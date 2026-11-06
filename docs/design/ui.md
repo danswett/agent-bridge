@@ -474,7 +474,7 @@ easing in, its duration out, and how far it travels.
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
-| Send and Answer | The reply box; a question card | Send, Send answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button that sent it (never an option, #773) shows the platform's progress ring, which stops with the request. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
+| Send and Answer | The reply box; a question card | Send, Send answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button that sent it (Send or Send answer, never an option, #773) shows the platform's progress ring, which stops with the request. Decided, not yet built (#600; builds in #616, #625): the ring is the only in-flight signal (§6.5), turning while the request is open and still while this device waits for a machine that isn't connected. Delivered, the ring cross-fades to the `check` icon, which holds about 1 s and cross-fades back to the button's rest glyph; the button never changes size or fill. An exception's line (§6.5) fades in place in the room reserved for it under the box, or on the question card, and fades out in place when it goes; nothing pops and nothing below it moves. Today both clients show Sending…, Sending again… and "Delivered. The session has your reply." Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
 | Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
@@ -1108,10 +1108,18 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
     (`truncated`) can't be answered from here either, as before. Leaving the session is never
     an answer: the row keeps its glyph until the host clears the question.
+  - **While an answer goes** (#600): the control that sent it shows its ring (a tap
+    question's tapped option, or the answer's button; §6.5) and the card's
+    status line stays empty, as a reply's receipt does (§6.5); the line speaks only for an
+    exception (Still sending…, a stall, Waiting for *machine*, or an outcome other than
+    Delivered). Never Up next, since a question holds the session, and never "answered".
+    Confirmed, that control shows the check for about 1 s and the card resolves to "You
+    answered · *value*" ("You answered", §6.5), with no badge. An entry in the Needs you
+    lane, where a client still draws one, says the same.
   - **Resolved:** the card quietens, with no Needs you fill, and reads "Main agent asked"
     (or "Delegate *name* asked") over the question as it was shown. Below that:
     - with this device's answer record for the question, the record's progress and outcome as
-      the card shows them: "You answered *value*" once confirmed; "Sent, but not confirmed.
+      the card shows them: "You answered · *value*" once confirmed; "Sent, but not confirmed.
       Check at the machine" for `unconfirmed`; refused, failed and stale as they are;
     - with no record (answered elsewhere, or the call ended without an answer), "No longer
       waiting", since the protocol doesn't say what was answered elsewhere.
@@ -1294,6 +1302,113 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     app makes keeps it as it was, unless it lands at the end, where it shows in full. On a
     screen shorter than twice the header it folds with the header.
   - **Reduced motion:** a cross-fade, as the header's. From 760 it never collapses.
+- **The receipt** (#600; decided by the owner 2026-11-04 and revised the same day to "quiet
+  unless something's wrong", #617; the boards are the Proposal #600 set, §10) says where a
+  reply or an answer has got only when something needs saying. This section is the spec; the
+  proposal page ([proposals/600-reply-progress.md](proposals/600-reply-progress.md)) keeps the
+  reasoning.
+  - **The normal path is quiet.** While a reply or an answer is on its way, Send's progress
+    ring (an answer's: the control that sent it) is the only thing that shows it; nothing appears under
+    the box or on the card's status line, whatever stage the host reports. When it is
+    delivered, Send cross-fades from the ring to the `check` icon, holds it about 1 s
+    (`sendCheckHold`), and cross-fades back to rest. An answer's control does the same, and
+    the card then resolves to "You answered · *value*" (below). There is no badge and no
+    "Delivered" line.
+  - **The line is for exceptions only.** A line under the box, and on a question card its
+    status line, appears only in the states marked *line* below, and fades in place
+    (`acknowledge`); it goes when the next stage or the outcome makes it untrue, fading out
+    in place. It is words only, with no ring or badge: Send's ring already says the request
+    is open.
+  - **Its room is reserved.** From Send the line keeps the room the longest outcome needs
+    ("Sent, but not confirmed. Check at *machine* before sending it again."), two lines at
+    phone width (a narrow pane included) and one on a wide window, empty unless it has
+    something to say, so neither an exception nor the outcome moves the box or the card's
+    controls. The room stays until the box is next typed in or the session is left, so the
+    check and its return to rest move nothing either. On a question card the line is there,
+    empty, from Send. A refusal whose reason is longer still may grow, as today's does.
+  - **Timing.** Nothing is shown or spoken for the first 400 ms after Send. A spoken stage
+    is the furthest reached, so a backlog is never played, at most one a second, and an
+    outcome is spoken at once, skipping any stage not yet spoken.
+  - **The states,** for a reply. An answer has the same rows, but never Up next (a question
+    holds the session), ends in "You answered" (below), and has "Answer" for "Reply" in what
+    is spoken:
+
+    | State | When | Seen | Colour | Spoken (polite, at most one a second; a failure assertive, §9.1 A6) |
+    |---|---|---|---|---|
+    | Quiet | 0–400 ms after Send | Send's ring | – | nothing; Send is busy |
+    | Uploading | attachments, before the request | *line*: today's ("Uploading 2 attachments… 40%") | text2 | as today |
+    | Sending | from 400 ms until the machine has it | Send's ring | – | "Sending reply" |
+    | Sent | progress `received` | Send's ring | – | "Reply sent" |
+    | Passed to the agent | progress `typed` | Send's ring | – | "Reply passed to the agent" |
+    | Up next | `typed` with `working: true` (replies only) | Send's ring | – | "Reply up next, after the agent's current step" |
+    | Delivered | result `delivered` | Send's check for about 1 s, then rest (an answer: the card resolves to You answered · *value*) | the check in Send's own ink | "Reply delivered"; "Answer delivered. You answered *value*" |
+    | Still sending | nothing from the machine 3 s after Send; any other wait while connected; a retry | *line*: Still sending… | text2 | "Reply still sending" |
+    | Sent, stalled | `received`, then nothing for 5 s | *line*: Sent · still waiting on *machine* | text2 | "Reply sent, still waiting on *machine*" |
+    | Passed, stalled | `typed` on an idle session, then nothing for 10 s | *line*: Passed to the agent · not picked up yet | text2 | "Reply passed to the agent, not picked up yet" |
+    | Still being delivered | a resend met the first copy in flight | *line*: the stage reached · still being delivered | text2 | "Reply still being delivered" |
+    | Waiting for the machine | held on this device while the machine isn't connected | *line*: Waiting for *machine* · it goes when *machine* is back; Send's ring stands still | text2 | "Reply waiting for *machine*" |
+    | Not confirmed | result `unconfirmed` (host: a reply 60 s, an answer 15 s), or the client's 9 min | *line*: Sent, but not confirmed. Check at *machine* before sending it again. | Needs you's text colour | the sentence |
+    | Busy, stale | result `busy` or `stale` | *line*: today's ("Not sent: …") | Needs you's text colour | the words |
+    | Refused, failed | result `refused`; the request failed | *line*: today's ("The machine refused this reply: …", "Couldn't send it: …") | Danger | the words |
+
+    An in-flight line's secondary words (after "·") are text2 too; an outcome's guidance or
+    reason keeps its outcome's colour. "Up next" has no stall: the agent is busy, and that is
+    expected. A stall's line goes when the next stage or the outcome arrives; resends are
+    unchanged, and today's "Sending again…" is retired. With an outcome other than Delivered
+    Send returns to rest at once, with no check. The receipt never drives the header: the
+    header keeps its own state from presence and the link (§2.2), so "Offline" once the
+    machine has left, or "Reconnecting…" while its channel comes back, and a question's row
+    says Waiting on you until the host clears it.
+  - **Send's check** is the `check` icon (`design/icons/check.svg`; `icon-check` in the
+    PWA sprite, `AbIconCheck` on Windows), stroked like Send's own arrow and drawn at its
+    size in its place, in Send's ink on its Bridge fill. Windows draws it as a Path with the
+    same geometry, never Segoe's CheckMark. Send stays the same size and colour throughout:
+    only its glyph cross-fades (§5.3). In forced colours it takes Send's own system colours,
+    as the arrow does (the glyph is drawn in the button's current colour; §9.1 A9).
+  - **Tap to answer.** A single-choice question sends when an option is tapped, with no Send
+    answer button, so the tapped option is the control that sent it (creative director,
+    2026-11-04, under the owner's option A). On both clients the same ring as Send's, at
+    Send's size and stroke, shows at the option's trailing edge, and the other options are
+    disabled at the choices' existing disabled opacity (`.choice:disabled` in the PWA; the
+    option buttons' disabled state on Windows, from QuestionViewModel); the tapped option keeps
+    full opacity. Delivered, the ring cross-fades to the same stroked `check` for about
+    1 s (`sendCheckHold`), then the question resolves to "You answered · *value*". An
+    exception shows the same *line* on the card's status line, and the options stay disabled
+    while the request is open. An outcome other than Delivered stops the ring, as it returns
+    Send to rest, and the existing retry rules decide the rest (`answerControls` in the PWA,
+    QuestionViewModel on Windows), since a host types into a prompt once
+    ("One attempt per prompt", [`session.answer`](../protocol/v1-sessions.md#sessionanswer)):
+    - **Not confirmed, stale:** the answer may already have been typed, so the tapped option
+      stays pressed, the others stay disabled, and the line says so ("Sent, but not
+      confirmed. Check at *machine* before sending it again."; stale's "Already answered or
+      gone"). A fresh answer is never offered.
+    - **Busy, refused:** nothing was typed, so the options are enabled again with none
+      pressed, as today (busy after its short pause).
+    - **Failed:** the host answered the request with an error (the client's `failed`); the
+      options stay as they are and today's Try again resends the same request. A lost
+      connection or response is not Failed: it is Waiting for *machine* or Still sending…,
+      and both clients resend the same request on their own, so it never needs Try again.
+
+    Under reduced motion the ring stands
+    still, as Send's does (§5.3). What is spoken is unchanged. A question with a separate
+    submit button (free text, several choices, a form) keeps the ring on that button.
+  - **You answered · *value*:** a confirmed answer's words on the resolved card, the same on
+    the card and in a Needs you entry, in text2 with no badge. The value is:
+    - a tap question: the label of the option that went;
+    - free text: its first line, with runs of white space as one space, cut at the last
+      word break within 40 characters (or at 40, with no break after the 20th) and ended
+      with "…" when longer. It is drawn as plain text, isolated in its own direction;
+    - a form of several fields: nothing, so the line reads "You answered".
+
+    A screen reader hears "Answer delivered. You answered *value*", with the same value.
+  - **Older hosts** (no `sessions.progress`) report no stage, so nothing says Sent, Passed to
+    the agent or Up next for them, not even to a screen reader: the client never invents a
+    stage nobody reported. Everything else is the same: Send's ring, Still sending… at 3 s,
+    the waiting words, and Send's check at Delivered (or You answered).
+  - **Timings** from the host (#598) are never shown; they stay in the client's local
+    marks and logs.
+  - The quiet window, the one-a-second announcement limit, `sendCheckHold` and the stall
+    thresholds are named constants in one place per platform.
 
 ### 6.6 Machines
 
@@ -2060,6 +2175,16 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   exactly so, beside the block they describe. An approval's card has no Copy. Hidden includes
   what draws blank but runs as part of a word (U+00A0 and the other spaces but U+0020, U+2800;
   #546), which the Needs you lane refuses as it refuses a bidi control.
+- **Receipt words** (§6.5, #600). On screen, only for an exception: Still sending… · Sent ·
+  still waiting on *machine* · Passed to the agent · not picked up yet · still being
+  delivered · Waiting for *machine* · it goes when *machine* is back; outcomes other than
+  Delivered keep today's words. On a resolved card: You answered · *value* (the option's
+  label, free text's first line cut to about 40 characters, nothing for a form). Spoken
+  only, never shown on the normal path: Sending reply · Reply sent · Reply passed to the
+  agent · Reply up next, after the agent's current step · Reply delivered (and "Answer" for
+  an answer). Delivered is Send's check, never a line or a badge. Older hosts use the same
+  words, less the stages they don't report. Never "typed", "queued", "injected", "in the
+  terminal" or "Sending again…". Never "answered" before the host confirms.
 
 ## 9. Accessibility
 
@@ -2112,6 +2237,21 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   `CanvasText` hairline. The reply area's compact bar (§6.5, #935) is the same: its copy of the
   draft is drawn only, focus anywhere in the reply area brings the box back in full, it never
   expands over the focused control, and focus never lands on a hidden control.
+- **The reply and answer receipt (#600)** is a polite live region (`role=status` on the PWA;
+  `AutomationProperties.LiveSetting` Polite with a LiveRegionChanged event on Windows),
+  present and empty from Send. The normal path shows nothing, but its stages are still
+  announced: Sending, Sent, Passed to the agent, Up next and Delivered, prefixed "Reply" or
+  "Answer", nothing in the first 400 ms, at most one a second (only the later of two is
+  spoken), and the outcome always. An exception's line is announced as it appears; a reply
+  or answer that failed (Refused, failed) is said assertively, as A6 says. Send's
+  check is not announced on its own: "Reply delivered" says it, and Send's accessible name
+  stays "Send". In forced colours Send's ring and check take Send's own system colours, as
+  its arrow does (A9), at full opacity, including the still ring of "Waiting for *machine*":
+  on Send's Highlight fill GrayText would fall below A8's 3:1, so stillness and the waiting words
+  say the request is held, never a dimmed ring. Every word on the line is CanvasText, so
+  every failure says itself in words. Under reduced motion the ring is still, the ring, the
+  check and the rest glyph swap over `crossFade`, and a line fades in over `crossFade`
+  instead of rising; the quiet window and the announcement limit still apply.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
@@ -2192,3 +2332,9 @@ reference ([proposals/253-attention/](proposals/253-attention/)).
 The delegate events (#661) and the history (#292) are drawn on the Proposal #661
 boards: before and after, the run fold and Earlier expanded, and history scrolled up, on a phone
 and the desktop, dark and light ([proposals/661-delegate-events.md](proposals/661-delegate-events.md)).
+
+The reply and answer receipt (#600, §6.5) is drawn on the Proposal #600 boards, decided by
+the owner 2026-11-04 ([proposals/600-reply-progress/](proposals/600-reply-progress/)),
+and revised the same day to "quiet unless something's wrong": Send's ring and check on the
+normal path, the exception lines, "You answered · *value*" and older hosts, each in dark,
+light, contrast and reduced motion.
