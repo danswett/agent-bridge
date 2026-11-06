@@ -535,6 +535,8 @@ Sections, top to bottom:
      It is the app's badge (§7): the Windows app's tray and Sessions badge, the PWA's app badge
      where the browser has one, and on Apple the Dock badge, the menu bar extra and the icon
      badge.
+   - A session that needs sign-in is never counted in N nor shown by the filter: the sign-in
+     banner owns it (§6.13, owner decision 2026-11-05). Its row still says so where it lives.
    - A question on a machine that is away, or back but not yet confirmed by its next full list,
      is neither counted in N nor shown by the filter, nor raised as a notification (#269).
    - **Look:** the `needs` glyph (`idle` at none), then "Needs you · N". It is a control, so it
@@ -1453,16 +1455,18 @@ action lives on the machine, not on each row. The field names follow Connection'
 | Where in §2.2 | When | Glyph | Status text | Action |
 |---|---|---|---|---|
 | After rule 1 | `attention.kind: signInNeeded` with `recovery: pending` (signed in; the host hasn't seen the model answer yet) | `idle` | "Signed in · waiting for the session to confirm" | None. A session that died mid-turn is to get a Continue like §6.12's (planned, #780); not built yet |
-| After the row above | `attention.kind: signInNeeded` with any other `recovery` (or none) | `needs` | "Needs sign-in", with the machine as line 2's second fact (§2.2); the agent and "@*account*" are in the banner, Needs you and Details | **Sign in**, only with the `sessions.signin` capability and `signIn: phone`; no button otherwise (A7) |
+| After the row above | `attention.kind: signInNeeded` with any other `recovery` (or none) | `needs` | "Needs sign-in", with the machine as line 2's second fact (§2.2); the agent and "@*account*" are in the banner and Details | **Sign in**, only with the `sessions.signin` capability and `signIn: phone`; no button otherwise (A7) |
 | Refines rule 3 | `working` with `attention.kind: notResponding` | `failed` | "Not responding", with the machine as line 2's second fact; the trailing age says since when, and Details gives the time | None; there is nothing safe to press yet |
 | Before rule 4 | Main agent idle, and `attention.kind: error` | `failed` | "Not authorised", "Rate limited" or "Agent error", from `attention.errorClass` `auth`, `rate` or `other` (an unknown class reads as "Agent error"; a new class gets its words here first), plus "· N delegates still running" when background agents survive the turn | None on the row; Details gives the host's sentence for it (`attention.message`) |
 
 The error rule sits after the question rules and before rules 4 and 5, so background work
 that survives a failed turn never hides the error behind "Delegating".
 
-- `signInNeeded` counts in Needs you and sorts with the other `needs` rows. "Not responding",
-  the error rows and "waiting for the session to confirm" don't count in Needs you: nothing a
-  person does on the row fixes them.
+- Needs you counts questions and approvals only (owner decision, 2026-11-05): the banner owns
+  sign-in, so `signInNeeded` doesn't count in Needs you, its N or the app badge (§6.1, §7), and
+  the filter doesn't show it. Nor do "Not responding", the error rows and "waiting for the
+  session to confirm": nothing a person does on the row fixes them. The row itself is
+  unchanged, found where it lives in the list and by search.
 - **Signing in isn't recovery.** A completed sign-in (`signin.done`) only moves the session to
   "waiting for the session to confirm". It is recovered only when the host clears
   `signInNeeded` under #800's clear gate: a main-agent reply with model words or a tool
@@ -1487,8 +1491,9 @@ that survives a failed turn never hides the error behind "Delegating".
   it. One per (machine, agent, account), never one per session. It isn't §6.12's restore notice,
   which is planned for #780 and goes in the window's banner area over every page.
 - Title: "*Agent* on *machine* needs sign-in" plus "· @*account*" when known. Line 2: "*n*
-  sessions affected", with the affected sessions' titles from the client's own records (never
-  from text in the record).
+  sessions affected: *A*, *B*" ("1 session affected: *A*" for one). Each title is a link that
+  opens that session; there is no separate line of titles. The titles come from the client's own
+  records (never from text in the record).
 - One button, **Sign in**, only with the capability and `signIn: phone`. Without the capability
   there is no button and no instruction: a missing capability doesn't prove the agent can't sign
   in from a device.
@@ -1506,7 +1511,7 @@ that survives a failed turn never hides the error behind "Delegating".
 
 | State | Banner shows | Button |
 |---|---|---|
-| Needed | Title; "*n* sessions affected" | Sign in |
+| Needed | Title; "*n* sessions affected: *A*, *B*" | Sign in |
 | At the machine (`signIn: machine`) | "Sign in at the machine · *reason*" | None |
 | Checking (`recovery: checking`; the host is looking for a stored sign-in) | "Checking for a sign-in that still works…" | Sign in |
 | Signing in elsewhere (`recovery: signingIn`, and no request from this device) | "Waiting for sign-in" | Show code (joins the sign-in under way) |
@@ -1600,7 +1605,7 @@ title, with the count in the body; only Home Assistant notices add the grouped
 | Use | Text |
 |---|---|
 | Row | "Needs sign-in · *machine*"; "Signed in · waiting for the session to confirm"; "Not responding · *machine*" (age trailing); "Not authorised"; "Rate limited"; "Agent error" |
-| Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Checking for a sign-in that still works…"; "Waiting for sign-in"; "Waiting for sign-in · code expires *time*"; "Code expired"; "Signed in · waiting for *n* sessions to confirm"; "Signed in · *n* sessions recovered"; "Recovered by itself"; "Sign-in refused · *reason*"; "Sign-in failed"; "Sign in at the machine · *reason*"; "Couldn't start sign-in. Try again."; "*machine* can't be reached now" |
+| Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected: *A*, *B*" ("1 session affected: *A*"); "Checking for a sign-in that still works…"; "Waiting for sign-in"; "Waiting for sign-in · code expires *time*"; "Code expired"; "Signed in · waiting for *n* sessions to confirm"; "Signed in · *n* sessions recovered"; "Recovered by itself"; "Sign-in refused · *reason*"; "Sign-in failed"; "Sign in at the machine · *reason*"; "Couldn't start sign-in. Try again."; "*machine* can't be reached now" |
 | Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in code couldn't be shown." |
 | Buttons | "Sign in"; "Show code"; "Open"; "Copy"; "Cancel"; "Try again" |
 | Push, toast and HA notice titles | "*Agent* on *machine* needs sign-in"; "… isn't responding"; "… wasn't authorised"; "… hit a rate limit"; "… stopped with an error". HA notices only, grouped: " · *n* sessions: *A*, *B*". Body: "*n* sessions affected" for sign-in; `attention.message` for the others |
@@ -1635,7 +1640,8 @@ question, as choosing its row does.
   them, since typing then sending is the card's own pattern; it still checks, before sending,
   that the question is the one shown. Every other question's notification only opens its
   card.
-- The count each platform shows is Needs you's N (§6.1).
+- The count each platform shows is Needs you's N (§6.1), which never counts a session that needs
+  sign-in (§6.13).
 - **Collaborators (#519):** their sessions are never notified, badged or counted. A message
   from an external agent held for you is counted in N but **never pushed on its own**, unlike
   an approval (`agent-principals.md` §5.7, normative). A person can opt in to one aggregated
