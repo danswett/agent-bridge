@@ -345,6 +345,11 @@ second. It deletes:
 It prunes only when the process list is complete. A runtime (node, bun) whose command line
 could not be read counts as live: it may be the session's.
 
+It prunes nothing while the host is still judging what a reboot or a crash took
+([host-launch.md](host-launch.md), #780) and has not yet read a Claude or Codex session's
+registration: an ended session's registration pruned first would read as a death. A first
+drain of the spool that took over 60 s once did exactly that.
+
 **Stopping.** On a clean stop the host removes the heartbeat if it is still its own. Hooks then
 give their fixed reply at once, rather than spooling to nobody until it goes stale.
 

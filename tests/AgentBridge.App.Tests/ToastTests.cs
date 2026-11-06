@@ -848,6 +848,48 @@ public sealed class ToastTests
         Assert.Equal("s7", opened);
     }
 
+    // #625 cr2-625d (6676595964): the words were taken after waiting for the machine, so an option
+    // relabelled meanwhile gave its new label, or a question the app didn't know at the click its later one.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_toast_answer_says_what_the_app_knew_at_the_click_however_the_question_changes_while_it_waits_for_its_machine(bool knownAtClick)
+    {
+        await using var host = new FakeHost();
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        host.Start();
+        await using var connection = host.Connect();
+        var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(50) };
+        var asked = Make.Choice("q1");
+        var relabelled = asked with { Fields = [asked.Fields[0] with { Options = [.. asked.Fields[0].Options!.Select(o => o.Value == "pg" ? o with { Label = "Drop the database" } : o)] }] };
+        Session? known = knownAtClick ? Make.Session(question: asked) : null;
+        Deliveries? back = null;
+        var responder = new ToastResponder(_ => back, sink, (_, _) => { }) { SessionOf = (_, _) => known };
+        var pg = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: asked), Caps, "PC", "remote-id"), false))
+            .Descendants("action").Select(a => (string)a.Attribute("arguments")!).First(a => ToastAction.Parse(a).Value == "pg");
+
+        // Clicked while its machine is away: the answer waits for it (FindAsync), and meanwhile the
+        // option is relabelled. Then the machine is back.
+        var handled = responder.HandleAsync(pg, new Dictionary<string, string>());
+        known = Make.Session(question: relabelled);
+        back = deliveries;
+        await handled.WaitAsync(FakeHost.Patience);
+
+        var texts = Xml(Assert.Single(sink.Shown)).Descendants("text").Select(t => t.Value).ToList();
+        if (knownAtClick)
+        {
+            Assert.Equal("PostgreSQL (Recommended)", deliveries.Get("answer|s1|q1")!.Chosen);
+            Assert.Contains("You answered · \u2068PostgreSQL (Recommended)\u2069", texts);
+        }
+        else
+        {
+            Assert.Null(deliveries.Get("answer|s1|q1")!.Chosen);
+            Assert.Contains("You answered", texts);
+        }
+        Assert.DoesNotContain(texts, t => t.Contains("Drop the database", StringComparison.Ordinal));
+    }
+
     // What an Approve once button said before #372, still in Notification Center after an update.
     static string OldApproveOnce(string? machine = null)
     {

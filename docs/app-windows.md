@@ -447,7 +447,9 @@ into one folder with one version. An app update is a host update, so they never 
   that started it, so the update hooks may find their ancestry incomplete and leave the host
   alone (`LifecycleGuard`); the app's own start brings it back either way.
 * Uninstall (`OnBeforeUninstallFastCallback`) stops the host and removes the logon task,
-  the app's `Run` entry and the toast registration. The host's profile (device key,
+  the app's `Run` entry, the toast registration and the host's empty logon markers
+  (`HKCU\Software\AgentBridge\logon-*`, volatile, [host-launch.md](host-launch.md#restoring-after-a-reboot-or-a-crash)),
+  and that key once nothing else is in it. The host's profile (device key,
   account, `config.json`, logs) stays in `%LOCALAPPDATA%\AgentBridge`, like any app's
   data, so a reinstall picks up where it was.
 
@@ -666,6 +668,52 @@ under its tag is silent too): without it Windows plays its default sound, which 
 every question (#754). The app keeps running in the notification area when its window
 closes, so toasts keep coming.
 
+**Progress and timing marks** (#600, [ui.md](design/ui.md) §6.4, §6.5 and §9, as the owner
+decided them on #617 and revised to "quiet unless something's wrong"): an answer or a reply to a
+host whose hello offers `sessions.progress` asks for it (`"progress": true`), and follows the
+host's progress frames before the outcome (`Deliveries`, `Delivery.Stage`; `Receipt` in
+App.Core). The normal path is quiet: Send's ring (an answer's: the button's) is all that shows
+it goes, whatever stage the host reports; once delivered, Send cross-fades from the ring to the
+check for about a second (`ReceiptTiming.SendCheckHold`) and back to its arrow (`CheckGlyph`: the
+`check` icon's geometry as a stroked Path in the button's own ink, never Segoe's CheckMark). A single-choice question sends on a tap, so the tapped option is the
+control that sent it: it keeps full opacity with the ring, then the check, at its trailing edge,
+while the other options are disabled. After a stale or unconfirmed outcome the tapped option stays
+pressed (marked ✓) and the others disabled, since the answer may have been typed and a prompt gets
+one attempt; only busy or refused enables them all again, none pressed. A failed answer's Send again
+resends the same request. Send, too, keeps its look while it shows its
+ring or check, doing nothing until it can send. An
+answer's card then says "You answered · *value*" in text2 (a tap's option, free text's first
+line cut to about 40 characters, nothing for a form of several fields). There is no badge and no
+"Delivered" line. Any other outcome returns Send to rest at once and says why on the line. A
+stage only moves forward, across resends of the same request; an older host is asked for
+nothing, reports no stage, and is otherwise the same. The line under the box (and an answer's
+status line) has words, in text2 and with nothing beside them, only when something needs
+saying: "Still sending…" after 3 s with nothing heard (and for a resend), "Sent · still waiting
+on *machine*" after 5 s, "Passed to the agent · not picked up yet" after 10 s (Up next never
+stalls); a resend that meets the first copy in flight keeps its stage and adds "· still being
+delivered"; one held while the host isn't connected says "Waiting for *machine* · it goes when
+*machine* is back", with Send's ring standing still in text3 (`ReceiptTiming` holds the
+thresholds). The line is a live region that hears every stage, quiet ones included:
+nothing for the first 400 ms, then the furthest stage reached ("Sending reply", "Reply sent",
+"Reply passed to the agent", "Reply up next, after the agent's current step"), each said once,
+at most one a second (the later of two), and the outcome always ("Reply delivered", "Answer
+delivered. You answered *value*"); a failure, a refusal or a question changed since is said
+assertively, since the person must act on it (ui.md §9.1 A6), everything else politely. Between announcements the line is
+named by its words, so it never reads as an earlier state. The timing and what was said are kept
+by request, so the question's line and the card's receipt after the question has gone share
+them, for as long as any receipt shows the request. Past 50 kept, the oldest that no receipt
+shows and that is no longer on its way goes; past 100, an unshown one still on its way goes too. From Send the
+line keeps the room the longest outcome needs (`ReceiptWords.Room`, laid out unseen under it:
+two lines at phone width, one on a wide window) until the box is next typed in, so neither an
+exception, the check nor Send's return to rest moves what is below. Each answer and reply also writes one
+line to `app.log` when it has its outcome: the request's first 8 hex digits (as the host's log
+names it), the outcome (one the protocol names, otherwise `other`), each mark in ms from the tap
+(`sent` once the request is handed to the channel, a resend's `sent 2`, `received`, `typed` or `queued`,
+`result`), and the host's `typed`, `recorded` and `confirmed` timings (ms from its receipt), for
+example
+`reply 1a2b3c4d delivered: sent 3 ms, received 41 ms, typed 388 ms, result 1402 ms; host: typed 352 ms, recorded 1190 ms, confirmed 1361 ms`.
+Nothing of it is sent anywhere. The demo host offers progress too.
+
 The activator is the app's own (`INotificationActivationCallback` in an HKCU
 `LocalServer32` registration, S3 finding 1, without the toolkit S3 used), under the AUMID
 Velopack gives the app's shortcuts (`velopack.AgentBridgeApp`). It is registered with COM
@@ -761,12 +809,13 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   colour (the upper bound for that layer over dark Mica). Encoded white and transparent
   regression samples exercise that guard too; missing, blank or failed window captures fail
   the self-test. No capture-only page fill or bitmap recolouring is applied.
+  Its progress gallery (#600, ui.md §6.5) puts a reply and an answer through each receipt state against the demo host, which holds a request or picks its outcome for the gallery's sessions (`DemoHost.Script`): Send's ring in the quiet window, Still sending…, Send's check, a failed reply with Send again, a tapped option's ring, unconfirmed and stale (the tapped option pressed, and heard as pressed through its Toggle pattern, the rest disabled), busy and refused (every option again), and You answered for a tap, free text and a form. It checks each and saves `result.progress.<state>.<pass>.png` in light, dark, at the narrowest window and in high contrast. A reply's receipt line on screen as high contrast turns on must turn to the window's text without being bound again: receipt lines and Send's held ring repaint on a theme or system colour change.
   Last, it measures a live resize (#765): it resizes the window a step a frame, 8 px at a time, from 1560 px to
   400 and back, and keeps every interval between the UI thread's frames (`CompositionTarget.Rendering`) by the window's width
   class, once with the demo's own sessions and once with a window as heavy as a real one (16 more sessions, a conversation of
   over 200 items, 50 tool rows and a strip of 20 delegates, the finished ones unfolded), and writes p50, p95, the longest and how many frames went over
   16.7 and 33 ms into the result's `resize` and `result.resize.json`, the p95 in each width class in its log line, with a picture of where the drag ended. Before the heavy drag it scrolls a block in the middle of the response to the top of the conversation and pictures the conversation (`result.resize.before.png`); after it, it checks that block is where it was in the layout (its top against the viewport within 0.5 DIP, the proof) and pictures it again (`result.resize.after.png`), which must be drawn alike across the reading column: no more than 4 pixels more than 8 apart in a channel, and none more than 96 apart (`PictureDifference`). So a renderer's noise between two renders (a single speck of a card's fill by its rounded corner, or an anti-aliased edge) doesn't count, while a block moved by a pixel, which differs along every edge of its text, does; the log gives the count and the largest difference either way. It then presses Page Down and Down for real on a link in the conversation (`SendInput` with the window in the foreground, else posted to the window with keyboard focus, as the keyboard sends them; the result's `keysPressedBy` says which) and checks the text scrolled with focus where it was and nothing selected; that Tab from the last link or Copy button drawn goes to the first in the next block with one, which it realises (the move made with `FocusManager.TryMoveFocus`, as Tab makes it, not an injected key), that Tab pressed for real onto the Copy button of a code block laid out across the conversation's bottom edge brings the block's start to the leading edge, and onto one wholly in view moves nothing (the result's `tabInViewProblem`), that Shift+Tab pressed for real onto the Copy button of a code block wholly in view, its top 3 DIP below the view's, where the focus manager's 20 DIP padding round a control would scroll it, move nothing (within 0.5 DIP; the result's `tabNearEdgeProblem`), that Tab pressed for real onto the first link of a block taller than the view (a quoted log of 44 lines just before the run of linked paragraphs) brings its start to the leading edge (within 1.5 DIP), and Shift+Tab onto its last link brings that link wholly into view (within 1.5 DIP) at the nearest edge, no further than WinUI's 20 DIP margin past it, the block's start above the view (the result's `tallTabProblem`), and that Tab, pressed for real (`SendInput`, else posted; the result's `linkTabPressedBy` says which) on the last link of the last block the list has realised, goes to the first link of the next block, which it hadn't, and brings that block in at the leading edge numbered in its set, each block found from its link (a link is a text element in its block's text, not a control; the heavy response ends with a run of 110 short linked paragraphs, more than twice the most the list was seen to realise from a view's top, so with the run's first block at the top of the view the last block realised and the next both fall in it wherever the list stops; the check fails with "setup: ..." rather than skips if they don't); that no block's container is a tab stop, selected, filled or drawn with chrome or a focus visual; that the last block, off screen and named as no other block is, is found by its name and brought into view through the peer the search found; and that a screen reader is given every block as a list item numbered 1 to N in a set of N, with the header and footer outside it. WinUI numbers an item only once it is realised, so the check walks the items as a screen reader does: the list's ItemContainer pattern finds each next item (`FindItemByProperty` with no property), and one not yet realised is realised through its VirtualizedItem pattern (`Realize`) before its numbers are read, none of them -1 (the result's `listRealisedByPeer` counts the realised ones, `listWalkSeconds` the walk). A capture of your message and its three-block reply is also taken in high contrast at 1440, 1200 and 400 (`result.yours.<width>.highcontrast.png`), beside the light and dark ones. The frame times are a report, not a
-  bar: the runners draw in software, so they fail it only when it could not measure: when a sweep never reached all three width classes. The two sweeps share 30 s, a hang guard that keeps the self-test well inside its 300 s (180 s until #800's sign-in captures: the banner, the sheet and a Needs sign-in row in every state they can be in, in Light, Dark and high contrast); a sweep cut short by it is reported (`lightFinished`, `heavyFinished` and the log), not failed. `build/app-self-test.ps1` runs it; when the app ends with anything but 0, or leaves a check unfinished (the result's `unfinished`, even with 0), it fails and prints the exit code as an NTSTATUS, the check it was in, the end of the app's log and the crash Windows recorded, faulting module and offset (#240). On CI it also has Windows Error Reporting keep a minidump of a crash beside the logs, and prints the crashing thread's stack from it with the runner's `cdb` (#242): for a fail fast the event names no module. Then it runs the `Setup.exe` it packed, silently, on the throwaway runner,
+  bar: the runners draw in software, so they fail it only when it could not measure: when a sweep never reached all three width classes. The two sweeps share 30 s, a hang guard that keeps the self-test well inside its 360 s (180 s until #800's sign-in captures: the banner, the sheet and a Needs sign-in row in every state they can be in, in Light, Dark and high contrast; then 300 s until #600's progress gallery); a sweep cut short by it is reported (`lightFinished`, `heavyFinished` and the log), not failed. `build/app-self-test.ps1` runs it; when the app ends with anything but 0, or leaves a check unfinished (the result's `unfinished`, even with 0), it fails and prints the exit code as an NTSTATUS, the check it was in, the end of the app's log and the crash Windows recorded, faulting module and offset (#240). On CI it also has Windows Error Reporting keep a minidump of a crash beside the logs, and prints the crashing thread's stack from it with the runner's `cdb` (#242): for a fail fast the event names no module. Then it runs the `Setup.exe` it packed, silently, on the throwaway runner,
   checks the installed copy's channel and that its executables and `Update.exe` are for that
   machine, and runs the same self-test from the installed copy. Last, it dry-runs publishing
   the package (`build/publish-prerelease.ps1

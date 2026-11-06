@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #600: one frame of the reply and answer receipt</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+.p600f, .p600f * { box-sizing: border-box; }
+.p600f { display: flex; flex-direction: column; gap: 14px; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; font-size: 14px; line-height: 20px; }
+.p600f-dev { position: relative; overflow: hidden; display: flex; flex-direction: column; }
+.p600f-head { flex: none; display: flex; flex-direction: column; gap: 2px; }
+.p600f-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.p600f-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; }
+.p600f-conv { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 12px; overflow: hidden; }
+.p600f-label { font-size: 12px; line-height: 16px; margin-bottom: 4px; }
+.p600f-bubble { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 8px; }
+.p600f-box { display: flex; align-items: flex-end; gap: 4px; padding: 4px 4px 4px 12px; border-radius: 8px; }
+.p600f-draft { flex: 1; min-width: 0; padding: 8px 0; min-height: 36px; }
+.p600f-btn { width: 36px; height: 36px; border-radius: 6px; display: grid; place-items: center; flex: none; }
+.p600f-receipt { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; min-height: 18px; font-size: 13px; line-height: 18px; font-weight: 600; }
+.p600f-q { border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.p600f-qh { font-size: 12px; line-height: 16px; font-weight: 600; }
+.p600f-radios { display: flex; flex-direction: column; }
+.p600f-radio { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 13px; line-height: 18px; }
+.p600f-qfoot { display: flex; gap: 8px 12px; align-items: center; margin-top: 8px; }
+.p600f-qfoot > .p600f-qsend { align-self: flex-end; }
+.p600f-qsendfix { min-width: 112px; height: 32px; justify-content: center; }
+.p600f-qsend { align-self: flex-start; padding: 6px 14px; border-radius: 6px; font-size: 13px; line-height: 18px; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.p600f-cap { width: 100%; font-size: 12px; line-height: 17px; }
+.p600f-cap b { display: block; font-size: 13px; line-height: 18px; margin-bottom: 4px; }
+.p600f-cap p { margin: 4px 0 0; }
+.p600f-chip { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 11px; line-height: 16px; font-weight: 600; margin-right: 6px; }
+.p600f-sr { margin-top: 6px; padding: 6px 8px; border-radius: 6px; font-size: 12px; line-height: 16px; display: flex; gap: 6px; align-items: flex-start; }
+</style>
+</helmet>
+<!-- Decided by the owner 2026-11-04; docs/design/ui.md §6.5 is the spec, and docs/design/proposals/600-reply-progress.md the reasoning. -->
+<div class="p600f" style="width: {{w}}px">
+  <div class="p600f-dev" style="width: {{w}}px; height: {{h}}px; padding: {{pad}}; border-radius: {{radius}}px; background: {{t.layer}}; border: {{devBorder}}; color: {{t.text}}">
+    <div class="p600f-head" style="padding-bottom: 10px; border-bottom: 1px solid {{t.stroke}}">
+      <div class="p600f-title" style="font-size: {{titleSize}}px; line-height: {{titleLine}}px">{{title}}</div>
+      <div class="p600f-meta" style="color: {{t.text2}}">
+        <sc-if value="{{showGlyph}}"><svg viewBox="0 0 48 48" width="16" height="16" style="color: {{glyph.c}}"><sc-if value="{{glyph.bg}}"><circle cx="24" cy="24" r="23" fill="currentColor"/></sc-if><path d="{{glyph.p1}}" fill="{{glyph.f1}}"/><path d="{{glyph.p2}}" fill="currentColor" fill-opacity="{{glyph.o2}}"/></svg></sc-if>
+        <span>{{status}}</span>
+      </div>
+    </div>
+    <div class="p600f-conv" style="padding: 12px 0 0; justify-content: {{convJustify}}">
+      <sc-if value="{{nv}}">
+        <!-- A Needs you entry for an approval answered from it (pwa/js/ui/needs-you-view.js): its status line says the same words as the card. -->
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <div style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}">Needs you · 1</div>
+          <div class="p600f-q" style="background: {{nv.bg}}; border: 1px solid {{nv.edge}}">
+            <div style="display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; line-height: 20px">
+              <svg viewBox="0 0 48 48" width="16" height="16" style="flex: none; color: {{t.needsHead}}"><circle cx="24" cy="24" r="23" fill="currentColor"/><path d="{{nv.glyph}}" fill="{{nv.ink}}"/></svg>
+              <span>Release notes for 1.33</span>
+            </div>
+            <div style="padding: 6px 8px; border-radius: 4px; background: {{t.card}}; border: 1px solid {{t.stroke2}}; font-family: 'Cascadia Mono', Consolas, monospace; font-size: 12px; line-height: 16px">git push origin release/1.33</div>
+            <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">ULTRA · Main agent · 2m</div>
+            <div style="display: flex; gap: 8px">
+              <span class="p600f-qsend" style="background: {{t.bridge}}; color: {{t.onBridge}}">Approve once</span>
+              <span class="p600f-qsend" style="background: {{t.card}}; color: {{t.text}}; border: 1px solid {{t.stroke2}}; font-weight: 400">Deny</span>
+            </div>
+            <div class="p600f-receipt" style="min-height: {{receiptMin}}px; color: {{r.color}}; margin-top: 0">
+              <span>{{r.text}}<span style="font-weight: 400; color: {{r.subColor}}">{{r.sub}}</span></span>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{showAgent}}">
+      <div>
+        <div class="p600f-label" style="color: {{t.text2}}"><span style="font-weight: 600; color: {{t.text}}">Main agent</span>&#160;&#160;{{agentAge}}</div>
+        <div style="font-size: {{bodySize}}px; line-height: {{bodyLine}}px">{{agentText}}</div>
+      </div>
+      </sc-if>
+      <sc-if value="{{showBubble}}">
+        <div class="p600f-bubble" style="background: {{t.card}}; border: 1px solid {{t.stroke2}}; font-size: {{bodySize}}px; line-height: {{bodyLine}}px">{{reply}}</div>
+      </sc-if>
+      <sc-if value="{{q}}">
+        <div class="p600f-q" style="background: {{q.bg}}; border: 1px solid {{q.edge}}">
+          <div class="p600f-qh" style="color: {{q.head}}">{{q.heading}}</div>
+          <div style="font-size: 13px; line-height: 18px">{{q.text}}</div>
+          <sc-if value="{{q.open}}">
+            <!-- ui.md §6.4 "Answering" (#773): the platform's radio list, chosen first, then one Send answer. Nothing sends on a tap, and no option ever carries a ring. -->
+            <div class="p600f-radios" role="radiogroup">
+              <sc-for list="{{q.choices}}" as="c">
+                <div class="p600f-radio">
+                  <svg viewBox="0 0 20 20" width="18" height="18" style="flex: none"><circle cx="10" cy="10" r="8.5" fill="none" stroke="{{c.ring}}" stroke-width="1.5"/><sc-if value="{{c.on}}"><circle cx="10" cy="10" r="4.5" fill="{{c.dot}}"/></sc-if></svg>
+                  <span>{{c.text}}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <!-- The footer row: the receipt line on the left, always rendered and empty on the normal path, so an exception's words never move the card's controls; Send answer (or Try again) right-aligned. At phone width the line wraps under the button. -->
+          <div class="p600f-qfoot" style="flex-direction: {{q.footDir}}">
+            <div class="p600f-receipt" style="min-height: {{receiptMin}}px; color: {{r.color}}; margin-top: 0; flex: 1 1 auto; align-self: stretch">
+              <span>{{r.text}}<span style="font-weight: 400; color: {{r.subColor}}">{{r.sub}}</span></span>
+            </div>
+            <sc-if value="{{q.showSend}}">
+              <!-- Send answer keeps its size and fill: like Send, only its content cross-fades, to the ring, then the check, then back to its label (ui.md §6.5). -->
+              <span class="p600f-qsend p600f-qsendfix" style="background: {{t.bridge}}; color: {{t.onBridge}}; border: {{sendBorder}}">
+                <sc-if value="{{q.sendRing}}"><svg viewBox="0 0 16 16" width="18" height="18"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="28.3 9.4" transform="rotate(-90 8 8)"/></svg></sc-if>
+                <sc-if value="{{q.sendCheck}}"><svg viewBox="0 0 20 20" width="18" height="18"><path d="{{SEND_CHECK}}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></sc-if>
+                <sc-if value="{{q.sendLabel}}"><span>Send answer</span></sc-if>
+              </span>
+            </sc-if>
+            <sc-if value="{{q.retry}}"><span class="p600f-qsend p600f-qsendfix" style="background: {{t.card}}; color: {{t.text}}; border: 1px solid {{t.stroke2}}; font-weight: 400">Try again</span></sc-if>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+    <sc-if value="{{showBox}}">
+      <div style="flex: none; padding-top: 10px">
+        <div class="p600f-box" style="background: {{t.card}}; border: 1px solid {{t.stroke2}}; border-bottom: 2px solid {{t.bridge}}">
+          <div class="p600f-draft" style="font-size: {{bodySize}}px; line-height: 20px; color: {{draftColor}}">{{draftText}}</div>
+          <div class="p600f-btn" style="color: {{t.text2}}"><dc-import name="Icon" icon="attach" size="18" hint-size="18px,18px"></dc-import></div>
+          <div class="p600f-btn" style="background: {{t.bridge}}; color: {{t.onBridge}}; border: {{sendBorder}}">
+            <sc-if value="{{sending}}"><svg viewBox="0 0 16 16" width="18" height="18" style="opacity: {{ringOp}}"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="28.3 9.4" transform="rotate(-90 8 8)"/></svg></sc-if>
+            <sc-if value="{{done}}"><svg viewBox="0 0 20 20" width="18" height="18"><path d="{{SEND_CHECK}}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></sc-if>
+            <sc-if value="{{atRest}}"><dc-import name="Icon" icon="send" size="18" hint-size="18px,18px"></dc-import></sc-if>
+          </div>
+        </div>
+        <div class="p600f-receipt" style="min-height: {{receiptMin}}px; color: {{r.color}}">
+          <span>{{r.text}}<span style="font-weight: 400; color: {{r.subColor}}">{{r.sub}}</span></span>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+  <div class="p600f-cap" style="color: {{capT.text}}">
+    <b><span class="p600f-chip" style="color: {{capT.bridge}}; background: {{capT.tag}}">{{at}}</span><sc-if value="{{modeChip}}"><span class="p600f-chip" style="color: {{capT.text}}; background: {{capT.tag2}}">{{modeChip}}</span></sc-if>{{label}}</b>
+    <sc-for list="{{notes}}" as="n"><p style="color: {{capT.text2}}">{{n}}</p></sc-for>
+    <sc-if value="{{sr}}">
+      <div class="p600f-sr" style="background: {{capT.tag2}}; color: {{capT.text}}">
+        <svg viewBox="0 0 16 16" width="14" height="14" style="flex: none; margin-top: 1px; color: {{capT.bridge}}"><path d="M2 6h3l4-3v10l-4-3H2zM11.5 5.5a3.5 3.5 0 0 1 0 5M13.2 3.6a6 6 0 0 1 0 8.8" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round" stroke-linecap="round"/></svg>
+        <span>{{sr}}</span>
+      </div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"f":{"editor":"json","default":{}},"$preview":{"width":300,"height":760}}'>
+// The S glyph family from the Slipgates brand spec (PR #558), on a 48 grid. The header glyph is drawn to show the
+// receipt beside a session state; the receipt itself borrows no glyph.
+const TOP = 'M42.872 8.625C43.472 8.625 43.679 8.91 43.494 9.481L42.506 12.519C42.321 13.09 41.928 13.375 41.328 13.375L26 13.375C22.919 13.375 19.809 14.264 17.461 16.321C15.473 18.062 14.286 20.445 14.233 23.101C14.25 23.7 13.958 24 13.358 24L10.399 24C9.799 24 9.494 23.7 9.483 23.1C9.536 19.09 11.298 15.421 14.296 12.778C17.522 9.935 21.741 8.625 26 8.625L42.872 8.625Z';
+const BOT = 'M5.128 39.375C4.528 39.375 4.321 39.09 4.506 38.519L5.494 35.481C5.679 34.91 6.072 34.625 6.672 34.625L22 34.625C25.081 34.625 28.191 33.736 30.539 31.679C32.527 29.938 33.714 27.555 33.767 24.899C33.75 24.3 34.042 24 34.642 24L37.601 24C38.201 24 38.506 24.3 38.517 24.9C38.464 28.91 36.702 32.579 33.704 35.222C30.478 38.065 26.259 39.375 22 39.375L5.128 39.375Z';
+const NEEDS_S = 'M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z';
+// design/glyphs/mark-offline.svg: the gates standing apart, Neutral at 85% (brand.md).
+const OFFLINE = 'M46.872 8.625C47.472 8.625 47.679 8.91 47.494 9.481L46.506 12.519C46.321 13.09 45.928 13.375 45.328 13.375L30 13.375C26.919 13.375 23.809 14.264 21.461 16.321C19.473 18.062 18.286 20.445 18.233 23.101C18.25 23.7 17.958 24 17.358 24L14.399 24C13.799 24 13.494 23.7 13.483 23.1C13.536 19.09 15.298 15.421 18.296 12.778C21.522 9.935 25.741 8.625 30 8.625L46.872 8.625ZM1.128 39.375C0.528 39.375 0.321 39.09 0.506 38.519L1.494 35.481C1.679 34.91 2.072 34.625 2.672 34.625L18 34.625C21.081 34.625 24.191 33.736 26.539 31.679C28.527 29.938 29.714 27.555 29.767 24.899C29.75 24.3 30.042 24 30.642 24L33.601 24C34.201 24 34.506 24.3 34.517 24.9C34.464 28.91 32.702 32.579 29.704 35.222C26.478 38.065 22.259 39.375 18 39.375L1.128 39.375Z';
+// The `check` icon (design/icons/check.svg, #600): Send's success glyph, stroked like `send`, on the 20 grid.
+const SEND_CHECK = 'M4.5 10.5l3.5 3.5 7.5-8';
+const DARK = {
+  layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,.07)', stroke2: 'rgba(255,255,255,.12)',
+  text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)',
+  bridge: '#2DD4BF', onBridge: '#062621', active: '#4C9AFF', neutral: '#8B949E',
+  danger: '#FF6B6B', needsText: '#FFD27A', needsHead: '#FFB224', needsFill: 'rgba(255,178,36,0.10)', needsEdge: 'rgba(255,178,36,0.45)', dangerText: '#FF9494',
+  track: 'rgba(255,255,255,.18)', bezel: '#3A3F45',
+};
+const LIGHT = {
+  layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,.07)', stroke2: 'rgba(0,0,0,.12)',
+  text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)',
+  bridge: '#0B7A6E', onBridge: '#FFFFFF', active: '#0B63E5', neutral: '#6E7781',
+  danger: '#C9302C', needsText: '#7A4600', needsHead: '#8F5300', needsFill: '#FFF2D6', needsEdge: '#E8C27A', dangerText: '#C9302C',
+  track: 'rgba(0,0,0,.16)', bezel: '#C9CDD2',
+};
+// Windows contrast themes, as forced colours resolve them: Night sky (dark) and Desert (light).
+const NIGHT_SKY = {
+  layer: '#000000', card: '#000000', stroke: '#A6A6A6', stroke2: '#FFFFFF',
+  text: '#FFFFFF', text2: '#FFFFFF', text3: '#A6A6A6',
+  bridge: '#D6B4FD', onBridge: '#2B2B2B', active: '#D6B4FD', neutral: '#A6A6A6',
+  danger: '#FFFFFF', needsText: '#FFFFFF', needsHead: '#FFFFFF', needsFill: '#000000', needsEdge: '#FFFFFF', dangerText: '#FFFFFF',
+  track: '#A6A6A6', bezel: '#FFFFFF',
+};
+const DESERT = {
+  layer: '#FFFAEF', card: '#FFFAEF', stroke: '#676767', stroke2: '#3D3D3D',
+  text: '#3D3D3D', text2: '#3D3D3D', text3: '#676767',
+  bridge: '#903909', onBridge: '#FFF5E3', active: '#903909', neutral: '#676767',
+  danger: '#3D3D3D', needsText: '#3D3D3D', needsHead: '#3D3D3D', needsFill: '#FFFAEF', needsEdge: '#3D3D3D', dangerText: '#3D3D3D',
+  track: '#676767', bezel: '#3D3D3D',
+};
+const CAP = {
+  dark: { text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', bridge: '#2DD4BF', tag: 'rgba(45,212,191,.14)', tag2: 'rgba(255,255,255,.06)' },
+  light: { text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', bridge: '#0B7A6E', tag: 'rgba(11,122,110,.12)', tag2: 'rgba(0,0,0,.05)' },
+};
+const SESSION = {
+  working: { status: 'Working · ULTRA', p1: TOP, p2: BOT, o2: 0.3, c: 'active' },
+  idle: { status: 'Idle · ULTRA', p1: TOP + BOT, p2: '', o2: 1, c: 'neutral' },
+  offline: { status: 'Offline · last seen 2m ago', p1: '', p2: OFFLINE, o2: 0.85, c: 'neutral' },
+  needs: { status: 'Waiting on you · ULTRA', p1: NEEDS_S, p2: '', o2: 1, c: 'needsHead', bg: 1 },
+};
+const AGENT_TEXT = {
+  phone: 'I’ve drafted the 1.33 notes. Want the breaking changes first, or the fixes?',
+  desktop: 'I’ve drafted the 1.33 release notes from the merged PRs. Want the breaking changes first, or the fixes?',
+};
+class Component extends DCLogic {
+  renderVals() {
+    const f = this.props.f || {};
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const t = f.hc ? (theme === 'light' ? DESERT : NIGHT_SKY) : (theme === 'light' ? LIGHT : DARK);
+    const phone = f.kind !== 'desktop';
+    const w = f.w || (phone ? 300 : 440), h = f.h || (phone ? 560 : 400);
+    const s = SESSION[f.session || 'working'];
+    // The receipt line (ui.md §6.5, "quiet unless something's wrong"): words only, and only for an
+    // exception or a resolved answer. Send carries the ring and the check.
+    const r = f.r || {};
+    const tone = r.tone || 'quiet';
+    // ui.md §9: in forced colours every receipt word is CanvasText.
+    const color = f.hc ? t.text : { quiet: t.text2, ok: t.bridge, warn: t.needsText, bad: t.dangerText }[tone];
+    // An outcome's guidance or reason keeps its Needs you / Danger colour (ui.md §6.5); only
+    // in-flight secondary words and a confirmed answer's value drop to text2.
+    const receipt = {
+      text: r.text || '', sub: r.sub ? (/[.:]$/.test(r.text) ? ` ${r.sub}` : ` · ${r.sub}`) : '', subColor: f.hc ? t.text : (tone === 'warn' || tone === 'bad' ? color : t.text2), color,
+    };
+    let q = null;
+    if (f.q) {
+      const open = f.q !== 'answered';
+      const picked = 1;
+      // ui.md §6.4 "While an answer goes" (#773, #774): what was chosen stays selected and
+      // read-only while the answer goes and once an outcome forbids another (qheld), never
+      // dimmed as disabled. Send answer carries the ring, then the check. Not confirmed and stale
+      // (qheld) take Send answer away, since an unconfirmed answer is final and never resent;
+      // failed (qretry) puts Try again in its place, which resends the same request. Busy and
+      // refused make the fields editable again, with Send answer back.
+      const choices = ['Breaking changes first', 'Fixes first', 'One list, newest first'].map((text, i) => {
+        const on = i === picked;
+        return { text, on, ring: on ? t.bridge : t.text2, dot: t.bridge };
+      });
+      const gone = !!(f.qheld || f.qretry);
+      q = {
+        open, answered: !open, choices, retry: !!f.qretry,
+        showSend: open && !gone, sendRing: !!f.sending, sendCheck: !!f.done, sendLabel: !f.sending && !f.done,
+        footDir: w < 400 ? 'column-reverse' : 'row',
+        heading: open ? 'Main agent asks' : 'Main agent asked',
+        text: f.qtext || 'Which order for the 1.33 notes?',
+        bg: open && !f.hc ? t.needsFill : t.card,
+        edge: open ? t.needsEdge : t.stroke2,
+        head: open ? t.needsHead : t.text2,
+      };
+    }
+    const needsMode = !!f.needs;
+    const glyphColor = s.c === 'needsHead' ? t.needsHead : t[s.c];
+    return {
+      t, w, h, at: f.at || '', label: f.label || '', notes: f.notes || [], sr: f.sr || '',
+      capT: CAP[theme], SEND_CHECK,
+      // ui.md §6.5: from Send the receipt reserves the longest outcome's lines ("Sent, but not
+      // confirmed. Check at …" wraps to two at phone width, a narrow Windows pane included), so the outcome never moves the box.
+      receiptMin: w < 400 ? 36 : 18,
+      pad: phone ? '14px 12px 16px' : '14px 18px 16px',
+      radius: phone ? 22 : 8,
+      devBorder: phone ? `6px solid ${t.bezel}` : `1px solid ${t.stroke2}`,
+      title: needsMode ? 'Sessions' : 'Release notes for 1.33', titleSize: phone ? 17 : 15, titleLine: phone ? 22 : 20,
+      status: needsMode ? 'ULTRA · 3 sessions' : s.status, showGlyph: !needsMode, showAgent: !needsMode, convJustify: needsMode ? 'flex-start' : 'flex-end',
+      nv: needsMode ? { bg: f.hc ? t.card : t.needsFill, edge: t.needsEdge, glyph: NEEDS_S, ink: f.hc ? t.layer : '#14100A' } : null,
+      modeChip: f.rm ? 'Reduced motion' : '', glyph: { p1: s.p1, p2: s.p2, o2: s.o2, c: glyphColor, bg: !!s.bg, f1: s.bg ? (f.hc ? t.layer : '#14100A') : 'currentColor' },
+      agentAge: f.age || '1m', agentText: AGENT_TEXT[phone ? 'phone' : 'desktop'],
+      bodySize: phone ? 14 : 14, bodyLine: 20,
+      reply: f.reply || 'Breaking changes first, then fixes.',
+      showBubble: !!f.bubble,
+      showBox: !f.q && !needsMode,
+      draftText: f.draft === '' ? 'Message the main agent' : (f.draft || 'Breaking changes first, then fixes.'),
+      draftColor: f.draft === '' ? t.text3 : t.text,
+      sending: !!(f.sending || f.still), done: !!f.done, atRest: !f.sending && !f.still && !f.done, ringOp: 1,
+      sendBorder: f.hc ? `1px solid ${t.stroke2}` : '0',
+      q, r: receipt,
+    };
+  }
+}
+</script>
+</body>
+</html>
