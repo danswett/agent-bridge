@@ -111,7 +111,7 @@ test('an unconfirmed answer says how far it got: typed into the prompt, or recor
   assert.equal(readAnswerResult({ outcome: 'unconfirmed', stage: 'acknowledged' }).stage, 'typed');
   assert.equal(readAnswerResult({ outcome: 'delivered', stage: 'typed' }).stage, null);
   const done = (stage) => ({ state: 'done', outcome: 'unconfirmed', reason: 'why', detail: { outcome: 'unconfirmed', stage } });
-  assert.match(describeAnswer(done('typed'), 'DEV-VM1').text, /^Typed into the prompt, but not confirmed as submitted\. Check at the machine on DEV-VM1\. \(why\)$/);
+  assert.match(describeAnswer(done('typed'), 'DEV-VM1').text, /^Typed into the prompt, but not confirmed as submitted\. Check the conversation\. \(why\)$/);
   assert.match(describeAnswer(done('recorded'), 'DEV-VM1').text, /^The session recorded something for this question, but not confirmed as this answer\./);
   assert.match(describeAnswer(done(null), 'DEV-VM1').text, /^Sent, but not confirmed\./);
 });
