@@ -334,6 +334,9 @@
     <x:String x:Key="AbMotionReorderDuration">00:00:00.167</x:String>
     <x:String x:Key="AbMotionReorderEase">0.33,0,0.67,1</x:String>
     <x:String x:Key="AbMotionReorderReduced">Instant</x:String>
+    <x:String x:Key="AbMotionCollapseDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionCollapseEase">0.33,0,0.67,1</x:String>
+    <x:String x:Key="AbMotionCollapseReduced">CrossFade</x:String>
 
     <Style x:Key="AbGlyphDelegating" TargetType="ContentControl">
         <Setter Property="Width" Value="16" />

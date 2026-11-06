@@ -73,6 +73,27 @@ public sealed class TolerantEnumConverterFactory : JsonConverterFactory
     }
 }
 
+// For an optional field whose unknown value must read as absent, not as one of its values
+// (session.class, #913): its absence is the older host's behaviour, which a client knows how to show.
+public sealed class UnknownAsAbsentConverter<T> : JsonConverter<T?> where T : struct, Enum
+{
+    static readonly Dictionary<string, T> ByName = Enum.GetValues<T>().ToDictionary(v => JsonNamingPolicy.CamelCase.ConvertName(v.ToString()), v => v, StringComparer.Ordinal);
+
+    public override T? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String && ByName.TryGetValue(reader.GetString()!, out var v)) { return v; }
+        // Anything else, an object or a list included, is passed over whole.
+        reader.Skip();
+        return null;
+    }
+
+    public override void Write(Utf8JsonWriter writer, T? value, JsonSerializerOptions options)
+    {
+        if (value is { } v) { writer.WriteStringValue(JsonNamingPolicy.CamelCase.ConvertName(v.ToString())); }
+        else { writer.WriteNullValue(); }
+    }
+}
+
 // Limits are UTF-8 bytes of the text. Its JSON form can be larger (escaped quotes and
 // control characters, and 12 bytes for each emoji), which SessionBudget.Fit accounts for.
 public static class Limits
@@ -314,6 +335,12 @@ public enum SignInWhere { Phone, Machine, Unknown }
 [UnknownAs(Failed)]
 public enum RecoveryState { Checking, SigningIn, Pending, Failed }
 
+// session.class (#913): which notification tier the session is in now, decided by the host so
+// every client follows one policy instead of its own. A class a client does not know reads as
+// absent (UnknownAsAbsentConverter), so it keeps today's rules: read as NeedsYou, a newer host
+// could interrupt people with something an older client can't explain (Creative, #913 q10).
+public enum NotificationClass { NeedsYou, Done, Fyi }
+
 // Dev: built from a working copy rather than released (docs/protocol/v1-usage.md). Sessions:
 // how many were live when hello was answered. ReadOnly: why this machine takes no answers,
 // replies, stops or launches from other devices now (agent-ha-bridge running for the user,
@@ -362,6 +389,15 @@ public sealed record Session
     // truthful beside it (idle after an error), so an older client, which ignores this,
     // reads the session as it always did. Absent when nothing is wrong.
     public Attention? Attention { get; init; }
+    // The notification tier the session is in (#913): NeedsYou interrupts, Done waits, Fyi never
+    // notifies. The host sets it from the fields above, the parent session carrying its
+    // delegates' questions. Absent from an older host, and a client then keeps its own rules.
+    [JsonConverter(typeof(UnknownAsAbsentConverter<NotificationClass>))]
+    public NotificationClass? Class { get; init; }
+    // When the session's present tier began (#913), which the 15-minute reminder counts from:
+    // the earliest of question.askedAt and attention.since for NeedsYou, else statusSince.
+    // Set with Class, from the same fields, so it never moves updatedAt on its own.
+    public DateTimeOffset? ClassSince { get; init; }
 
     // The list and event form: everything but the tool history.
     public Session WithoutHistory() => Activity.History is null ? this : this with { Activity = Activity with { History = null } };

@@ -437,11 +437,15 @@ without the worker); `sw.js` shows the same fields elsewhere:
 | Notice | Shown | Tap |
 |---|---|---|
 | `question` | The session's title; "*machine* · waiting on you" and the question. Alerts | Opens that machine and session, scrolled to it, with focus on the question's first control: once that machine's list is current (#269), only if the session still asks that same question and nothing has been pressed, typed or focused since |
-| `finished` | "*machine* · finished" and the start of the response. Alerts | Opens the session |
-| `resolved` | "*machine* · no longer waiting", silently, in place of the question | Opens the session |
+| `finished` | "*machine* · finished" and the start of the response. Alerts, unless the push's class is `done` (below) | Opens the session |
+| `resolved` | "*machine* · no longer waiting": shown silently in place of the question, then closed, so nothing of the session's is left in the tray | Opens the session |
 
 All notices about one session share its tag (`<machine id>:<session id>`), so each
-replaces the last. A tap opens the app at `?host=&session=&question=`, which it takes out
+replaces the last. A push may carry the host's notification class in `data.class` (#913),
+which the worker follows over its own rules: `needsYou` alerts as a question does; `done`
+is always silent and never alerts again, whatever the push's own `silent` says; `fyi`
+shows nothing that stays (shown silently, then closed, since a push that shows nothing
+costs an iOS subscription). An absent or unknown class is as before. A tap opens the app at `?host=&session=&question=`, which it takes out
 of the address once read; an app already open is focused and told where to go instead,
 keeping its connection. The app also closes notifications itself: those for a question it
 answered, and question notifications for questions its machine no longer asks. iOS shows
