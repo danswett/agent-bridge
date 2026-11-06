@@ -846,23 +846,72 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
-    [Fact]
-    public async Task A_session_with_no_transcript_yet_may_be_asking_whether_to_trust_its_folder_so_a_reply_is_refused_and_says_why()
+    const string FreshSession = "88888888-8888-4888-8888-888888888888";
+
+    // A session just started with no first prompt has no transcript yet (Copilot writes it with the
+    // first prompt), and its window is what says whether it is ready (#1018).
+    async Task<(string Transcript, SecureChannel Channel)> FreshAsync(Func<int, IReadOnlyList<string>?> screen)
     {
-        const string fresh = "88888888-8888-4888-8888-888888888888";
-        var transcript = f.CopilotSession(fresh, 101, name: null);
+        var transcript = f.CopilotSession(FreshSession, 101, name: null);
         f.Processes.Run(AgentKind.Copilot, 101);
+        injector.Screen = screen;
         await source.RefreshAsync();
-        var ch = await OpenAsync();
+        return (transcript, await OpenAsync());
+    }
 
-        var (outcome, reason) = await ReplyAsync(ch, "hello there", id: fresh);
+    [Fact]
+    public async Task A_first_reply_to_a_session_with_no_transcript_yet_is_delivered_when_its_window_shows_the_ready_box()
+    {
+        var (transcript, ch) = await FreshAsync(pid => pid == 101 ? CopilotIdle : null);
+        injector.OnInject = plan => Fixture.Append(transcript, Prompt(plan.Sends[0].Text));
 
-        Assert.Equal("refused", outcome);
-        Assert.StartsWith("Copilot has not started this session's transcript yet", reason);
-        Assert.Contains("trust its folder", reason);
+        var (outcome, reason) = await ReplyAsync(ch, "hello there", id: FreshSession);
+
+        Assert.Equal(("delivered", null), (outcome, reason));
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_first_reply_is_held_with_words_for_the_phone_while_the_window_asks_whether_to_trust_its_folder()
+    {
+        var (transcript, ch) = await FreshAsync(pid => pid == 101 ? CopilotTrustQuestion : null);
+
+        var (outcome, reason) = await ReplyAsync(ch, "hello there", id: FreshSession);
+
+        Assert.Equal(("refused", "Copilot is asking whether to trust its folder, and a reply would answer it. Answer it on that machine"), (outcome, reason));
         Assert.Empty(injector.Plans);
         Assert.False(File.Exists(transcript));
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_first_reply_is_held_as_still_starting_and_never_typed_while_the_window_cannot_be_read_or_shows_no_box(bool readable)
+    {
+        var (transcript, ch) = await FreshAsync(pid => pid == 101 && readable ? ["", "  Starting…"] : null);
+
+        var (outcome, reason) = await ReplyAsync(ch, "hello there", id: FreshSession);
+
+        // Creative's words (#1018): the clients read it as "The machine refused this reply: {reason}."
+        Assert.Equal(("refused", "the session is still starting, so it can't take a reply yet. Send it again in a moment"), (outcome, reason));
+        Assert.DoesNotContain("at the machine", reason);
+        Assert.Empty(injector.Plans);
+        Assert.False(File.Exists(transcript));
+    }
+
+    // Copilot's folder-trust dialog, as captured live (1.0.105 to 1.0.107): drawn in place of the
+    // prompt's box and footer.
+    static readonly IReadOnlyList<string> CopilotTrustQuestion =
+    [
+        "\u256D" + new string('\u2500', 20) + "\u256E",
+        "\u2502 Confirm folder trust     \u2502",
+        "\u2502 Do you trust the files in this folder? \u2502",
+        "\u2502 \u276F 1. Yes                \u2502",
+        "\u2502   2. Yes, and remember this folder for future sessions \u2502",
+        "\u2502   3. No (Esc)               \u2502",
+        "\u2502 \u2191/\u2193 to navigate \u00B7 enter to select \u00B7 esc to cancel \u2502",
+        "\u2570" + new string('\u2500', 20) + "\u256F",
+    ];
 
     [Fact]
     public async Task A_reply_while_an_answer_to_that_session_is_being_typed_is_busy_as_is_one_behind_another_reply()
