@@ -244,6 +244,7 @@ cannot be moved aside is left as it is and never written over: the record does n
 | Same boot, and the last run saw it go | Ended under the host's eyes |
 | Same boot, and its agent's endings are not yet all taken in (on a machine migrated from agent-ha-bridge, a Claude or Codex SessionEnd still in the hook intake's spool) | Waits until the intake has drained the spool, then is judged; while the profile's `intake.json` cannot be read no intake runs, and it waits; so it does while the intake cannot claim the spool (another host has it, or the claim file cannot be opened), since nothing here takes it in |
 | Same boot, and its agent recorded a normal end | Ended. Copilot: a `session.shutdown` of the main agent after the last `user.message` and the last `session.resume` in its `events.jsonl`. Claude and Codex: its hook registration says `Ended` (their SessionEnd hook), the newest of its roots; an ending read while discovery was held is kept, since the intake may prune the registration before the hold lifts |
+| Same boot, a Claude or Codex session, and its registration is gone | Uncertain: agent-ha-bridge's daemon prunes an ended registration within about a minute, and a Claude one once it is 240 minutes old, so its absence says nothing either way. Not offered, not in the push and never restored; its folder is kept from the worktree reclaimer for as long as an offer's (7 days), and the host log says so |
 | Otherwise | Died with the host |
 
 The cause is `reboot` across boots or logons; on the same boot, `restart` if the last run wrote `stopped`, else

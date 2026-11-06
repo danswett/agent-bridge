@@ -184,6 +184,31 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(["asked", "died"], Written().Owed.Select(w => w.Entry.Id).Order(StringComparer.Ordinal));
     }
 
+    // Engineering on #813: on the same boot, a Codex session that ended while the host was down has its
+    // registration pruned by agent-ha-bridge's daemon within a minute, and a Claude one once it is
+    // 240 minutes old. Gone, it says nothing either way: neither is offered or pushed as having died,
+    // and their folders are kept as an offer's are, for as long.
+    [Fact]
+    public async Task A_claude_or_codex_session_whose_registration_is_gone_on_the_same_boot_is_not_offered_and_keeps_its_folder()
+    {
+        Previous(Fixture.T0, false, E("codex", AgentKind.Codex, cwd: "/work/codex"), E("claude", AgentKind.Claude, cwd: "/work/claude"));
+        ends.Of["codex"] = null;
+        ends.Of["claude"] = null;
+        var logs = new List<string>();
+        await using var r = Recorder(logs: logs);
+
+        r.Start();
+
+        Assert.Empty(told);
+        Assert.Null(r.Notice);
+        Assert.Equal(["/work/claude", "/work/codex"], r.Folders()!.Order(StringComparer.Ordinal));
+        Assert.Equal(2, Written().Owed.Count(w => w.Uncertain == true));
+        Assert.Equal(2, logs.Count(l => l.Contains("registration is gone", StringComparison.Ordinal)));
+
+        Time.Advance(RestoreRecorder.OwedFor);
+        Assert.Empty(r.Folders()!);
+    }
+
     [Fact]
     public async Task After_a_reboot_every_session_that_was_live_is_offered_even_one_its_agent_wrote_as_ended()
     {
@@ -573,7 +598,7 @@ public sealed class RestoreTests : IDisposable
         await using var r = Recorder();
         r.Start();
 
-        ends.Of.Remove("a");
+        ends.Of["a"] = null;
         source.HeldNow = null;
         Time.Advance(RestoreRecorder.JudgeEvery);
 
@@ -819,10 +844,12 @@ public sealed class RestoreTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    // As its agent records it; one not listed has a record that says it has not ended (a registration
+    // without Ended), and null is one with no record at all (a registration pruned).
     sealed class Ends : ISessionEnds
     {
         public readonly Dictionary<string, bool?> Of = new(StringComparer.Ordinal);
-        public bool? Ended(AgentKind agent, string id) => Of.GetValueOrDefault(id);
+        public bool? Ended(AgentKind agent, string id) => Of.TryGetValue(id, out var ended) ? ended : false;
     }
 
     sealed class Logon(bool fresh) : ILogonMarker

@@ -38,7 +38,10 @@ public sealed record RestoreEntry
 // EndedSeen: its agent was once seen to record a normal ending while it was still being judged,
 // kept because the record of it may be gone by the time it can be judged (the hook intake prunes
 // an ended Codex registration once its process has gone).
-public sealed record RestoreOwed(RestoreEntry Entry, RestoreCause Cause, DateTimeOffset? Since, DateTimeOffset At, bool Decided, bool? EndedSeen = null);
+// Uncertain: a Claude or Codex session judged on the same boot with its registration gone, so whether
+// it ended is unknown (RestoreVerdict.Uncertain): never offered or pushed, its folder kept as an
+// offer's is, for as long.
+public sealed record RestoreOwed(RestoreEntry Entry, RestoreCause Cause, DateTimeOffset? Since, DateTimeOffset At, bool Decided, bool? EndedSeen = null, bool? Uncertain = null);
 
 // restore.json, in the profile's folder beside config.json. Boot: when the machine started, as this
 // run of the host read it; a later run on another boot knows the machine restarted. Stopped: the host

@@ -3,7 +3,7 @@ using AgentBridge.Protocol;
 namespace AgentBridge.Host.Core.Restore;
 
 // What became of a session an earlier run of the host saw live.
-public enum RestoreVerdict { Running, Ended, Died, Waiting }
+public enum RestoreVerdict { Running, Ended, Died, Waiting, Uncertain }
 
 // What the worktree reclaimer asks (RestoreWorktreeUsage): the folders of the sessions waiting to be
 // restored or still being judged, which no reclaim may take; or null when they cannot be known, and
@@ -35,6 +35,10 @@ public static class RestoreJudge
     //   * its agent's endings not yet settled (a hook's SessionEnd still in the intake's spool):
     //     waiting, as for a hold, so an ending written while the host was down is not missed;
     //   * ended normally, as its agent records it: never restored;
+    //   * a Claude or Codex session whose registration is gone: uncertain. agent-ha-bridge's daemon
+    //     prunes an ended registration within a minute, and Claude's once it is StaleAfter old, so
+    //     its absence says nothing either way (ISessionEnds). Neither offered nor said to have died,
+    //     its folder kept as an offer's is (Engineering on #813);
     //   * otherwise it died with the host.
     // A session a person closed while the host was down, on the same boot, with nothing its agent
     // records, reads as died: it is offered, never typed into (#780, known edge).
@@ -45,7 +49,12 @@ public static class RestoreJudge
         if (cause == RestoreCause.Reboot) { return RestoreVerdict.Died; }
         if (entry.Gone is not null) { return RestoreVerdict.Ended; }
         if (!endsSettled) { return RestoreVerdict.Waiting; }
-        return endedNormally() == true ? RestoreVerdict.Ended : RestoreVerdict.Died;
+        return endedNormally() switch
+        {
+            true => RestoreVerdict.Ended,
+            null when entry.Agent is AgentKind.Claude or AgentKind.Codex => RestoreVerdict.Uncertain,
+            _ => RestoreVerdict.Died,
+        };
     }
 }
 
@@ -448,7 +457,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             }
             var seen = w.EndedSeen;
             var entry = w.Entry;
-            var verdict = RestoreJudge.Judge(entry, w.Cause, running: false, held: held.Contains(entry.Agent), () => seen == true || options.Ends.Ended(entry.Agent, entry.Id) == true,
+            var verdict = RestoreJudge.Judge(entry, w.Cause, running: false, held: held.Contains(entry.Agent), () => seen == true ? true : options.Ends.Ended(entry.Agent, entry.Id),
                 endsSettled: settled);
             switch (verdict)
             {
@@ -464,6 +473,14 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
                     owed.RemoveAt(i);
                     said.Add(w with { Decided = true, At = now });
                     break;
+                case RestoreVerdict.Uncertain when options.RestoreOnStart:
+                    // Kept for its folder alone, as long as an offer would be: never offered or pushed.
+                    owed[i] = w with { Decided = true, At = now, Uncertain = true };
+                    log($"restore: session {(entry.Id.Length > 8 ? entry.Id[..8] : entry.Id)} went while the host was away and its registration is gone, so whether it ended is unknown; not offered, its folder kept for {OwedFor.TotalDays:0} days");
+                    break;
+                case RestoreVerdict.Uncertain:
+                    owed.RemoveAt(i);
+                    break;
             }
         }
         BuildNoticeLocked();
@@ -471,7 +488,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         var waiting = owed.Count(w => !w.Decided);
         if (waiting > 0 && time.GetElapsedTime(startedStamp) < NoticeAfter) { return null; }
         // The push says only what this start found: an offer an earlier one pushed is in hello alone.
-        var found = owed.Where(w => w.Decided).Concat(said).Where(w => judgedNow.Contains(w.Entry.Id)).OrderByDescending(w => w.Entry.Seen).ToList();
+        var found = owed.Where(Offered).Concat(said).Where(w => judgedNow.Contains(w.Entry.Id)).OrderByDescending(w => w.Entry.Seen).ToList();
         if (found.Count == 0) { return null; }
         told = true;
         return NoticeOf(found, waiting, found);
@@ -479,7 +496,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
 
     void BuildNoticeLocked()
     {
-        var offered = owed.Where(w => w.Decided).Concat(said).OrderByDescending(w => w.Entry.Seen).ToList();
+        var offered = owed.Where(Offered).Concat(said).OrderByDescending(w => w.Entry.Seen).ToList();
         var waiting = owed.Count(w => !w.Decided);
         if (offered.Count == 0 && waiting == 0)
         {
@@ -513,6 +530,9 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             OfferedMore = offered.Count > RestoreProtocol.MaxOffered ? offered.Count - RestoreProtocol.MaxOffered : null,
         };
     }
+
+    // Judged to have died, and so offered: not one kept only for its folder (RestoreOwed.Uncertain).
+    static bool Offered(RestoreOwed w) => w.Decided && w.Uncertain != true;
 
     string Signature() => string.Join(";", owed.Select(w => $"{w.Entry.Id}:{w.Decided}:{w.EndedSeen}"));
 
