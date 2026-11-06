@@ -277,6 +277,34 @@ test('every glyph is named with its state, as a row reads: title, status, machin
   await expect(card(page, CLAUDE).locator('.tool-line .glyph')).toHaveAccessibleName('running');
 });
 
+// ui.md §9.1 A1 (#365): the words a row draws, in the order drawn and joined with commas (its
+// title, its second line's facts, its age or the new activity dot in its place), then what else
+// its glyph's name says.
+test('a session row is named for the words it draws, in the order drawn, then for what else its glyph says', async ({ page }) => {
+  await openDemo(page);
+  const named = (id) => row(page, id).locator('.row-main');
+  await expect(named(COPILOT)).toHaveAccessibleName(/^Plan Migration to Windows App, Waiting on you, danswett\/agent-ha-bridge, \d+d ago, Demo machine$/);
+  await expect(named(DELEGATING)).toHaveAccessibleName(/^Land the P1 slices, Delegating to 2 agents, danswett\/agent-bridge, \d+d ago, details not reported, Demo machine$/);
+  // Driven: "Driven by an agent" in the status's place; and, updated while not open, the dot in the age's.
+  await upsert(page, CODEX, { driver: 'agent', updatedAt: later() });
+  await expect(named(CODEX)).toHaveAccessibleName('Fix flaky test, Driven by an agent, New activity, idle, Demo machine');
+  // With every machine shown, the row draws its machine where the workspace was.
+  await openDemo(page, '&machines=3');
+  await expect(named(COPILOT)).toHaveAccessibleName(/^Plan Migration to Windows App, Waiting on you, Demo machine, \d+d ago$/);
+});
+
+// Rules 10-12 over rule 7 (#800): the row draws what is wrong, not "Driven by an agent", so its
+// name starts with that too, and says it is driven only after its age (A1).
+test('a driven session that needs sign-in or is not responding is named for the status its row draws, with its driver after its age', async ({ page }) => {
+  await openDemo(page, '&signin=1');
+  const named = (id) => row(page, id).locator('.row-main');
+  await upsert(page, 'signin-1', { driver: 'agent', driverPrincipal: 'homeassistant:demo' });
+  await expect(row(page, 'signin-1').locator('.row-status')).toHaveText('Needs sign-in');
+  await expect(named('signin-1')).toHaveAccessibleName(/^Coordinate the Shiproom, Needs sign-in, danswett\/agent-bridge, [^,]+, Copilot · @demo-user, driven by an agent, Demo machine$/);
+  await expect(row(page, 'stalled').locator('.row-status')).toHaveText('Not responding');
+  await expect(named('stalled')).toHaveAccessibleName(/^Re-run the flaky suite, Not responding, [^,]+, since [^,]+, driven by an agent, Demo machine$/);
+});
+
 test('the latest response is rendered as Markdown', async ({ page }) => {
   await openDemo(page);
   const response = card(page, COPILOT).locator('.response');
