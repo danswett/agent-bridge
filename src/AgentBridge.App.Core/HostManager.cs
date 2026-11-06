@@ -318,8 +318,29 @@ public sealed class HostManager
         // run, rather than a second launcher started beside it and the first one's pid lost (#106
         // review, #420).
         var adopted = LauncherAlive();
-        if (!adopted) { launcher = processes.Start(layout.LauncherExe, layout.ServeArguments); }
+        if (!adopted) { StartLauncher(); }
         await WaitForLauncherAsync(started: !adopted, ct);
+    }
+
+    // Starts a launcher unless a stop marker is there, the look and the start under the marker's
+    // lock. Start cleared the marker as it began, so one there now is a later Stop's from another
+    // process (Program's, or a second app), which this one cannot cancel. Unlocked, that Stop
+    // could write its marker after the look but before the launcher existed: the launcher then
+    // cleared it as older than itself, the Stop found no launcher recorded yet and said the host
+    // was stopped, and the host started (#478 review). Under the lock that Stop either wrote first,
+    // and nothing starts, or writes once the launcher exists, which keeps it. Held only while the
+    // process is created, and let go as Start returns: the launcher waits for it (2 s) to clear an
+    // earlier marker. Not had within 2 s, nothing starts.
+    void StartLauncher()
+    {
+        using var held = HostLauncherContract.LockStopMarker(layout.ProfileFolder, StopMarkerLockWait);
+        if (held is null)
+        {
+            Log($"the host was not started: its stop marker's lock ({HostLauncherContract.StopMarkerLock}) was held for {StopMarkerLockWait.TotalSeconds:0} s");
+            throw new InvalidOperationException($"the host was not started: {HostLauncherContract.StopMarkerLock} was held by another process for {StopMarkerLockWait.TotalSeconds:0} s; try again");
+        }
+        if (File.Exists(StopMarker)) { throw new OperationCanceledException(StoppedWhileStarting); }
+        launcher = processes.Start(layout.LauncherExe, layout.ServeArguments);
     }
 
     bool LauncherAlive() => CurrentLauncher() is { } pid && processes.IsRunning(pid);
@@ -336,12 +357,8 @@ public sealed class HostManager
         {
             if (!started && !LauncherAlive())
             {
-                // Start cleared the marker as it began, so one there now is a later Stop's, from
-                // another process (Program's); a launcher started now would clear it as older than
-                // itself and start the host after that Stop (#478 review).
                 ct.ThrowIfCancellationRequested();
-                if (File.Exists(StopMarker)) { throw new OperationCanceledException(StoppedWhileStarting); }
-                launcher = processes.Start(layout.LauncherExe, layout.ServeArguments);
+                StartLauncher();
                 started = true;
                 deadline = Time.GetUtcNow() + StartTimeout;
             }

@@ -899,6 +899,88 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.IsType<OperationCanceledException>(ended);
     }
 
+    [Theory]
+    [Trait("Category", "Network")]
+    // The launcher Start starts at once, or the fresh one once a launcher it took on has ended.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_stop_from_another_process_as_a_launcher_is_being_started_is_kept_by_that_launcher(bool afterAnAdoptedOne)
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var looks = 0;
+        // No host comes up. Each look at the pipe takes a second, so Start's wait runs out at once.
+        var m = new HostManager(manager.Layout, tasks, processes, _ =>
+        {
+            if (++looks > 1) { processes.Alive.Remove(77); }
+            clock.Advance(TimeSpan.FromSeconds(1));
+            throw new IOException("not listening");
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Elevated = () => false,
+            Time = clock,
+        };
+        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
+        if (afterAnAdoptedOne)
+        {
+            var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+            Assert.True(launcherFiles.HoldRecord(77, startedUtc));
+            processes.Alive.Add(77);
+            processes.Others.Add((77, startedUtc.Ticks));
+        }
+        // Another process's Stop writes its marker, as MarkStopped does, while the launcher is
+        // being created; the launcher exists once Start returns, and then clears a marker older
+        // than itself (#478 review: unlocked, the marker was written first, and cleared).
+        Task? otherStop = null;
+        var launcherStartedUtc = DateTime.MinValue;
+        processes.OnStart = () =>
+        {
+            otherStop = Task.Run(() =>
+            {
+                using var held = HostLauncherContract.LockStopMarker(manager.Layout.ProfileFolder, TimeSpan.FromSeconds(10));
+                File.WriteAllText(StopMarker, "");
+            });
+            otherStop.Wait(TimeSpan.FromMilliseconds(300));
+            // A file's time is the clock's last tick (about 16 ms) but DateTime.UtcNow is precise,
+            // so the launcher's start is put well clear of a marker written either side of it.
+            Thread.Sleep(50);
+            launcherStartedUtc = DateTime.UtcNow;
+            Thread.Sleep(50);
+        };
+
+        await Record.ExceptionAsync(() => m.StartAsync());
+        await otherStop!.WaitAsync(TimeSpan.FromSeconds(30));
+        launcherFiles.ClearStoppedBefore(launcherStartedUtc);
+
+        Assert.Single(processes.Started);
+        Assert.True(launcherFiles.Stopped());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Starting_with_no_task_starts_no_launcher_when_the_stop_markers_lock_cannot_be_had()
+    {
+        var logged = new List<string>();
+        var m = new HostManager(manager.Layout, tasks, processes, _ => throw new IOException("not listening"),
+            userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Elevated = () => false,
+            Log = logged.Add,
+        };
+        using var held = HostLauncherContract.LockStopMarker(manager.Layout.ProfileFolder, TimeSpan.FromSeconds(1));
+        Assert.NotNull(held);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => m.StartAsync());
+
+        Assert.Empty(processes.Started);
+        Assert.Contains(logged, l => l.Contains("was not started", StringComparison.Ordinal));
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Starting_with_no_task_when_a_launcher_it_started_ends_without_a_host_fails_and_starts_no_other()
