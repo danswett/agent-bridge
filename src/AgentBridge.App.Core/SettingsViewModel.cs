@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 
 namespace AgentBridge.App.Core;
@@ -10,6 +11,9 @@ public interface IUpdater
     // Null when this copy was not installed by Velopack (a build folder): no updates then.
     string? InstalledVersion { get; }
     Task<string?> CheckAsync();
+    // When the feed itself was last asked, where a check may be answered from the machine's
+    // shared copy of it (#530): null when every check asks the feed.
+    DateTimeOffset? DiscoveredAt => null;
     // The release notes of the release the last check found, when it has any.
     string? PendingNotes => null;
     Task DownloadAsync(Action<int> progress);
@@ -621,7 +625,10 @@ public sealed class SettingsViewModel : Observable
     {
         if (updater.InstalledVersion is null) { UpdateStatus = "Updates are off in a development copy."; return; }
         UpdateStatus = "Checking…";
-        updateVersion = await updater.CheckAsync();
+        // GitHub limiting or unreachable is a wait, said as the status with when the next check
+        // is (#530), not an error to act on.
+        try { updateVersion = await updater.CheckAsync(); }
+        catch (ReleaseDiscoveryException e) { UpdateStatus = e.Message; return; }
         UpdateStatus = updateVersion is { } v ? $"Version {v} is available." : $"Up to date ({updater.InstalledVersion}).";
         Raise(nameof(UpdateAvailable));
     });

@@ -1,6 +1,11 @@
+using System.Net;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host;
+using AgentBridge.Host.Core.Updates;
+using Microsoft.Extensions.Time.Testing;
+using Velopack;
 using Velopack.Locators;
+using Velopack.Sources;
 using Xunit;
 
 // The host's own updater, as far as it can be tried without an installed package.
@@ -107,6 +112,120 @@ public sealed class HostUpdatesTests : IDisposable
         var found = await updates.CheckAsync(CancellationToken.None);
 
         Assert.Equal(offered, found?.Version);
+    }
+
+    [Fact]
+    public async Task Checks_on_GitHub_go_through_the_machines_shared_discovery_so_a_limit_holds_every_check_until_it_resets()
+    {
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 4, 20, 0, 0, TimeSpan.Zero));
+        var github = new FakeGitHub();
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, time, random: () => 0);
+        var updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
+        github.Answer = () => new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(2)) } };
+
+        var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => updates.CheckAsync(CancellationToken.None));
+        Assert.True(limited.Limited);
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => updates.CheckAsync(CancellationToken.None));
+        Assert.Equal(1, github.Requests);
+
+        // A release without this channel's feed offers nothing, as Velopack's own source treats it.
+        time.Advance(TimeSpan.FromMinutes(2));
+        github.Answer = () => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""[{"name":"Agent Bridge 0.1.601","prerelease":true,"published_at":"2026-11-04T19:00:00Z","assets":[]}]"""),
+        };
+        Assert.Null(await updates.CheckAsync(CancellationToken.None));
+        Assert.Null(await updates.CheckAsync(CancellationToken.None));
+        Assert.Equal(2, github.Requests);
+        Assert.Equal("https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10&page=1", github.Url);
+    }
+
+    // GitHub's own shape, as the API lists releases: the adapter keeps each release's assets, so
+    // Velopack finds the channel's feed among them, and leaves pre-releases out when they are off.
+    [Theory]
+    [InlineData(true, "0.1.602")]
+    [InlineData(false, "0.1.601")]
+    public async Task A_release_GitHub_lists_is_offered_from_its_channel_feed_and_a_pre_release_only_when_they_are_on(bool prereleases, string offered)
+    {
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
+        static string Download(string version, string file) => $"https://github.com/danswett/agent-bridge/releases/download/v{version}/{file}";
+        static string Release(string version, bool pre, string published) => $$"""
+            {"name":"Agent Bridge {{version}}","prerelease":{{(pre ? "true" : "false")}},"published_at":"{{published}}","assets":[
+              {"name":"releases.win.json","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/1","browser_download_url":"{{Download(version, "releases.win.json")}}","content_type":"application/json"},
+              {"name":"AgentBridgeApp-{{version}}-full.nupkg","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/2","browser_download_url":"{{Download(version, $"AgentBridgeApp-{version}-full.nupkg")}}","content_type":"application/octet-stream"}]}
+            """;
+        static string Feed(string version) =>
+            $$"""{"Assets":[{"PackageId":"AgentBridgeApp","Version":"{{version}}","Type":"Full","FileName":"AgentBridgeApp-{{version}}-full.nupkg","SHA1":"0000000000000000000000000000000000000000","SHA256":"0000000000000000000000000000000000000000000000000000000000000000","Size":1}]}""";
+        var github = new FakeGitHub();
+        github.Answer = () => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($"[{Release("0.1.602", true, "2026-11-04T20:00:00Z")},{Release("0.1.601", false, "2026-11-04T19:00:00Z")}]"),
+        };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, random: () => 0);
+        var feeds = new FakeDownloads(new()
+        {
+            [Download("0.1.602", "releases.win.json")] = Feed("0.1.602"),
+            [Download("0.1.601", "releases.win.json")] = Feed("0.1.601"),
+        });
+        var source = new DiscoveredGithubSource(VelopackHostUpdates.Repository, prereleases, discovery, feeds);
+
+        var found = await new UpdateManager(source, null, copy).CheckForUpdatesAsync();
+
+        Assert.Equal(offered, found?.TargetFullRelease.Version.ToString());
+        Assert.Equal(1, github.Requests);
+    }
+
+    // A list whose releases have a field of the wrong type is GitHub's answer that couldn't be
+    // read, backed off and never kept, rather than a JsonException from the cache at every check.
+    [Theory]
+    [InlineData("""[{"name":"Agent Bridge 0.1.601","prerelease":{},"assets":[]}]""")]
+    [InlineData("""[{"name":"Agent Bridge 0.1.601","prerelease":true,"published_at":"soon","assets":[]}]""")]
+    [InlineData("""[{"name":"Agent Bridge 0.1.601","prerelease":true,"assets":{"name":"releases.win.json"}}]""")]
+    public async Task A_release_list_with_a_field_the_updater_cannot_read_is_a_failure_backed_off_not_kept(string list)
+    {
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 4, 20, 0, 0, TimeSpan.Zero));
+        var github = new FakeGitHub { Answer = () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(list) } };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, time, random: () => 0);
+        var updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
+
+        var failed = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => updates.CheckAsync(CancellationToken.None));
+        Assert.StartsWith("GitHub's answer to the update check could not be read.", failed.Message);
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => updates.CheckAsync(CancellationToken.None));
+        Assert.Equal(1, github.Requests);
+
+        time.Advance(ReleaseDiscovery.FirstBackoff);
+        github.Answer = () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[]") };
+        Assert.Null(await updates.CheckAsync(CancellationToken.None));
+        Assert.Equal(2, github.Requests);
+    }
+
+    sealed class FakeDownloads(Dictionary<string, string> files) : IFileDownloader
+    {
+        public Task<byte[]> DownloadBytes(string url, IDictionary<string, string>? headers = null, double timeout = 30) =>
+            Task.FromResult(System.Text.Encoding.UTF8.GetBytes(files[url]));
+        public Task<string> DownloadString(string url, IDictionary<string, string>? headers = null, double timeout = 30) =>
+            Task.FromResult(files[url]);
+        public Task DownloadFile(string url, string targetFile, Action<int> progress, IDictionary<string, string>? headers = null, double timeout = 30, CancellationToken cancelToken = default) =>
+            throw new InvalidOperationException("nothing is downloaded here");
+    }
+
+    sealed class FakeGitHub : HttpMessageHandler
+    {
+        public Func<HttpResponseMessage> Answer = () => new(HttpStatusCode.InternalServerError);
+        public int Requests;
+        public string? Url;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Requests);
+            Url = request.RequestUri?.ToString();
+            return Task.FromResult(Answer());
+        }
     }
 
     [Fact]

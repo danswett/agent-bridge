@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Updates;
 using Microsoft.Win32;
 using Velopack;
 using Velopack.Sources;
@@ -13,37 +14,16 @@ namespace AgentBridge.App;
 sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile) : IUpdater
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
+    // Shared with every profile's app and host through the app's folder (#530).
+    readonly ReleaseDiscovery discovery = new(Paths.AppData);
     UpdateManager? manager;
     UpdateInfo? pending;
     string? source;
-    bool github;
-    static readonly HttpClient RateLimits = new() { Timeout = TimeSpan.FromSeconds(10) };
-
-    // GitHub's rate limit for this address, from its rate_limit endpoint, which costs nothing
-    // against it (Velopack's error carries neither the body nor the headers): whether the core
-    // limit is spent, and when it resets (or Retry-After, when sent). Unknown when it can't be read.
-    static async Task<(bool Spent, DateTimeOffset? Reset)> GithubLimitAsync()
-    {
-        try
-        {
-            using var ask = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/rate_limit");
-            ask.Headers.UserAgent.ParseAdd("agent-bridge-app");
-            using var answer = await RateLimits.SendAsync(ask);
-            DateTimeOffset? after = answer.Headers.RetryAfter is { } r ? r.Date ?? (r.Delta is { } d ? DateTimeOffset.UtcNow + d : null) : null;
-            using var body = System.Text.Json.JsonDocument.Parse(await answer.Content.ReadAsStringAsync());
-            if (body.RootElement.TryGetProperty("resources", out var resources) && resources.TryGetProperty("core", out var core)
-                && core.TryGetProperty("remaining", out var left) && left.TryGetInt64(out var remaining)
-                && core.TryGetProperty("reset", out var reset) && reset.TryGetInt64(out var seconds))
-            {
-                return (remaining == 0, after ?? (remaining == 0 ? DateTimeOffset.FromUnixTimeSeconds(seconds) : null));
-            }
-            return (false, after);
-        }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or ArgumentOutOfRangeException or System.Text.Json.JsonException) { }
-        return (false, null);
-    }
 
     public static string FeedFile => Path.Combine(Paths.AppData, "feed.txt");
+
+    // A feed.txt source is read whole at every check; only GitHub's list is shared and may be older.
+    public DateTimeOffset? DiscoveredAt => source is { } key && key.StartsWith('|') ? discovery.FetchedAt : null;
 
     public string? InstalledVersion
     {
@@ -60,12 +40,11 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         var key = $"{feed}|{prereleases()}";
         if (manager is not null && source == key) { return manager; }
         IUpdateSource from = feed.Length == 0
-            ? new GithubSource(Repository, null, prereleases(), null)
+            ? new DiscoveredGithubSource(Repository, prereleases(), discovery)
             : Uri.TryCreate(feed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https"
                 ? new SimpleWebSource(feed)
                 : new SimpleFileSource(new DirectoryInfo(feed));
         source = key;
-        github = feed.Length == 0;
         pending = null;
         downloaded = null;
         // No channel named: the installed package's own decides, `win` for x64 and `win-arm64` for
@@ -76,21 +55,9 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     public async Task<string?> CheckAsync()
     {
         var from = Manager();
-        UpdateInfo? found;
-        try { found = await from.CheckForUpdatesAsync(); }
-        // GitHub's unauthenticated API allows 60 requests an hour per address, which machines
-        // behind one address share (#800): the reset it reports is when to ask again. A 403 is
-        // the rate limit only when it says so, or the limit is spent: GitHub refuses other things
-        // with 403 too, and those are failures like any other.
-        catch (HttpRequestException e) when (github && e.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.TooManyRequests)
-        {
-            var (spent, reset) = await GithubLimitAsync();
-            if (e.StatusCode == System.Net.HttpStatusCode.TooManyRequests || spent || e.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new UpdateRateLimitedException(e.Message, reset, e);
-            }
-            throw;
-        }
+        // GitHub's limit (#800) comes as ReleaseDiscovery's Limited, with the reset GitHub sent:
+        // AutoUpdater holds its checks off until then.
+        var found = await from.CheckForUpdatesAsync();
         // The feed or the pre-release choice changed while this check ran (one by Settings, one
         // automatic, may overlap): its answer is the old source's, and must not undo the change by
         // becoming pending again. What the current source has found stands.
@@ -130,6 +97,22 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     {
         if (Ready is null || pending is null) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
         Manager().ApplyUpdatesAndRestart(pending.TargetFullRelease, ["--background", "--profile", profile]);
+    }
+}
+
+// Velopack's GithubSource with its release list from the machine's shared ReleaseDiscovery
+// (#530), as the host's (DiscoveredGithubSource in AgentBridge.Host's HostUpdates.cs): one request
+// to the API per interval for every app and host here, rather than one per check. Each release's
+// feed and the packages come from their browser download URLs, which the API's limit does not count.
+sealed class DiscoveredGithubSource(string repository, bool prereleases, ReleaseDiscovery discovery) : GithubSource(repository, null, prereleases)
+{
+    protected override async Task<GithubRelease[]> GetReleases(bool includePrereleases)
+    {
+        // Read through discovery, so a list this can't read is its failure, backed off, never kept.
+        var releases = await discovery.ReleasesAsync(ReleaseDiscovery.ReleasesUrl(RepoUri.ToString()),
+            json => System.Text.Json.JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None);
+        // As GithubSource orders and filters its own.
+        return [.. releases.OfType<GithubRelease>().OrderByDescending(r => r.PublishedAt).Where(r => includePrereleases || !r.Prerelease)];
     }
 }
 
