@@ -1128,6 +1128,70 @@ public sealed class RestoreTests : IDisposable
         if (offered) { Assert.Equal(RestoreCause.Reboot, told[0].Cause); }
     }
 
+    // #913's table, Product's 6689838536 Q2: a session restored after a crash is needsYou, from its
+    // restore, until the person acts on it (here a prompt, which starts a turn).
+    [Fact]
+    public async Task A_session_restored_after_a_crash_needs_the_person_from_its_restore_until_they_act_on_it()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999969";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("ok", 3), Copilot.TurnEnd(4));
+        await real.RefreshAsync();
+        Assert.Equal(NotificationClass.Done, real.Get(Id)!.Class);
+
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Crash });
+        await Until(() => real.Get(Id)?.Restored is not null);
+        var restored = real.Get(Id)!;
+        Assert.Equal(((NotificationClass?)NotificationClass.NeedsYou, (DateTimeOffset?)Fixture.T0.AddSeconds(5)), (restored.Class, restored.ClassSince));
+
+        Fixture.Append(events, Copilot.User("next", 10), Copilot.TurnStart(11));
+        await real.RefreshAsync();
+        var acted = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Working, (NotificationClass?)NotificationClass.Fyi, RestoreCause.Crash), (acted.Status, acted.Class, acted.Restored!.Cause));
+    }
+
+    // Product's 6689838536 Q1: after a reboot or a host restart the restored notice gives no class; the
+    // session needs the person only through its own state.
+    [Theory]
+    [InlineData(RestoreCause.Reboot)]
+    [InlineData(RestoreCause.Restart)]
+    public async Task A_session_restored_after_a_reboot_or_a_host_restart_takes_its_class_from_its_own_state(RestoreCause cause)
+    {
+        const string Id = "99999999-9999-4999-8999-999999999968";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("ok", 3), Copilot.TurnEnd(4));
+        await real.RefreshAsync();
+
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = cause });
+        await Until(() => real.Get(Id)?.Restored is not null);
+
+        Assert.Equal(NotificationClass.Done, real.Get(Id)!.Class);
+    }
+
+    // The crash's needsYou goes with its restored notice.
+    [Fact]
+    public async Task A_crash_restores_needsYou_ends_when_its_restored_notice_does()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999967";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("ok", 3), Copilot.TurnEnd(4));
+        await real.RefreshAsync();
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Crash });
+        await Until(() => real.Get(Id)?.Restored is not null);
+        Assert.Equal(NotificationClass.NeedsYou, real.Get(Id)!.Class);
+
+        real.Mark(Id, null);
+        await Until(() => real.Get(Id)!.Restored is null);
+
+        Assert.Equal(NotificationClass.Done, real.Get(Id)!.Class);
+    }
+
     [Fact]
     public async Task A_restored_mark_offers_continue_until_a_turn_starts_after_the_restore()
     {

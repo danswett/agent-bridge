@@ -10,15 +10,19 @@ public static class NotificationClasses
     // First match wins:
     //   Ending: the person asked it to end, so nothing about it is news.
     //   A question (its own or, through status rule 2, a delegate's) or attention (sign-in, an
-    //     errored turn, not responding): it needs the person.
+    //     errored turn, not responding): it needs the person. So does a session restored after a
+    //     crash, while its restored notice is shown and nobody has acted on it (restoredAfterCrash,
+    //     which the source decides: a prompt since the restore, or a turn started after it, ends it).
+    //     After a reboot or a host restart it does not: those sessions need the person only through
+    //     their own state (Product, 6689838536 Q1).
     //   Idle with an answer of the main agent's own: its turn is done. A delegate's text never
     //     counts, so a delegate finishing is never the session finishing (subagents.md §7).
     //   Anything else (working, or idle with nothing of the main agent's own said): FYI.
     // Watch, Mute and an agent-driven turn (#489) decide who is alerted for a class, not the class.
-    public static NotificationClass Of(Session s)
+    public static NotificationClass Of(Session s, bool restoredAfterCrash = false)
     {
         if (s.Status == SessionStatus.Ending) { return NotificationClass.Fyi; }
-        if (s.Question is not null || s.Attention is not null) { return NotificationClass.NeedsYou; }
+        if (s.Question is not null || s.Attention is not null || CrashRestored(s, restoredAfterCrash)) { return NotificationClass.NeedsYou; }
         if (s.Status == SessionStatus.Idle && !string.IsNullOrWhiteSpace(MainResponse(s))) { return NotificationClass.Done; }
         return NotificationClass.Fyi;
     }
@@ -29,19 +33,23 @@ public static class NotificationClasses
     // working and idle within fyi. Each of those once restarted it, and so the 15-minute reminder
     // (#913 q9), which a new question while already needsYou must not (#975 review). Only a change of
     // tier, or a session the host has not sent before, takes it from the fields that put the session
-    // there: for needsYou its oldest pending reason, otherwise statusSince.
-    public static DateTimeOffset Since(Session s, NotificationClass c, Session? previous = null)
+    // there: for needsYou its oldest pending reason (a crash restore's being its time), otherwise
+    // statusSince.
+    public static DateTimeOffset Since(Session s, NotificationClass c, Session? previous = null, bool restoredAfterCrash = false)
     {
         if (previous is { Class: { } was, ClassSince: { } began } && was == c) { return began; }
         if (c != NotificationClass.NeedsYou) { return s.StatusSince; }
-        return (s.Question?.AskedAt, s.Attention?.Since) switch
+        DateTimeOffset? oldest = null;
+        foreach (var at in new[] { s.Question?.AskedAt, s.Attention?.Since, CrashRestored(s, restoredAfterCrash) ? (DateTimeOffset?)s.Restored!.At : null })
         {
-            ({ } asked, { } since) => asked < since ? asked : since,
-            ({ } asked, null) => asked,
-            (null, { } since) => since,
-            _ => s.StatusSince,
-        };
+            if (at is { } t && (oldest is null || t < oldest)) { oldest = t; }
+        }
+        return oldest ?? s.StatusSince;
     }
+
+    // Only while the session still carries the crash's restored notice: the flag alone says no one
+    // has acted since, never which restore it was.
+    static bool CrashRestored(Session s, bool restoredAfterCrash) => restoredAfterCrash && s.Restored is { Cause: RestoreCause.Crash };
 
     // The main agent's own latest answer, as PushNotifier reads it for a finished push: the
     // top-level response unless source names a delegate for it, then own's.
