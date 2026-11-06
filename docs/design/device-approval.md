@@ -1877,7 +1877,7 @@ fingerprint locally (in the app or the CLI) before it holds the roster.
 
 | Combination | Outcome |
 |---|---|
-| Old client, enforcing host | The handshake fails before any gate runs: the old client's `ReadIntro` requires `name` and `kind`, so it ends the channel on the empty message 2 (XX) or the empty IK reply, never reaching `not-approved`, and shows its usual failure to reach the machine, even if its key is rostered. So a client must be updated before any host it talks to enforces. Every device §8.2 enrolls already has roster support, since joining needs it (§8.3 ships join first); this row is a copy left on an old version, such as a PWA tab not reloaded or an app not yet updated. Windows apps update within 30 minutes, and the PWA on reload |
+| Old client, enforcing host | The old client's `ReadIntro` requires `name` and `kind`, so it fails before any gate runs, never reaching `not-approved`, on every XX handshake (message 2 is empty) and on IK when its key is not active (the reply is empty), and shows its usual failure to reach the machine. With an active key and the host's key still in its IK cache (`pwa/js/channels.js`, the app's `Machines`), it gets the full IK reply (§7.1) and keeps working over IK until its first XX fallback, which then fails. So a client must be updated before any host it talks to enforces. Every device §8.2 enrolls already has roster support, since joining needs it (§8.3 ships join first); this row is a copy left on an old version, such as a PWA tab not reloaded or an app not yet updated. Windows apps update within 30 minutes, and the PWA on reload |
 | New client, old host | The client sees no heads in `hello`. In `observe` it warns; in `enforce` it refuses to send, saying "update this machine". Old hosts update with their app |
 | New client, old relay | No roster store, so enrollment is unavailable and says why. Devices that hold a roster keep enforcing it and gossip |
 | New host, old relay | The same: a host in `enforce` keeps its roster and syncs from peers. Freshness still works through peers and the pipe |
@@ -1963,8 +1963,9 @@ Each slice adds its own. Together they cover:
   says `approved: false` and nothing else, and `roster.submit` answers only `accepted` or
   `refused` (§7.1).
 * An old client (no roster support) opening to a host in `enforce` fails the handshake on the
-  empty intro, by XX and by IK alike, whether or not its key is rostered, and shows its usual
-  failure to reach the machine.
+  empty intro over XX, whether or not its key is rostered, and over IK when its key is not active,
+  and shows its usual failure to reach the machine. With an active key and the host's key in its
+  IK cache it opens over IK and is served, until its first XX fallback, which fails.
 * A device added with the mutual codes on the PWA (or an Apple client, or the Windows app after R4)
   is served by every host, including one that was offline during the approval.
 * A removed device is refused by every host, including one that was offline at the removal.
@@ -1988,8 +1989,10 @@ Each slice adds its own. Together they cover:
 * **What an active device still learns.** An active device whose only handshake with a host so
   far was XX in `enforce` (an empty message 2) opens its next channel to that host with IK, and
   sends it deflated frames: its approved `hello` carried `transport`. An unrostered device's
-  `hello` carries no `transport`, and its message 2 holds no `ik`, so it never learns that the
-  peer is a host.
+  `hello` carries no `transport`, and its message 2 holds no `ik`. Two other signals still tell an
+  unrostered opener that the peer is a host, and are accepted in this phase: that it answers
+  `hello` at all (`approved: false`, where an app's hub answers `unknown op hello`), and relay
+  presence while the relay is still in `observe` (§8.2 step 4).
 
 **Enrollment**
 * A relay that substitutes keys on either leg: code 1 fails at A and code 2 fails at N. A grinding
