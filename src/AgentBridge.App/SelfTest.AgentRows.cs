@@ -34,7 +34,8 @@ static partial class SelfTest
         var names = shown.Select(b => $"{b.Name} ({b.Id})").ToList();
         result["agentRowNames"] = names;
         var ids = Buttons(rows).Select(b => b.Id).ToList();
-        string[] wanted = ["Set up Copilot CLI", "Remove Copilot CLI's connection", "Repair Claude Code", "Remove Claude Code's connection", "Remove Codex's connection"];
+        // Copilot CLI has no owned record yet, so nothing to remove: no Remove button (#784's ruling).
+        string[] wanted = ["Set up Copilot CLI", "Repair Claude Code", "Remove Claude Code's connection", "Remove Codex's connection"];
         check(shown.Select(b => b.Name).SequenceEqual(wanted) && ids.Distinct().Count() == ids.Count,
             $"names each agent row's buttons for its agent, with ids of their own ({string.Join(" | ", names)})");
         var verbs = shown.Where(b => b.Id.StartsWith("SetUpAgent_", StringComparison.Ordinal)).Select(b => $"{b.Id}: {b.Button.Content}").ToList();

@@ -549,14 +549,15 @@ public sealed class SettingsTests : IAsyncLifetime
         """, ProtocolJson.Options)!;
 
     [Fact]
-    public void Failed_hooks_the_host_cannot_repair_offer_no_verb_and_say_the_hosts_words_in_danger()
+    public void Failed_hooks_the_host_cannot_repair_offer_no_button_and_say_the_hosts_words_in_the_neutral_tone()
     {
         var row = new AgentReadinessRow(FromWire("failed", UnknownRecord, "unknown"), canManage: true);
 
         Assert.False(row.ShowSetUp);
         Assert.False(row.CanSetUp);
+        Assert.False(row.ShowRemove);
         Assert.Equal(UnknownRecord, row.Status);
-        Assert.Equal(Tone.Bad, row.StatusTone);
+        Assert.Equal(Tone.None, row.StatusTone);
         Assert.Equal($"Codex: {UnknownRecord}", row.StatusName);
     }
 
@@ -577,7 +578,10 @@ public sealed class SettingsTests : IAsyncLifetime
     [InlineData("failed", UnknownRecord, null, false)]
     public void Remove_is_offered_only_for_hooks_this_profiles_owned_record_set_up(string hooks, string detail, string? hookSetup, bool canRemove)
     {
-        Assert.Equal(canRemove, new AgentReadinessRow(FromWire(hooks, detail, hookSetup), canManage: true).CanRemove);
+        var row = new AgentReadinessRow(FromWire(hooks, detail, hookSetup), canManage: true);
+
+        Assert.Equal(canRemove, row.ShowRemove);
+        Assert.Equal(canRemove, row.CanRemove);
     }
 
     [Fact]

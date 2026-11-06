@@ -42,7 +42,8 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
         // Failed with no setup that didn't finish is hooks the host can't repair: unreadable intake,
         // or an ownership record it doesn't recognise or can't read (AgentReadinessService.Hooks).
         // StandaloneHooks.Preflight refuses those, and the refused setup still asked for a restart
-        // (#705 Engineering review), so the row offers nothing and says the host's words instead.
+        // (#705 Engineering review), so the row offers nothing and says the host's words instead, in
+        // the neutral tone of a row the app can't act on (#784's ruling), not as a status of its own.
         (ReadinessState.Failed, HookSetup.Unknown) when CannotRepair => null,
         (_, HookSetup.Incomplete) or (ReadinessState.Failed, _) => "Repair",
         (ReadinessState.Missing or ReadinessState.NeedsAction, _) => "Set up",
@@ -84,7 +85,9 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     public bool CanSetUp => canManage && ShowSetUp;
     public string SetUpName => $"{SetUpVerb ?? "Set up"} {Label}";
     public string SetUpId => $"SetUpAgent_{Id}";
-    public bool CanRemove => canManage && agent.Hooks.State != ReadinessState.Blocked && HasOwnRecord;
+    // Not shown at all where the host would refuse it: no button that can't work (#784's ruling).
+    public bool ShowRemove => agent.Hooks.State != ReadinessState.Blocked && HasOwnRecord;
+    public bool CanRemove => canManage && ShowRemove;
     public string RemoveName => $"Remove {Label}'s connection";
     public string RemoveId => $"RemoveAgent_{Id}";
     // The confirmation before either: named for the agent, and for what Remove leaves alone.
@@ -95,7 +98,7 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // Its accessible name says whose it is: a live region is read out on its own, away from the
     // agent's heading (#705 review).
     public string StatusName => Status.Length == 0 ? "" : $"{Label}: {Status}";
-    public Tone StatusTone => note?.Tone ?? (CannotRepair ? Tone.Bad : Tone.None);
+    public Tone StatusTone => note?.Tone ?? Tone.None;
     public string StatusId => $"AgentStatus_{Id}";
     public string Installation => agent.Installation.State == ReadinessState.Working
         ? agent.Version is { } version ? $"Installed, version {version}" : "Installed, version not verified"

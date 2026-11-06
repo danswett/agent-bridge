@@ -124,6 +124,7 @@
                                             Content="Remove connection"
                                             Foreground="{ThemeResource AbDangerText}"
                                             Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(ShowRemove)}"
                                             IsEnabled="{x:Bind CanRemove}"
                                             Click="OnRemoveAgent"
                                             AutomationProperties.Name="{x:Bind RemoveName}"
