@@ -794,6 +794,24 @@ export class SignInBanners {
     }
   }
 
+  // A sign-in push's link (?host=&signin=, #969): that machine's banner for that agent, with focus on
+  // its action (Sign in, or its line when there is nothing to press here). The link picks a banner
+  // and nothing more. With no banner for it now (signed in since, or recovered), nothing is said and
+  // focus stays where it is: the machine is shown as it is. Says 'gone' (no banner for it),
+  // 'hidden' (one, not on screen yet: focus() on it would do nothing, so it is left to the next
+  // draw), or 'shown' (on screen, and focus moved to it).
+  reveal(hostId, agent) {
+    this.render();
+    const b = [...this.#views.values()].map((v) => v.entry).find((e) => e.hostId === hostId && e.agent === agent && e.state === 'needed');
+    const view = b && this.#views.get(b.key);
+    if (!view) { return 'gone'; }
+    const target = view.els.actions.contains(view.els.verb) ? view.els.verb : view.els.line;
+    if (!target.getClientRects().length) { return 'hidden'; }
+    target.focus({ preventScroll: true });
+    target.scrollIntoView?.({ block: 'nearest' });
+    return 'shown';
+  }
+
   // With the account: nothing of its machines stays on the page.
   stop() {
     clearInterval(this.ticker);

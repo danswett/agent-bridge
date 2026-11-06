@@ -60,6 +60,11 @@ public sealed record UpdateReport(UpdateState State, IReadOnlyList<string>? Take
 // credential for that relay, as private as the device key.
 public sealed record RelayAccount(string Relay, string Token, string AccountId, string Login);
 
+// host.relay.account's request: the app's own device id, when it says it (#801). The host then
+// refuses manage.* through the relay from that key: the app manages its own machine from Settings,
+// and an agent here could use its key as the same user. Absent from an older app.
+public sealed record RelayAccountRequest(string? Device = null);
+
 [UnknownAs(Off)]
 public enum RelayState { Off, SignedOut, Connecting, Connected, Refused }
 

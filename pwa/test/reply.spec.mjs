@@ -111,7 +111,8 @@ test.describe('on a phone', () => {
     const reply = box(page, ASKING);
     const input = reply.getByRole('textbox', { name: 'Reply' });
     await expect(input).toBeDisabled();
-    await expect(reply.locator('.reply-held')).toHaveText('The session is waiting for an answer to its question. Answer that first, then reply.');
+    // On a phone the notice is one line, with a link to the question (ui.md §6.5).
+    await expect(reply.locator('.reply-held')).toHaveText('Answer its question first. Go to the question');
     await expect(reply.getByRole('button', { name: 'Send' })).toBeDisabled();
 
     // A question arriving takes the box away from words already typed, and gives it back.

@@ -18,7 +18,7 @@ public static class RestartWarning
         if (host.State == LinkState.NotRunning) { return null; }
         if (host.State != LinkState.Connected)
         {
-            return "This machine's host isn't connected right now, so whether a session is waiting on you can't be told. "
+            return "This machine's bridge isn't connected right now, so whether a session is waiting on you can't be told. "
                 + "Restarting stops the host for a moment, and a question or approval waiting may then have to be answered at the machine.";
         }
         // A list still being read may be missing the busy session (as AutoUpdater.Idle): not
@@ -40,7 +40,7 @@ public static class RestartWarning
         var parts = new List<string>();
         if (asking > 0) { parts.Add($"{Count(asking)} {(asking == 1 ? "is" : "are")} waiting on you"); }
         if (working > 0) { parts.Add($"{(asking > 0 ? working.ToString(System.Globalization.CultureInfo.InvariantCulture) : Count(working))} {(working == 1 ? "has" : "have")} a turn running"); }
-        return $"{string.Join(", and ", parts)}. Restarting stops this machine's host for a moment: the agents keep running, "
+        return $"{string.Join(", and ", parts)}. Restarting stops this machine's bridge for a moment: the agents keep running, "
             + "but a question or approval waiting may then have to be answered at the machine.";
     }
 

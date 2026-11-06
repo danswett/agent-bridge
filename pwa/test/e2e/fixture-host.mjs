@@ -26,7 +26,7 @@ import { readQuestion } from '../../js/protocol.js';
 
 const EMPTY = new Uint8Array(0);
 
-export async function startFixtureHost({ base, name = 'fixture-host', sessions = [], answering = true, replying = answering, usage = null }) {
+export async function startFixtureHost({ base, name = 'fixture-host', sessions = [], answering = true, replying = answering, usage = null, signingIn = false }) {
   const key = await P256KeyPair.generate();
   const deviceId = await deviceIdOf(key.public);
   const account = await (await startDeviceFlow(base)).wait();
@@ -68,7 +68,7 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     const reply = (result) => sendJson(ch, { re: id, ok: true, result });
     switch (op) {
       case 'hello':
-        return reply({ protocol: 1, machine: { id: deviceId, name, os: 'linux', hostVersion: '0.0.0-fixture', ...(usage ? { dev: true, sessions: state.size } : {}) }, capabilities: ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), 'push', ...(usage ? ['usage'] : [])] });
+        return reply({ protocol: 1, machine: { id: deviceId, name, os: 'linux', hostVersion: '0.0.0-fixture', ...(usage ? { dev: true, sessions: state.size } : {}) }, capabilities: ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(replying ? ['sessions.reply'] : []), 'push', ...(usage ? ['usage'] : []), ...(signingIn ? ['sessions.signin'] : [])] });
       case 'usage.get':
         if (!usage) { break; }
         return reply(usage);

@@ -380,14 +380,17 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal([("Looks good. Now open the PR – please 🚀", false, 300), ("", true, 0)], plan.Sends.Select(s => (s.Text, s.Enter, s.Enter ? s.EnterDelayMs : s.PauseAfterMs)));
     }
 
-    [Fact]
-    public async Task A_reply_to_a_working_session_is_delivered_once_copilot_takes_it_at_its_next_step()
+    [Theory]
+    [InlineData("esc interrupt")]
+    [InlineData("ctrl+c interrupt")]
+    [InlineData("ctrl+c stop agents")]
+    public async Task A_reply_to_a_working_session_is_delivered_once_copilot_takes_it_at_its_next_step(string hint)
     {
         Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
         await source.RefreshAsync();
         Assert.Equal(SessionStatus.Working, source.Get(Id)!.Status);
         // While the turn runs, the footer's place holds the turn's own row (#843 review).
-        injector.Screen = _ => CopilotWorking;
+        injector.Screen = _ => Working(80, $" \u25D0 Working {hint}");
         // Copilot writes a steering prompt when its next round starts, after the running tool.
         injector.OnInject = plan => _ = Task.Delay(700).ContinueWith(_ => Fixture.Append(events,
             Copilot.ToolDone("t1", second++), Copilot.TurnStart(second++), Prompt(plan.Sends[0].Text, "steering")), TaskScheduler.Default);
@@ -531,6 +534,96 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         // UTC, not the machine's local time with a Z on it.
         var at = DateTimeOffset.Parse(match.Groups["at"].Value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal);
         Assert.InRange(at, before, DateTimeOffset.UtcNow);
+    }
+
+    // ---- measuring confirmation (#1025) ----
+
+    List<string> MeasuredReplier(TimeSpan confirm, TimeSpan lateWatch, CancellationToken stopping = default)
+    {
+        var logged = new List<string>();
+        Serve(Answerer(), new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            ConfirmTimeout = confirm,
+            PollInterval = TimeSpan.FromMilliseconds(25),
+            LateWatch = lateWatch,
+            LateLook = TimeSpan.FromMilliseconds(50),
+        }, m => { lock (logged) { logged.Add(m); } }, gate) { Stopping = stopping });
+        return logged;
+    }
+
+    static string[] Lines(List<string> logged)
+    {
+        lock (logged) { return [.. logged]; }
+    }
+
+    [Fact]
+    public async Task Each_reply_logs_one_confirmation_line_of_its_agent_state_times_timeout_and_outcome_and_never_its_words()
+    {
+        var logged = MeasuredReplier(TimeSpan.FromSeconds(2), TimeSpan.Zero);
+        injector.OnInject = plan => Fixture.Append(events, Now(Prompt(plan.Sends[0].Text)));
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        Assert.Equal("delivered", (await ReplyAsync(ch, "measure these private words", request)).Outcome);
+
+        var line = Assert.Single(Lines(logged), l => l.Contains(" confirm: ", StringComparison.Ordinal));
+        Assert.Matches($@"^reply {request[..8]} to {Id[..8]} confirm: copilot, idle, typed \d+, recorded \d+, timeout 2 s, delivered$", line);
+        Assert.DoesNotContain("private", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_reply_recorded_after_its_timeout_stays_unconfirmed_and_a_second_line_says_how_late_it_came()
+    {
+        var logged = MeasuredReplier(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
+        // Nothing is recorded while the reply waits.
+        injector.OnInject = _ => { };
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        var (outcome, _) = await ReplyAsync(ch, "on its way", request);
+
+        Assert.Equal("unconfirmed", outcome);
+        Assert.Matches($@"^reply {request[..8]} to {Id[..8]} confirm: copilot, idle, typed \d+, recorded never, timeout 1 s, unconfirmed$",
+            Assert.Single(Lines(logged), l => l.Contains(" confirm: ", StringComparison.Ordinal)));
+        Fixture.Append(events, Now(Prompt("on its way")));
+        var late = $"reply {request[..8]} late: recorded ";
+        await Wait.UntilAsync(() => Lines(logged).Any(l => l.StartsWith(late, StringComparison.Ordinal)), "the late line", Patience);
+        var ms = long.Parse(Assert.Single(Lines(logged), l => l.StartsWith(late, StringComparison.Ordinal))[late.Length..], System.Globalization.CultureInfo.InvariantCulture);
+        // Recorded after the timeout ran out, in ms after the request was received, as the agent timed it.
+        Assert.InRange(ms, 1000, 60_000);
+    }
+
+    [Fact]
+    public async Task A_reply_never_recorded_says_so_once_the_late_watch_is_over()
+    {
+        var logged = MeasuredReplier(TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(1));
+        injector.OnInject = _ => { };
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        Assert.Equal("unconfirmed", (await ReplyAsync(ch, "lost", request)).Outcome);
+
+        var never = $"reply {request[..8]} late: not recorded within 1 s more";
+        await Wait.UntilAsync(() => Lines(logged).Contains(never), "the late line", Patience);
+    }
+
+    [Fact]
+    public async Task A_late_watch_ends_when_the_host_stops_and_logs_nothing_more()
+    {
+        using var stop = new CancellationTokenSource();
+        var logged = MeasuredReplier(TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(30), stop.Token);
+        injector.OnInject = _ => { };
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        Assert.Equal("unconfirmed", (await ReplyAsync(ch, "stopped", request)).Outcome);
+        await stop.CancelAsync();
+        Fixture.Append(events, Now(Prompt("stopped")));
+        await Task.Delay(500);
+
+        Assert.DoesNotContain(Lines(logged), l => l.Contains(" late: ", StringComparison.Ordinal));
     }
 
     // ---- the fast path (#599) ----
@@ -1136,14 +1229,17 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     static IReadOnlyList<string> Working(int width, string row, string line = "") =>
         ["\u25CF Running the tests.", "", "\u257B" + new string('\u2584', width - 1), line.Length == 0 ? "\u2503" : $"\u2503 {line}", "\u2579" + new string('\u2580', width - 1), row];
 
-    [Fact]
-    public async Task A_reply_to_a_working_Copilot_in_a_window_under_80_columns_is_refused_and_nothing_is_typed()
+    [Theory]
+    [InlineData("esc interrupt")]
+    [InlineData("ctrl+c interrupt")]
+    [InlineData("ctrl+c stop agents")]
+    public async Task A_reply_to_a_working_Copilot_in_a_window_under_80_columns_is_refused_and_nothing_is_typed(string hint)
     {
         // There the turn's row shows no shell or vim label, and a box holding only spaces in
         // shell mode draws as empty: the reply could run as a shell command.
         Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
         await source.RefreshAsync();
-        injector.Screen = _ => Working(79, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue");
+        injector.Screen = _ => Working(79, $" \u25D0 Working {hint}");
         var ch = await OpenAsync();
 
         var (outcome, reason) = await ReplyAsync(ch, "also run the e2e tests");
@@ -1158,15 +1254,18 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     [InlineData("draft")]
     [InlineData("shell")]
     [InlineData("vim")]
-    public async Task A_reply_to_a_working_Copilot_is_refused_for_a_draft_shell_mode_or_vim_normal_mode_as_when_idle(string state)
+    [InlineData("draft", "ctrl+c interrupt")]
+    [InlineData("shell", "ctrl+c interrupt")]
+    [InlineData("vim", "ctrl+c interrupt")]
+    public async Task A_reply_to_a_working_Copilot_is_refused_for_a_draft_shell_mode_or_vim_normal_mode_as_when_idle(string state, string hint = "esc interrupt")
     {
         Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
         await source.RefreshAsync();
         injector.Screen = _ => state switch
         {
-            "draft" => Working(80, CopilotWorking[5], "half a thought"),
-            "shell" => Working(80, " Shell \u00B7 Allow All \u00B7 \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", "Execute shell command"),
-            _ => Working(80, " -- NORMAL -- \u00B7 \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue"),
+            "draft" => Working(80, $" \u25D0 Working {hint}", "half a thought"),
+            "shell" => Working(80, $" Shell \u00B7 Allow All \u00B7 \u25D0 Working {hint}", "Execute shell command"),
+            _ => Working(80, $" -- NORMAL -- \u00B7 \u25D0 Working {hint}"),
         };
         var ch = await OpenAsync();
 
@@ -1326,11 +1425,15 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     // would show the label, and a row without one is safe (Trust's #843 re-review).
     [InlineData(70, false)]
     [InlineData(80, true)]
-    public async Task A_turn_that_starts_after_the_read_in_a_narrow_window_gets_none_of_the_reply(int width, bool typed)
+    [InlineData(70, false, "ctrl+c interrupt")]
+    [InlineData(80, true, "ctrl+c interrupt")]
+    [InlineData(70, false, "ctrl+c stop agents")]
+    [InlineData(80, true, "ctrl+c stop agents")]
+    public async Task A_turn_that_starts_after_the_read_in_a_narrow_window_gets_none_of_the_reply(int width, bool typed, string hint = "esc interrupt")
     {
         const string Idle = " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help";
         injector.Screen = _ => Working(width, Idle);
-        injector.Holding = () => injector.Screen = _ => Working(width, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", " ");
+        injector.Holding = () => injector.Screen = _ => Working(width, $" \u25D0 Working {hint}", " ");
         injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
         var ch = await OpenAsync();
 
@@ -1391,11 +1494,15 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     // Enter goes (#843 review, Copilot 4477100508).
     [InlineData(70, false)]
     [InlineData(80, true)]
-    public async Task A_turn_that_starts_before_the_Enter_in_a_narrow_window_gets_no_Enter(int width, bool entered)
+    [InlineData(70, false, "ctrl+c interrupt")]
+    [InlineData(80, true, "ctrl+c interrupt")]
+    [InlineData(70, false, "ctrl+c stop agents")]
+    [InlineData(80, true, "ctrl+c stop agents")]
+    public async Task A_turn_that_starts_before_the_Enter_in_a_narrow_window_gets_no_Enter(int width, bool entered, string hint = "esc interrupt")
     {
         const string Idle = " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help";
         injector.Screen = _ => Working(width, Idle);
-        injector.Sent = i => { if (i == 0) { injector.Screen = _ => Working(width, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", "go on"); } };
+        injector.Sent = i => { if (i == 0) { injector.Screen = _ => Working(width, $" \u25D0 Working {hint}", "go on"); } };
         injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
         var ch = await OpenAsync();
 

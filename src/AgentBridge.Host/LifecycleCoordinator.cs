@@ -62,6 +62,9 @@ public sealed class QuietLease : IDisposable
     internal LifecycleCoordinator Owner { get; }
     internal DeliveryGate.Exclusion Fence { get; }
     internal bool Sent, CancelScheduled, Committed, Disposed;
+    // Released (abort, dispose, refused announce) before its lifetime ran out: a later commit is
+    // a caller fault, not an expiry.
+    internal bool EndedEarly;
     internal long Generation;
     internal long ConnectionRevision;
     internal PlannedStateReceipt? Receipt;
@@ -110,17 +113,24 @@ public sealed class LifecycleCoordinator
     readonly DepartureConnection connection;
     readonly TimeProvider time;
     readonly IReadOnlyDictionary<DeparturePurpose, (DepartureBlocker Kind, IDepartureCondition Condition)[]> conditions;
+    readonly DepartureWatchdog watchdog;
     bool evaluatingConditions, reentryFault;
     long sequence;
 
-    public LifecycleCoordinator(DeliveryGate delivery, DepartureConditions conditions, IPlannedStateTransport? transport = null, TimeProvider? time = null)
+    // Without a watchdog, a state-only one on the same clock still records the commit for the status.
+    public LifecycleCoordinator(DeliveryGate delivery, DepartureConditions conditions, IPlannedStateTransport? transport = null, TimeProvider? time = null,
+        DepartureWatchdog? watchdog = null)
     {
         this.delivery = delivery;
         this.conditions = conditions.Freeze();
         this.transport = transport ?? new UnnegotiatedPlannedStateTransport();
         connection = this.transport.Connection ?? throw new ArgumentException("transport connection state is required", nameof(transport));
         this.time = time ?? TimeProvider.System;
+        this.watchdog = watchdog ?? new DepartureWatchdog(time: this.time);
     }
+
+    // None, Committed (with when) or Stuck: for the host's status report, never the relay.
+    public DepartureStatus Departure => watchdog.Status;
 
     public Task<QuietResult<QuietLease>> TryAcquireQuiet(DeparturePurpose purpose, CancellationToken cancellationToken = default) =>
         TryAcquireQuiet(DefaultWait, purpose, cancellationToken);
@@ -242,7 +252,7 @@ public sealed class LifecycleCoordinator
             {
                 if (!Current(lease) || lease.Committed || !lease.Fence.TryBeginCommit(out var fenceBlocker))
                 {
-                    result = DepartureResult.Abort(DepartureBlocker.ConditionFault);
+                    result = DepartureResult.Abort(Expired(lease) ? DepartureBlocker.LeaseExpired : DepartureBlocker.ConditionFault);
                 }
                 else
                 {
@@ -281,13 +291,18 @@ public sealed class LifecycleCoordinator
                         lease.Committed = true;
                         result = DepartureResult.Commit(new DepartureGuard(lease));
                     }
-                    else { result = DepartureResult.Abort(blocked ?? (changed ? DepartureBlocker.AnnounceUnacked : DepartureBlocker.ConditionFault)); }
+                    else
+                    {
+                        result = DepartureResult.Abort(blocked ?? (changed ? DepartureBlocker.AnnounceUnacked
+                            : Expired(lease) ? DepartureBlocker.LeaseExpired : DepartureBlocker.ConditionFault));
+                    }
                 }
             }
             catch { result = DepartureResult.Abort(DepartureBlocker.ConditionFault); }
             if (!result.Committed) { cancel = EndLease(lease); }
         }
         Dispatch(cancel);
+        if (result.Committed) { watchdog.Arm(); }
         return result;
     }
 
@@ -328,6 +343,7 @@ public sealed class LifecycleCoordinator
         if (lease is null || !ReferenceEquals(lease.Owner, this) || lease.Committed || lease.CancelScheduled) { return null; }
         lease.Disposed = true;
         lease.CancelScheduled = true;
+        lease.EndedEarly = !lease.Fence.LifetimeElapsed;
         try { lease.Fence.Dispose(); }
         catch { return new(lease, null, CancellationOutcome.CancelUnsent); }
         if (!lease.Sent) { return new(lease, null, CancellationOutcome.NotRequired); }
@@ -366,6 +382,12 @@ public sealed class LifecycleCoordinator
     }
 
     bool Current(QuietLease lease) => ReferenceEquals(lease.Owner, this) && lease.IsCurrent;
+
+    // #885: callers report expiry as "changed" (retry), which ConditionFault must not look like.
+    // Decided from the lease's own monotonic lifetime, not from whether the asynchronous expiry
+    // notification has run yet.
+    bool Expired(QuietLease lease) =>
+        ReferenceEquals(lease.Owner, this) && !lease.Committed && !lease.EndedEarly && lease.Fence.LifetimeElapsed;
 
     bool ReceiptCurrent(PlannedStateReceipt receipt)
     {
