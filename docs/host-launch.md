@@ -279,7 +279,7 @@ cannot restore one more than once. A host that stops while a restore waits its t
 running; one still being judged is never let go) unless it is resumed or seen live again, and said in `hello`'s `machine.restore` ([v1-sessions.md](protocol/v1-sessions.md#hello)) for
 this run, at most 24 hours, and in one `restored` notification, sent when every session is judged and
 restored, or 10 minutes after start, and only if this start found any that died. The notification
-says how many were restored (a session restored and then offered as a loop is counted once, as a loop), names those offered, and names those, restored or not, that went mid-turn or with a question waiting; one an earlier start offered is offered still in
+says how many were restored (a session restored and then offered as a loop is counted once, as a loop) and counts those offered, and names only those, restored or not, that went mid-turn or with a question waiting; the rest are left to Launch, where they are offered; one an earlier start offered is offered still in
 `hello`, not notified again, and is not restored by a later start: a person resumes it from Launch.
 One an earlier start was still judging is judged now, as of this start's cause. Beside agent-ha-bridge,
 or while the machine is read-only or launching is off, nothing is restored: the sessions are only
