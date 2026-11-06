@@ -14,7 +14,12 @@ question, #253) replaced the Needs you lane with a filter, signed off by the own
 2026-11-02; the reasoning is in [proposals/253-attention.md](proposals/253-attention.md).
 Collaborators (#519: the External colour, its marks, the person filter, the external filter and
 the held message) were decided by the owner on 2026-11-03 and added here (§6.7); the reasoning
-and the boards are in [proposals/519-collaborators.md](proposals/519-collaborators.md). The
+and the boards are in [proposals/519-collaborators.md](proposals/519-collaborators.md).
+First-run setup and Settings (#384: readiness, Settings' sections and the guided setup) were
+decided by the owner on 2026-11-03 and added here (§6.8–§6.10); the reasoning and the boards
+are in [proposals/384-first-run.md](proposals/384-first-run.md). Most of it isn't built yet:
+each part says what ships today and marks the rest **Not built yet (#384 slice *N*)**, for
+the slices in the proposal's §11, or **Parked** with the issue that parked it. The
 accessibility contract (§9.1) gathers the accessibility rules already decided here and the WCAG
 requirements they rest on, each with the check that enforces it, and the rules the owner
 approved for it on 2026-11-04 (#707). Delegate events in the conversation (§6.4, #661) and the
@@ -42,7 +47,9 @@ without them: where they disagree, this page wins and the mock-ups get fixed.
    a pushed screen. Nothing expands in place and shoves the list around.
 5. **The interface doesn't explain itself.** No helper sentences inside the UI ("Replies go
    to the main agent…"). If a control needs a sentence, the control is wrong. Tooltips and
-   accessibility labels carry the detail.
+   accessibility labels carry the detail. The one exception is Settings and first-run setup
+   (#384, §6.9, §6.10): a step's subtitle, and one factual line of consent, security or cost
+   that states a consequence before the action it is about, since a tooltip may never be seen.
 6. **Every element has a purpose** (the owner, 2026-11-05). Nothing is drawn twice on one
    screen. If two elements show the same fact, one goes. A design review checks this first.
 
@@ -69,6 +76,12 @@ people.
 A collaborator's session (§6.7) draws its state's glyph in External. When it waits on its owner,
 it draws the `needs` shape **outlined** in External, never the filled `needs` glyph: the
 question is theirs, not yours.
+
+A readiness check (#384, §6.8) is not a session, and reuses five glyphs: `done` for Working,
+`idle` for Missing, `ended` for Not selected, `failed` for both Blocked and Failed (the words
+tell them apart), and `working` while it is Checking. So `done` is still never a session's.
+**Not built yet (#384 slice 1):** today's Settings shows each check as plain text, with no
+glyph.
 
 Motion: `working` turns once per 1.2 s, and `delegating`'s satellites drift once per 8 s.
 Both are still under reduced motion. Nothing else animates on its own: every other motion
@@ -109,6 +122,12 @@ longer be so. It shows the `failed` glyph (a host unreachable, §2.1) and, in se
 "Offline · last seen 2m ago" once the machine has left the relay's presence, or "Reconnecting…"
 while it is listed but its link is down; rule 7's overlay does not apply. A row's line 2 is
 "Offline · *machine*". Nothing on it can be acted on (§6.1, "A machine away").
+- **Not during a return's grace (#950).** For 3 s after the app comes back to the screen, every
+  row looks as it last did: no `failed` glyph and no "Reconnecting…", though nothing on it can
+  be acted on until its machine's list is whole (§6.1, "Coming back to the app"). Only once the
+  grace has run out does a machine that isn't back show these away states, changing the glyph
+  and words in place. Before #950 they showed from the first moment the link was down, so a
+  reconnect of under a second flashed every row red.
 
 A message from an external agent held for you (§6.7) is a pending question on its target
 session: rule 1 applies, Needs you counts it, and the status reads "Waiting on you · message
@@ -324,6 +343,7 @@ does.
     and the overline in the band's top 20. Nothing else sits above the band.
   - **Meta lists** (property rows such as Details, Tools rows and delegate events) have a row
     pitch of 24. A wrapped row grows by whole lines; its next row still starts on the pitch.
+    Delegate events on touch are the exception: §6.4 gives their rows 44 and their lines a gap.
   - **Scrolling under a header:** a header that stays put (a pane's header band, the delegate
     strip) shows a hairline at its foot only while content is scrolled beneath it, and none
     at rest.
@@ -475,11 +495,11 @@ easing in, its duration out, and how far it travels.
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
 | Send and Answer | The reply box; a question card | Send, Send answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button that sent it (Send or Send answer, never an option, #773) shows the platform's progress ring, which stops with the request. Decided, not yet built (#600; builds in #616, #625): the ring is the only in-flight signal (§6.5), turning while the request is open and still while this device waits for a machine that isn't connected. Delivered, the ring cross-fades to the `check` icon, which holds about 1 s and cross-fades back to the button's rest glyph; the button never changes size or fill. An exception's line (§6.5) fades in place in the room reserved for it under the box, or on the question card, and fades out in place when it goes; nothing pops and nothing below it moves. Today both clients show Sending…, Sending again… and "Delivered. The session has your reply." for a reply, and "Delivered. The session has your answer." for a question card's answer. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
-| Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
+| Toast and banner | In-app toasts; banners such as a new version being ready (a machine going offline is never a banner, §6.1, #950) | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
 | Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session; Jump to latest is chosen (§6.4), which scrolls to the end as the person asked, scrolled back or not | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
-| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
+| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle; an order change arriving during a return's grace (§6.1, #950) | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
 **Not in the design:**
@@ -544,7 +564,9 @@ Sections, top to bottom:
    - A session that needs sign-in is never counted in N nor shown by the filter: the sign-in
      banner owns it (§6.13, owner decision 2026-11-05). Its row still says so where it lives.
    - A question on a machine that is away, or back but not yet confirmed by its next full list,
-     is neither counted in N nor shown by the filter, nor raised as a notification (#269).
+     is neither counted in N nor shown by the filter, nor raised as a notification (#269). The
+     exception is a return's 3 s grace (#950, "Coming back to the app", rule 6): N and the
+     filter's rows stay as they were, with the question held, until the grace is over.
    - **Look:** the `needs` glyph (`idle` at none), then "Needs you · N". It is a control, so it
      takes the platform's button styling and never a status colour. Pressed, it has the
      selection's look (the quiet fill, the 3×16 Bridge pill, semibold words) and, at its
@@ -597,11 +619,12 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 **A machine away (#269).** A host's relay link drops now and then (a restart, an update, a
 network blip), often for under a minute. While its machine has left the relay's presence, and the
 client's own relay link is up on the same account:
-- Its rows stay where they are, read as stale (§2.2), and so do the session open, its machine tab,
-  your order and pins.
+- Its rows stay where they are, read as stale (§2.2; after a return, only once the grace below has
+  run out), and so do the session open, its machine tab, your order and pins.
 - Nothing on them can be done: answering, Approve once and Deny, replying, attaching, End session,
   and launching or resuming on that machine are disabled. Their questions leave Needs you, the
-  badges and notifications.
+  badges and notifications (after a return, once the grace below is over). In an offline machine's session, the reply box and the question say
+  why in place of their actions (§6.4, §6.5; #950).
 - Back again, they can be acted on only once the machine's next full list (its snapshot) has
   confirmed that the session and its question still exist, never on the copy kept meanwhile. A
   session that ended meanwhile goes to Ended then, and a question that ended never becomes
@@ -611,6 +634,76 @@ client's own relay link is up on the same account:
   again once that list is whole (#427).
 - After **15 minutes** away its rows go, and the machine is listed as offline (§6.6). It goes at
   once when it is forgotten, when the client is signed out or refused, or when the account changes.
+
+**Coming back to the app (#950).** A phone suspends the PWA when it leaves the screen, and its
+links drop; coming back, they reconnect, usually in well under a second. Coming back is calm:
+the list keeps what it last knew while it catches up, it stays honest about what can't be done
+yet, and connection news shows only when it is news. These are interaction rules; the visual
+language doesn't change. Decided 2026-11-05 (Creative; Product accepted rules 1–7), with rule 8
+added the same evening; the timeline is drawn in
+[proposals/950-calm-return.md](proposals/950-calm-return.md).
+1. **A 3-second grace.** It starts when the app comes back to the screen: the PWA's
+   `visibilitychange` to visible, `pageshow` from the back/forward cache, or `online`; the
+   Windows app waking from sleep or changing network. While it lasts, every row, the open
+   session and its machine tab look exactly as they last did: no `failed` glyph, no
+   "Reconnecting…", no strip and no banner. Anything that arrives updates in place, and an order
+   change uses §5.3's Reorder motion.
+2. **The hold still applies, at once.** As in "A machine away" (#427), nothing on a session is
+   acted on until its machine's full list is whole again. Its controls are `aria-disabled` at
+   once, so a screen reader is never told a held action works. They are drawn disabled only once
+   the hold has lasted 600 ms. A press before then does nothing and shows "Updating…" in text2
+   under that control, never a toast. Opening a session and reading it work throughout.
+3. **A quiet cue only when it's news.** If any machine's list is still not whole 1 s after the
+   return, the title row shows "Updating…" in text2, in a fixed slot beside the title. It
+   doesn't move, isn't announced, and goes the moment every list is whole. A return that
+   finishes in under 1 s changes nothing on screen. On the PWA desktop and in the Windows app,
+   the list pane's own header row (the one holding the Sessions heading) plays the phone title
+   row's part, and the slot is at its end. Neither the slot nor the strip ever goes above the
+   list or into the window chrome.
+4. **When the grace runs out (3 s),** a machine that isn't back shows the away states on its rows
+   (§2.2): the glyph and words change in place. If the client's own link is still down, the
+   connection strip replaces the title row's content (the list header row's, on a desktop and
+   in the Windows app), at the same height (§7). It is announced once, politely. The Windows
+   app does the same, and no longer raises its "connecting" banner for this case.
+5. **Nothing pushes the rows.** There are no "Connecting…" rows above the sessions, ever. A
+   machine with no kept list says so in the same fixed slot ("Connecting to 2 machines…"), never
+   as rows. Banners already showing when the app comes back stay put. A new connection banner is
+   never inserted above the list.
+6. **A real outage reads as it always has** once the grace is over, including the 15-minute
+   rule above. During the grace, rule 1 wins for what is drawn: a held question keeps its row,
+   in the list and under Needs you's filter, and N (and so the badges) doesn't change, though
+   the question is held at once (`aria-disabled`, rule 2). Once the grace is over, a machine
+   still away has today's behaviour: its questions leave Needs you, the badges and
+   notifications. Notifications follow the hold as they do now.
+7. **Platforms:** the PWA first. The Windows app takes rules 1–5 on waking from sleep, with the
+   same 3 s. Apple and Android take them through §7 when they are un-parked.
+8. **A machine's connection news is never a sentence over the list.** Offline, Connecting,
+   Opening a channel and Couldn't reach all go from above the list (the PWA's lines from
+   `hostNote()`, #396).
+   - Inside an offline machine's session, the reply box and the question say why, in text2, in
+     place of their usual actions: "*machine* is offline · you can answer once it's back" (§6.4,
+     §6.5). If focus was on a control the line replaces, focus moves to the line, which takes
+     `tabindex="-1"`. It isn't announced separately: its words are what is read as focus lands.
+     Focus never drops to the page.
+   - The machine tab and the Machines page (§6.6) carry the machine's own state.
+   - Only an error the person can act on (Couldn't reach, unsupported) shows, in rule 3's fixed
+     slot, on one line, naming the machine ("Couldn't reach *machine*"). While it shows,
+     "Updating…" doesn't. With more than one, the slot shows the first in machine order, plus
+     "and N more" if that fits the line.
+
+| Time after the return | Rows, open session, machine tab | A held session's controls | Title row's slot | Connection strip |
+|---|---|---|---|---|
+| 0 (return) | As they last were; anything arriving updates in place | `aria-disabled` until the machine's list is whole; drawn as they were. A press does nothing and shows "Updating…" under the control | Empty | None |
+| Every list whole before 1 s | Fresh data, in place | Back to normal | Never shown | None |
+| 600 ms, hold still on | As they last were | Drawn disabled | Empty | None |
+| 1 s, any list not whole | As they last were | Drawn disabled | "Updating…", or "Connecting to N machines…" for machines with no kept list; an actionable error ("Couldn't reach *machine*") in their place. It goes when every list is whole | None |
+| 3 s, grace over | A machine not back: the away states (§2.2), in place. The rest as they are | Disabled as §6.1 says; an offline machine's session says why (rule 8) | As at 1 s, unless the strip has replaced the title row's content | Only if the client's own link is down: in the title row (or list header row), at its height, announced once, politely |
+
+Through the grace, Needs you's N, its filter's rows and the badges stay as they were (rule 6).
+On the PWA desktop and in the Windows app, "title row" is the list pane's header row (rule 3).
+
+The owner may change the 3 s grace; the 1 s cue and the 600 ms point stand with it unless the
+owner changes them too.
 
 **Row anatomy (two lines):**
 - **Leading:** the status glyph, aligned to line 1.
@@ -933,6 +1026,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     "Started 3 delegates: *A*, *B* and 1 more", and "1 more" expands the line to name the rest.
     "*n* more" meets §9.1 A11's size: 44×44 on touch, 32×32 with a pointer. Its text can stay
     small; the hit area makes up the size.
+    On touch every row of every line, on one row or wrapped, is 44 high, so each name and "*n* more"
+    fills its row: a 44 target over no other name. Lines sit 8 apart, so a line's own rows are
+    always closer together than the next line and a wrapped line reads as one. With a pointer,
+    lines keep the meta style's own leading.
     One that reports back in the same gap leaves the shared line for its own merged line, in place.
   - **Runs fold (D3):** more than 3 lines in a row between two messages fold into one, drawn
     "5 delegates · 4 reported back › 1 still working". It shows no working glyph. It expands in
@@ -1029,7 +1126,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       an option", "Enter a number"), and the error is said once (§9.2). It is absent where
       the card can't be answered here (`answerAtMachine`, `truncated`, resolved, a
       collaborator's read-only view, §6.7) and while a sent answer's outcome forbids sending
-      another (§6.5). While its machine is away it stays, disabled, as §6.1's controls do. Why
+      another (§6.5). While its machine is away it stays, disabled, as §6.1's controls do; once
+      that machine is offline, the card says "*machine* is offline · you can answer once it's
+      back" in text2 in place of its actions, and focus on an action it replaces moves to that
+      line (§6.1, #950 rule 8). Why
       visible and not hidden until complete: the rule that a button which doesn't apply is
       absent, not disabled (A7), is about actions that do nothing in the current state, and
       an open question's Send answer always applies. Hidden until complete, the card's only
@@ -1087,9 +1187,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **An approval is drawn as it runs,** since Approve once allows all of it: exactly as
     written, in the code face, never read as Markdown, with its hidden characters,
     right-to-left letters and bare carriage returns escaped and the code notes beside it, and
-    no Copy ("An approval's card", below, #220). Approve once stays offered whatever it holds,
-    the owner's "escape and allow" (#253). It wraps and is never cut, so a long command or a
-    diff keeps Approve once.
+    no Copy ("An approval's card", below, #220). It wraps and is never cut, so a long command or a
+    diff keeps Approve once. One the host escaped anything in is approved only through the
+    confirmation sheet ("Escaped approvals", below, #803), which replaced the one-tap Approve
+    once of the owner's "escape and allow" (#253).
   - **A host sends an approval's hidden characters and right-to-left letters as escapes**
     (`\u202E`, `\u05D0`, #220). The card's notes, and Needs you, which never offers such a
     prompt inline (§6.1), count a host's escape as the character it stands for.
@@ -1236,6 +1337,53 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   hook's 300-character preview cut short with nothing marking it truncated, so a card draws that
   exactly as written and answers it at the machine. Other questions and the conversation keep
   their Markdown.
+- **Escaped approvals** (#803; copy and layout by the creative director, the token signed off by
+  the owner): an approval with `escaped` (v1-sessions.md, "Escaped approvals").
+  - **The card** (PWA and app): Approve becomes **"Approve once…"**; the ellipsis says it opens
+    the sheet. Deny stays one tap. The notes stay above the buttons. Without
+    `sessions.approveEscaped` there is no disabled button: Approve is not shown (one verb per
+    state), and its place says why. Not an approved device: "Approve this at *machine*, or from a
+    device approved there.", with **How to approve a device** opening the help text. A machine
+    whose `approve` is `machine`: "*machine* takes this approval only at the machine." One whose
+    `approve` is `tooMany` (more escapes than a question marks): "Too many hidden characters to
+    show here. Approve this at *machine*." Deny stays.
+  - **The confirm sheet** (full screen on a phone, a dialog on a wide PWA as tall as what it holds
+    up to 90% of the window, a ContentDialog in the app). Title "Approve a command with hidden characters?"; line 2 "*session title* on
+    *machine*". The warning, in the warning role, each sentence only where it applies, then the
+    last always: "Boxed codes like `\u000D` are characters that run but aren't drawn." /
+    "Boxed codes like `\u202E` and right-to-left letters can reorder what you see." /
+    "Approving runs everything below, boxed characters included." Then the command, in full,
+    never cut, in the code face at body size, left to right (`unicode-bidi: plaintext`), wrapped,
+    in a scrollable read-only region that is focusable and scrolls from the keyboard (Page Down,
+    End). **The confirm sits at the end of the command, inside the scrolled content,** so it
+    cannot be reached without the end shown and never sits under the opener's tap point; it
+    stays disabled for 1 s after it first comes into view, which stops a double tap (held, in forced
+    colours, it is the system's disabled cue: `GrayText` text and border, no fill). Its label
+    is "I've read it. Approve once", its accessible name "Approve once: I've read the escaped
+    command". "Scroll to the end to approve." shows until the end is in view; when the confirm
+    becomes available, a polite announcement says "Approve is now available". **Cancel** is pinned
+    in the header (the app's Close button): the default action, the Escape action, and where
+    focus starts. Back or Cancel sends nothing. The sheet traps focus; under reduced motion it
+    appears without travel. The command is signed when the confirm is pressed, never on opening,
+    and lasts five minutes from that press, however late the machine's link returns. Pressed
+    while the machine is out of reach, the sheet stays open saying "Not sent" directly under the
+    confirm, which is the Try again. One that could not be sent within its five minutes is never sent: the card says it
+    expired and offers **Approve once…** again.
+  - **Escape tokens** (owner sign-off, outline only): each host mark (`marks`) is its `\uXXXX`
+    text in the code face and size with a 1 px outline in the Danger role (`Highlight` in forced
+    colours), a 2 px radius, 2 px side padding and no fill. Text the agent typed itself, `\u202E`
+    included, is never boxed. A token's accessible name is "hidden character, *Unicode name*"
+    ("right-to-left override"), or "right-to-left letter, …". The warning's own codes are boxed
+    the same way. Contrast: AA for text, 3:1 for the outline, in light, dark and forced colours.
+  - **Windows app Settings**, under the folder-trust devices, says who may approve these and why,
+    whether folder trust is on or off: the folder-trust devices (only while folder trust is on),
+    the devices `config.json` lists by short id, or only at the machine.
+  - **Home Assistant:** Deny only, under the line "Approve from the *app* or at the machine.", or
+    "Approve at the machine." when `approve` is `machine` or `tooMany`. It has no device key, and its users include agents.
+  - **Needs you, toasts, pushes:** no special case. Never an inline Approve (#202); a tap opens
+    the card.
+  - The Mac, iPhone and iPad app does not have the sheet yet: its Approve on one is refused by the
+    host with the reason, and Deny goes (a known difference, #832).
 - **Markdown the parser can't take** (#440): an agent's text that the Markdown parser fails on,
   or could read only slowly, is drawn as written: one paragraph of plain prose, its line breaks
   kept, never dropped and never read as Markdown. Since an agent can send text here on purpose,
@@ -1282,6 +1430,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   question first. Go to the question". The link is a scroll the app makes to the question
   (§6.2: it leaves the header as it was) and puts focus on its first choice. With the notice,
   the reply area is 99 at rest on a phone.
+- **While its machine is offline** (§6.1, #950 rule 8), the box says why in text2, in place of
+  its usual actions: "*machine* is offline · you can answer once it's back". Focus on a control it
+  replaces moves to the line (§6.1, rule 8). During a return's hold, its controls are held as
+  §6.1's rule 2 says.
 - **Platform styling:**
   - Windows and the PWA: a card with a 2 px Bridge bottom edge.
   - macOS: a capsule field.
@@ -1400,8 +1552,26 @@ machine, online ones first, then the account's offline machines (#213):
   where there are two. No device id on the row.
 - **Inside the row, under its two lines, in its text column:** the machine's updates (what its
   app found, how the last update ended, Check and Install) and, for an offline machine, Forget.
+  Its update line shows a "Needs you" line from the host (#800) in any phase, in the host's words.
+  While the six-hour backstop skips for a question waiting (below), it reads exactly
+  "Update ready · waiting for a question to be answered", never "answer at the machine".
   Every action is the same small secondary button. Check for updates, for every machine at once,
   sits under the rows in the same column.
+- **When an update is ready** (owner decision on #689, 6674007815; Product, 6674016765; Creative,
+  6674096426): a per-machine setting, a two-choice picker, never a toggle. Each choice carries its
+  note.
+  - **Restart to update**, *For a machine you use*: the default, for a new install and any machine
+    not set. A release downloads in the background and waits for the person's Restart to update
+    (#516); after six hours it says "Needs you", at most daily.
+  - **Install between turns**, *For a machine agents use*: the owner sets it on dev boxes and VMs
+    until #384's machine role exists. The update installs by itself at the first moment no session
+    on the machine has a turn running or a question waiting, once its sessions are read (a few
+    seconds), with no two-minute wait. The six-hour backstop installs on a machine that never goes
+    quiet, over a turn running, but an update never strands a waiting question: while one waits, or
+    whether one does can't be told, the backstop skips, and the machine says so ("Update ready ·
+    waiting for a question to be answered", and "Needs you" in its log, at most daily).
+  - Set in the Windows app's Settings for now. On the phone it is a row in that machine's Settings,
+    the current choice in text2; tapping it opens the same two choices with their notes (#801).
 - **A machine away (§6.1):** listed once, as offline ("Offline", and "Last seen 2m ago" on line
   2), with Forget, both while its rows are kept and after they have gone. A client whose relay
   keeps no roster lists it so only while its rows are kept.
@@ -1575,6 +1745,263 @@ never its text. A card with it shows "Driven by an external agent · @*login*" o
 sessions and one line, "Collaborators' sessions: in the Slipgates app". No card approves a held
 message.
 
+### 6.8 Readiness (#384)
+
+One model of whether a machine is ready, behind Settings › Overview, each agent's page, first
+run's steps and the PWA's read-only view alike. Every check is one row: the glyph, its name, a
+reason with its last observation's time, the state's words, and at most two fixes. The states,
+drawn on the [states board](proposals/384-first-run/proposal-384-states.png):
+
+| State | Glyph (§2.1) | Words | For Finish |
+|---|---|---|---|
+| Not selected | `ended`, Neutral | text3 | Never counted, and never success |
+| Missing | `idle`, Neutral | text2 | Not passed |
+| Needs you | `needs` | Needs you's text colour | Not passed |
+| Working | `done`, Neutral | text2 | Passed, with its evidence |
+| Blocked | `failed`, Danger | Danger's text colour; names what blocks it ("Blocked by hook trust") | Not passed |
+| Failed | `failed`, Danger | Danger's text colour | Not passed |
+| Checking (while it runs) | `working`, Active | text2 | Not yet |
+
+**What ships today:** the host reports six states (`ReadinessState`: Unknown, Missing,
+NeedsAction, Working, Blocked, Failed), and Settings shows them as plain text. Not selected,
+Checking and the glyphs are **Not built yet (#384 slice 1)**, and Finish (§6.10) is slice 5's.
+
+- **No success colour** (#384 decision 1). Working is the neutral ring with a check; colour is
+  spent only on Needs you, Blocked and Failed. Blocked and Failed share a shape on purpose
+  (decision 2): neither is the person's to answer in that row, and the words say which.
+- **Working needs evidence.** A written file, a running process, a heartbeat older than its
+  interval or a hook from another session is not Working. Installed is not signed in, signed
+  in is not entitled, registered is not trusted, and trusted is not received.
+- **Not selected is never success,** and its dotted ring and text3 keep a list of them from
+  reading as Working, in colour or in greyscale.
+- **The checks,** each its own row: an agent's executable (version and home), sign-in, access
+  (entitlement), ownership, registration, activation and trust, its test session (launched
+  through the bridge's own launch path, seen, and its test message received: "Session seen"),
+  and the last hook from that session; the host's heartbeat; launch authorization;
+  connectivity; and, where enabled and supported, the reply and approval route and each
+  selected device's path. The words for each state of each are in the proposal's
+  [state matrix](proposals/384-first-run.md#51-the-state-matrix).
+- **Required for Finish (§6.10):** the host's heartbeat and launch authorization; for each
+  *selected* agent, each of its checks, except that an agent whose version is unknown (§6.10
+  step 2) may finish as Not verified; connectivity, unless the person chose local only; and
+  the reply and approval route and selected device paths, where enabled and supported. A phone
+  not yet paired reads Not paired and may be paired later; it never reads as a device path
+  that passed.
+  "Last hook" is Working only for a hook from the session started for it, after its last change.
+- **Agency** is an agent of its own that shares Copilot CLI's hooks and sign-in, and its rows say
+  so ("Uses Copilot CLI's sign-in", "Reports through Copilot CLI's hooks"; decision 13).
+- **A change applies to new sessions.** Editing a folder, the permission mode or a hook runs the
+  checks it affects again, and sessions started before it read "New session needed · 1 session
+  started before this change", with Show sessions. Nothing is stopped for them.
+- **Home Assistant** has no check, step or editor here. Discover reports what legacy coexistence
+  and the migration guards find, and leaves them where they are.
+
+### 6.9 Settings (#384)
+
+**What ships today:** Settings is one scrolling page (`SettingsView`): the host, this
+machine's name, Relay and sign-in, "Agents on this machine" (each agent's row, below), "Your
+devices" with the two answer toggles of Workspaces and trust, this app's toggles, and the
+Host log. The host section's "Restore sessions after a reboot or crash" switch (§6.12) is
+**Not built yet (#780)**. The sectioned pane below, its table and the card for an agent
+installed later are **Not built yet (#384 slice 5)**.
+
+**An agent's row today** (the creative director's #784 words; #705's per-row names and
+verbs). Every state is words on the row, with at most one verb:
+- **Not installed:** "Not installed", with **Install CLI** (named "Install CLI for *Agent*")
+  where the app can install it. Where it can't (Agency), there is no verb, and the line says
+  how: "Not installed · install it on this machine".
+- **Installing:** "Installing…". Install CLI stays pressed with its ring (A4), and **Cancel**
+  sits beside it, named "Cancel CLI installation".
+- **Afterwards** the row goes straight to the state the check finds. A failed install reads
+  "Install failed · *reason*", with Install CLI offered again. The reason is from a
+  categorised set, never the installer's own text, and the row shows no output lines and no
+  Copy details.
+- **Set up, not yet tested:** an agent whose hooks are set up but that no new session has
+  tested yet reads "Not tested yet" (#705), never Ready.
+- **A host the app can't act on:** "Read-only · *reason*" when the host reports `blocked`
+  (for example "Read-only · this machine's host is older", in the one word every row uses for
+  it, #959); "Hook ownership couldn't be checked · *reason*" (or "Hook intake couldn't be
+  checked · *reason*") when the hooks have
+  failed and their `hookSetup` is `unknown`, the reason being one of access denied, file in use
+  or couldn't read ("Can't check" alone when the host gives neither); and "Can't check · this
+  machine's host is older" only when `hookSetup` is `unknown` and the hooks are neither blocked
+  nor failed, since a current host sends `unknown` only with those. All three are `text2`, with
+  no status colour and no verb, and never fall back to Ready, Not set up or Needs repair.
+
+First run and Settings are the same editors over the same host state: nothing is set up in
+first run that Settings can't change, check or repair. On Windows, Settings has its own pane of
+sections beside the rail (§7), with Settings selected on the rail:
+
+| Section | What it holds | Board |
+|---|---|---|
+| **Overview** | Every readiness check, grouped This machine, Agents and Other devices; Check again; Diagnostics; Resume setup while setup is unfinished | [Overview](proposals/384-first-run/proposal-384-settings-overview.png) |
+| **Agents** | A tab per agent: Installation (Executable, Home), Account (Sign-in, Access), Hooks (Registration, Hook trust, Last hook, Running sessions); Run test session, Repair hooks, Remove bridge integration | [Agents](proposals/384-first-run/proposal-384-settings-agents.png) |
+| **Accounts** | Slipgates' own (the GitHub account, Relay, this machine's name), each agent's sign-in, and Devices | [Accounts](proposals/384-first-run/proposal-384-settings-accounts.png) |
+| **Workspaces and trust** | The four groups below. **Parked (#699)**, but for its two shipped toggles | [Workspaces and trust](proposals/384-first-run/proposal-384-settings-workspaces.png) |
+| **General** | The host (Restart, Stop, start at sign-in, Restore sessions after a reboot or crash (§6.12), Dev Box keep-awake), this app (start at sign-in, notifications, updates, pre-releases, version), and Troubleshooting (Host log, Set up again) | [General](proposals/384-first-run/proposal-384-settings-general.png) |
+
+Collaboration (§6.7) keeps its own section, after Accounts, whose Devices it follows.
+
+- **Overview is the health list** (decision 5): there is no separate Health page. The nav's
+  badge leads to it. An agent's row opens its Agents tab. An agent found but not set up reads
+  Not selected with **Set up**: an agent installed later is offered, never opted in.
+- **An agent installed later** (#231; decided by the owner on 2026-11-04, option (a)) is
+  offered the way Collaboration's discovery is (§6.7): a grey dot on the Agents nav item, and
+  a card at the top of Overview, "*Agent* *version* is installed · Set it up to see its
+  sessions in Slipgates", with **Set up** and **Not now**. Set up does what the agent's row's Set
+  up does; Not now hides the card and the dot for that agent at that version, until
+  its version changes. It is never a toast, a push or a count, it is not Needs you, and it is
+  never offered on a read-only host (beside agent-ha-bridge, the row offers Review migration).
+  Nothing is drawn twice (the 11-05 rule): while the card shows, it holds the agent's only Set
+  up, and the agent's Overview row reads Not selected with no verb. Once Not now hides the
+  card, the row's Set up returns.
+- **Needs you on a section:** an agent's tab carries the Needs you dot while that agent needs
+  the person, and the Agents nav item carries the same.
+- **Remove bridge integration** is a subtle button, and removes only Slipgates' own
+  registrations and blocks. Uninstalling a CLI or its credentials is never on this page.
+- **Dev Box keep-awake** is shown only on a Dev Box, Off by default, with its consequence on
+  its row ("Signs in with az login · an awake Dev Box keeps billing").
+- **Workspaces and trust** is **Parked (#699)**, except its two answer toggles, which ship
+  today on Settings' page: "Let this app and my devices approve Copilot permission prompts",
+  On by default, and "Answer folder-trust questions from my devices", Off by default. The
+  rest of this item is the parked design, kept for when #699 resumes: four groups, each a
+  separate decision with its own default and owner. No control combines them, and nothing
+  defaults to Allow all.
+  - **Folders Slipgates may start sessions in:** each approved folder, with **Subfolders**
+    (Off) and **Remove**, then **Add folder**. None until added, and the exact folder only.
+    Subfolders ships only once the host supports subfolder scope (decision 7); until then it
+    isn't drawn. A path with a space is quoted by every launch; a system folder is refused.
+  - **Each agent's own folder trust:** what each CLI reports. The CLI decides, and Slipgates
+    never pre-trusts.
+  - **Permission prompts:** New sessions, **Standard prompts** by default.
+  - **Answers from my devices:** "Let this app and my devices approve Copilot permission
+    prompts", On by default as today, as its own row (decision 6); "Answer folder-trust
+    questions from my devices", **Off** by default; and the paired devices, or "No devices
+    paired" with **Pair a phone**.
+- **Remote clients** (the PWA, and later Apple). **Not built yet (#384 slice 5):** today the
+  PWA's `#/settings` holds only Notifications, Demo and Account, and shows no machine's
+  Settings. The design: they show a machine's Settings and readiness **read
+  only** (decision 10; [phone](proposals/384-first-run/proposal-384-phone.png)): "*machine* ·
+  Online · checked 14:52 · read only", then "Change these on *machine* · Settings in the
+  Windows app", then Agents, This machine and Trust. A row that needs the person reads "Needs
+  you on *machine*". No control is drawn that the device can't use; an action appears remotely
+  only where an existing explicit approval path already allows it (#67).
+
+### 6.10 First-run setup (#384)
+
+**Not built yet (#384 slice 5).** Today there is no guided setup: a machine is set up from
+Settings' page (§6.9), each agent from its row.
+
+Settings with a guide. Six steps, in a stepper that **replaces Settings' own pane** while setup
+runs; the app rail stays, with Settings selected, so Sessions and Machines are one click away
+and setup never traps the person (decision 4). The steps, in order, with their boards
+([every board](proposals/384-first-run/contact-sheet.png)):
+
+1. **Discover** ([board](proposals/384-first-run/proposal-384-discover.png)), "Read only:
+   nothing on this machine changes until you choose". This machine (the host, and "Fresh
+   install" or "Earlier setup found"), Agents (each Found with its version and path, or Not
+   found; **Scan again**) and Accounts. A machine set up earlier gets an info bar, "Earlier
+   setup found · its working settings are kept", with **Review migration** (the existing
+   reversible path), what is **Kept**, and what another tool owns, Blocked and **Not
+   changed**, with **Details**. Fresh setup never takes over another tool's state.
+2. **Agents** ([board](proposals/384-first-run/proposal-384-agents.png)), "Found agents are
+   selected. Choose any others to install." A checkbox row per agent: found ones checked,
+   missing ones unchecked and Not selected. **An agent's version** (#231; Head of Product's
+   decision, 2026-11-04, [#696](https://github.com/danswett/agent-bridge/issues/696#issuecomment-6651872822))
+   sets how it's offered:
+   - **Tested:** checked.
+   - **Newer than tested:** checked, with "newer than tested" after the version.
+   - **Unknown:** always listed, never left out, and **unchecked**, reading "Version not
+     verified". Checking it shows one line under the row: "We couldn't read *Agent*'s
+     version. Setup may not work; we'll check it afterwards." After setup its row reads
+     **Working** once evidence arrives (§6.8), or **Not verified** (the `idle` ring, plain
+     words, never Working's ring). Not verified doesn't hold Finish; Overview keeps the row
+     with **Check again**.
+   - **Older than the supported minimum:** no checkbox and no Set up. It reads "Update
+     *Agent* to set it up", and Scan again picks up the update.
+
+   The same rules apply to an agent installed later (§6.9) and to its row in Agents.
+
+   Checking a missing agent never installs it: its row
+   reads **Install needed** (Needs you) and asks for consent first. **What ships** (from
+   Settings' Install CLI, §6.9) is one combined Windows Package Manager dialog, "Install
+   *Agent* and its required runtimes?": it names the Windows Package Manager community source
+   and its agreements, says required runtimes may ask for Windows administrator approval,
+   that existing CLIs aren't upgraded and that nothing else (hooks, sign-in, folder trust, a
+   restart) is asked for, and that Agency is installed through the person's organization. Its
+   buttons are **Install CLI and runtimes** and **Cancel**, Cancel the default. There is no
+   separate runtime step: winget brings the runtimes the CLI needs, and the app refuses to
+   install Agency. **Not built yet (#384 slice 3):** the consent card drawn on the boards,
+   which names the npm package, the command run, what it needs and where it installs, with
+   **Install**, **Not now** and **Open the official page**; and **Install Node.js** for a
+   missing runtime through the same card (decision 12).
+   - **Installing:** the row's words as §6.9: "Installing…", Install CLI held pressed with its
+     ring, and **Cancel** ("Cancel CLI installation"). No package-manager lines are shown. The
+     person may go on ("Installing continues if you go on").
+   - **Install failed:** "Install failed · *reason*", the reason from a categorised set, with
+     Install CLI offered again; no error lines and no Copy details. Continue stays available;
+     a failed install only keeps that agent from Finish ("Codex CLI won't be verified until
+     it's installed").
+3. **Accounts** ([board](proposals/384-first-run/proposal-384-accounts.png)), Slipgates' own
+   account first, since the relay and devices depend on it. Its device code is drawn large in
+   the code face with the page's address, **Copy code and open the page** and **Cancel**, and
+   says when it expires. Each CLI signs in through its own supported flow. The app never asks
+   for a password and never shows a token or credential: only what the CLI reports.
+   Installation, sign-in and access are always three rows.
+4. **Hooks** ([board](proposals/384-first-run/proposal-384-hooks.png)), "Slipgates adds only
+   its own hooks and keeps everything else." Registration, owned instructions, and for Codex,
+   **Hook trust** ("Codex asks you to trust a new hook. Slipgates never answers this.", Needs
+   you, **Open Codex**) and the hook command, quoted and run once before it is written: a
+   command known not to run is never installed. Sessions started earlier get the **New session
+   needed** info bar, with **Show sessions**; they are not stopped.
+5. **Workspaces** ([board](proposals/384-first-run/proposal-384-workspaces.png)), "Separate
+   decisions, each with its own default. None of them is Allow all.": the four groups of §6.9.
+   **Parked (#699)** with them; until it resumes, setup has no Workspaces step beyond the two
+   shipped toggles.
+6. **Verify** ([running](proposals/384-first-run/proposal-384-verify.png),
+   [blocked](proposals/384-first-run/proposal-384-blocked.png),
+   [ready](proposals/384-first-run/proposal-384-ready.png)). A real test session per selected
+   agent, only once the person allows it. The Test sessions card names the folder, the agents,
+   the first message ("Reply with the word ready. Don't change any files."), **Close the test
+   sessions afterwards** (checked by default, decision 8), and who allowed it ("By you, in this
+   app, at 14:35"). Checks run one at a time, each a row, and the foot reads "Checking 6 of 11".
+   - **Blocked:** "Finish waits for 3 checks · Fix them, or deselect what you don't need." The
+     checks that aren't passed come first, under Needs you, each with its one fix (a relay that
+     timed out offers **Try again** and **Use local only**); the Working ones follow, with
+     **Check again**. Deselecting an agent or choosing local only are the ways past it, and
+     neither reads as success.
+   - **Ready:** "Ready on this machine · Checked 14:41 · 3 test sessions closed". Choosing
+     local only puts a neutral **Local only** chip in the header and Relay reads **Off**, with
+     no warning colour (decision 9). Nothing skipped reads as Working.
+
+- **The stepper:** each step's row has its readiness glyph (§6.8; `idle` before it starts) and
+  one line of state ("3 agents", "Codex hook trust", "Checking 6 of 11"). The current step is
+  the selection pill (§2.1), never a status colour. The foot reads "N of 6 steps done".
+- **The footer:** **Save and exit**, then **Back** and **Continue**, or **Finish** on Verify,
+  with a one-line reason beside them whenever Continue means less than all done ("1 needs you,
+  1 blocked, 1 failed"). Finish is enabled only once every required check (§6.8) is Working.
+- **Save and exit** is on every step but Ready. It keeps the choices and what is unfinished,
+  never a "done" flag: on return every check runs again. The app then opens on Settings ›
+  Overview, which reads "Setup isn't finished · *what*" with **Resume setup**, and the pane's
+  foot keeps **Resume setup · 5 of 6**. Resume opens the first step that isn't finished. An
+  install cut short by a crash, a sign-out or a restart reads **Install interrupted** (Needs
+  you) with **Check again**, which finds it installed or offers Try again; a retry never
+  registers anything twice.
+- **Agents installed later:** setup offers only what it finds while it runs. An agent installed
+  after setup finishes is offered in Settings (§6.9's card), never by opening setup again.
+- **Narrow windows** (under 760, §5.2): the stepper becomes one line, "Step 2 of 6 · Agents",
+  a six-part progress bar and a **Steps** button that opens the list as a flyout
+  ([board](proposals/384-first-run/proposal-384-narrow-agents.png)). Settings' pane becomes a
+  list page, and each section a pushed page with a "‹ Settings" back row; an agent's tabs
+  become the list of agents one level up
+  ([board](proposals/384-first-run/proposal-384-narrow-settings-agents.png)). A row keeps its
+  actions on its line where they fit, and otherwise puts them under its reason.
+- **Motion** is §5.3's, with nothing added: choosing a step is a Tab switch (its pill moves as
+  Selection does), the consent card opens as a Disclosure, a narrow window's sections push and
+  pop, and the Steps list is a flyout. The only loops are Checking's `working` glyph (§2.1) and
+  Install CLI's ring while an install runs, and both are still under reduced motion. There is
+  no progress bar and no percentage.
+
 ### 6.12 Restored sessions (#780)
 
 **Not built yet:** planned for #780 Host B and its client slices; the field names here are the
@@ -1658,7 +2085,7 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   again after a failure with no outcome, reuse the same `request`, so the host types it at most
   once and returns the first outcome. Only Try again after a `busy` or `refused` outcome sends a
   **new** `request`, because the host remembers each outcome for ten minutes and would only
-  repeat it. `unconfirmed` is never retried: the receipt says to check at the machine, as §6.5's
+  repeat it. `unconfirmed` is never retried: the receipt says to check the conversation, as §6.5's
   does. While it is in
   flight the button is disabled and keeps focus (A4).
 - **In the conversation:** shown as the person's own message, exactly as a typed reply is. It is
@@ -1790,7 +2217,9 @@ that survives a failed turn never hides the error behind "Delegating".
   "· *reason*", the reason is the host's categorised reason in plain words, from a known set.
   Raw text from the machine or the CLI is never shown, verbatim or trimmed: it belongs in
   diagnostics (#802). A line with no reason from that set reads without one ("Sign-in
-  refused").
+  refused"). The set for a refused start, by the host's reason: "too many requests, try again
+  later", "another sign-in is under way", "too many sign-ins waiting on this machine" and "not
+  available from this device".
 
 **Machine banner** (one per machine, agent and account, rolled up from the sessions' `attention`)
 
@@ -1800,7 +2229,10 @@ that survives a failed turn never hides the error behind "Delegating".
 - Title: "*Agent* on *machine* needs sign-in" plus "· @*account*" when known. Line 2: "*n*
   sessions affected: *A*, *B*" ("1 session affected: *A*" for one). Each title is a link that
   opens that session; there is no separate line of titles. The titles come from the client's own
-  records (never from text in the record).
+  records (never from text in the record), each drawn as a host's sentence is: revealed (a hidden
+  or right-to-left character as its escape) and at most 120 characters. A link keeps its comma,
+  so no line starts with one, and each is a target at least 32px tall with a pointer and 44px on
+  touch, the height of its line box (§9.1 A11).
 - One button, **Sign in**, only with the capability and `signIn: phone`. Without the capability
   there is no button and no instruction: a missing capability doesn't prove the agent can't sign
   in from a device.
@@ -1955,6 +2387,12 @@ question, as choosing its row does.
   push an hour at most, with a count and no text ("3 agent messages are waiting"), which opens
   Needs you.
 
+**Coming back to the app, on every client (#950):** §6.1's "Coming back to the app" rules hold
+where each client comes back: the PWA first, on returning to the screen or a network change; the
+Windows app, rules 1–5, on waking from sleep, with the same 3 s grace and the slot and strip in
+the list pane's header row, never in the title bar; Apple and Android when
+they are un-parked.
+
 **Windows (WinUI 3):**
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
   and a centred search box. System caption buttons.
@@ -1962,7 +2400,9 @@ question, as choosing its row does.
   agent or machine, titles starting with them first, then the most recently updated, whatever
   machine the list shows, and opens the one chosen as a notification does.
 - **Navigation:** a compact `NavigationView` rail (Sessions, Machines, Launch, Usage;
-  Settings at the foot) with a selection pill.
+  Settings at the foot) with a selection pill. Settings opens its one page (§6.9). **Not built
+  yet (#384 slice 5):** Settings' own pane of sections beside the rail, which first-run
+  setup's stepper replaces while it runs (§6.9, §6.10).
 - **Content:** a layer with an 8 px top-left radius.
 - **Controls:** ListView rows with a 3×16 Bridge pill on selection, SelectorBar for
   machines (those that don't fit under More, §6.1), an Accent button for New, subtle icon buttons
@@ -1973,7 +2413,11 @@ question, as choosing its row does.
   comes back only as an owner-approved spec here first.
 - **Banners** sit over every page, `InfoBar`s in this order (#293):
   - What stops the app from its job: the host not running, refusing the app, connecting, or
-    view only. Warning, with no close button: it goes once that is put right.
+    view only. Warning, with no close button: it goes once that is put right. On waking from
+    sleep or changing network, "connecting" is not raised for it (#950): during §6.1's 3-second
+    grace nothing shows, and after it, if the link is still down, the connection strip replaces
+    the list header row's content at the same height (§6.1, rules 3 and 4). A banner already
+    showing when the app comes back stays put.
   - "Discovery held: …" ([v1-sessions.md](../protocol/v1-sessions.md#discovery-held)), one per
     held machine, its name first when there is more than one. Informational, with the
     `InfoBar`'s close button, named "Dismiss Discovery held on *machine*" (§9.1 A1) and reached
@@ -2016,6 +2460,10 @@ question, as choosing its row does.
   platforms' controls.
 - **Desktop:** the Windows layout with a 56 px web app bar in place of the title bar (mark,
   name, search, machines online, account).
+  - **Coming back (#950):** the list pane's header row (the Sessions heading) holds the fixed
+    slot at its end, and the connection strip replaces that row's content at the same height,
+    as the phone's title row does (§6.1, rules 3 and 4). Neither ever goes into the web app bar
+    or above the list.
 - **Phone:**
   - a 24/32 title row with Search and New, and the sort menu between them;
   - machine tabs;
@@ -2023,6 +2471,12 @@ question, as choosing its row does.
     is the way to Launch.
   - The app bar comes back only as a strip while the connection has news (connecting,
     reconnecting, paused, an error), and as the search row while searching.
+    - **The strip replaces the title row's content, at the same height** (#950), so nothing below it
+      moves. After a return it shows only once §6.1's 3-second grace has run out with this
+      client's own link still down, and it is announced once, politely. A machine's own news
+      is never the strip's: it is on its rows, its tab and the Machines page (§6.1, rule 8).
+      Before #950 the strip and connection lines were inserted above the list, and the rows
+      jumped down and back up on every return.
 - **App banners** sit at the top of the content, above the page, one card each (`card` fill,
   `stroke2`), with no icon and no dismiss, in this order:
   - "A new version of the app is ready." · Reload (primary). A release is offered only once it
@@ -2135,9 +2589,30 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **Numbers before nouns:** "3 delegates", "1 background command".
 - **Approval notifications** say "waiting for your approval" and offer only Open (§7): an
   approval is approved in the app, never from a notification.
-- **No sentences explaining the UI,** no exclamation marks, and no emoji. The one exception is
+- **No sentences explaining the UI,** no exclamation marks, and no emoji. The exceptions are
   a collaborator's read-only lines (§6.7), which say whose session it is and who can act on it,
-  because a control that is absent can't carry a tooltip.
+  because a control that is absent can't carry a tooltip, and Settings' and setup's one-line
+  consent, security and cost lines and step subtitles (§1, principle 5; #384).
+- **Setup and Settings words (#384):**
+  - States: Not selected, Not found, Not signed in, Not checked, Not registered, Not trusted,
+    Needs you, Working, Blocked, Blocked by *X*, Failed, Checking, Waiting for you, Queued,
+    Found, Signed in, Registered, Trusted, Approved, Kept, Not changed, Not paired, Local only,
+    New session needed, Install needed, Installing, Install failed, Install interrupted,
+    Version not verified, Not verified, newer than tested.
+  - Agent rows today (#784, #705): "Not installed"; "Not installed · install it on this
+    machine"; "Installing…"; "Install failed · *reason*"; "Read-only · *reason*"; "Hook
+    ownership couldn't be checked · *reason*"; "Hook intake couldn't be checked · *reason*";
+    "Can't check · this machine's host is older"; "Not tested yet". Actions: Install CLI, Cancel
+    (named "Cancel CLI installation"); the consent dialog's Install CLI and runtimes.
+  - Version lines (#231): "We couldn't read *Agent*'s version. Setup may not work; we'll
+    check it afterwards."; "Update *Agent* to set it up".
+  - Titles: Set up; Discover; Agents; Accounts; Hooks; Workspaces; Verify; Ready on this
+    machine. Settings' sections: Overview, Agents, Accounts, Workspaces and trust, General.
+  - Actions: Continue, Back, Finish, Save and exit, Resume setup, Set up again, Scan again,
+    Check again, Install, Not now, Cancel, Try again, Sign in, Sign in again,
+    Open Codex, Repair hooks, Run test session, Remove bridge integration, Add folder, Remove,
+    Pair a phone, Use local only.
+  - The product name in them is Slipgates.
 - **Collaborator words (#519):** "Mine", "Everyone", "Show sessions from", "Manage
   collaborators…", "External", "*machine* · their name", "· read-only", "Waiting for @*login*",
   "copilot session" and "· status only", "@*login* shares status only: no titles or text.",
@@ -2167,6 +2642,15 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   an answer). Delivered is Send's check, never a line or a badge. Older hosts use the same
   words, less the stages they don't report. Never "typed", "queued", "injected", "in the
   terminal" or "Sending again…". Never "answered" before the host confirms.
+- **Return words (#950):** "Updating…" (the title row's cue, and under a held control pressed);
+  "Connecting to N machines…" (the same slot, for machines with no kept list); "*machine* is
+  offline · you can answer once it's back" (the reply box and the question). An error the person
+  can act on (Couldn't reach, unsupported) is one line in the same slot, naming the machine
+  ("Couldn't reach *machine*", with "and N more" when there are others and it fits), in place of
+  "Updating…".
+  Never a sentence over the list about a machine's connection: no "*machine* is offline. Its
+  sessions are as it last sent them…", "Connecting to *machine*…" or "Opening an end-to-end
+  encrypted channel to *machine*…" there.
 
 ## 9. Accessibility
 
@@ -2234,6 +2718,12 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   every failure says itself in words. Under reduced motion the ring is still, the ring, the
   check and the rest glyph swap over `crossFade`, and a line fades in over `crossFade`
   instead of rising; the quiet window and the announcement limit still apply.
+- **Coming back to the app (#950, §6.1):** a held control is `aria-disabled` from the moment
+  of the return, before it is drawn disabled at 600 ms, so it is never said to work while it is
+  held. The "Updating…" cue is never announced. The connection strip, if the grace runs out with
+  the client's own link down, is announced once, politely. When an offline machine's line
+  replaces a focused control (rule 8), focus moves to the line (`tabindex="-1"`), whose words
+  are read as focus lands, with no separate announcement; focus never drops to the page.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
@@ -2297,6 +2787,41 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   field missing, whose error is its accessible description and is said once, assertively
   (A6). While an answer goes, its controls are read-only, not disabled, so they keep focus
   and say their value (A4).
+- **Setup and Settings (#384):** these follow §9.1; what each surface adds is below.
+  - **The stepper** is a list (`role="list"`) of links, the current one `aria-current="step"`.
+    Each step is named for its label, state and line, joined with commas ("Hooks, needs you,
+    Codex hook trust"; A1). The step's title is the level 1 heading, and its groups level 2.
+  - **Focus** (A3, A4): when a step opens, focus lands on its title. Tab goes from there
+    through the step's controls, then the footer (Save and exit, Back, Continue or Finish). The
+    stepper is reached with Shift+Tab from the title, or F6. A disabled Finish stays
+    focusable, its reason its accessible description ("Finish, unavailable, 1 needs you, 1
+    blocked, 1 failed").
+  - **Announcements** (A6): install progress and Verify each have one region that says changes
+    of state, never percentages ("Installing Codex CLI", "Codex CLI installed", "Codex CLI
+    install failed", "Check 6 of 11: Copilot CLI hook, working"), at most one every 5 s while a
+    step runs; a failure isn't held back by that limit. The device code is a heading, its text
+    spelled out for screen readers.
+  - **Settings' agent rows** (A1, A2, A7; #678): each action is named for its row ("Set up
+    Claude Code", "Repair hooks, Codex CLI", "Remove bridge integration, Copilot CLI"), with
+    a key of its own. An action's progress and result are said from its own row's region (A6).
+    When a row's verb goes (a row that reaches Working has none), A4's target is the row's next
+    action, or else the row itself. Today's rows (§6.9): Install CLI is named "Install CLI for
+    *Agent*" and, while its install runs, stays focusable and pressed with its ring (A4); Cancel
+    beside it is named "Cancel CLI installation". A Read-only, couldn't-be-checked or Can't
+    check row has no button, and its words are its name.
+  - **The card for an agent installed later** (§6.9) is a group named for its line ("Claude
+    Code 1.0.3 is installed"), its buttons named for the agent ("Set up Claude Code", "Not now,
+    Claude Code"; A1). It never takes focus when it appears, and is announced once (A6), only
+    while Overview is open. After Not now, A4's target is the next card, or else Overview's
+    first row. The Agents item's dot is in its name ("Agents, new agent found").
+  - **Keyboard:** arrows move within the stepper, an agent's tabs and toggle groups; Space
+    toggles checkboxes and switches; Enter activates; Alt+← is Back; Esc closes the consent
+    card without installing (A5). Checkboxes, switches and the combo box report their state,
+    and every switch is named for its row ("Subfolders, C:\Projects\sample, off").
+  - **High contrast** (A9; decision 11; [board](proposals/384-first-run/proposal-384-blocked-contrast.png)):
+    Working's check ring is WindowText (CanvasText on the web), not Neutral's GrayText, which
+    reads as disabled. Needs you and Danger take their system colours, and their shapes carry
+    the state. The current step is Highlight with HighlightText ink.
 
 ## 10. Mock-up index
 
@@ -2330,3 +2855,12 @@ the owner 2026-11-04 ([proposals/600-reply-progress/](proposals/600-reply-progre
 and revised the same day to "quiet unless something's wrong": Send's ring and check on the
 normal path, the exception lines, "You answered · *value*" and older hosts, each in dark,
 light, contrast and reduced motion.
+
+First-run setup and Settings (#384, §6.8–§6.10) are drawn on the Proposal #384 boards: every
+step, every Settings section, the compact layout, high contrast, the PWA phone's read-only view
+and the readiness states ([proposals/384-first-run/](proposals/384-first-run/), on one
+[contact sheet](proposals/384-first-run/contact-sheet.png)).
+
+Coming back to the app (#950, §6.1) changes when things show, not how they look, so it has no
+boards: its timeline and the captures its build must show are in
+[proposals/950-calm-return.md](proposals/950-calm-return.md).

@@ -6,7 +6,7 @@ namespace AgentBridge.App.Core;
 // Another of the account's machines' updates (#51, docs/protocol/v1-update.md): what it runs, a
 // newer release once a check has found one, what its app is doing about it, how the last update
 // ended, and Check and Install. Install asks that machine's app to install the latest release as
-// soon as no session there is busy (or after six hours), as its automatic updates do: its host
+// soon as no session there has been busy for two minutes, however long that takes (#516): its host
 // and app restart then, and the outcome comes back here. That machine's host lets only a
 // person's device ask (this app is one) and none at all when it is read-only; it is then not
 // listed, as it offers no updates.
@@ -27,12 +27,21 @@ public sealed class MachineUpdateViewModel : Observable
     public string Name => machine.Name;
     UpdateState? State => machine.Host.Update;
 
+    // The host's own line for an update held back for a question waiting (AutoUpdater.QuestionLine).
+    const string QuestionLinePrefix = "Update ready \u00b7 ";
+
     public string StatusText
     {
         get
         {
             if (State is not { } s) { return ""; }
             if (!s.Installer) { return Line(s.Unavailable ?? "its app is not running, so it cannot update now"); }
+            // "Needs you" (#800) is the host's own line, in whatever phase: an update waited past
+            // six hours is never left to the log alone.
+            if (s.Waiting is { } held && held.StartsWith("Needs you", StringComparison.Ordinal)) { return Words.Sentence(held); }
+            // So is the line of an update held back for a question waiting (Creative on #719,
+            // 6674096426): its exact words.
+            if (s.Waiting is { } question && question.StartsWith(QuestionLinePrefix, StringComparison.Ordinal)) { return question; }
             return s.Phase switch
             {
                 UpdatePhase.Checking => "Checking for updates\u2026",

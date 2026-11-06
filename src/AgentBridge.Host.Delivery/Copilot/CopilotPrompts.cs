@@ -3,8 +3,9 @@ using System.Text.Json;
 namespace AgentBridge.Host.Delivery.Copilot;
 
 // What a transcript says before a reply is typed: whether it could be read at all, whether
-// anything is asking the person, and the line boundary later records are read from.
-public sealed record CopilotInputState(bool Readable, bool Asking, long ScannedTo);
+// anything is asking the person, and the line boundary later records are read from. Resumed:
+// all that is asking was left open by a CLI since replaced, and may or may not still be shown.
+public sealed record CopilotInputState(bool Readable, bool Asking, long ScannedTo, bool Resumed = false);
 
 // A prompt the person gave: a main-agent user.message with no other source, the offset its
 // line starts at, which identifies it, and the paths of the files Copilot attached to it
@@ -26,6 +27,16 @@ public sealed class CopilotInput(string path)
     // requests (by request id), as of scannedTo.
     readonly Dictionary<string, string?> asks = new(StringComparer.Ordinal);
     readonly HashSet<string> permissions = new(StringComparer.Ordinal);
+    // Open when a new CLI resumed the session (session.resume) with no end written for them: the
+    // killed CLI's. Whether the new one shows them again is not known, and a reply's Enter on a
+    // menu still shown would accept it, so they keep a reply out until something settles them: their
+    // own completion, an abort or shutdown, a question asked since (shown in their place), or a
+    // prompt the person typed at the machine (no source, or "user" for one with an attachment; never a
+    // schedule's or an agent's), so nothing held the input. Answers are not held by
+    // them: an answer to one of these is refused as stale (CopilotPermissionTranscript). Each with the
+    // agent that asked it (null for the session's own, and for a permission request), so a helper's
+    // abort or shutdown settles its own (Copilot on #837).
+    readonly Dictionary<string, string?> stale = new(StringComparer.Ordinal);
     long scannedTo;
 
     public string Path => path;
@@ -39,6 +50,7 @@ public sealed class CopilotInput(string path)
             {
                 asks.Clear();
                 permissions.Clear();
+                stale.Clear();
                 scannedTo = 0;
             }
             if (Jsonl.Lines(path, scannedTo, skipFirst: false, Line) is not { } to)
@@ -47,7 +59,8 @@ public sealed class CopilotInput(string path)
             }
             BytesRead += to - scannedTo;
             scannedTo = to;
-            return new CopilotInputState(true, asks.Count > 0 || permissions.Count > 0, scannedTo);
+            var fresh = asks.Count > 0 || permissions.Count > 0;
+            return new CopilotInputState(true, fresh || stale.Count > 0, scannedTo, Resumed: !fresh && stale.Count > 0);
         }
     }
 
@@ -58,9 +71,10 @@ public sealed class CopilotInput(string path)
     {
         var ask = bytes.IndexOf("\"type\":\"tool.execution_start\""u8) >= 0 && bytes.IndexOf("\"ask_user\""u8) >= 0;
         var permission = bytes.IndexOf("\"type\":\"permission."u8) >= 0;
-        var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0;
-        var answer = asks.Count > 0 && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
-        if (!ask && !permission && !ending && !answer) { return; }
+        var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
+        var answer = (asks.Count > 0 || stale.Count > 0) && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
+        var typed = stale.Count > 0 && bytes.IndexOf("\"type\":\"user.message\""u8) >= 0;
+        if (!ask && !permission && !ending && !answer && !typed) { return; }
         if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
         using (e.Doc)
         {
@@ -68,25 +82,43 @@ public sealed class CopilotInput(string path)
             switch (e.Type)
             {
                 case "tool.execution_start" when CopilotPrompts.Str(data, "toolName") == "ask_user" && CopilotPrompts.Str(data, "toolCallId") is { } id:
+                    // The session's own question, shown in place of what a killed CLI left; a
+                    // subagent's is not (it stops only that subagent), so those stay.
+                    if (e.AgentId is null) { stale.Clear(); }
                     asks[id] = e.AgentId;
                     break;
                 case "tool.execution_complete" or "human_response.recorded" when CopilotPrompts.Str(data, "toolCallId") is { } id:
                     asks.Remove(id);
+                    stale.Remove(id);
                     break;
                 case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
+                    if (e.AgentId is null) { stale.Clear(); }
                     permissions.Add(id);
                     break;
                 case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:
                     permissions.Remove(id);
+                    stale.Remove(id);
+                    break;
+                case "user.message" when e.AgentId is null && CopilotPrompts.Str(data, "source") is null or "" or "user":
+                    stale.Clear();
+                    break;
+                case "session.resume" when e.AgentId is null:
+                    // A new CLI: what the killed one asked may still be on its screen (stale).
+                    foreach (var (id, agent) in asks) { stale[id] = agent; }
+                    foreach (var id in permissions) { stale[id] = null; }
+                    asks.Clear();
+                    permissions.Clear();
                     break;
                 case "abort" or "session.shutdown" when e.AgentId is null:
                     // The session's own abort or shutdown ends everything it was asking.
                     asks.Clear();
                     permissions.Clear();
+                    stale.Clear();
                     break;
                 case "abort" or "session.shutdown":
-                    // A subagent's ends only its own questions.
+                    // A subagent's ends only its own questions, the killed CLI's left stale too.
                     foreach (var id in asks.Where(a => a.Value == e.AgentId).Select(a => a.Key).ToList()) { asks.Remove(id); }
+                    foreach (var id in stale.Where(a => a.Value == e.AgentId).Select(a => a.Key).ToList()) { stale.Remove(id); }
                     break;
             }
         }
@@ -116,11 +148,12 @@ public static class CopilotPrompts
             using (e.Doc)
             {
                 // A subagent's messages are its own; one with a source (a scheduled prompt,
-                // memory, another agent) was not typed by anybody.
+                // memory, another agent) was not typed by anybody. "user" is the person's own, as
+                // Copilot marks a prompt with an attachment (CopilotParser.Source).
                 if (e.AgentId is not null) { return; }
                 if (e.Type == "session.shutdown") { ended = true; return; }
                 if (e.Type != "user.message" || e.Data.ValueKind != JsonValueKind.Object) { return; }
-                if (Str(e.Data, "source") is { Length: > 0 }) { return; }
+                if (Str(e.Data, "source") is { Length: > 0 } and not "user") { return; }
                 if (Str(e.Data, "content") is { } content) { prompts.Add(new CopilotPrompt(start, content, AttachedPaths(e.Data), Jsonl.Timestamp(e.Doc.RootElement))); }
             }
         }

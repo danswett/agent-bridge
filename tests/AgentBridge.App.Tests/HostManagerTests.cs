@@ -43,6 +43,8 @@ public sealed class HostManagerTests : IAsyncLifetime
             StartTimeout = TimeSpan.FromSeconds(5),
             StopTimeout = TimeSpan.FromSeconds(1),
             Poll = TimeSpan.FromMilliseconds(50),
+            // No machine's real processes: the package is what a test says it is.
+            PackageHosts = () => [],
             Elevated = () => elevated,
         };
         return Task.CompletedTask;
@@ -411,6 +413,283 @@ public sealed class HostManagerTests : IAsyncLifetime
 
         Assert.Empty(tasks.Ended);
         Assert.False(File.Exists(StopMarker));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_stop_given_up_on_a_usage_probe_still_finishing_leaves_no_stop_marker_so_a_crash_is_still_restarted()
+    {
+        var quick = new HostManager(manager.Layout, tasks, processes,
+            ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(50),
+            ProbeWait = TimeSpan.FromMilliseconds(300),
+            ProbePoll = TimeSpan.FromMilliseconds(50),
+            PackageHosts = () => [],
+        };
+        quick.SetStartAtSignIn(true);
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        host.Start();
+
+        await Assert.ThrowsAsync<HostBusyException>(() => quick.StopAsync());
+
+        Assert.False(File.Exists(StopMarker));
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.True(await quick.IsRunningAsync());
+    }
+
+    HostManager QuickProbes(TimeSpan? probeWait = null, TimeSpan? callTimeout = null) => new(manager.Layout, tasks, processes,
+        ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+    {
+        StartTimeout = TimeSpan.FromSeconds(5),
+        StopTimeout = TimeSpan.FromSeconds(1),
+        Poll = TimeSpan.FromMilliseconds(50),
+        ProbeWait = probeWait ?? TimeSpan.FromSeconds(5),
+        ProbePoll = TimeSpan.FromMilliseconds(50),
+        ProbeCallTimeout = callTimeout ?? TimeSpan.FromSeconds(10),
+        PackageHosts = () => [],
+    };
+
+    static ProbeHoldResult Finishing => new(true, "Codex's app-server is still finishing");
+
+    // A stop that never comes back is a failure of its own, not a test that hangs.
+    static async Task<T> Within<T>(Task<T> work, TimeSpan limit)
+    {
+        Assert.Same(work, await Task.WhenAny(work, Task.Delay(limit)));
+        return await work;
+    }
+
+    static async Task Within(Task work, TimeSpan limit)
+    {
+        Assert.Same(work, await Task.WhenAny(work, Task.Delay(limit)));
+        await work;
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_settings_stop_waiting_on_a_usage_probe_is_given_up_when_the_app_quits_and_leaves_no_marker()
+    {
+        var m = QuickProbes(probeWait: TimeSpan.FromMinutes(5));
+        var waiting = new TaskCompletionSource();
+        host.On(HostOps.ProbeHold, _ => { waiting.TrySetResult(); return Finishing; });
+        host.Start();
+
+        var stop = m.StopAsync();
+        await waiting.Task;
+        m.Quit(TimeSpan.FromSeconds(1), _ => { });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Within(stop, TimeSpan.FromSeconds(10)));
+        Assert.False(File.Exists(StopMarker));
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.True(await m.IsRunningAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_host_its_launcher_brings_back_during_a_stop_is_waited_for_only_as_long_as_the_caller_allows()
+    {
+        // The first host stops at once; its launcher (the logon task) starts another, which is
+        // still finishing a usage probe. The caller (Velopack's hook) allows 300 ms, not ProbeWait.
+        var m = QuickProbes(probeWait: TimeSpan.FromMinutes(5));
+        m.SetStartAtSignIn(true);
+        var stopped = 0;
+        host.On(HostOps.ProbeHold, _ => Volatile.Read(ref stopped) > 0 ? Finishing : new ProbeHoldResult(false, null));
+        host.On(HostOps.Stop, d => { Interlocked.Increment(ref stopped); _ = Task.Run(host.StopAsync); return new { stopping = true }; });
+        var restarted = false;
+        tasks.StillRunningWhile = () =>
+        {
+            if (Volatile.Read(ref stopped) > 0 && !restarted) { restarted = true; host.Start(); }
+            return true;
+        };
+        host.Start();
+
+        var why = await Within(m.StopWithinAsync(TimeSpan.FromMilliseconds(300)), TimeSpan.FromSeconds(30));
+
+        Assert.True(restarted);
+        Assert.Contains("still finishing", why, StringComparison.Ordinal);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_launcher_brought_host_still_finishing_a_probe_is_given_up_on_when_the_app_quits()
+    {
+        var m = QuickProbes(probeWait: TimeSpan.FromMinutes(5));
+        m.SetStartAtSignIn(true);
+        var stopped = 0;
+        var waiting = new TaskCompletionSource();
+        host.On(HostOps.ProbeHold, _ =>
+        {
+            if (Volatile.Read(ref stopped) == 0) { return new ProbeHoldResult(false, null); }
+            waiting.TrySetResult();
+            return Finishing;
+        });
+        host.On(HostOps.Stop, d => { Interlocked.Increment(ref stopped); _ = Task.Run(host.StopAsync); return new { stopping = true }; });
+        var restarted = false;
+        tasks.StillRunningWhile = () =>
+        {
+            if (Volatile.Read(ref stopped) > 0 && !restarted) { restarted = true; host.Start(); }
+            return true;
+        };
+        host.Start();
+
+        var stop = m.StopAsync();
+        await Within(waiting.Task, TimeSpan.FromSeconds(30));
+        m.Quit(TimeSpan.FromSeconds(1), _ => { });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Within(stop, TimeSpan.FromSeconds(10)));
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Theory]
+    [Trait("Category", "Network")]
+    // The same process still there, or its pid since given to another.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_update_whose_host_stops_answering_mid_stop_but_still_runs_is_refused_and_nothing_is_ended(bool pidReused)
+    {
+        // The host answers when the update begins, then its pipe hangs while its process runs on.
+        var answering = true;
+        var m = new HostManager(manager.Layout, tasks, processes,
+            ct =>
+            {
+                if (Volatile.Read(ref answering)) { return LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct); }
+                if (pidReused) { lock (processes) { processes.StartTimes[4242] = Make.T0.AddHours(1); } }
+                throw new TimeoutException("the pipe did not answer");
+            },
+            userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(1),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(50),
+            ProbeWait = TimeSpan.FromSeconds(5),
+            ProbePoll = TimeSpan.FromMilliseconds(50),
+            PackageHosts = () => [4242],
+        };
+        processes.Alive.Add(4242);
+        processes.StartTimes[4242] = Make.T0;
+        host.On(HostOps.Status, _ =>
+        {
+            Volatile.Write(ref answering, false);
+            return FakeHost.StatusOf();
+        });
+        host.Start();
+        var applied = false;
+
+        var update = m.StopAndApplyAsync(() => { }, () => applied = true);
+
+        if (pidReused)
+        {
+            await update;
+            Assert.True(applied);
+        }
+        else
+        {
+            var e = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => update);
+            Assert.Contains("could not be reached to stop it and is still running", e.Message, StringComparison.Ordinal);
+            Assert.False(applied);
+            Assert.False(File.Exists(StopMarker));
+        }
+        Assert.Empty(processes.Killed);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Two_stops_waiting_on_the_same_usage_probe_both_end_with_the_host_stopped_and_the_marker_kept()
+    {
+        var m = QuickProbes();
+        var asked = 0;
+        host.On(HostOps.ProbeHold, _ => Interlocked.Increment(ref asked) > 6 ? new ProbeHoldResult(false, null) : Finishing);
+        host.On(HostOps.Stop, d => { _ = Task.Run(host.StopAsync); return new { stopping = true }; });
+        host.Start();
+
+        var first = m.StopAsync();
+        var second = m.StopAsync();
+        await Within(Task.WhenAll(first, second), TimeSpan.FromSeconds(30));
+
+        Assert.True(File.Exists(StopMarker));
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.False(await m.IsRunningAsync());
+    }
+
+    [Theory]
+    [Trait("Category", "Network")]
+    // Its process still there, the host stops answering: a hold that never comes back, or a pipe
+    // that goes. Neither is the host ending, whatever its pipe says.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_host_that_stops_answering_while_a_stop_waits_for_its_usage_probe_is_said_to_be_running_not_ended(bool pipeGone)
+    {
+        var m = QuickProbes(callTimeout: TimeSpan.FromMilliseconds(500));
+        processes.Alive.Add(4242);
+        var asked = 0;
+        host.On(HostOps.ProbeHold, d =>
+        {
+            if (Interlocked.Increment(ref asked) == 2)
+            {
+                if (pipeGone) { _ = Task.Run(host.StopAsync); }
+                else { Thread.Sleep(TimeSpan.FromSeconds(2)); }
+            }
+            return Finishing;
+        });
+        host.Start();
+
+        var e = await Assert.ThrowsAsync<HostBusyException>(() => m.StopAsync());
+
+        Assert.StartsWith("the host could not say whether a usage probe it started is still finishing, so nothing was stopped", e.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(StopMarker));
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task No_stop_marker_is_there_while_a_stop_waits_for_the_hosts_usage_probe_only_once_it_is_done()
+    {
+        var m = QuickProbes();
+        var asked = 0;
+        var markedWhileBusy = false;
+        host.On(HostOps.ProbeHold, _ =>
+        {
+            markedWhileBusy |= File.Exists(StopMarker);
+            return ++asked < 4 ? new ProbeHoldResult(true, "Codex's app-server is still finishing") : new ProbeHoldResult(false, null);
+        });
+        var markedAtStop = false;
+        host.On(HostOps.Stop, d => { markedAtStop = File.Exists(StopMarker); _ = Task.Run(host.StopAsync); return new { stopping = true }; });
+        host.Start();
+
+        await m.StopAsync();
+
+        Assert.False(markedWhileBusy);
+        Assert.True(markedAtStop);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_host_that_crashes_while_a_restart_waits_for_its_usage_probe_is_left_to_its_launcher_and_the_restart_says_it_ended()
+    {
+        var m = QuickProbes();
+        m.SetStartAtSignIn(true);
+        var asked = 0;
+        var markedAtCrash = false;
+        host.On(HostOps.ProbeHold, d =>
+        {
+            if (++asked == 2) { markedAtCrash = File.Exists(StopMarker); _ = Task.Run(host.StopAsync); }
+            return new ProbeHoldResult(true, "Codex's app-server is still finishing");
+        });
+        host.Start();
+
+        var e = await Assert.ThrowsAsync<HostBusyException>(() => m.RestartAsync());
+
+        Assert.StartsWith("the host ended unexpectedly while the stop waited for its usage probe", e.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("nothing was stopped", e.Message, StringComparison.Ordinal);
+        // The launcher looks at the marker the moment its host ends: none there, so it starts the
+        // crashed host again, as after any crash.
+        Assert.False(markedAtCrash);
+        Assert.False(File.Exists(StopMarker));
+        Assert.Empty(host.Sent(HostOps.Stop));
     }
 
     [Fact]

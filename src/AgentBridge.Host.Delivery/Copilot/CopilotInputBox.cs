@@ -155,14 +155,14 @@ public static partial class CopilotInputBoxReader
     [
         "open sidebar", "/ commands", "? help", "@ files", "# issues", "esc exit shell mode", VimNormal, VimInsert,
         "Interactive", "interactive", "Shell", "shell", "Plan", "plan", "Autopilot", "autopilot",
-        "esc interrupt", "esc stop agents", "esc edit prompt", "esc again to", " enqueue",
+        "esc interrupt", "esc stop agents", "esc edit prompt", "esc again to", "ctrl+c interrupt", "ctrl+c stop agents", " enqueue",
     ];
 
     // A running turn's own hints (`LMe`), as TurnHints reads them. Under 80 columns that row
     // leaves out the vim and mode labels, so a turn that starts after the box was read would
     // hide them from the footer checks: in a narrow window both of a reply's sends refuse it
     // (Trust's #843 re-review).
-    public static readonly IReadOnlyList<string> TurnSigns = ["esc interrupt", "esc stop agents", "esc edit prompt", "esc again to", " enqueue"];
+    public static readonly IReadOnlyList<string> TurnSigns = ["esc interrupt", "esc stop agents", "esc edit prompt", "esc again to", "ctrl+c interrupt", "ctrl+c stop agents", " enqueue"];
 
     // Whether the window is under 80 columns (`V5.compact`), measured by the box's own bottom
     // edge, which spans the frame.
@@ -182,10 +182,12 @@ public static partial class CopilotInputBoxReader
     // row with neither of the turn's own hints (a turn being cancelled drops them) is not taken
     // for it. With the hints hidden (`hideToggleHelp`) the idle footer is drawn empty, so no
     // reply is typed into an idle session there (refused, as a box with no footer); a turn's row
-    // keeps Esc's hint, which is not one of the hidden ones.
+    // keeps its interrupt hint, which is not one of the hidden ones. CLI 1.0.106 uses Ctrl+C
+    // for interrupt/stop agents without a draft (captured live); Esc remains for a draft or
+    // a second-step hint. Keep both in the reader and the checks held up to each key.
     static bool Working(string row) => TurnHints().IsMatch(row);
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"\besc (?:esc )?(?:interrupt|stop agents|edit prompt|again to \S)|\S \benqueue\b")]
+    [System.Text.RegularExpressions.GeneratedRegex(@"\b(?:esc (?:esc )?(?:interrupt|stop agents|edit prompt|again to \S)|ctrl\+c (?:interrupt|stop agents))|\S \benqueue\b")]
     private static partial System.Text.RegularExpressions.Regex TurnHints();
 
     // What the footer under the prompt's box may carry (1.0.105's `oDo`): the sidebar hint, the

@@ -120,7 +120,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 if (IsNotice(e, text)) { S.UncountedTurn = true; break; }
                 S.FirstUserMessage ??= text;
                 S.UserMessage = text;
-                S.Prompts++;
+                S.Prompt(Json.Time(e, "timestamp"));
                 S.UncountedTurn = false;
                 break;
             case "system" when Json.Str(e, "subtype") == "compact_boundary":

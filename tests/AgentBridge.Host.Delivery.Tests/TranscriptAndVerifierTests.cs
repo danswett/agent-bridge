@@ -56,6 +56,23 @@ public sealed class CopilotTranscriptTests : IDisposable
         Assert.True(CopilotTranscript.Find(events, "q1").SessionEnded);
     }
 
+    // A new CLI resumed the session: the killed one's question may or may not still be shown, so it
+    // is ended (never answered by keys), until the new CLI asks it again.
+    [Fact]
+    public void The_sessions_own_resume_ends_its_question_until_the_new_cli_asks_it_again()
+    {
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "m" }, 1), Copilot.Event("session.resume", new { }, 2, agentId: "helper"));
+        Assert.False(CopilotTranscript.Find(events, "q1").SessionEnded);
+
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, 3));
+        var call = CopilotTranscript.Find(events, "q1");
+        Assert.Equal((true, true), (call.SessionEnded, call.Resumed));
+
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "m" }, 4));
+        call = CopilotTranscript.Find(events, "q1");
+        Assert.Equal((false, false), (call.SessionEnded, call.Resumed));
+    }
+
     [Fact]
     public void A_question_far_behind_a_large_tail_is_still_found()
     {

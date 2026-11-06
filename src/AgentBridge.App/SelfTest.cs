@@ -100,6 +100,7 @@ static partial class SelfTest
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
             await CheckCurrentTools(window, main, Check);
+            await CheckUpdateBanner(window, main, Check, outFile);
 
             // Needs you (#165): every question on both machines, its count the one the tray shows,
             // and Approve once and Deny right there for the permission prompt.
@@ -372,6 +373,8 @@ static partial class SelfTest
             AppLog.Write("self-test: sign-in");
             await CheckSignIn(window, main, remote, Check, outFile);
             await CaptureSignIn(window, main, remote, Check, outFile);
+            AppLog.Write("self-test: update captures");
+            await CaptureUpdate(window, main, Check, outFile);
             // The receipt's states (ui.md §6.5) in each theme and at the narrowest width; high
             // contrast's pass draws them too.
             await ProgressPasses(window, main, demo, Check, outFile, result);
@@ -965,6 +968,7 @@ static partial class SelfTest
                 await Task.Delay(300);
                 var broken = await DrawPages(window, theme.ToString(), outFile, check);
                 check(broken.Count == 0 && root.ActualTheme == theme, $"draws every page with its title in {theme}{(broken.Count > 0 ? $": not {string.Join(", ", broken)}" : "")}");
+                await CheckEscapedSheet(window, check, outFile, theme.ToString().ToLowerInvariant(), notSent: true);
             }
             root.RequestedTheme = ElementTheme.Default;
         }
@@ -1014,6 +1018,7 @@ static partial class SelfTest
             await PictureAgentRows(window, main, outFile, "highcontrast");
             await PictureRowsTheAppCantActOn(window, main, demo, outFile, [ElementTheme.Default]);
             await ProgressGallery(window, main, demo, check, outFile, result, "highcontrast");
+            await CheckEscapedSheet(window, check, outFile, "high-contrast", notSent: true);
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();
@@ -1022,6 +1027,8 @@ static partial class SelfTest
             check(systemCaptions, $"leaves the caption buttons in the system's colours in high contrast ({window.AppWindow.TitleBar.ButtonForegroundColor?.ToString() ?? "system"})");
             // The sign-in banner and sheet in high contrast (#800, Creative 6655285995).
             await CaptureSignIn(window, main, remote, check, outFile, contrast: true);
+            // The update bar and Settings' update row in high contrast (#719, Creative 6643004091).
+            await CaptureUpdate(window, main, check, outFile, contrast: true);
             window.ShowPage("sessions");
         }
         finally

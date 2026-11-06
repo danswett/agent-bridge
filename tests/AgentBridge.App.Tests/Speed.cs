@@ -12,24 +12,34 @@ using Xunit.Abstractions;
 // long when the work is linear, and sixteen times when it is quadratic; MaxRatio (8) is between
 // them. The measurer is the tests' own, not the app's (#688): a change to the app's must not
 // silently change what every speed check means.
+//
+// A quarter size is timed as Step runs back to back, so both sizes of a pair hold the CPU for about
+// as long. On a runner whose cores are shared round robin, a short run can finish inside one time
+// slice where a long one never does: NeedsYouTests' `[](` line on #837 (run 42149093491) took 45 ms
+// at a quarter and 464 ms at full size, 10.2×, in the median of three pairs and again when measured
+// afresh, though the work is linear. Random pauses rarely land the same way twice; a quarter size
+// timed alone dodging the wait for the CPU that every full size pays does, and is the likeliest
+// reading of it.
 static class Speed
 {
     public const int Step = 4;
     // Between linear's 4 and quadratic's 16, geometrically: room for noise above 4, well short of 16.
     public const double MaxRatio = 8;
-    // Three pairs, so the median is a true middle: of two, the lower ratio was taken, and one paused
-    // quarter-size run (1.6× beside 16×) hid quadratic work (#875).
-    public const int Runs = 3;
+    // Five pairs, so the median is a true middle that two disturbed pairs can't move: of two, the
+    // lower ratio was taken, and one paused quarter-size run (1.6× beside 16×) hid quadratic work
+    // (#875); of three, a second disturbed pair decided.
+    public const int Runs = 5;
     // A quarter-size run quicker than this is timed as this long, so a timer's noise on a fast run
     // can't fail it.
     public static readonly TimeSpan QuarterFloor = TimeSpan.FromMilliseconds(10);
     // Work this quick at full size is past judging, and past mattering: a timer's noise would decide.
     public static readonly TimeSpan Floor = TimeSpan.FromMilliseconds(200);
 
+    // Quarter is one quarter-size run's share of the Step timed back to back.
     public readonly record struct Pair(TimeSpan Quarter, TimeSpan Full)
     {
         public double Ratio => Full.TotalMilliseconds / Math.Max(Quarter.TotalMilliseconds, QuarterFloor.TotalMilliseconds);
-        public override string ToString() => $"{Quarter.TotalMilliseconds:0} ms, then {Full.TotalMilliseconds:0} ms at {Step}×, {Ratio:0.0}×";
+        public override string ToString() => $"{Quarter.TotalMilliseconds:0} ms a quarter-size run, then {Full.TotalMilliseconds:0} ms at {Step}×, {Ratio:0.0}×";
     }
 
     public static void IsLinear(Func<int, string> input, int size, Action<string> work) => IsLinear(input, size, work, TimeProvider.System);
@@ -61,27 +71,36 @@ static class Speed
     // The two sizes are timed in turn, not each in a block of its own: timed as blocks, a slow
     // stretch over one block skewed the ratio either way (#872). Each pair goes in the order opposite
     // to the last, so a machine slowing or speeding up steadily favours neither size, and the median
-    // pair outvotes one that a pause splits. One untimed run first: its first call compiles the work,
-    // which once inflated the quarter size (#710).
+    // pair outvotes those that pauses split. One untimed run first: its first call compiles the work,
+    // which once inflated the quarter size (#710). The quarter size is timed Step runs at a time,
+    // as long as the full size, for the time slices above.
     internal static Pair Measure(Action quarter, Action full, TimeProvider time)
     {
         quarter();
+        void Quarters()
+        {
+            for (var i = 0; i < Step; i++)
+            {
+                quarter();
+            }
+        }
+
         var pairs = new Pair[Runs];
         for (var i = 0; i < Runs; i++)
         {
             TimeSpan q, f;
             if (i % 2 == 0)
             {
-                q = Time(quarter, time);
+                q = Time(Quarters, time);
                 f = Time(full, time);
             }
             else
             {
                 f = Time(full, time);
-                q = Time(quarter, time);
+                q = Time(Quarters, time);
             }
 
-            pairs[i] = new(q, f);
+            pairs[i] = new(q / Step, f);
         }
 
         Array.Sort(pairs, (a, b) => a.Ratio.CompareTo(b.Ratio));
@@ -145,7 +164,15 @@ public sealed class SpeedTests
 
         Speed.IsLinear(n => new string('[', n), 4000, Costing(clock, n => n * 110, pausedCall: 0, pause: TimeSpan.Zero, lengths: lengths), clock);
 
-        Assert.Equal([1000, 1000, 4000, 4000, 1000, 1000, 4000], lengths);
+        Assert.Equal(
+        [
+            1000,
+            1000, 1000, 1000, 1000, 4000,
+            4000, 1000, 1000, 1000, 1000,
+            1000, 1000, 1000, 1000, 4000,
+            4000, 1000, 1000, 1000, 1000,
+            1000, 1000, 1000, 1000, 4000,
+        ], lengths);
     }
 
     // The first call is the measurer's untimed one; the second is the first pair's quarter size.
@@ -163,17 +190,73 @@ public sealed class SpeedTests
         Assert.All(measured, pair => Assert.Equal(16, pair.Ratio, 3));
     }
 
+    // Call 6 is the first full-size run: the untimed run and the first pair's four quarter-size runs
+    // come before it.
     [Fact]
     public void Linear_work_slower_than_two_seconds_with_one_paused_run_passes_on_a_fake_clock()
     {
         var clock = new FakeTimeProvider(Start);
         // 20,000 characters at full size take 2.2 s, as #688's did.
-        var work = Costing(clock, n => n * 110, pausedCall: 3, pause: TimeSpan.FromSeconds(30));
+        var work = Costing(clock, n => n * 110, pausedCall: 6, pause: TimeSpan.FromSeconds(30));
         var measured = new List<Speed.Pair>();
 
         Speed.IsLinear(n => new string('[', n), 20000, work, clock, measured.Add);
 
         Assert.Equal(4, Assert.Single(measured).Ratio, 3);
+    }
+
+    // A core shared round robin, as a busy runner's are: the work holds it for a time slice, then
+    // waits while the others ready on it take theirs. 187.5 ms is Windows Server's slice (12 clock
+    // ticks of 15.625 ms). A slice's wait lands on every full-size run, but a 45 ms quarter-size run,
+    // timed alone, fits inside a slice: the likeliest reading of #837's linear `[](` line at 10.2×.
+    static Action<string> Sharing(FakeTimeProvider clock, Func<long, long> microseconds, int others)
+    {
+        var slice = TimeSpan.FromMilliseconds(187.5);
+        var used = TimeSpan.Zero;
+        return text =>
+        {
+            var left = TimeSpan.FromTicks(microseconds(text.Length) * 10);
+            while (left > TimeSpan.Zero)
+            {
+                if (used == slice)
+                {
+                    clock.Advance(slice * others);
+                    used = TimeSpan.Zero;
+                }
+
+                var run = left < slice - used ? left : slice - used;
+                clock.Advance(run);
+                used += run;
+                left -= run;
+            }
+        };
+    }
+
+    // 5,000 characters take 45 ms and 20,000 take 180 ms of the core. Each quarter-size run timed
+    // alone measured 45 ms against 555 ms at full size, 12.3×, and failed twice.
+    [Fact]
+    public void Linear_work_quicker_than_a_time_slice_at_a_quarter_passes_on_a_core_shared_with_two_others()
+    {
+        var clock = new FakeTimeProvider(Start);
+        var measured = new List<Speed.Pair>();
+
+        Speed.IsLinear(n => new string('[', n), 20000, Sharing(clock, n => n * 9, others: 2), clock, measured.Add);
+
+        Assert.Equal(4, Assert.Single(measured).Ratio, 3);
+    }
+
+    [Fact]
+    public void Quadratic_work_still_fails_on_a_core_shared_with_two_others()
+    {
+        var clock = new FakeTimeProvider(Start);
+        // 45 ms at a quarter of 20,000 characters, as above; 720 ms at full size.
+        var work = Sharing(clock, n => n * n * 9 / 5000, others: 2);
+        var measured = new List<Speed.Pair>();
+
+        var failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => Speed.IsLinear(n => new string('[', n), 20000, work, clock, measured.Add));
+
+        Assert.Contains("grew faster than linearly", failed.Message);
+        Assert.All(measured, pair => Assert.Equal(16, pair.Ratio, 3));
     }
 }
 
@@ -194,10 +277,17 @@ public sealed class SpeedTests
 //   takes (9 million in about 60 ms), about 53 ms, 10L: (16 × 10.1 + 4) / (10.1 + 1) = 14.9×;
 // - at 3 ns a step, as quick as any CPU runs one, beside the slowest parse: about 24 ms, 4.5L,
 //   (16 × 4.5 + 4) / (4.5 + 1) = 13.8×; so the ratio stays at 13× or more, where 8 fails it;
-// - the full size, 16Q + 4L, takes 0.40 s to 0.88 s, over the 200 ms floor; the quarter size,
+// - the full size, 16Q + 4L, takes 0.40 s to 0.88 s, over the 200 ms floor; a quarter-size run,
 //   29 ms to 59 ms, over its 10 ms floor;
-// - failing, it is measured twice: 2 × (4 quarter + 3 full runs) = 104Q + 32L, about 2.7 s, and
-//   5.7 s on windows-11-arm, where the 12,000-character version this replaces took about 10 s.
+// - failing, it is measured twice, each time one untimed quarter-size run and five pairs of four
+//   quarter-size runs and a full one: 2 × (21 quarter + 5 full runs) = 202Q + 82L, about 5.3 s, and
+//   11 s on windows-11-arm.
+//
+// The second is the work of NeedsYouTests' A_long_line_of_brackets_is_made_plain_quickly, whose
+// `[](` row flaked on #837, with the same pass. Its own work is linear scans of a few hundred
+// characters, microseconds beside Q, so the ratio stays near 16×. A quarter of 160 `[](` is 120
+// characters: Q = 384 × 120² ≈ 5.5 million steps, 17 ms to 37 ms; the full size, 0.27 s to 0.59 s,
+// over the floor; failing, 202Q, about 3.4 s, and 7.5 s on windows-11-arm.
 [Collection(nameof(GrowthTests))]
 public sealed class SpeedQuadraticControlTests(ITestOutputHelper output)
 {
@@ -214,19 +304,26 @@ public sealed class SpeedQuadraticControlTests(ITestOutputHelper output)
         sink = x;
     }
 
-    [Fact]
-    public void A_quadratic_pass_added_to_the_markdown_work_fails_the_check()
-    {
-        static string Repeat(string s, int n) => string.Concat(Enumerable.Repeat(s, n));
+    static string Repeat(string s, int n) => string.Concat(Enumerable.Repeat(s, n));
 
+    void FailsTheCheck(int size, Action<string> work)
+    {
         var failed = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => Speed.IsLinear(
             n => Repeat("[](", n),
-            192,
-            t => { AgentBridge.App.Core.MarkdownModel.Parse(t); AgentBridge.App.Core.MarkdownModel.Outline(t); Quadratically(t); },
+            size,
+            work,
             TimeProvider.System,
             pair => output.WriteLine($"measured {pair}, against {Speed.MaxRatio}×")));
 
         output.WriteLine(failed.Message);
         Assert.Contains("grew faster than linearly", failed.Message);
     }
+
+    [Fact]
+    public void A_quadratic_pass_added_to_the_markdown_work_fails_the_check() =>
+        FailsTheCheck(192, t => { AgentBridge.App.Core.MarkdownModel.Parse(t); AgentBridge.App.Core.MarkdownModel.Outline(t); Quadratically(t); });
+
+    [Fact]
+    public void A_quadratic_pass_added_to_the_needs_you_line_work_fails_the_check() =>
+        FailsTheCheck(160, t => { AgentBridge.App.Core.NeedsYouEntry.PlainLine(t); Quadratically(t); });
 }

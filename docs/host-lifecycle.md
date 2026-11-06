@@ -5,7 +5,8 @@ draft [#815](https://github.com/danswett/agent-bridge/pull/815).
 [SRE's slice decision](https://github.com/danswett/agent-bridge/pull/815#issuecomment-6654417590)
 permits **graceful, process-local** exclusion only; Connection may veto.
 Engineering's independent review is required. No scheduler, installer, apply loop,
-remote management command or forced watchdog restart is added.
+remote management command or forced-recovery watchdog is added; the only restart
+added is the committed-departure watchdog below, through the existing `host.restart` path.
 
 ## One host, one delivery gate
 
@@ -37,7 +38,7 @@ must not add an `AutoUpdater.IdleFor`/whole-session idle test or another fence.
 | API | Result / bound |
 |---|---|
 | `DepartureConditions.Register(DeparturePurpose, params IDepartureCondition[])` | Once per purpose, at composition. Invalid kinds, duplicate registration or registration after coordinator construction are refused. |
-| `LifecycleCoordinator(DeliveryGate, DepartureConditions, IPlannedStateTransport?, TimeProvider?)` | Freezes/copies the composition-time conditions. Not a grant of remote authority. |
+| `LifecycleCoordinator(DeliveryGate, DepartureConditions, IPlannedStateTransport?, TimeProvider?, DepartureWatchdog?)` | Freezes/copies the composition-time conditions. Not a grant of remote authority. |
 | `TryAcquireQuiet(TimeSpan maxWait, DeparturePurpose purpose, CancellationToken, DepartureMode)` | `Task<QuietResult<QuietLease>>`; default-wait overload takes purpose only. Wait 0–10 s, default 5. Returns `Value` or typed `Reason`, never a free-text error. |
 | `AnnouncePlanned(QuietLease, CancellationToken)` | `Task<QuietResult<PlannedStateReceipt>>`; five seconds for durable acceptance, inside the lease lifetime. |
 | `CommitDeparture(QuietLease)` | `DepartureResult`: `Guard` on commit, otherwise closed `Kind`. Checks/marks `Committing` under the gate lock, evaluates snapshots under the coordinator lock only, then re-takes the gate lock to commit the same exclusion. No call-site delegate or condition list. |
@@ -54,7 +55,14 @@ Purpose is a label, not authorization. The closed `QuietBlockedReason` set is:
 The separate, closed `DepartureBlocker` set for commit/conditions is exactly:
 `DeliveryInFlight`, `Typing`, `AnnounceUnacked`, `JournalUncertain`,
 `AppRunning`, `OtherHostRunning`, `ChannelChanged`, `TransferInFlight`,
-`ConditionFault`. `IDepartureCondition` exposes `Kind` and synchronous
+`ConditionFault`, `LeaseExpired`. `LeaseExpired` (#885) is the coordinator's own
+outcome: the provisional lease's 30-second lifetime ran out before commit, whether
+or not the gate's expiry notification has run yet. Callers report it as
+"changed" and may start again; it was previously `ConditionFault`, which callers
+could not tell from a condition that really faulted. A lease released before its
+lifetime (abort, dispose, refused announcement) and a lease already committed still
+abort as `ConditionFault`. Registration refuses a condition whose `Kind` is
+`LeaseExpired`. `IDepartureCondition` exposes `Kind` and synchronous
 `bool IsBlocking()`: lock-free and non-blocking, with no I/O or side effects, reading only its owner's in-memory
 snapshot refreshed outside the fence. Kinds are validated/captured at registration.
 No owner or transport getter runs while the delivery gate lock is held.
@@ -78,6 +86,46 @@ the host remains fenced until exit; there is no guard-release/abort API.
 Prepare/download/verify outside the lease. Suspend invalidation must be supplied
 by the future OS consumer through cancellation/abort; no OS event adapter is
 installed by this slice.
+
+### Committed-departure watchdog (#805 N1)
+
+A committed guard fences deliveries until the process exits, so a follow-on action
+that fails after commit (an update apply that throws, a restart that never happens)
+would leave the host refusing deliveries for ever. `DepartureWatchdog` notices that.
+
+- `LifecycleCoordinator(..., DepartureWatchdog? watchdog)` arms it when
+  `CommitDeparture` commits, and only then. It runs on an injected `TimeProvider`;
+  the bound defaults to **2 minutes** (`DepartureWatchdog(handler, time, bound)`).
+  Without one, the coordinator keeps a state-only watchdog on its own clock.
+- When the bound passes with the process still alive, the state becomes `Stuck` with
+  the closed reason `departure-stuck`, and `IDepartureStuckHandler.DepartureStuck`
+  is called **once**. A throwing handler is contained; the state stays `Stuck`.
+  Stuck never reopens deliveries in this process.
+- `ServeAsync`'s default, `RestartingDepartureStuckHandler`, logs one fixed line
+  (`departure stuck: committed departure did not exit; restarting the host`, with
+  no exception text or path) and calls the host's **existing `host.restart` path**,
+  `SettledRestart`: it first waits up to 90 s for a usage probe tied to the host to
+  settle (#238), then `HostHandover.Request()`, then the serve stop token. A host
+  under the logon task's launcher exits with `HostLauncherContract.Restart` for the
+  launcher to restart; an unsupervised one starts its replacement after it has
+  stopped and let go of its lock. No new restart or exit path is added. This is not
+  `WatchdogRecovery`/forced recovery: commit required no accepted work in flight,
+  and the fence has refused new work since, so the restart carries no input.
+  With no restart action the handler only logs that deliveries stay refused. If the
+  host is already stopping when the bound passes (a committed `RemoteStop`,
+  `Shutdown` or `SignOut` whose teardown runs past 2 minutes; one usage-monitor
+  disposal alone can wait 90 s), it only logs, so a requested stop is never turned
+  into a restart. That holds through the probe settle too, for the watchdog and
+  `host.restart` alike: a stop asked for during the settle ends the wait, and
+  `SettledRestart` reads the stop token again just before the handover and never
+  hands over once it is set. The one window left is the few instructions between
+  that read and `HostHandover.Request()` (a single volatile write), since nothing
+  can withdraw a handover. A disposed watchdog (the serve loop has ended) never fires.
+- `LifecycleCoordinator.Departure` and `HostControl.Departure` expose
+  `DepartureStatus(State: None | Committed | Stuck, CommittedAt, Reason)` to the
+  host's status/health readers. It is **not** added to `HostStatus` (the local-pipe
+  contract) or any relay message; showing it on the app or Fleet row (#755) is a
+  separate contract change.
 
 ### Hard slice boundary
 

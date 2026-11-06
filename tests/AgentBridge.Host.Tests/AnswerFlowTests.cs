@@ -181,6 +181,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("error", reason);
+        Assert.DoesNotContain("at the machine", reason);
     }
 
     [Fact]
@@ -192,6 +193,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("different answer", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         // A fresh question, which the session never answers.
         Fixture.Append(events, Ask("q2", second++));
@@ -200,6 +202,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         (outcome, reason) = await AnswerAsync(ch, new { pick = "a" }, question: "q2");
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("did not record an answer", reason);
+        Assert.DoesNotContain("at the machine", reason);
         Assert.Equal(2, injector.Plans.Count);
     }
 
@@ -215,6 +218,21 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Fixture.Append(events, Recorded("q1", new { pick = "a" }));
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal(("stale", "the question has already been answered"), (outcome, reason));
+        Assert.Empty(injector.Plans);
+    }
+
+    // Copilot on #837: a new CLI resumed the session after it asked. The host's view may still list the
+    // question, but keys typed for it would go to whatever the new CLI shows: refused as stale.
+    [Fact]
+    public async Task An_answer_to_a_question_asked_before_the_session_was_resumed_is_stale_and_types_nothing()
+    {
+        var ch = await OpenAsync();
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, second++));
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("stale", outcome);
+        Assert.Contains("resumed in a new Copilot CLI", reason);
         Assert.Empty(injector.Plans);
     }
 
@@ -455,6 +473,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("console closed", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         // A different question, so the first attempt's outcome is not what comes back.
         Fixture.Append(events, Ask("q2", second++));

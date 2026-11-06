@@ -42,7 +42,7 @@ A row the app can't act on has its own words and no verb, in the neutral seconda
 status colour, never Ready, Not set up or Needs repair, and nothing on it is a button that can't
 work (Creative's rulings on #784 and #705):
 - hooks the host holds back (`blocked`: a read-only host, or another profile's) say
-  "Read-only · *why*" ("an older bridge runs this machine", "another bridge profile owns its
+  "Read-only · *why*" ("this machine's host is older", "another bridge profile owns its
   hooks", or "set in this host's settings"), and Install CLI is hidden on them;
 - hooks the host reports `failed` with `hookSetup: unknown`, which its setup refuses, say "Hook
   ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or
@@ -50,6 +50,9 @@ work (Creative's rulings on #784 and #705):
 - `unknown` beside any other hooks comes only from a host older than the field, and says
   "Can't check · this machine's host is older". Its rows offer no Set up, Repair or Remove: the
   detail's words they once fell back on offered actions the host might refuse.
+
+Each reason is said once, on the status line: a Version or Hooks line beneath it that would give
+the same reason says only the fact ("Hooks: Not checked").
 
 No row shows an exception's, a command's or an installer's own text, which named paths: each
 says why from a known set (`AgentWords`), and the app's log keeps the host's words. That
@@ -257,10 +260,21 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   not stop; 1 from Task Manager; 0xC000013A for Ctrl+C or logging off. A Stop from the app
   also covers the launcher, which no pipe reaches between crash restarts or while the host it
   restarted is still starting: Stop writes a marker (`host.stopped` in the profile's folder)
-  that the launcher checks after every host exit and every wait before starting the host again;
+  that the launcher checks after every host exit and every wait before starting the host again.
+  It is written only once the host's usage probes are done, just before the host is asked to
+  stop (or when no host answers), so a host that crashes during that wait, or while the app
+  quits during it, is still started again; the Stop then says the host ended unexpectedly
+  rather than that nothing was stopped, but only when its process has gone and nothing answers
+  on its pipe (a host whose process is still there but no longer answers is reported as not
+  stopped). Stops run one at a
+  time (Settings' Stop and Restart, an update's), so a second waits for the first and finds the
+  host stopped, rather than clearing the first's marker (#238). The app then
   waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
   the run itself if it is still there after the 20 s start timeout. A host the launcher starts
-  also looks for the marker once its pipe is open and, finding it, exits 0 without serving, so
+  also looks for the marker once its pipe is open and, finding it, exits 0 without serving (it
+  looks first before it starts restoring what a reboot or a crash took, and exits then having
+  restored nothing; a restore it starts resumes no agent until the look with its pipe open has
+  passed, #986), so
   a host still starting when the launcher was ended, or under a launcher this app did not start
   (one from before the app was last opened), stops too: either the app's Stop reaches its pipe
   or the host sees the marker. A host that refuses the app's connection (one of them elevated)
@@ -287,8 +301,24 @@ into one folder with one version. An app update is a host update, so they never 
   `%LOCALAPPDATA%\AgentBridge`: that is the host's data root (device keys, accounts,
   config, logs), and Velopack deletes its install folder on uninstall.
 * `OnBeforeUpdateFastCallback` (the old version, before files are replaced) stops the host
-  over the pipe and waits for its process to exit, so nothing in `current\` is locked;
-  `OnAfterUpdateFastCallback` (the new version) starts it again through its logon task.
+  over the pipe and waits for its process to exit, so nothing in `current\` is locked. Every
+  update the app starts has stopped the host already, after waiting for its usage probes (below),
+  so the hook finds it stopped and begins nothing. One it finds running (an update the app did
+  not start) is stopped only if its usage probes are done within 6 s. Velopack gives this hook
+  15 s and kills it after that, carrying on with the update
+  ([Velopack: App Hooks](https://docs.velopack.io/integrating/hooks)), so the hook waits at most
+  10 s in all and leaves the rest to the app's own start and exit. If the probes are not done, the
+  host is not asked to stop at all, and Velopack ends it with the package, which can cut a Codex
+  app-server it started mid-refresh (#238). The app turns off Velopack's own apply of a downloaded
+  update when the app starts (`SetAutoApplyOnStartup(false)`), so an update is applied only by
+  the app's own install, which waits for the probes, or by a person: `Update.exe` run by hand,
+  a newer setup run over the app, or an uninstall. If one of those comes while a Codex usage probe
+  is running (up to about 10 minutes for one that is slow to answer, usually under a minute) and
+  Codex happens to be refreshing its sign-in, the person may have to sign in to Codex again.
+  Keeping the probe alive across those is #974. The same holds for uninstall, whose hook has
+  30 s, and which then goes on;
+  `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon
+  task, waiting at most 10 s.
   The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
   launch if it is not running.
 * `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
@@ -336,40 +366,160 @@ into one folder with one version. An app update is a host update, so they never 
   the app nor the host does: an x64 copy is never offered an Arm64 package, nor the reverse,
   whichever is newer (`HostUpdatesTests`). Moving x64 to another channel name would strand every
   installed copy on its last version, so it stays `win`.
-* **Automatic updates** (`AutoUpdater`): Settings has "Include pre-releases in updates" and
-  "Install updates automatically", both per profile (`<profile>-settings.json`) and both on by
-  default. The installed app checks on start and every 30 minutes, and downloads a release it
-  finds at once. It installs it once this machine's host has been idle (no session with a turn
-  running or a question waiting) for two minutes without a break, seen at every minute's tick
-  and every session change, and since its sessions were last read in full (a reconnect starts
-  the wait again), or six hours after it first found one, whatever the sessions are
-  doing (though still only once they are read in full, so not in the middle of a reconnect).
-  The path is that of "Update and restart": the host stopped over the pipe, then
-  `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
-  host again. The new version's first start shows a toast: the version it came from, and the
-  release's notes.
+* **Updates in the background, installed as "When an update is ready" says** (`AutoUpdater`,
+  #516; owner decision on #689, 6674007815; Product, 6674016765 and 6674052423; Creative,
+  6674096426): Settings has "Include pre-releases in updates" and "Download updates
+  automatically", both per profile (`<profile>-settings.json`) and both on by default. The
+  installed app checks on start and every 30 minutes, and downloads a release it finds at once,
+  without stopping the host or closing anything. Then **When an update is ready**, a two-choice
+  picker kept per machine and profile (`whenUpdateReady`, unset meaning the default,
+  `AppPreferences.DefaultWhenReady`), says what happens:
+  * **Restart to update** (*For a machine you use*), the default for a new install and any
+    machine not set: it waits, for as long as it takes, for the person's Restart to update:
+    **nothing installs because the host is idle, or because it has waited long enough**. Before
+    #516 the app installed by itself once the host had been idle for two minutes, or six hours
+    after it found the release whatever the sessions were doing, and so exited under the person
+    without a word.
+  * **Install between turns** (*For a machine agents use*; the owner sets it on dev boxes and VMs
+    until a machine role exists, #384): it installs by itself, through the same path as Restart
+    to update, at the first moment no session on this machine has a turn running or a question
+    waiting, over a whole snapshot read in full and settled for five seconds (`SettleFor`), with
+    no two-minute wait: a session going idle sets a tick for then, rather than the next minute's.
+    A machine that never goes quiet installs at the **six-hour backstop** (`WaitAtMost`, and no
+    sooner than 20 minutes after the machine last stopped refusing, `ReturnGrace`), over a turn
+    running. **An update never strands a waiting question:** installing stops the host
+    (`HostManager.StopAndApplyAsync`), and the app can't establish that a question waiting stays
+    answerable from the person's other devices through that (its own restart warning says it may
+    then have to be answered at the machine), so while a question waits, or whether one does
+    can't be told (the host's link down, its sessions not read in full, or one read past a
+    field), the backstop skips. The update state's `waiting` then reads exactly "Update ready ·
+    waiting for a question to be answered" (for the question; "Needs you: …" for not knowing), its
+    phase `waiting` and `automatic` true, and the log says "Needs you: …" at most daily. The PWA's
+    update line and the app's machine rows show that line as it is. An Install pressed on another
+    device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
+    effect at once (the app looks again). Setting it from the phone is #801's.
+  * **Ready:** a banner over every page, "Version *v* is ready. Restart to update." with
+    **Restart to update** (an `InfoBar` with no close button, like the other app banners, so it
+    stays while the release waits), and the same line and button in Settings. No toast: toasts
+    are for what waits on the person, and an update can wait (Creative on #719, as #231 ruled for
+    a newly found agent). The bar and Settings' update line are polite live regions, each change
+    of their words said once (ready, restarting, failed; a release that became ready while
+    Settings was busy, once it is idle), and Settings' own download at most every quarter
+    (ui.md §9.1 A6). Errors name the next step in one sentence: "The update didn't download.
+    *Product* will try again at *time*.", or "The update didn't install because another bridge
+    profile is running from this installation.", its reason a kind (another profile running, the
+    installer's error, a newer update downloaded meanwhile, the host not answering), never a
+    process id, a path or an error's own words, which go to the log. A failed install is a
+    warning bar whose button reads **Try again**; while restarting, the button shows its progress
+    ring, ignores presses, keeps focus and says "Restarting…" to a screen reader, never drawn at
+    rest in accent (Creative on #719, 6675195544). There is one restart with one state, whichever
+    control starts it: Settings' Restart to update goes through the banner's
+    (`SettingsViewModel.ShareRestart`), so the control pressed shows its ring, the banner shows
+    "Restarting to update…", and a failure shows on the banner as the warning with Try again,
+    never as an error (Engineering's second-family review, 6676638175; Creative, 6676653935). A
+    release Settings downloaded itself, with automatic downloads off, is taken by the app's
+    updater when Settings' Restart to update is pressed, so the press installs it (6677216492).
+    Nothing is said twice on one screen (Creative, 6677102646): while the banner, above Settings,
+    offers the release or says why it didn't install, Settings' line doesn't repeat it; with no
+    banner, Settings says it, once. A check from Settings that GitHub refuses or limits is
+    Settings' own news, said there with its next check as a status, after the offer when Settings
+    says the offer, and whatever the banner says; Restart to update stays. A newer release downloaded while
+    one waits takes its place. A release an earlier run downloaded is
+    ready from the next start, before any check (`UpdateManager.UpdatePendingRestart`), so it is
+    offered offline or while the feed refuses (#530), but only if it came from the feed and
+    pre-release choice selected now and is still the bytes verified for it
+    (`update-downloaded.txt` in the app's data says which, with the checksum).
+  * **Every package is checked against its release** (`DownloadMark`, Engineering's
+    second-family review of #719, 6676612221): Velopack (1.2.161) takes a package already in its
+    folder under the release's file name for the release without checking its bytes, so one
+    downloaded from another feed under the same name and version would pass. Before a download, a
+    package there that doesn't match the chosen release's checksum from its feed (SHA-256 where the
+    feed gives one, else SHA-1) is removed; after it, the package is marked ready only when it
+    matches, and otherwise removed and the download has failed. The mark keeps the checksum and its
+    algorithm. A package offered after a restart must still match it, and just before install the
+    package is checked again from a handle that keeps it open, read-only to everyone else, until
+    the app exits; the installer opens it by its path after that, so the check does not reach
+    past the app's exit (Engineering's second-family review, 6677353697): an accepted limitation,
+    whose fix, a verified per-profile copy handed to `Update.exe`, is #984. A release whose feed gives no checksum is never installed. The checksum proves the
+    package is the one the chosen feed names, not who published it: the feed supplies its own
+    checksum. The app downloads full packages only (`AppPackages`): Velopack rebuilds a release
+    from deltas into a package that is never the full package's bytes, so it would fail this
+    check (6677216492).
+  * **Restart to update** says what a restart would interrupt, when a session here is waiting on
+    the person or has a turn running ("Restart to update now?", Not now the default): the agents
+    keep running, but a question or approval the host was carrying may then have to be answered
+    at the machine. It asks last, after any download and every check, just before the host stops,
+    so a session that became busy since the press is counted (and a host reconnecting, or refusing
+    the app, is warned of too, since it may carry a question the app can't see); Not now leaves the release offered
+    and says nothing went wrong. After Restart to update is chosen, another profile running from
+    the installation is looked for again, since the dialog may have stayed open a while. One
+    install at a time: a second press (the banner and Settings at once, or a device's Install) is
+    refused and leaves the first alone, and a press during a background check waits for it, then
+    installs only what is downloaded once it has finished. An install that fails
+    starts the host again and keeps the release offered, to be tried again only when the person
+    presses again. Then the path is the one it always was: the host stopped over the
+    pipe, then `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version
+    starts the host again, and whose first start shows a toast: the version it came from, and the
+    release's notes. The banner's and Settings' take the same path (`AutoUpdater.RestartToUpdateAsync`),
+    which refuses while another profile's app or host runs from this installation (below), asking
+    the host for its own pid first. The banner offers only a release the updater has ready: while a
+    newer one found since is still downloading, or held after a failed download, it offers nothing.
+  * **Usage probes hold the host's stop** (#238): before the host is stopped, for an install or
+    anything else (Settings' Stop, Restart and Restart to update), the app asks it to hold its
+    usage probes (`host.probes.hold`) and waits until no Codex app-server it started to read
+    Codex's allowance is still answering or in its grace: the app-server's input goes with the
+    host, and cutting it mid-refresh can sign Codex out. A host that cannot say, or is still busy
+    after 11 minutes, is neither stopped nor ended; the stop fails and says why. An install going
+    ahead by itself (a device's Install, or Install between turns at a gap or at the backstop)
+    waits a tick at a time for that, its `waiting` line saying "*why*; it installs once that is
+    done", and is checked again once the host has answered (the press, the machine's refusals,
+    whether it still goes ahead, and the release, as of then), and the host starts no new probe
+    meanwhile. Before an update, every other profile's host running from the package is held and
+    waited for the same way, since Velopack ends them too, each held again every round and once
+    more just before the hand-over, with the package looked at again once they are done (a host
+    started meanwhile is held too); one that cannot confirm, or a host of the package no pipe
+    reaches, stops the update before anything is stopped. Quitting gives up those waits, never a
+    probe, so a host already stopped for the update is started again within Quit's 25 s.
+  * **Never at startup:** Velopack applies a downloaded release by itself whenever the exe starts,
+    by default, a second start that only shows the window included, stopping every process in the
+    package. `Program` turns that off (`SetAutoApplyOnStartup(false)`); the release waits for
+    Restart to update instead.
+  * **A failed download** is tried again in the background, without asking the feed again, ten
+    minutes after it failed, then after twice as long each time it fails again in a row, up to
+    four hours (`ObservedUpdater.HoldAfter`); the app keeps running throughout, and a check finding
+    another release starts the count again.
   * A read-only host (`delivery.readOnly`) and one beside a running agent-ha-bridge (G5) update
     like any other: those rules guard what other devices may do (the Home Assistant Install
     button below), and replacing the app and host touches neither the agents' consoles nor
     agent-ha-bridge. That is how a shadow beside agent-ha-bridge keeps itself current.
   * It never installs while another profile's app or host runs from this installation (Velopack
-    stops every process in the package and restarts only this profile), or while the host is not
-    running or its sessions are not yet read in full (`sessions.synced`), so that it cannot say
-    whether they are busy. Just before stopping the host it asks again: `host.status` from the
-    host itself, and the processes running from the package.
-  * Those are the machine's refusals, and they don't hold an update silently for ever (#800: a
-    VM's app lost its link to a live host and sat on an old release for ~20 h, one log line
-    saying so). So are sessions never read in full on a connected host. It still checks and
-    downloads behind them (only "Install updates automatically" off stops the checks), and a
-    device's Install waits behind sessions not yet read in full, as before. The six hours run from the first find through
-    them; only the switch turned off restarts them. Once the machine stops refusing an update
-    held that long (the link back, say), it installs as soon as the sessions have been idle for
-    two minutes, or 20 minutes later whatever they are doing (`ReturnGrace`), never at the first
-    tick. A refusal in force is logged again every hour, with the app's link state while the
-    host is the reason. A release held past six hours is told to the owner: the update state the
-    devices see (`waiting`) reads "Needs you: the update to X has waited since T because Y", and
-    the app logs that line at most daily. The wait it shows never names an "installs anyway"
-    time already past.
+    stops every process in the package and restarts only this profile). An Install pressed on
+    another device also waits while the host is not running or its sessions are not yet read in
+    full (`sessions.synced`), so that it cannot say whether they are busy. Just before stopping the
+    host it asks again: `host.status` from the host itself, and the processes running from the
+    package.
+  * Those are the machine's refusals, and they never stop checks and downloads (#800: a VM's
+    app lost its link to a live host and sat on an old release for ~20 h, one log line saying
+    so): a release found behind one is downloaded and offered for Restart to update as ever.
+    Only "Download updates automatically" off stops the checks. A refusal in force is logged
+    again every hour, with the app's link state while the host is the reason; a device's
+    Install held by sessions not yet read in full on a connected host is told as the machine's
+    refusal too, and stays queued.
+  * **Needs you, never silent (#800):** set to Restart to update, a release that has waited more than six hours
+    (`WaitAtMost`, from the first find, restarted only by the person turning the switch back
+    on) is told to the owner, whether the machine keeps it from them (the host gone, another
+    profile running from here, which is asked once it is that old, the host's status unreadable,
+    its sessions unread), it is downloaded and simply not restarted into, or a newer one found since keeps failing to download. The update state the
+    devices see carries `waiting` "Needs you: the update to X has waited since T because Y", and
+    the app logs that line at most daily. It is a reminder only: nothing installs because of it,
+    the phase stays `idle` so the devices keep their Install, and there is no forced install
+    after six hours, nor #923's 20-minute grace, since #516 waits for the person's Restart. Set
+    to Install between turns, Needs you is said only for what keeps the update from installing:
+    the machine refusing, a download failing, or the backstop unable to tell whether a question
+    waits (above).
+    The PWA's update line and the app's rows for other machines show a `waiting` that starts
+    with "Needs you" in any phase, in the host's words; acting on it from the phone (Restart to
+    update) is #801's.
   * The link to the host lost (not `Connected`, or no `host.status` on it): before refusing again
     the app re-attaches, at once and then backing off to every 30 minutes, and logs what it did
     at most hourly. A connected link is asked for the host's status again. Otherwise, when the
@@ -385,24 +535,28 @@ into one folder with one version. An app update is a host update, so they never 
     429, or a 403 whose reason says "rate limit", straight from a feed counts too (any other 403
     is a failure like any other); it holds for an hour, then two hours each time, until one
     succeeds, as Velopack's error carries no headers. The next check is made at the hold's end,
-    however recently a press was answered. A press from a device in the meantime is answered with
+    however recently a press was answered. A check from Settings that succeeds meanwhile ends the
+    hold (#934), and a change of source (Include pre-releases, `feed.txt`) drops it. A press from a
+    device in the meantime is answered with
     the reason without asking the feed. The reason goes to the devices as the last update's
     outcome (`failed`), once each time, though never over an update made, or a press answered,
     in the last day, which the devices may not have seen yet. Velopack's `GithubSource` is given
     no token, so the checks are unauthenticated.
-  * Settings and the automatic updates share one updater, and only the release actually
+  * Settings and the background updates share one updater, and only the release actually
     downloaded is applied (`IUpdater.Ready`), checked again immediately before the host stops: a
     release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
     changed, which drops the downloaded release, and any check still running against the old
     source finds nothing) is checked for and downloaded again first.
-  * The host is never left down (`HostManager.StopAndApplyAsync`, one install at a time: Update
-    and restart pressed while the automatic one installs is refused): an install that fails starts
-    it again and waits for the next check; quitting the app while the host is stopping for an
-    update, or stopped and not yet updated, waits for the stop to finish, applies nothing, and
-    starts the host on the way out; and an app killed meanwhile starts it at its next start, as
-    every start does, with the host's logon task at sign-in behind that.
-  * Only the app's own timer starts it, or a person's press on another of their devices (below),
-    so nothing an agent can reach does. A development copy and the demo never update.
+  * The host is never left down (`HostManager.StopAndApplyAsync`, one install at a time: a second
+    Restart to update, or a device's Install, while one installs is refused): an install that
+    fails starts it again and waits for the next check; quitting the app while the host is
+    stopping for an update, or stopped and not yet updated, waits for the stop to finish, applies
+    nothing, and starts the host on the way out; and an app killed meanwhile starts it at its next
+    start, as every start does, with the host's logon task at sign-in behind that.
+  * Only the app's own timer checks and downloads, and only a person's press installs (Restart to
+    update here, or Install on another of their devices, below), unless When an update is ready is
+    Install between turns, so nothing an agent can reach does. A development copy and the demo
+    never update.
 * **From another device** (#51, [v1-update.md](protocol/v1-update.md)): the PWA and the app on
   another machine show this machine's updates and ask for a check, or for the latest release to
   be installed now. The app here does it, through the same `AutoUpdater` (`UpdateReporter`
@@ -410,25 +564,28 @@ into one folder with one version. An app update is a host update, so they never 
   host serves to the account's devices as `update.*`, and takes the presses the host carries in
   its status (`updateAsks`), each once. A check is made at once. An install is refused at once
   if another profile's app or host runs from this installation, or the host is gone; otherwise
-  the latest release is found, downloaded and installed by the rules above (idle for two
-  minutes, or six hours), with "Install updates automatically" off too: being asked stands in
+  the latest release is found, downloaded and installed once this machine's host has been idle
+  (no session with a turn running or a question waiting) for two minutes without a break, seen at
+  every minute's tick and every session change, and since its sessions were last read in full (a
+  reconnect starts the wait again), however long that takes, with "Download updates
+  automatically" off too: being asked stands in
   for the switch, for that release. How it ended is kept in the profile's settings
   (`lastUpdate`, with the press it answers in `updateRequest` across the restart), so the new
   version reports `updated`, or `failed` if it did not take, and the devices see it; an
-  automatic install that fails is reported `failed` too, as is one from Settings (its download
-  included), whose Update and restart also answers a device's Install not yet carried out. A
+  install from the banner that fails is reported `failed` too, as is one from Settings (its
+  download included), whose Restart to update, like the banner's, also answers a device's Install
+  not yet carried out. A
   press the app comes to more than ten minutes after it was made has lapsed at the host and is
   refused, not carried out late. The presses being carried
   out are kept too (`updateInstallAsked`, `updateCheckAsked`): one left unfinished when the app
   stopped for anything but an update is reported `refused` by its next start, never carried out
-  then. Settings and the automatic updates
+  then. Settings and the background updates
   share one `ObservedUpdater`, so a check or download from Settings is reported as well, and a
   release whose download failed is still reported as there, and their downloads take turns
   (Velopack's update lock fails a second rather than waiting): the later one finds the release
-  already downloaded. A pressed install's six hours run from no earlier than the press, and any
-  install's from no earlier than the switch last allowed it (not the machine's refusals), so turning the switch on hours
-  after a check found a release still waits for busy sessions. A press within a minute of the last check is answered from it,
-  a failed download is not tried again for ten minutes, and the presses taken are remembered
+  already downloaded. A press within a minute of the last check is answered from it,
+  a failed download is not tried again for ten minutes (longer after each further failure), and
+  the presses taken are remembered
   across restarts (`updateTaken`) so none is carried out twice; the host takes at most three
   presses of each kind from a device in ten minutes ([v1-update.md](protocol/v1-update.md#how-often)). The host
   takes these presses only through the relay, only from a device listed as a person's (`pwa` or
@@ -455,27 +612,40 @@ into one folder with one version. An app update is a host update, so they never 
 
 ### Releases and updates: every merge to main is a pre-release
 
-CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` a GitHub
-pre-release, `v0.1.<n>`, of the whole package. Installed copies include pre-releases by
-default and install them by themselves once their host is idle (Automatic updates, above);
-Settings, **Check for updates** and **Install**, does it at once, as does the Home Assistant
+CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` whose CI built the
+app a GitHub pre-release, `v0.1.<n>`, of the whole package. A change the app's jobs don't
+select (docs only, say) builds and publishes nothing. Installed copies include pre-releases by
+default and download them in the background, then wait for the person's **Restart to update**
+(Updates in the background, above); Settings, **Check for updates** and **Restart to update**,
+downloads and installs at once, as does the Home Assistant
 connector's Install button on a machine the dashboard drives.
 
 * **Version** `0.1.<CI run number>`. The number is the CI workflow's own count, shared by pull
   requests and pushes, so main's versions only rise, with gaps; a re-run keeps its number.
   Renaming or recreating `ci.yml` starts the count at 1 again, below every release, and no
   installed copy would ever take one: move the minor version up (`0.2.<n>`) in the same change.
-* **When:** after every check job in CI on that commit has passed: the `product` tests (Linux,
-  Windows x64 and Windows on Arm) and both `app` jobs (x64 and Arm64: build, pack, self-test,
-  install), and also the PWA, Home Assistant, spike and light jobs, none of which may have failed
-  or been cancelled. It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
+* **When:** after every check job CI selected on that commit has passed, the `app` jobs among
+  them: the `product` tests (Linux, Windows x64 and Windows on Arm), both `app` jobs (x64 and
+  Arm64: build, pack, self-test, install), and whichever PWA, Home Assistant, spike and light
+  jobs ran, none of which may have failed or been cancelled. Main's CI plans from its last passed
+  commit, so an app change whose own run was replaced while waiting is built by the next run.
+  It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
   request or a fork. It
-  is the only job with `contents: write`, and runs one at a time (concurrency group
-  `publish-prerelease`). Before it, `publish-gate` lets through only the commit `main` is at
-  now: GitHub keeps one waiting job per concurrency group and cancels the older waiting one, so
-  a slow build of an older merge must not reach the group and evict a newer one. A run whose
-  commit main has moved past publishes nothing, and the newer commit's run publishes instead
-  (re-run it if it failed).
+  is the only job with `contents: write` (CI's other writes are `attest`'s `attestations: write`
+  and `id-token: write`, and main's `relay-image-sarif` job's `security-events: write`, which
+  uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
+  `publish-prerelease`), and publishes each version once, never one older than any already
+  out and never from a commit that doesn't hold the latest release's commit, so release order
+  doesn't rest on the order main's CI runs go in (first attempts share
+  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
+  its own): a run publishes even after `main` has moved on, unless main's head has since
+  changed the app (main's own selector, under the lock, says so; main's later run publishes
+  both, where publishing this first could leave that one's lower version refused), and
+  one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
+  one already waiting), where by default the next to arrive would replace the one waiting, so a
+  re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
+  start in is not promised, which is why the checks above keep the order.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
@@ -510,16 +680,18 @@ connector's Install button on a machine the dashboard drives.
   release's full package must rebuild this version's full package byte for byte. If it does not
   (or there is no delta), it is rebuilt from that release with `vpk delta generate` and checked
   the same way; if that fails too, the full package is published alone, with a warning, since a
-  wrong delta would cost every copy a failed patch first. A copy on the previous version
-  downloads only the delta rather than the ~100 MB full package; one further behind applies the
-  chain of deltas, as far back as the newest ten releases Velopack's GitHub source reads, or
-  else the full package. Each architecture's delta is checked against the same channel's
+  wrong delta would cost every copy a failed patch first. The app downloads only full packages
+  since #719 (its checksum check, above), so the deltas are published but not downloaded by the
+  app. Each architecture's delta is checked against the same channel's
   package; the first release with Arm64 in it has no Arm64 base, so it publishes Arm64's full
   package alone (with the warning) and x64's delta as usual.
 * **Once per version:** a version whose tag exists is skipped, so re-running a run publishes
   nothing twice. A version older than one already published is skipped (two merges close
-  together, the later one's build first). A draft left by a failed attempt is deleted and the
-  version uploaded again.
+  together, the later one's build first). So is a version whose commit doesn't hold the
+  latest release's commit (`compare` says it is behind): an ancestor's run created after its
+  descendant's has the higher number, and would otherwise take installed copies back to older
+  code; a commit off that line, or a tag or comparison that can't be read, stops the publish.
+  A draft left by a failed attempt is deleted and the version uploaded again.
 * **Pruning:** the newest 20 pre-releases stay; older ones are deleted with their assets, and
   their tags stay. A full (non-pre-release) release, a draft, or a release not tagged
   `v<major>.<minor>.<patch>` is never touched.
@@ -586,8 +758,9 @@ gh release download $tag -R danswett/agent-bridge -p $setup
 ```
 
 (`gh release download` without a tag takes the latest full release, and there is none yet.)
-From then on it keeps itself on the newest pre-release ("Install updates automatically"), or
-Settings, **Check for updates**, then **Install**, takes it there at once; turning off "Include
+From then on it downloads the newest pre-release by itself ("Download updates automatically") and
+offers **Restart to update**, or Settings, **Check for updates**, then **Restart to update**,
+takes it there at once; turning off "Include
 pre-releases" in Settings stops it finding them until there are full releases.
 
 ### Signing (later)
@@ -616,8 +789,14 @@ which always runs it unelevated.
 
 ### agent-ha-bridge on the same machine (G4, G5)
 
-The app never writes agent hook registrations (no Copilot, Claude or Codex hooks), and its
-names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
+The app writes no agent hook registrations itself. Its Settings agent rows ask the host
+(`host.agents.setup`) to set up, repair or remove this profile's own Copilot CLI, Claude Code or
+Codex hooks; the host writes them (`StandaloneHooks`) beside a record of what it owns
+(`agent-bridge-owner.json`), so a removal takes only that. Beside agent-ha-bridge those rows are
+read-only: the host is read-only and refuses setup (`AgentSetupService`, and
+`StandaloneHooks.Preflight` while agent-ha-bridge is active or its directory remains), reports
+the hooks as blocked, and the rows say "Read-only · this machine's host is older" with no verb.
+The app's names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
 sessions (their session folders) and Claude sessions (Claude Code's own
 `~/.claude/sessions/<pid>.json`), and Codex ones run with `--no-daemon`, as every launch
 from this host is (the terminal holds `~/.codex/thread-writer-locks/<id>.lock`). A Codex
@@ -758,7 +937,7 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   to show the dry run's report, confirm, and show the result, and it cannot be reached through
   the relay.
 * Code signing.
-* Arm64 builds, the first-run wizard's agent detection and winget installs.
+* The first-run wizard's agent detection and winget installs.
 
 ## Testing
 
@@ -773,7 +952,7 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   page's choices, every setting and the whole prompt sent, resume, Codex's first prompt,
   busy, failed and Try again, a lost response sent again with the same request, no approved folder,
   profile and context, and a launch on another machine, including one whose machine leaves or drops out; and the app reaching another
-  host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, the host never left down and never started by it, a lost link made again, an update held past six hours told as "Needs you", the 20-minute grace once the host is back, and the rate-limit hold), host lifecycle with a
+  host through the in-process relay with the host's account), toast plans and activation handling, background updates (`AutoUpdaterTests`: a release downloaded and waiting for Restart to update, a device's Install waiting for the sessions however long that takes, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, the host never left down and never started by it, a lost link made again, "Needs you" past six hours, and the rate-limit hold), host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
 * CI (`app` jobs, one for x64 on `windows-latest` and one for Arm64 on `windows-11-arm`) runs
@@ -814,7 +993,7 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   400 and back, and keeps every interval between the UI thread's frames (`CompositionTarget.Rendering`) by the window's width
   class, once with the demo's own sessions and once with a window as heavy as a real one (16 more sessions, a conversation of
   over 200 items, 50 tool rows and a strip of 20 delegates, the finished ones unfolded), and writes p50, p95, the longest and how many frames went over
-  16.7 and 33 ms into the result's `resize` and `result.resize.json`, the p95 in each width class in its log line, with a picture of where the drag ended. Before the heavy drag it scrolls a block in the middle of the response to the top of the conversation and pictures the conversation (`result.resize.before.png`); after it, it checks that block is where it was in the layout (its top against the viewport within 0.5 DIP, the proof) and pictures it again (`result.resize.after.png`), which must be drawn alike across the reading column: no more than 4 pixels more than 8 apart in a channel, and none more than 96 apart (`PictureDifference`). So a renderer's noise between two renders (a single speck of a card's fill by its rounded corner, or an anti-aliased edge) doesn't count, while a block moved by a pixel, which differs along every edge of its text, does; the log gives the count and the largest difference either way. It then presses Page Down and Down for real on a link in the conversation (`SendInput` with the window in the foreground, else posted to the window with keyboard focus, as the keyboard sends them; the result's `keysPressedBy` says which) and checks the text scrolled with focus where it was and nothing selected; that Tab from the last link or Copy button drawn goes to the first in the next block with one, which it realises (the move made with `FocusManager.TryMoveFocus`, as Tab makes it, not an injected key), that Tab pressed for real onto the Copy button of a code block laid out across the conversation's bottom edge brings the block's start to the leading edge, and onto one wholly in view moves nothing (the result's `tabInViewProblem`), that Shift+Tab pressed for real onto the Copy button of a code block wholly in view, its top 3 DIP below the view's, where the focus manager's 20 DIP padding round a control would scroll it, move nothing (within 0.5 DIP; the result's `tabNearEdgeProblem`), that Tab pressed for real onto the first link of a block taller than the view (a quoted log of 44 lines just before the run of linked paragraphs) brings its start to the leading edge (within 1.5 DIP), and Shift+Tab onto its last link brings that link wholly into view (within 1.5 DIP) at the nearest edge, no further than WinUI's 20 DIP margin past it, the block's start above the view (the result's `tallTabProblem`), and that Tab, pressed for real (`SendInput`, else posted; the result's `linkTabPressedBy` says which) on the last link of the last block the list has realised, goes to the first link of the next block, which it hadn't, and brings that block in at the leading edge numbered in its set, each block found from its link (a link is a text element in its block's text, not a control; the heavy response ends with a run of 110 short linked paragraphs, more than twice the most the list was seen to realise from a view's top, so with the run's first block at the top of the view the last block realised and the next both fall in it wherever the list stops; the check fails with "setup: ..." rather than skips if they don't); that no block's container is a tab stop, selected, filled or drawn with chrome or a focus visual; that the last block, off screen and named as no other block is, is found by its name and brought into view through the peer the search found; and that a screen reader is given every block as a list item numbered 1 to N in a set of N, with the header and footer outside it. WinUI numbers an item only once it is realised, so the check walks the items as a screen reader does: the list's ItemContainer pattern finds each next item (`FindItemByProperty` with no property), and one not yet realised is realised through its VirtualizedItem pattern (`Realize`) before its numbers are read, none of them -1 (the result's `listRealisedByPeer` counts the realised ones, `listWalkSeconds` the walk). A capture of your message and its three-block reply is also taken in high contrast at 1440, 1200 and 400 (`result.yours.<width>.highcontrast.png`), beside the light and dark ones. The frame times are a report, not a
+  16.7 and 33 ms into the result's `resize` and `result.resize.json`, the p95 in each width class in its log line, with a picture of where the drag ended. Through the heavy drag it checks that no piece of a flowing line is measured again (`FlowPanel`; the result's `flowLinesAtNewWidth` and `flowPiecesMeasuredAgain`): the conversation's delegate lines are in the list's footer, laid out at every new width even off screen, and a piece that fits its line is measured once, unconstrained, so only one wider than its line is measured at each width. Before the heavy drag it scrolls a block in the middle of the response to the top of the conversation and pictures the conversation (`result.resize.before.png`); after it, it checks that block is where it was in the layout (its top against the viewport within 0.5 DIP, the proof) and pictures it again (`result.resize.after.png`), which must be drawn alike across the reading column: no more than 4 pixels more than 8 apart in a channel, and none more than 96 apart (`PictureDifference`). So a renderer's noise between two renders (a single speck of a card's fill by its rounded corner, or an anti-aliased edge) doesn't count, while a block moved by a pixel, which differs along every edge of its text, does; the log gives the count and the largest difference either way. It then presses Page Down and Down for real on a link in the conversation (`SendInput` with the window in the foreground, else posted to the window with keyboard focus, as the keyboard sends them; the result's `keysPressedBy` says which) and checks the text scrolled with focus where it was and nothing selected; that Tab from the last link or Copy button drawn goes to the first in the next block with one, which it realises (the move made with `FocusManager.TryMoveFocus`, as Tab makes it, not an injected key), that Tab pressed for real onto the Copy button of a code block laid out across the conversation's bottom edge brings the block's start to the leading edge, and onto one wholly in view moves nothing (the result's `tabInViewProblem`), that Shift+Tab pressed for real onto the Copy button of a code block wholly in view, its top 3 DIP below the view's, where the focus manager's 20 DIP padding round a control would scroll it, move nothing (within 0.5 DIP; the result's `tabNearEdgeProblem`), that Tab pressed for real onto the first link of a block taller than the view (a quoted log of 44 lines just before the run of linked paragraphs) brings its start to the leading edge (within 1.5 DIP), and Shift+Tab onto its last link brings that link wholly into view (within 1.5 DIP) at the nearest edge, no further than WinUI's 20 DIP margin past it, the block's start above the view (the result's `tallTabProblem`), and that Tab, pressed for real (`SendInput`, else posted; the result's `linkTabPressedBy` says which) on the last link of the last block the list has realised, goes to the first link of the next block, which it hadn't, and brings that block in at the leading edge numbered in its set, each block found from its link (a link is a text element in its block's text, not a control; the heavy response ends with a run of 110 short linked paragraphs, more than twice the most the list was seen to realise from a view's top, so with the run's first block at the top of the view the last block realised and the next both fall in it wherever the list stops; the check fails with "setup: ..." rather than skips if they don't); that no block's container is a tab stop, selected, filled or drawn with chrome or a focus visual; that the last block, off screen and named as no other block is, is found by its name and brought into view through the peer the search found; and that a screen reader is given every block as a list item numbered 1 to N in a set of N, with the header and footer outside it. WinUI numbers an item only once it is realised, so the check walks the items as a screen reader does: the list's ItemContainer pattern finds each next item (`FindItemByProperty` with no property), and one not yet realised is realised through its VirtualizedItem pattern (`Realize`) before its numbers are read, none of them -1 (the result's `listRealisedByPeer` counts the realised ones, `listWalkSeconds` the walk). A capture of your message and its three-block reply is also taken in high contrast at 1440, 1200 and 400 (`result.yours.<width>.highcontrast.png`), beside the light and dark ones. The frame times are a report, not a
   bar: the runners draw in software, so they fail it only when it could not measure: when a sweep never reached all three width classes. The two sweeps share 30 s, a hang guard that keeps the self-test well inside its 360 s (180 s until #800's sign-in captures: the banner, the sheet and a Needs sign-in row in every state they can be in, in Light, Dark and high contrast; then 300 s until #600's progress gallery); a sweep cut short by it is reported (`lightFinished`, `heavyFinished` and the log), not failed. `build/app-self-test.ps1` runs it; when the app ends with anything but 0, or leaves a check unfinished (the result's `unfinished`, even with 0), it fails and prints the exit code as an NTSTATUS, the check it was in, the end of the app's log and the crash Windows recorded, faulting module and offset (#240). On CI it also has Windows Error Reporting keep a minidump of a crash beside the logs, and prints the crashing thread's stack from it with the runner's `cdb` (#242): for a fail fast the event names no module. Then it runs the `Setup.exe` it packed, silently, on the throwaway runner,
   checks the installed copy's channel and that its executables and `Update.exe` are for that
   machine, and runs the same self-test from the installed copy. Last, it dry-runs publishing

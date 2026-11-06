@@ -439,6 +439,42 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task An_install_waits_for_a_usage_probe_finishing_before_it_hands_the_release_over()
+    {
+        updates.Newer = Release();
+        var gate = updates.ReadyGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var c = await Ready();
+        await Press(c, "install_update");
+        await Settle(c, () => Volatile.Read(ref updates.ReadyAsked) == 1);
+        for (var i = 0; i < 5; i++) { await Pass(c, 10); }
+
+        Assert.Empty(updates.Applied);
+        Assert.Equal("downloading", Stage);
+
+        gate.SetResult();
+        await Settle(c, () => updates.Applied.Count == 1);
+        Assert.Equal("restarting", Stage);
+    }
+
+    [Fact]
+    public async Task An_install_that_cannot_confirm_a_usage_probe_is_done_is_refused_and_says_why()
+    {
+        const string why = "Codex's app-server, started to read its allowance, was still finishing after 11 minutes; try again later";
+        updates.Newer = Release();
+        updates.NotReady = new InvalidOperationException(why);
+        await using var c = await Ready();
+        await Press(c, "install_update");
+        await Settle(c, () => ha.NotifiedNow().Count == 1);
+
+        var (_, data) = Assert.Single(ha.NotifiedNow());
+        Assert.Equal($"Bridge update failed on {Machine}", data["title"]!.GetValue<string>());
+        Assert.Contains(why, data["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Empty(updates.Applied);
+        Assert.Equal("failed", Stage);
+        Assert.Equal(why, Attributes["stage_detail"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_press_from_before_the_host_started_is_history_not_an_instruction()
     {
         updates.Newer = Release();
@@ -855,6 +891,18 @@ internal sealed class FakeUpdates : IHostUpdates
         Reported = true;
         if (DownloadGate is { } gate) { await gate.Task.WaitAsync(cancellationToken); }
         progress(100);
+    }
+
+    // Whether what the update would end is safe to end: held until released, or refused.
+    public TaskCompletionSource? ReadyGate { get; set; }
+    public Exception? NotReady { get; set; }
+    public int ReadyAsked;
+
+    public async Task ReadyAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref ReadyAsked);
+        if (ReadyGate is { } gate) { await gate.Task.WaitAsync(cancellationToken); }
+        if (NotReady is { } e) { throw e; }
     }
 
     public void ApplyAndRestart(UpdateRelease release)

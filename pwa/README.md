@@ -74,7 +74,7 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/hidden-text.js` | Text not on screen as it runs (#165, #220): the hidden and right-to-left characters the Needs you lane refuses, and the `\uXXXX` escapes code and approvals draw them as (the app's `HiddenText`) |
 | `js/auth-state.js` | An agent that needs sign-in, whose turn ended on an error, or that has stopped answering (#800): every protocol name for them in one place (`Session.attention`, `hello.machine.signIn`, `sessions.signin` and its `signin.*` ops and events, as Connection's contract on #800 has them), the github.com allowlist, the user code's shape, and agent text cut short and refused when token-shaped (the app's `AuthState`) |
-| `js/ui/sign-in-view.js` | The sign-in banners (#800): one per machine, agent and account, listing the sessions held up, with Sign in; and the sheet that press opens, with the code from this device's own `signin.code`, Copy and Open |
+| `js/ui/sign-in-view.js` | The sign-in banners (#800): one per machine, agent and account, naming the sessions held up as links in its line, with Sign in; and the sheet that press opens, with the code from this device's own `signin.code`, Copy and Open |
 | `js/ui/needs-you-view.js` | Needs you on screen, above the list and apart from it, its entries kept in place across redraws |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each session's answers, replies, files, End session and the launch panel to the machine it is for; which session is chosen (from the address, kept across a resize) and which panes show; the heading, count, empty state and a line per machine that can't be reached |
 | `js/ui/delegates-view.js` | A session's delegates (ui.md §6.3): the strip under the header at three panes and a phone's chip row (an item per delegate the main agent started, "N finished" folded); the Delegates tab's list (a row per delegate under its parent: glyph, name, how long or finished, its latest line); and the delegate opened from any of them, in the inspector or pushed in the tab: Status, Model, Kind and ID, its Task, Latest and Reasoning, its Tools, the delegates it started, and "Ask main agent to stop it", which fills the reply box and sends nothing. Its own words come from `session.get` with `agent`, while it is on screen. Nothing in it replies to or stops a delegate |
@@ -294,7 +294,7 @@ as unconfirmed rather than sent again. Outcomes:
 | Outcome | Shown | Then |
 |---|---|---|
 | `delivered` | The check on the control that sent it for about a second, then You answered · *value* | The host's upsert takes the question away; the card keeps the line |
-| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check at the machine. | Final; nothing offers to send it again |
+| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again |
 | `stale` | Already answered or gone | Final |
 | `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request |
 | `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request |
@@ -328,7 +328,7 @@ what was sent (anything typed meanwhile stays), and every other outcome keeps th
 | Outcome | Shown | Then |
 |---|---|---|
 | `delivered` | Send's check for about a second; no line | The session's upsert shows it as your last message |
-| `unconfirmed`, or unknown | Sent, but not confirmed. Check at the machine before sending it again. | The words stay; sending them again is a new reply |
+| `unconfirmed`, or unknown | Sent, but not confirmed. Check the conversation before sending it again. | The words stay; sending them again is a new reply |
 | `stale` | Not sent: the session has ended. | |
 | `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s |
 | `refused` | The machine refused this reply: *reason* (a question pending, an agent it can't reply to yet) | |
@@ -541,6 +541,15 @@ Every Playwright test serves the output of `tools/build-site.mjs` under
 running another checkout's tests at the same time. CI splits the run over several jobs
 (quality/README.md §4.7): Chromium, three WebKit shards (`--shard`), and `test/e2e` alone in
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
+
+**Renders for design review** (`test/renders/*.render.mjs`, `playwright.renders.config.mjs`):
+captures, not checks, of the demo in the states a change wants Design to sign off, each in dark,
+light and forced colours at 390 and 1440 px, saved as `renders/<state>-<theme>-<width>.png`
+(`test/renders/shoot.mjs`). CI's Chromium leg of pwa-ui draws them after its tests and keeps
+`renders/` as the `pwa-renders` artifact for 14 days, whatever the tests did; a render that
+fails never fails the job. They are drawn in CI rather than on anyone's machine, and Chromium
+alone emulates forced colours. `test/renders/demo.render.mjs` draws the sessions list, so the
+route is seen to work before a feature adds its own states.
 
 * `test/answer.spec.mjs`, in demo mode at a phone's size: answering every field type and
   kind, defaults, required fields, the byte limit, every outcome, Sent then Passed to the agent

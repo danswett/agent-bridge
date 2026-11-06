@@ -120,6 +120,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("cancelled", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
     }
 
     [Fact]
@@ -147,6 +148,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains(kind, result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
     }
 
     [Fact]
@@ -157,6 +159,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
         Assert.Contains("did not record an answer", first.Reason);
+        Assert.DoesNotContain("at the machine", first.Reason);
         Assert.Equal(AnswerOutcome.Refused, again.Outcome);
         Assert.Single(injector.Plans);
     }
@@ -173,6 +176,169 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
         Assert.Equal(first, resent);
         Assert.Single(injector.Plans);
+    }
+
+    // ---- an approval the host escaped anything in (#803) ----
+
+    const string EscapedId = "c0b11070-0000-4000-8000-0000000000bb";
+
+    // A second session whose prompt's intention holds a right-to-left override: the host shows it
+    // escaped, and Approve takes the confirmation.
+    async Task<(string Events, Question Question)> EscapedAsync(string intention = "Push the branch \u202E")
+    {
+        var escapedEvents = f.CopilotSession(EscapedId, 501);
+        var prompt = Copilot.Prompts["commands"].DeepClone().AsObject();
+        prompt["intention"] = intention;
+        Fixture.Append(escapedEvents, Copilot.User("ship it", 1), Copilot.TurnStart(2), Copilot.ToolStart("c1", "powershell", new { command = "git push" }, 3),
+            Copilot.Permission("r1", "c1", prompt, 4));
+        f.Processes.Run(AgentKind.Copilot, 501);
+        await source.RefreshAsync();
+        var q = source.Get(EscapedId)!.Question!;
+        Assert.NotNull(q.Escaped);
+        return (escapedEvents, q);
+    }
+
+    static AnswerRequest EscapedRequest(Question q, string decision, string? request = null) => new()
+    {
+        Id = EscapedId,
+        Question = q.Id,
+        Request = request ?? Guid.NewGuid().ToString(),
+        Fields = new Dictionary<string, JsonElement> { ["decision"] = JsonSerializer.SerializeToElement(decision) },
+    };
+
+    // A confirmation as the host's relay path would hand one over, answering as told each time asked.
+    sealed class Confirmed(params string?[] answers) : IEscapedConfirmation
+    {
+        public int Asked;
+        public List<Question> Seen { get; } = [];
+        public string? Check(Question question)
+        {
+            Seen.Add(question);
+            return answers[Math.Min(Asked++, answers.Length - 1)];
+        }
+    }
+
+    [Fact]
+    public async Task Approve_on_an_escaped_approval_without_a_confirmation_is_refused_and_nothing_is_read_or_typed()
+    {
+        var (_, q) = await EscapedAsync();
+
+        var result = await Answerer().AnswerAsync(EscapedRequest(q, "approve"));
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Contains("escaped-command confirmation", result.Reason);
+        Assert.Equal(0, injector.ScreenReads);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_confirm_the_pipe_or_Home_Assistant_carries_is_not_one_and_nothing_is_typed()
+    {
+        var (_, q) = await EscapedAsync();
+        var carried = EscapedRequest(q, "approve") with { Confirm = new SignedCommand { Body = "e30", By = "AA", Mac = "AA" } };
+
+        var result = await Answerer().AnswerAsync(carried);
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Contains("through the relay", result.Reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task Deny_on_an_escaped_approval_needs_no_confirmation()
+    {
+        var (escapedEvents, q) = await EscapedAsync();
+        injector.OnInject = _ => Fixture.Append(escapedEvents, Copilot.PermissionDone("r1", "c1", "denied-interactively-by-user", second++));
+
+        var result = await Answerer().AnswerAsync(EscapedRequest(q, "deny"));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), result);
+        Assert.Equal(KeyPlan.Escape, Assert.Single(Assert.Single(injector.Plans).Plan.Sends).Text);
+    }
+
+    [Fact]
+    public async Task An_approval_with_too_many_escapes_to_mark_is_denied_from_anywhere_and_approved_only_at_the_machine()
+    {
+        // 513 zero-width spaces, well inside a question's message (#836 review): not truncated, so
+        // Deny goes, and Approve is refused even with a confirmation that would otherwise hold.
+        var (escapedEvents, q) = await EscapedAsync("Push " + string.Concat(Enumerable.Repeat("\u200B", EscapedApproval.MaxMarks + 1)));
+        Assert.Null(q.Truncated);
+        Assert.Equal(EscapedApproval.TooMany, q.Escaped!.Approve);
+
+        var approve = await Answerer().AnswerAsync(EscapedRequest(q, "approve"), confirmed: new Confirmed((string?)null));
+        Assert.Equal(AnswerOutcome.Refused, approve.Outcome);
+        Assert.Contains("too many hidden characters", approve.Reason);
+        Assert.Empty(injector.Plans);
+
+        injector.OnInject = _ => Fixture.Append(escapedEvents, Copilot.PermissionDone("r1", "c1", "denied-interactively-by-user", second++));
+        var deny = await Answerer().AnswerAsync(EscapedRequest(q, "deny"));
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), deny);
+        Assert.Equal(KeyPlan.Escape, Assert.Single(Assert.Single(injector.Plans).Plan.Sends).Text);
+    }
+
+    [Fact]
+    public async Task A_confirmed_escaped_approval_is_checked_again_at_its_turn_to_type_and_typed_once()
+    {
+        var (escapedEvents, q) = await EscapedAsync();
+        injector.OnInject = _ => Fixture.Append(escapedEvents, Copilot.PermissionDone("r1", "c1", "approved", second++));
+        var confirmed = new Confirmed((string?)null);
+
+        var result = await Answerer().AnswerAsync(EscapedRequest(q, "approve"), confirmed: confirmed);
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), result);
+        Assert.Equal("1", Assert.Single(Assert.Single(injector.Plans).Plan.Sends).Text);
+        // When it was taken, and again as listed once its turn to type had come.
+        Assert.Equal(2, confirmed.Asked);
+        Assert.All(confirmed.Seen, s => Assert.Equal(q.Escaped!.Shown, s.Escaped!.Shown));
+    }
+
+    [Fact]
+    public async Task A_confirmation_that_no_longer_holds_at_its_turn_to_type_types_nothing()
+    {
+        // The device taken off the approved list, say, while the answer waited its turn.
+        var (_, q) = await EscapedAsync();
+
+        var result = await Answerer().AnswerAsync(EscapedRequest(q, "approve"), confirmed: new Confirmed(null, "this device is not approved at this machine"));
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Contains("not approved at this machine", result.Reason);
+        Assert.Equal(0, injector.ScreenReads);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task An_escaped_approval_a_budget_cut_is_never_confirmed()
+    {
+        // An intention past what a question carries: the message is cut, and said to be.
+        var (_, q) = await EscapedAsync("\u202E" + new string('x', Limits.QuestionMessage));
+        Assert.True(q.Truncated);
+        var confirmed = new Confirmed((string?)null);
+
+        var result = await Answerer().AnswerAsync(EscapedRequest(q, "approve"), confirmed: confirmed);
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Contains("too large to show in full", result.Reason);
+        Assert.Equal(0, confirmed.Asked);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task An_escaped_approval_listed_cut_when_its_Approve_is_checked_again_is_refused_before_its_confirmation_is_asked()
+    {
+        // As listed again under the typing slot, where Answers.Check is not asked: whole when the
+        // answer came, cut by the time its keys would go.
+        var (_, q) = await EscapedAsync();
+        var cut = q with { Truncated = true };
+        var confirmed = new Confirmed((string?)null);
+
+        var approve = AnswerService.EscapedRefusal(cut, EscapedRequest(cut, "approve"), confirmed);
+        var deny = AnswerService.EscapedRefusal(cut, EscapedRequest(cut, "deny"), confirmed);
+
+        Assert.Equal("part of this approval didn't fit in the message from the machine, so it can only be approved at the machine", approve);
+        Assert.Null(deny);
+        Assert.Equal(0, confirmed.Asked);
+        Assert.Null(AnswerService.EscapedRefusal(q, EscapedRequest(q, "approve"), confirmed));
+        Assert.Equal(1, confirmed.Asked);
     }
 
     [Fact]

@@ -7,7 +7,7 @@ namespace AgentBridge.Quality;
 /// ci.yml's wiring to the plan (quality/README.md §4.7), which only names tie together: the jobs
 /// gated on the plan, the list the plan gives a true or false to, quality-gate's and publish-gate's
 /// needs, and the suite ids steps look for in the plan's suites. A name that drifts in any of them
-/// skips a job or a step silently, on main too, or leaves a job out of the gate (#487).
+/// skips a job or a step silently, in the whole ring too, or leaves a job out of the gate (#487).
 /// </summary>
 static partial class CiPlan
 {
@@ -46,27 +46,38 @@ static partial class CiPlan
     private static partial Regex ReadsSuites();
     [GeneratedRegex(@"^needs\.quality-gate\.result == 'success'$")]
     private static partial Regex GatePassed();
-    // The only shape a suite-gated step's if: may take: guards that hold on main too (the runner's
-    // OS, not cancelled), then a disjunction of exactly the main and whole-ring bypasses and the
-    // suite tests. A substring check passed `... || contains(...)) && contains(...)`, which main
-    // would skip whenever the second suite wasn't selected (#523's review).
+    [GeneratedRegex(@"^needs\.quality-gate\.outputs\.app == 'success'$")]
+    private static partial Regex AppBuilt();
+    const string AppResult = "${{ needs.app.result }}";
+    const string ConcurrencyGroup =
+        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
+    const string CancelInProgress = "${{ github.event_name == 'pull_request' }}";
+    // publish's own group, keeping every waiting publish (queue: max) where the default lets the
+    // next to arrive replace the one waiting: a re-run of an old run could otherwise replace a
+    // newer run's waiting publish (#938's review). Only publish: elsewhere, ci-main's newest run
+    // is meant to replace the one waiting (quality/README.md §4.7).
+    const string PublishGroup = "publish-prerelease";
+    const string PublishIf = "!cancelled() && needs.publish-gate.result == 'success'";
+    // The only shape a suite-gated step's if: may take: guards that hold in the whole ring too
+    // (the runner's OS, not cancelled), then a disjunction of exactly the whole-ring bypass and the
+    // suite tests. A substring check passed `... || contains(...)) && contains(...)`, which the
+    // whole ring would skip whenever the second suite wasn't selected (#523's review).
     // At most one of each, and only an OS a runner has: runner.os == 'Windows' && runner.os ==
     // 'Linux', or a misspelt OS, would never run the step anywhere.
     [GeneratedRegex(@"^(?:(?<os>runner\.os == '(?<name>Windows|Linux|macOS)')|(?<live>!cancelled\(\))) && ")]
     private static partial Regex Guard();
     [GeneratedRegex(@"^\$\{\{ matrix\.([A-Za-z0-9_-]+) \}\}$")]
     private static partial Regex MatrixValue();
-    [GeneratedRegex(@"\b(?:always|cancelled|failure|success)\s*\(", RegexOptions.IgnoreCase)]
-    private static partial Regex StatusFunction();
     [GeneratedRegex(@"^contains\(fromJSON\(env\.SUITES\), '[^']*'\)$")]
     private static partial Regex SuiteTerm();
     [GeneratedRegex(@"\s+")]
     private static partial Regex Spaces();
 
-    const string MainBypass = "github.event_name != 'pull_request'";
+    // Main is planned like a pull request (quality/README.md §4.7): only the whole ring, which the
+    // plan decides apart from the selector, runs a gated job or step whatever the selector says.
     const string WholeRingBypass = "env.WHOLE_RING == 'true'";
     static string GatedJobIf(string id) =>
-        $"github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{id} == 'true'";
+        $"needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{id} == 'true'";
 
     public static IReadOnlyList<Problem> Check(Catalog catalog, string yaml)
     {
@@ -90,9 +101,22 @@ static partial class CiPlan
             return problems;
         }
 
+        // Main's push runs coalesce in ci-main, never cancelled once running, and only first
+        // attempts join it: a re-run there could take a waiting push run's place, so that push's
+        // commit would go untested (quality/README.md §4.7).
+        if (Child(root, "concurrency") is not YamlMappingNode concurrency
+            || Normalize(Scalar(concurrency, "group") ?? "") != ConcurrencyGroup
+            || Normalize(Scalar(concurrency, "cancel-in-progress") ?? "") != CancelInProgress)
+            Add($"ci.yml's concurrency isn't group {ConcurrencyGroup} with cancel-in-progress {CancelInProgress}");
+        if (Child(root, "concurrency") is YamlMappingNode rootConcurrency && Child(rootConcurrency, "queue") is not null)
+            Add("ci.yml's concurrency sets queue, but only publish's may: in ci-main the newest push run replaces the one waiting");
+        foreach (var (id, job) in jobs)
+            if (id != "publish" && Child(job, "concurrency") is YamlMappingNode jobConcurrency && Child(jobConcurrency, "queue") is not null)
+                Add($"ci.yml job {id}'s concurrency sets queue, but only publish's may");
+
         // Jobs gated on the plan: an if: that reads the plan's true or false for a job. Exactly one
-        // shape, so main and the whole ring run it whatever the plan says, and quality-gate can tell
-        // from the job's own output whether it had to run.
+        // shape, so the whole ring runs it whatever the plan says, and quality-gate can tell from
+        // the job's own output whether it had to run.
         var gated = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var (id, job) in jobs)
         {
@@ -134,7 +158,7 @@ static partial class CiPlan
                 Add($"ci.yml plan's output {output} is {actual.Trim()}, not {binding}");
         }
 
-        // product's runners: on main and in the whole ring all three, whatever the selector says,
+        // product's runners: in the whole ring all three, whatever the selector says,
         // or its Windows-only steps (the AOT checks, the build scripts) would have no runner.
         if (jobs.TryGetValue("product", out var product))
         {
@@ -171,12 +195,16 @@ static partial class CiPlan
             if (!gateNeeds.Contains(Plan))
                 Add($"ci.yml {Gate} doesn't need plan, so a failed plan would skip every job and pass the gate");
             // Every check job, whether it reads the plan or not. Only the delivery jobs, which run
-            // on main where a superseded publish is cancelled by design, stay out; a check placed
+            // on main after the gate, stay out; a check placed
             // downstream of the gate (needs: quality-gate) could fail after it passed, so it's
             // reported too.
             foreach (var (id, job) in jobs.Where(j => j.Key is not (Gate or Plan) && !Delivery.Contains(j.Key)))
                 if (!gateNeeds.Contains(id))
                     Add($"ci.yml job {id} isn't in {Gate}'s needs, so its result wouldn't count (only {string.Join(", ", Delivery.Order(StringComparer.Ordinal))} may stay out)");
+            // What publish-gate reads to tell the app was built and checked in this run.
+            var gateOutputs = Child(gate, "outputs") as YamlMappingNode;
+            if (Normalize((gateOutputs is null ? null : Scalar(gateOutputs, "app")) ?? "") != AppResult)
+                Add($"ci.yml {Gate}'s output app isn't exactly {AppResult}, so {PublishGate} can't tell this run built the app");
         }
 
         // publish-gate stands on quality-gate rather than a second copy of its needs (#512), and
@@ -192,18 +220,29 @@ static partial class CiPlan
             if (publishIf.Contains("||", StringComparison.Ordinal) || IsTemplate(publishIf)
                 || !TopLevelConjuncts(publishIf).Any(t => GatePassed().IsMatch(t)))
                 Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.result == 'success' (as one of its top-level && conditions, with no || and no ${{{{ }}}} inside)");
+            // On main the app job runs only when the plan selected it, and a run that skipped it
+            // has no packages: the gate passing isn't enough to publish.
+            else if (!TopLevelConjuncts(publishIf).Any(t => AppBuilt().IsMatch(t)))
+                Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish");
         }
         if (jobs.TryGetValue("publish", out var publish))
         {
-            // No status function: then the implicit success() holds publish to publish-gate's.
-            var publishCondition = Expression(Scalar(publish, "if") ?? "");
-            if (publishCondition.Contains("||", StringComparison.Ordinal) || IsTemplate(publishCondition)
-                || StatusFunction().IsMatch(publishCondition))
-                Add($"ci.yml publish's if: has a ||, ${{{{ }}}} inside or a status function, so it could run without {PublishGate} succeeding");
+            // Exactly this: the implicit success() also needs every job further up to have succeeded,
+            // and a skip there (a check the plan didn't select) carries down past publish-gate's
+            // !cancelled(), so a checked app build would never publish (#938's review).
+            if (Expression(Scalar(publish, "if") ?? "") != PublishIf)
+                Add($"ci.yml publish's if: isn't exactly {PublishIf}, so it could run without {PublishGate} succeeding or never run after a skipped check");
+            // Exactly these three keys: cancel-in-progress false is also the only value queue: max
+            // may be combined with.
+            if (Child(publish, "concurrency") is not YamlMappingNode publishConcurrency || publishConcurrency.Children.Count != 3
+                || Scalar(publishConcurrency, "group") != PublishGroup
+                || Scalar(publishConcurrency, "cancel-in-progress") != "false"
+                || Scalar(publishConcurrency, "queue") != "max")
+                Add($"ci.yml publish's concurrency isn't exactly group {PublishGroup}, cancel-in-progress false and queue max, so publishes could run at once or a re-run's could replace a newer run's waiting one");
         }
 
         // Steps that run when a suite is selected: the suite must exist, say it runs in this job,
-        // and the step must run on main and in the whole ring whatever the plan selected, so its
+        // and the step must run in the whole ring whatever the plan selected, so its
         // job must hand it the plan's whole-ring output.
         var suites = catalog.Suites.ToDictionary(s => s.Id, StringComparer.Ordinal);
         foreach (var (id, job) in jobs)
@@ -227,8 +266,8 @@ static partial class CiPlan
                         Add($"ci.yml job {id} step \"{name}\" runs when suite {suiteId} is selected, but that suite's where: doesn't name ci.yml {id}");
                 }
                 if (!BypassesSelection(condition, JobOses(job)))
-                    Add($"ci.yml job {id} step \"{name}\" must run on main and in the whole ring whatever the plan selected: " +
-                        $"its if: must be [runner.os == 'Windows|Linux|macOS' && ][!cancelled() && ](github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)");
+                    Add($"ci.yml job {id} step \"{name}\" must run in the whole ring whatever the plan selected: " +
+                        $"its if: must be [runner.os == 'Windows|Linux|macOS' && ][!cancelled() && ](env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)");
             }
             var jobEnvMap = Child(job, "env") as YamlMappingNode;
             if (stepsTestingSuites)
@@ -281,10 +320,11 @@ static partial class CiPlan
         expression.Contains("${{", StringComparison.Ordinal) || expression.Contains("}}", StringComparison.Ordinal);
 
     /// <summary>
-    /// Whether a suite-gated step's if: is guards that hold on main too, then a disjunction of
-    /// exactly the main bypass, the whole-ring bypass and suite tests. Nothing else may sit
-    /// between them: a substring check passed `(main || contains(a)) && contains(b)`, which main
-    /// would skip whenever b wasn't selected (#523's review).
+    /// Whether a suite-gated step's if: is guards that hold in the whole ring too, then a
+    /// disjunction of exactly the whole-ring bypass and suite tests. Nothing else may sit between
+    /// them: a substring check passed `(whole || contains(a)) && contains(b)`, which the whole
+    /// ring would skip whenever b wasn't selected (#523's review), and a leftover main bypass
+    /// would run the step on every push to main again.
     /// </summary>
     static bool BypassesSelection(string condition, IReadOnlySet<string>? jobOses)
     {
@@ -306,8 +346,8 @@ static partial class CiPlan
         else if (guarded)
             return false;
         var terms = expression.Split("||").Select(t => t.Trim()).ToList();
-        return terms.Contains(MainBypass) && terms.Contains(WholeRingBypass) && terms.Any(t => SuiteTerm().IsMatch(t))
-            && terms.All(t => t is MainBypass or WholeRingBypass || SuiteTerm().IsMatch(t));
+        return terms.Contains(WholeRingBypass) && terms.Any(t => SuiteTerm().IsMatch(t))
+            && terms.All(t => t is WholeRingBypass || SuiteTerm().IsMatch(t));
     }
 
     /// <summary>A value as written in YAML, with runs of whitespace collapsed.</summary>

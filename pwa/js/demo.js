@@ -42,7 +42,8 @@ import { readQuestion } from './protocol.js';
 import { USAGE } from './usage.js';
 import { UPDATE } from './update.js';
 import { LAUNCH, TRUST, checkLaunch, flattenPrompt, trustAction } from './launch.js';
-import { TRANSFER, signTransfer, signTrust } from './transfer.js';
+import { TRANSFER, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
+import { ESCAPED_CAPABILITY } from './escaped.js';
 import { P256KeyPair } from './noise-p256.js';
 import { deviceIdOf } from './identity.js';
 import { fromUtf8 } from './bytes.js';
@@ -212,12 +213,13 @@ export class DemoHost {
   // signingIn: true, one that runs an agent's own device-code sign-in when a person asks (#800).
   // progress: false plays a host from before sessions.progress, which says nothing of an answer
   // or a reply until its outcome.
-  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, signingIn = false, progress = true } = {}) {
+  // confirming: false, one that does not take an escaped approval's confirmation from this device (#803).
+  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, confirming = approving, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, signingIn = false, progress = true } = {}) {
     this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...((answering || replying) && progress ? ['sessions.progress'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : []), ...(signingIn && answering ? [SIGN_IN.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(answering && confirming ? [ESCAPED_CAPABILITY] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...((answering || replying) && progress ? ['sessions.progress'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : []), ...(signingIn && answering ? [SIGN_IN.capability] : [])];
     if (updating) {
       this.update = { current: '0.1.0', installer: true, available: '0.2.0', notes: 'Updates from your phone', checkedAt: now(), phase: 'idle', automatic: false };
     }
@@ -762,7 +764,7 @@ export class DemoHost {
     const s = this.sessions.get(data?.id);
     const q = s?.question ? readQuestion(s.question) : null;
     if (!q || q.id !== data.question) { return { outcome: 'stale', reason: 'the session is no longer asking that question' }; }
-    const problem = checkAnswer(q, data);
+    const problem = checkAnswer(q, data) ?? this.#escapedRefusal(q, data);
     if (problem) { return { outcome: 'refused', reason: problem }; }
     const { outcome } = scripted;
     if (outcome === 'stale') { return { outcome, reason: scripted.reason ?? 'answered at the machine' }; }
@@ -777,6 +779,28 @@ export class DemoHost {
     if (outcome === 'delivered') { return { outcome }; }
     return { outcome, reason: scripted.reason ?? (outcome === 'unconfirmed' ? 'the session stopped answering' : 'from a newer host') };
   }
+
+  // As the host's AnswerService.EscapedRefusal, for what a page can check: Approve of an escaped
+  // approval only with a confirmation naming this question, this request and what was read.
+  #escapedRefusal(q, data) {
+    if (q.kind !== 'approval' || !q.escaped || data.fields?.decision !== 'approve') { return null; }
+    if (q.escaped.approve === 'tooMany') { return 'this approval holds too many hidden characters to show on another device, so it can only be approved at the machine; deny it from here, or answer at the machine'; }
+    if (q.escaped.approve !== 'confirm') { return 'this machine takes Approve for an approval with escaped characters only at the machine (permissions.escapedApproval); deny it from here, or answer at the machine'; }
+    let body = null;
+    try { body = JSON.parse(fromUtf8.decode(fromBase64url(data.confirm?.body ?? ''))); } catch { body = null; }
+    if (!body) { return 'this approval holds hidden or right-to-left characters, so Approve needs the escaped-command confirmation, which this app does not give: deny it, update the app, or answer at the machine'; }
+    this.confirmLog.push(body);
+    const t = body.target ?? {};
+    if (body.action !== 'session.approve:escaped' || t.session !== data.id || t.question !== q.id || body.request !== data.request) { return 'the confirmation is for another approval'; }
+    if (t.shown !== q.escaped.shown) { return 'the command changed after it was confirmed: read it again'; }
+    return null;
+  }
+
+  confirmLog = [];
+
+  // An escaped approval's confirmation waits here while a test holds it (demoConfirm).
+  signing = null;
+  holdSigning() { this.signing = new Promise((resolve) => { this.releaseSigning = () => { this.signing = null; resolve(); }; }); }
 
   #event(t, ev, data) { t.deliver({ ev, seq: ++t.seq, data }); }
 
@@ -1103,6 +1127,19 @@ export async function demoTrust(host, client) {
       return { ...command, body: toBase64url(new TextEncoder().encode(JSON.stringify({ ...body, target: { ...body.target, machine: host.machine.id }, to: host.machine.id }))) };
     },
     answer: (data) => { const c = client(); return c ? c.answerTrust(data) : Promise.reject(new Error('not connected')); },
+  };
+}
+
+// Confirming this machine's escaped approvals (#803), signed by a key this page makes for itself,
+// for the demo machine's.
+export async function demoConfirm(host) {
+  const me = await P256KeyPair.generate();
+  host.key ??= await P256KeyPair.generate();
+  const deviceId = await deviceIdOf(me.public);
+  return async ({ session, question, shown, request, now }) => {
+    // Tests hold signing (host.holdSigning()) to press Cancel or Back while it is under way.
+    await host.signing;
+    return signEscapedApproval({ key: me, deviceId, machinePublic: host.key.public, session, question, shown, request, now, to: host.machine.id });
   };
 }
 

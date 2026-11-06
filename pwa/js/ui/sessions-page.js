@@ -188,8 +188,8 @@ export class SessionsPage {
   // updates: an UpdateControl for the machines that offer updates (#51), or null.
   // shell: the pages and app bar (./shell.js), or null: where a session shown goes, and where
   // machines online and a waiting folder-trust question are said.
-  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, status = () => '', facts = null, forget = null, updates = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
-    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, status, facts, forget, updates, storage, onRendered });
+  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
+    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, storage, onRendered });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     // One gate for every send (#269): nothing new is given for a machine with no route now (its
@@ -476,6 +476,8 @@ export class SessionsPage {
       capabilities: link.capabilities, readOnly: link.machine?.readOnly ?? null,
       stale: this.hosts.staleOf(hostId),
       largeAttachments: () => largeLimit(link.capabilities, this.relayMax()),
+      // Signs an escaped approval's confirmation for this machine (#803), or null.
+      confirm: this.confirm(hostId),
     };
   }
 

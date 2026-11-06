@@ -4,8 +4,8 @@ using AgentBridge.Protocol;
 namespace AgentBridge.Host.Core.Usage;
 
 // One agent's allowance. Null means there is nothing to say: the agent has never run here
-// (it is left off rather than drawn as an empty bar), or a reading would cost something it
-// must not (an expired Claude token), in which case the last reading stands and ages.
+// (it is left off rather than drawn as an empty bar), or there is nothing newer to read, in which
+// case the last reading stands and ages.
 public interface IUsageCollector
 {
     AgentKind Agent { get; }
@@ -23,6 +23,36 @@ public interface IUsageCollector
     // A session of this agent has just opened here, so somebody is at the machine. Returns
     // whether that changed anything worth saying.
     bool SessionOpened(DateTimeOffset now) => false;
+
+    // Before each ask: whether a session of this agent is open here, and whether the monitor is
+    // asking at the busy pace (never while agent-ha-bridge runs for this user). A probing collector
+    // paces its probes by it.
+    void Pace(bool sessionOpen, bool busy) { }
+
+    // A session of this agent the last pass did not see has arrived here, whether or not another
+    // was already open: somebody is at the machine, and may have signed in again.
+    void SessionArrived() { }
+
+    // When the collector has something new to read before its next turn: a probe it started has
+    // finished, or a reading has become old enough to probe for. Never sooner than the monitor's
+    // MinimumGap after the last ask.
+    DateTimeOffset? WakeAt => null;
+
+    // Completes once the host may stop without cutting a probe short. A standalone Codex
+    // app-server's standard input goes with the host, and end of input tears down a refresh it is
+    // making, so its answers and the grace period after them are waited for (never a kill).
+    // Nothing else needs waiting for.
+    Task StoppingAsync() => Task.CompletedTask;
+
+    // The host is about to stop or be updated (#238): no probe whose process goes with it starts
+    // before until. Returns whether one is still running, or within its grace, so the caller waits.
+    bool Hold(DateTimeOffset until) => false;
+
+    // Asked when CollectAsync has nothing to say: whether what it said before is no longer this
+    // machine's to stand by (Codex's login changed to one no probe reads, with no transcript
+    // reading to take its place), so the monitor drops it rather than letting it stand and age.
+    // Once: it is cleared by asking. What peers and clients kept of it is theirs.
+    bool TakeWithdrawal() => false;
 }
 
 // Copilot's monthly allowance of AI credits, asked of GitHub (api.github.com/copilot_internal/
@@ -121,8 +151,14 @@ public sealed class CopilotUsageCollector(UsageOptions options, IUsageHttp http,
     {
         if (UsageRead.Property(response, "quota_snapshots") is not { } snapshots || UsageRead.Property(snapshots, "premium_interactions") is not { } premium) { return null; }
         if (UsageRead.Number(premium, "entitlement") is not { } limit || limit <= 0) { return null; }
+        // None given is none left over; one given that is no figure (NaN, an infinity) is unknown,
+        // not taken for none and drawn as the whole plan spent (#238 review).
+        if (UsageRead.Property(premium, "remaining") is not null && UsageRead.Number(premium, "remaining") is null) { return null; }
         var remaining = UsageRead.Number(premium, "remaining") ?? 0;
         var used = Math.Max(0, limit - remaining);
+        // Finite figures can still overflow between them (a limit near the largest double, a
+        // remaining as far below zero).
+        if (!double.IsFinite(used) || !double.IsFinite(100.0 * used / limit)) { return null; }
         var resets = UsageRead.Instant(response, "quota_reset_date_utc");
         // Monthly, resetting on the first, so the window began a month before it ends: taken
         // from the reset date rather than from today, so it holds whenever it is read.

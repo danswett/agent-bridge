@@ -10,7 +10,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   # By hand, only to prove pwa-ui's apt fallback, on a commit of its own (quality/README.md
   # §4.7); the plan job refuses anything else. A run by hand is never a release (APP_RELEASE),
-  # writes no cache and, like main, runs every job.
+  # writes no cache and runs every job (the whole ring).
   workflow_dispatch:
     inputs:
       force-apt-fallback:
@@ -22,11 +22,19 @@ permissions:
   contents: read
 
 # A newer push to a pull request cancels that pull request's older run: only the latest head's
-# result counts, and a superseded run only holds runners other work is queued for. Anything else,
-# a push to main above all (it publishes), is grouped by its own run id, so it is never grouped
-# with another run and never cancelled, exactly as before.
+# result counts, and a superseded run only holds runners other work is queued for. First attempts
+# of pushes to main share one group, ci-main, and are never cancelled once running: at most one of
+# them runs and one waits, a newer waiting push run cancelling the one waiting before it starts
+# (re-runs, below, run beside them). GitHub promises no order
+# between them, so nothing here relies on one: each run plans from the last commit main's CI
+# passed on, so a replaced run's changes are tested with a later one (the plan job), merge-rule
+# passes over a replaced run only when the newest run's commit builds on its commit, and
+# otherwise blocks until it's re-run (quality/README.md §4.9), and publish's own checks keep
+# releases in version and commit order (publish-gate). A re-run (attempt 2 on) never joins
+# ci-main, so it can't take a waiting push run's place: like a run by hand, it's grouped by its
+# own run id, never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -35,29 +43,34 @@ env:
   # workflow starts the count again at 1: below every release, which installed copies would
   # never take (docs/app-windows.md, "Releases and updates").
   APP_VERSION: 0.1.${{ github.run_number }}
-  # 'true' exactly when this run's package is published (the publish-gate job's condition): only
-  # then is the host a release build, whose Home Assistant connector may write to a real Home
-  # Assistant (design G6). Every pull request and fork builds a dev host.
+  # 'true' exactly when this run's package may be published (the publish-gate job's condition,
+  # which also needs the app built here): only then is the host a release build, whose Home
+  # Assistant connector may write to a real Home Assistant (design G6). Every pull request and
+  # fork builds a dev host.
   APP_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' }}
 
 jobs:
   plan:
     # What this run tests (quality/README.md §4): the selector reads quality/catalog.yml and the
-    # change, and each job below runs on a pull request only when a suite it runs is selected.
-    # A push to main is ring 2, which selects everything, so every job runs before a release
-    # publishes. A draft pull request is the fast ring: ring 0 on Linux, so a work in progress
-    # holds one or two runners, not a dozen; ready for review runs ring 1 on the same head.
-    # A pull request that changes CI, the catalog, the selector or the build runs the whole ring,
-    # decided here and not by the code it changes (#487). First, the catalog must be complete, or
-    # the selection could be silently wrong.
+    # change, and each job below runs only when a suite it runs is selected. A ready pull request
+    # is ring 1 over what merging it adds. A push to main is ring 1 too, over everything since the
+    # last commit main's CI passed on, so a commit whose own run was replaced while pending, or
+    # failed, is tested with this one; when that commit can't be found, main runs the whole ring.
+    # A draft pull request is the fast ring: ring 0 on Linux, so a work in progress holds one or
+    # two runners, not a dozen; ready for review runs ring 1 on the same head.
+    # A change to CI, the catalog, the selector or the build runs the whole ring (ring 2: every
+    # gated job and step), decided here and not by the code it changes (#487). First, the catalog
+    # must be complete, or the selection could be silently wrong.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read # a run by hand checks its commit is no open pull request's head
+      actions: read # main's last passed CI run, the base its plan diffs from
     outputs:
-      # 'true' when every gated job and step runs whatever the selector says: on main, and on a
-      # ready pull request that changes what decides selection (the whole-ring step below).
+      # 'true' when every gated job and step runs whatever the selector says: when a ready pull
+      # request or main's change touches what decides selection, when main's base is unknown, and
+      # on a run by hand (the whole-ring step below).
       whole-ring: ${{ steps.whole-ring.outputs.whole-ring }}
       product: ${{ steps.select.outputs.product }}
       ha-integration: ${{ steps.select.outputs.ha-integration }}
@@ -107,9 +120,10 @@ jobs:
         with:
           persist-credentials: false
           # A pull request's checkout is its merge commit, whose first parent is the base it merges
-          # into, so the change is HEAD^1..HEAD: what merging adds, even when the branch is behind.
-          # On main, HEAD^1 is the previous commit. Either way two commits are enough.
-          fetch-depth: 2
+          # into, so the change is HEAD^1..HEAD: what merging adds, even when the branch is behind;
+          # two commits are enough. Main diffs from its last passed commit, which may be any
+          # number of commits back, so it fetches the whole history.
+          fetch-depth: ${{ github.event_name == 'push' && '0' || '2' }}
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
@@ -117,9 +131,15 @@ jobs:
       # choose what tests it: one bug in ChangedFiles, or a line moving quality/** into
       # no_test_paths, once let a change pass a gate that ran nothing (#487). So the paths that
       # decide selection, and the solution and build roots every job builds from, are fixed here,
-      # and a ready pull request that touches any of them runs ring 2: every gated job and step,
-      # on every runner, whatever the selector says. A draft keeps its fast ring; its gate is not
-      # the required check. Its own step, so nothing the change runs can write this output.
+      # and a ready pull request or a push to main that touches any of them runs ring 2: every
+      # gated job and step, on every runner, whatever the selector says. A draft keeps its fast
+      # ring; its gate is not the required check. Its own step, so nothing the change runs can
+      # write these outputs, the base included.
+      # Main's base is the newest commit main's CI passed on (a push run, at any attempt) that is
+      # an ancestor of this one: a pending run replaced in ci-main tested nothing, and a failed
+      # one proved nothing, so their changes are in this diff. A base found but older than
+      # needed only tests more. None found, or the runs unreadable, never reads as "no change":
+      # the whole ring runs.
       # The paths come NUL-separated (-z): without it git quotes a path holding ", \, a tab or
       # another control character, and the quoted form, starting with ", slipped past the anchors
       # below (tools/AgentBridge.Quality/a"b.cs left the whole ring off). Fail closed as well: a
@@ -133,17 +153,39 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           DRAFT: ${{ github.event.pull_request.draft }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $roots = '^(\.github|quality|tools/AgentBridge\.Quality|tests/AgentBridge\.Quality\.Tests|build)/|(^|/)(Directory\.[^/]+\.(props|targets)|[^/]+\.slnx?|global\.json|nuget\.config)$'
           $odd = '^"|[\x00-\x1f\x7f\uFFFD]'
-          $out = git diff -z --name-only --no-renames HEAD^1 HEAD
-          if ($LASTEXITCODE) { throw "git diff HEAD^1 HEAD failed ($LASTEXITCODE)" }
+          $base = 'HEAD^1'
+          $known = $env:EVENT -eq 'pull_request'
+          if ($env:EVENT -eq 'push') {
+            $passed = @(gh api "repos/$env:REPO/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=100" --jq '.workflow_runs[].head_sha')
+            if ($LASTEXITCODE) {
+              "::warning title=plan::couldn't read main's passed CI runs, so the whole ring runs"
+            } else {
+              foreach ($sha in $passed) {
+                if ($sha -notmatch '^[0-9a-f]{40}$') { "::warning title=plan::unreadable run head '$sha', so the whole ring runs"; break }
+                if ($sha -eq $env:SHA) { continue }
+                git merge-base --is-ancestor $sha HEAD
+                if ($LASTEXITCODE -eq 0) { $base = $sha; $known = $true; break }
+              }
+            }
+            $said = if ($known) { "Main's change since ``$base``, the last commit its CI passed on." } else { "**No ancestor of this commit passed main's CI** (among the latest 100 passed runs), so the whole ring runs." }
+            $said | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          }
+          $out = git diff -z --name-only --no-renames $base HEAD
+          if ($LASTEXITCODE) { throw "git diff $base HEAD failed ($LASTEXITCODE)" }
           # PowerShell splits native output into lines; a path with a newline in it is put back.
           $changed = @((@($out) -join "`n") -split "`0" | Where-Object { $_ })
           $touched = @($changed | Where-Object { $_ -match $roots -or $_ -match $odd })
-          $whole = if ($env:EVENT -ne 'pull_request') { $true } elseif ($env:DRAFT -eq 'true') { $false } else { $touched.Count -gt 0 }
+          # A run by hand, and main without a known base, run everything.
+          $whole = if (-not $known) { $true } elseif ($env:DRAFT -eq 'true') { $false } else { $touched.Count -gt 0 }
           "whole-ring=$($whole.ToString().ToLowerInvariant())" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
-          if ($env:EVENT -eq 'pull_request' -and $touched.Count -gt 0) {
+          "base=$base" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+          if ($known -and $touched.Count -gt 0) {
             $shown = ($touched | Select-Object -First 10 | ForEach-Object { '`' + ($_ -replace '[\x00-\x1f\x7f`]', '?') + '`' }) -join ', '
             if ($touched.Count -gt 10) { $shown += " (+$($touched.Count - 10) more)" }
             $what = if ($whole) { 'so the whole ring runs (ring 2: every gated job and step)' } else { 'so marking it ready runs the whole ring' }
@@ -160,6 +202,8 @@ jobs:
           EVENT: ${{ github.event_name }}
           DRAFT: ${{ github.event.pull_request.draft }}
           WHOLE_RING: ${{ steps.whole-ring.outputs.whole-ring }}
+          # HEAD^1 on a pull request (its merge commit's base); on main, its last passed commit.
+          BASE: ${{ steps.whole-ring.outputs.base }}
           # The jobs gated below; plan.ps1 gives each a true or false output. The catalog check
           # fails when this list, the jobs whose if: reads the plan, the plan's outputs and
           # quality-gate's needs disagree (quality/README.md §4.7).
@@ -167,20 +211,20 @@ jobs:
         run: |
           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
-            ./quality/plan.ps1 -FastRing -Base HEAD^1 -Head HEAD -Jobs $jobs
+            ./quality/plan.ps1 -FastRing -Base $env:BASE -Head HEAD -Jobs $jobs
           } else {
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
-            ./quality/plan.ps1 -Ring $ring -Base HEAD^1 -Head HEAD -CompareRing1:($ring -gt 1) -Jobs $jobs
+            ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Jobs $jobs
           }
 
   product:
     # The product itself (src/, tests/), separate from the spikes. Windows and Linux,
     # since nothing in it may depend on Windows, and Windows on Arm, which the Arm64 package
     # runs on: the injector's console calls and the hook are tried there natively (#222).
-    # On a pull request, only the selected test projects, on the systems their suites declare
-    # (quality/catalog.yml platforms), and only the shipped-binary checks that were selected.
+    # On a pull request and on main, only the selected test projects, on the systems their suites
+    # declare (quality/catalog.yml platforms), and only the shipped-binary checks that were selected.
     needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.product == 'true'
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.product == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -204,8 +248,8 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - name: Choose what to test
-        # The whole solution when the whole ring runs (main, or a change to the solution, a
-        # workflow or quality/), as before. Otherwise a solution filter of the selected test
+        # The whole solution when the whole ring runs (a change to the solution, a workflow or
+        # quality/, or main with no passed base), as before. Otherwise a solution filter of the selected test
         # projects. The AOT checks below run their test projects too; the catalog gives those
         # suites their project, so it's here.
         shell: pwsh
@@ -301,7 +345,7 @@ jobs:
           retention-days: 14
       - name: The NativeAOT injector types into a real console
         # The same integration tests again, against the worker as it ships.
-        if: runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'injector-aot'))
+        if: runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'injector-aot'))
         shell: pwsh
         run: |
           $rid = if ($env:RUNNER_ARCH -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
@@ -311,17 +355,17 @@ jobs:
           dotnet test tests/AgentBridge.Host.Delivery.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~InjectorIntegrationTests"
       - name: The shadow install leaves the previous one running when it fails
         # Against stand-ins for the scheduled tasks, dotnet and the host: nothing is registered.
-        if: runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'build-scripts'))
+        if: runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'build-scripts'))
         shell: pwsh
         run: pwsh -NoProfile -File build/test-shadow-week.ps1
       - name: Publishing makes one pre-release per version and prunes only old pre-releases
         # Against stand-ins for gh, vpk and dotnet: nothing is uploaded or deleted.
-        if: runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'build-scripts'))
+        if: runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'build-scripts'))
         shell: pwsh
         run: pwsh -NoProfile -File build/test-publish-prerelease.ps1
       - name: The NativeAOT hook replies and spools as an agent runs it
         # The hook every agent waits on, as it ships: NativeAOT, started fresh for each event.
-        if: runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'hook-aot'))
+        if: runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'hook-aot'))
         shell: pwsh
         run: |
           $rid = if ($env:RUNNER_ARCH -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
@@ -333,7 +377,7 @@ jobs:
         # Run as it ships: its own unprivileged user and a read-only file system. The first product
         # image built but crashed at start, which only running it shows. container-scan scans the image
         # this builds, so it needs this step too.
-        if: runner.os == 'Linux' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'relay-container') || contains(fromJSON(env.SUITES), 'container-scan'))
+        if: runner.os == 'Linux' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'relay-container') || contains(fromJSON(env.SUITES), 'container-scan'))
         run: |
           docker build -f src/AgentBridge.Relay/Dockerfile -t agent-bridge-relay .
           docker run -d --name relay --read-only --tmpfs /tmp -p 8080:8080 -e Relay__Version=ci agent-bridge-relay
@@ -349,13 +393,13 @@ jobs:
       # from mirror.gcr.io or else ghcr.io (install-trivy's download-db.ps1); with neither, the
       # install fails and nothing is scanned. Both scans use only that database.
       - name: Install Trivy
-        if: runner.os == 'Linux' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'container-scan'))
+        if: runner.os == 'Linux' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'container-scan'))
         uses: ./.github/actions/install-trivy
         with:
           vulnerability-db: 'true'
       - name: The relay image has no fixable high or critical vulnerability
         id: relay-scan
-        if: runner.os == 'Linux' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'container-scan'))
+        if: runner.os == 'Linux' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'container-scan'))
         run: trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay
       - name: The relay image's high and critical vulnerabilities, fixed or not, as SARIF
         # Also after the scan above fails: then most of all. relay-image-sarif sends it to code
@@ -407,7 +451,7 @@ jobs:
     # it. The disposable Home Assistant every HA connector change is checked against
     # (docs/ha-connector.md, "Validation"); nothing here can reach any other.
     needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'
     runs-on: ubuntu-latest
     env:
       # The Home Assistant release the connector is checked against. Keep it at, or close to,
@@ -449,7 +493,7 @@ jobs:
         run: docker logs homeassistant 2>&1 | tail -n 300
   spikes:
     needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes == 'true'
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -511,7 +555,7 @@ jobs:
     # took; Arm64 in `win-arm64` (build/app-channels.ps1), built and self-tested on Arm64.
     name: app (${{ matrix.runtime }})
     needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.app == 'true'
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.app == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -630,12 +674,24 @@ jobs:
           retention-days: 7
 
   publish-gate:
-    # Only main's newest commit goes on to publish. GitHub keeps one pending job per concurrency
-    # group, cancelling the older pending one when another arrives, so a slow build of an older
-    # merge reaching the group could evict a newer one waiting there, then find itself superseded,
-    # leaving the newest merge unpublished. Turned away here, before the group, it never gets there.
-    # quality-gate must have passed: on main it requires every ci.yml check job (product, app, the
-    # PWA, Home Assistant and spike jobs, light) to have run and succeeded, since a release is what
+    # A main run publishes when it built and checked the app (quality-gate's app output): a run
+    # whose change left the app alone, docs only say, has no packages and publishes nothing; the
+    # last release stays the newest build of the app. Release order doesn't rest on the order
+    # main's runs start or finish, which GitHub doesn't promise (and an old run can be re-run):
+    # publish runs one at a time (its concurrency group never cancels one in progress, and keeps
+    # every waiting publish rather than letting the next to arrive replace it: publish's
+    # concurrency), and inside it publish-prerelease.ps1 publishes each version once, refuses a
+    # version older than any published, the version being this run's number, and refuses a commit
+    # that doesn't hold the latest release's commit, since neither a run number nor the order
+    # waiting publishes start in says anything of commit order. So a run that publishes after a
+    # newer commit's release publishes nothing, and an older commit's run that gets there first
+    # publishes nothing when main's head has since changed the app (main's selector says so):
+    # main's later run builds the app with both changes and publishes it, whatever the two runs'
+    # numbers, where publishing the older first could leave the newer one refused as an older
+    # version. Had it to be main's head instead, an app change followed by a docs-only commit
+    # would never be released.
+    # quality-gate must have passed: every ci.yml check job the plan selected (product, app, the
+    # PWA, Home Assistant and spike jobs, light) ran and succeeded, since a release is what
     # installed copies take within the half hour. That's this workflow's jobs only; CodeQL, perf
     # and the relay workflow run apart and don't hold a release. Needing quality-gate, rather than
     # a second copy of its list, keeps the two from drifting apart (#512); the catalog check fails
@@ -643,38 +699,37 @@ jobs:
     needs: [quality-gate]
     if: >-
       !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
-      && needs.quality-gate.result == 'success'
+      && needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'
     runs-on: ubuntu-latest
-    outputs:
-      newest: ${{ steps.head.outputs.newest }}
     steps:
-      - id: head
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          head=$(gh api "repos/${{ github.repository }}/git/ref/heads/main" --jq .object.sha)
-          if [ "$head" = "${{ github.sha }}" ]; then
-            echo "newest=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "newest=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::main has moved on to $head; that commit's own run publishes"
-          fi
+      - run: echo "::notice::main's CI passed with the app built at ${{ github.sha }}; publishing"
 
   publish:
-    # Every push to main becomes a GitHub pre-release, which installed copies update from
-    # (docs/app-windows.md, "Releases and updates"): the app jobs' packages, x64's and Arm64's in
-    # one release, once the product's tests pass on every system. Never a pull request and never
-    # a fork, and the only job here that can write to the repository.
+    # Every main run that built the app becomes a GitHub pre-release, which installed copies
+    # update from (docs/app-windows.md, "Releases and updates"): the app jobs' packages, x64's and
+    # Arm64's in one release, once the product's tests pass on every system. Never a pull request
+    # and never a fork, and the only job here that can write to the repository.
     needs: [publish-gate]
-    if: needs.publish-gate.outputs.newest == 'true'
+    # publish-gate's result, not the implicit success(): that also needs every job further up to
+    # have succeeded, and a check the plan skipped (PWA, Home Assistant) carries its skip down past
+    # publish-gate's !cancelled(), so a checked app build would never publish (#938's review).
+    if: ${{ !cancelled() && needs.publish-gate.result == 'success' }}
     runs-on: windows-latest
     permissions:
       contents: write
     # One publish at a time: the checks against what is already out, and the delta's base, hold
-    # until the release is up.
+    # until the release is up. queue: max keeps every waiting publish, up to 100, where the
+    # default keeps one and lets the next to arrive replace it: a re-run of an old run (which
+    # isn't in ci-main) could otherwise replace a newer run's waiting publish, leaving that run's
+    # app unpublished (#938). A 101st is cancelled, never one already waiting. GitHub doesn't
+    # promise the order waiting publishes start in, and it needn't be commit or run order, so the
+    # release order is publish-prerelease.ps1's to keep (publish-gate). actionlint 1.7.12 doesn't
+    # know queue: workflow-lint.yml lets that one finding, here only, through (#951).
+    # https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
     concurrency:
       group: publish-prerelease
       cancel-in-progress: false
+      queue: max
     timeout-minutes: 30
     outputs:
       # 'true' only when this run uploaded the release: attest then signs it.
@@ -683,9 +738,21 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      # Main's head now, under the publish lock, with its history: publish-prerelease.ps1 doesn't
+      # publish a commit main has since changed the app past (main's later run publishes that),
+      # read with main's own selector and catalog, as that run plans. A second clone, since the
+      # first one's origin/main is this run's commit.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 0
+          path: main-head
+          persist-credentials: false
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
+      - name: Build main's selector
+        run: dotnet build main-head/tools/AgentBridge.Quality -c Release --nologo -v q
       - run: dotnet tool install -g vpk --version 1.2.161
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -700,7 +767,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}"
+        run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -MainHead (git -C main-head rev-parse HEAD) -MainRepo main-head
 
   attest:
     # Build provenance and an SBOM attestation for each package publish uploaded (quality/README.md
@@ -768,7 +835,7 @@ jobs:
     #  - S4: the relay's security and routing checks against a fake GitHub, then the PWA in
     #    Chromium and WebKit through the same relay, then the container build.
     needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes-linux == 'true'
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes-linux == 'true'
     runs-on: ubuntu-latest
     # 35, as every job that runs `playwright install --with-deps` gets (#689): room for the five
     # minutes the download step gives a slow apt mirror and a full download from Canonical's
@@ -855,8 +922,8 @@ jobs:
 
   light:
     # The small Linux checks, on one runner instead of one each (#459): each step runs when its
-    # suite is selected, and every selected one runs even after another fails. On main, and when
-    # the whole ring runs, every step runs, whatever the plan selected (#487).
+    # suite is selected, and every selected one runs even after another fails. When the whole
+    # ring runs, every step runs, whatever the plan selected (#487).
     #  - design-gen, a11y-contrast: every client's generated copy matches design/, so a token or
     #    SVG changed without regenerating fails here, and every theme meets the contrast rules in
     #    design/tokens.json (design/README.md);
@@ -868,7 +935,7 @@ jobs:
     #  - docs-links: relative links and their #anchors in every Markdown file resolve.
     # Not in plan's own runner: a failing check there would skip every job that needs the plan.
     needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.light == 'true'
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.light == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -882,28 +949,28 @@ jobs:
         with:
           node-version: '22'
       - name: Every generated file matches design/
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
         run: node tools/design-gen/generate.mjs --check
       - name: Contrast, the SVG subset and the generated files
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
         run: node --test "tools/design-gen/test/*.test.mjs"
       - name: Connector read-contract mock
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'connector-conformance')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'connector-conformance')) }}
         run: node --test tools/connector-conformance/mock-host.test.mjs
       - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
         run: bash .github/actions/playwright-system-packages/test.sh
       # build-site.mjs bundles the app with esbuild (#609), and the unit tests build the site: the
       # PWA's packages, as locked, without Playwright's browsers (only the pwa-ui jobs fetch those).
       # Without install scripts, as pages.yml builds the published site (#650), so a build that
       # needed one fails here first.
       - name: The PWA's packages
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'pwa-unit') || contains(fromJSON(env.SUITES), 'pwa-site-csp')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'pwa-unit') || contains(fromJSON(env.SUITES), 'pwa-site-csp')) }}
         working-directory: pwa
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: PWA unit tests
         id: pwa-unit
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'pwa-unit')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'pwa-unit')) }}
         working-directory: pwa
         run: node --test "test/unit/*.test.mjs"
       - name: PWA unit test coverage
@@ -946,7 +1013,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
       - name: The Pages build accepts the live relay and its blob store, and refuses bad ones
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'pwa-site-csp')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'pwa-site-csp')) }}
         working-directory: pwa
         run: |
           node tools/build-site.mjs --out "$RUNNER_TEMP/site" --relay https://relay.example
@@ -974,7 +1041,7 @@ jobs:
       # same tag fails this step instead of running. To update, take the new release's
       # lychee-x86_64-unknown-linux-gnu.tar.gz.sha256.
       - name: Links and anchors in Markdown resolve
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'docs-links')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'docs-links')) }}
         env:
           LYCHEE_VERSION: v0.24.2
           LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
@@ -1002,7 +1069,7 @@ jobs:
     # (PWA_SKIP_E2E): left out here, not left to skip itself for want of the dev stack.
     name: pwa-ui (${{ matrix.name }})
     needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-ui == 'true'
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-ui == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -1074,11 +1141,37 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
+      # Renders of the demo for design review (pwa/test/renders): captures, not checks, so they
+      # never fail the job, and they are kept whatever the tests did. Design signs a state off
+      # against what the product draws, and nothing runs on an owner's machine, so CI draws them.
+      # Chromium alone: the engine that emulates forced colours.
+      - name: Renders of the demo
+        if: ${{ !cancelled() && matrix.project == 'chromium' && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
+        continue-on-error: true
+        run: npx playwright test --config playwright.renders.config.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() && matrix.project == 'chromium' }}
+        with:
+          name: pwa-renders
+          path: pwa/renders/
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
           path: pwa/test-results
+          retention-days: 7
+      # The sign-in captures test/sign-in.spec.mjs takes in Chromium (#800, #963), for Creative to
+      # look at on every run, not only a failed one.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() && matrix.project == 'chromium' }}
+        with:
+          name: pwa-captures
+          path: |
+            pwa/test-results/**/signin-*.png
+            !pwa/test-results/**/attachments/**
+          if-no-files-found: warn
           retention-days: 7
 
   pwa-e2e:
@@ -1086,7 +1179,7 @@ jobs:
     # (test/e2e/e2e.spec.mjs). The only job that needs the dev stack, so the only one that builds
     # it (#457): built once, here, rather than in every shard or passed round as an artifact.
     needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-e2e == 'true'
+    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-e2e == 'true'
     runs-on: ubuntu-latest
     # 35, as every job that runs `playwright install --with-deps` gets (#689): main run
     # 41952998347 cancelled this job at its old 15 inside that install, fetching 126 of Chromium's
@@ -1144,14 +1237,13 @@ jobs:
 
   quality-gate:
     # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
-    # required. Every job the plan marked to run must have succeeded: on main, and when the whole
-    # ring runs, that is every job here; on a pull request, those the plan gave true. A job the
-    # plan skipped isn't selected, so a pull request never waits on it, but any job that failed
-    # or was cancelled fails this, and so does a selected job that was skipped (#487). The plan
-    # itself is in needs, since when it fails every other job is skipped. The catalog check
-    # fails when any check job is missing here. publish-gate, publish, attest and
-    # relay-image-sarif are not: they deliver rather than check, and run only on main, where a
-    # superseded publish is cancelled by design.
+    # required. Every job the plan marked to run must have succeeded: when the whole ring runs,
+    # that is every job here; otherwise, on main as on a pull request, those the plan gave true. A
+    # job the plan skipped isn't selected, so no run waits on it, but any job that failed or was
+    # cancelled fails this, and so does a selected job that was skipped (#487). The plan itself is
+    # in needs, since when it fails every other job is skipped. The catalog check fails when any
+    # check job is missing here. publish-gate, publish, attest and relay-image-sarif are not: they
+    # deliver rather than check, and run only on main.
     # A draft's gate has another name, so the required check, quality-gate, only ever comes from
     # ring 1 or 2. Ready for review reruns this workflow on the same head, and GitHub creates the
     # new gate's check only once every job it needs is done; under the same name, the draft's
@@ -1161,11 +1253,13 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      # Whether this run built and checked the app's packages: publish-gate publishes only then.
+      app: ${{ needs.app.result }}
     steps:
       - name: Every job the plan selected passed, and none failed
         env:
           NEEDS: ${{ toJSON(needs) }}
-          EVENT: ${{ github.event_name }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
@@ -1173,11 +1267,24 @@ jobs:
             echo "::error title=quality-gate::failed or cancelled: $bad"
             exit 1
           fi
-          # Selected: every job on a push and when the whole ring runs, otherwise those the plan
-          # gave true. Each must have succeeded; a skipped one was meant to run and didn't.
-          missing=$(echo "$NEEDS" | jq -r --arg event "$EVENT" '
+          # A plan that passed gives whole-ring and every job here exactly true or false. Anything
+          # else, an output renamed or lost, would leave a job unselected without a word, and main
+          # no longer runs every job regardless.
+          unknown=$(echo "$NEEDS" | jq -r '
             (.plan.outputs // {}) as $plan
-            | ($event != "pull_request" or $plan["whole-ring"] == "true") as $all
+            | if .plan.result != "success" then "" else
+                [("whole-ring", (keys[] | select(. != "plan")))
+                  | select(($plan[.] // "") as $v | $v != "true" and $v != "false")]
+                | join(", ") end')
+          if [ -n "$unknown" ]; then
+            echo "::error title=quality-gate::the plan gave no true or false for: $unknown"
+            exit 1
+          fi
+          # Selected: every job when the whole ring runs, otherwise those the plan gave true.
+          # Each must have succeeded; a skipped one was meant to run and didn't.
+          missing=$(echo "$NEEDS" | jq -r '
+            (.plan.outputs // {}) as $plan
+            | ($plan["whole-ring"] == "true") as $all
             | [to_entries[] | select(.key == "plan" or $all or $plan[.key] == "true")
                 | select(.value.result != "success") | "\(.key) (\(.value.result))"]
             | join(", ")')

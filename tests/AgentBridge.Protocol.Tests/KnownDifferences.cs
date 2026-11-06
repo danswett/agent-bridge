@@ -15,6 +15,8 @@ public static class KnownDifferences
         "TrustQuestion/missing-agent", "TrustQuestion/missing-answerable", "TrustQuestion/missing-kind",
         "Question/a-choice-that-cannot-be-read", "Question/a-choice-label-that-is-not-text", "Question/a-delegate-that-is-not-an-id",
         "DiscoveryChanged/wrong-type-discoveryHeld",
+        // The PWA reads escaped text it cannot read as held at the machine: Deny, never a one-tap Approve.
+        "Question/escaped-text-that-cannot-be-read",
     ];
 
     // #446: a required field missing, or one of the wrong type, that both read past. C# reads it as

@@ -45,8 +45,15 @@ namespace AgentBridge.Host;
 //
 // sessions.restoreOnStart: whether sessions a reboot or a crash took are kept offered to resume,
 // and later (#780) resumed, idle, when the host starts again (docs/host-launch.md). On when absent.
-// A value that is not true or false, or a file that cannot be read, turns it off: what was lost is
-// still said, and nothing is kept.
+// A value that is not true or false, or a file that cannot be read, turns it off: nothing is started.
+// What was owed is kept all the same (RestoreKept): the person may have meant it on, and a file broken
+// for a while, or written by a newer host, must not drop the sessions a reboot took.
+//
+// permissions.escapedApproval and escapedApprovalDevices (#803): how Approve is given for an
+// approval the host escaped anything in. "confirm" (the default): a two-step confirmation from a
+// person's device approved here, the devices listed, or launch.remoteFolderTrustDevices while the
+// list is absent. "machine": Approve only at the machine; Deny still goes from anywhere. A value
+// that cannot be read is "machine", and a list that cannot be read approves no device; each is said.
 //
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)
@@ -79,7 +86,7 @@ public sealed record HostSettings(bool RemoteApproval)
     public IReadOnlyList<string> DevBoxProblems { get; init; } = [];
 
     // Every problem a section reported, for the log, config show, and config set's check.
-    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems);
+    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems).Concat(PermissionProblems);
 
     public bool Push { get; init; } = true;
 
@@ -87,6 +94,17 @@ public sealed record HostSettings(bool RemoteApproval)
     public bool TrustedPeers { get; init; }
 
     public bool RestoreOnStart { get; init; } = true;
+    // permissions.escapedApproval: EscapedApproval.Confirm or .Machine.
+    public string EscapedApproval { get; init; } = AgentBridge.Protocol.EscapedApproval.Confirm;
+
+    // permissions.escapedApprovalDevices: null while absent, when launch.remoteFolderTrustDevices
+    // is used; a list, even an empty one, replaces it.
+    public IReadOnlyList<string>? EscapedApprovalDevices { get; init; }
+
+    public IReadOnlyList<string> PermissionProblems { get; init; } = [];
+
+    // Off only because the file could not be read: what a reboot or a crash took is kept to offer.
+    public bool RestoreKept { get; init; }
 
     // Why a read-only host takes nothing, said to devices; and why one whose file has a problem doesn't.
     public const string ReadOnlyReason = "this is a read-only comparison host (delivery.readOnly in its config); answer at the machine";
@@ -97,7 +115,8 @@ public sealed record HostSettings(bool RemoteApproval)
     static HostSettings Off => Default with
     {
         RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, ReadOnly = true,
-        Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RestoreOnStart = false,
+        Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RestoreOnStart = false, RestoreKept = true,
+        EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine, EscapedApprovalDevices = [],
     };
 
     public static (HostSettings Settings, string? Problem) Load(string folder)
@@ -198,6 +217,7 @@ public sealed record HostSettings(bool RemoteApproval)
             }
             if (!root.TryGetProperty("permissions", out var permissions)) { return (settings, null); }
             if (permissions.ValueKind != JsonValueKind.Object) { throw new JsonException("permissions is not an object"); }
+            settings = Escaped(settings, permissions);
             if (permissions.TryGetProperty("trustedPeers", out var trusted))
             {
                 settings = settings with
@@ -222,6 +242,43 @@ public sealed record HostSettings(bool RemoteApproval)
         {
             return (Off, $"{path} is not valid ({e.Message}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only");
         }
+    }
+
+    // permissions.escapedApproval and escapedApprovalDevices, read in the direction that does least:
+    // what is wrong with either is said, and never turns on more than was meant.
+    static HostSettings Escaped(HostSettings settings, JsonElement permissions)
+    {
+        var problems = new List<string>();
+        if (permissions.TryGetProperty("escapedApproval", out var policy) && policy.ValueKind != JsonValueKind.Null)
+        {
+            var value = policy.ValueKind == JsonValueKind.String ? policy.GetString() : null;
+            if (value is AgentBridge.Protocol.EscapedApproval.Confirm or AgentBridge.Protocol.EscapedApproval.Machine) { settings = settings with { EscapedApproval = value }; }
+            else
+            {
+                settings = settings with { EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine };
+                problems.Add($"permissions.escapedApproval is not \"{AgentBridge.Protocol.EscapedApproval.Confirm}\" or \"{AgentBridge.Protocol.EscapedApproval.Machine}\"; an approval with escaped characters is approved only at the machine");
+            }
+        }
+        if (permissions.TryGetProperty("escapedApprovalDevices", out var devices) && devices.ValueKind != JsonValueKind.Null)
+        {
+            if (devices.ValueKind != JsonValueKind.Array)
+            {
+                settings = settings with { EscapedApprovalDevices = [] };
+                problems.Add("permissions.escapedApprovalDevices is not a list of device ids; no device may approve one with escaped characters");
+            }
+            else
+            {
+                var ids = new List<string>();
+                foreach (var e in devices.EnumerateArray())
+                {
+                    var id = e.ValueKind == JsonValueKind.String ? e.GetString() : null;
+                    if (TransferProtocol.IsDeviceId(id)) { if (!ids.Contains(id!) && ids.Count < 64) { ids.Add(id!); } }
+                    else { problems.Add($"permissions.escapedApprovalDevices: '{Limits.KeepStart(id ?? e.ValueKind.ToString(), 40)}' is not a device id; ignored"); }
+                }
+                settings = settings with { EscapedApprovalDevices = ids };
+            }
+        }
+        return problems.Count == 0 ? settings : settings with { PermissionProblems = problems };
     }
 
     internal static readonly JsonDocumentOptions Options = new() { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };

@@ -468,6 +468,22 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         Assert.Empty(screens.Typed);
     }
 
+    // #995, Creative 6680283740: a worker that did not start is not a window that changed. The
+    // refusal says so in fixed words, never the exception's, and the question stays answerable.
+    [Fact]
+    public async Task A_folder_trust_answer_whose_injector_did_not_start_says_the_machine_couldnt_deliver_it()
+    {
+        screens.Rows = CopilotAsks();
+        ServeTrust(Trusting(), trustConfirm: TimeSpan.FromMilliseconds(500));
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+
+        screens.Fails = new InjectionResult(InjectionStatus.NothingTyped, AgentBridge.Host.Delivery.Windows.WorkerInjector.NotStarted);
+        var refused = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
+
+        Assert.Equal(("refused", "the machine couldn't deliver it; answer at the machine"), (refused.Outcome, refused.Reason));
+    }
+
     [Fact]
     public async Task A_window_that_changed_before_the_key_went_is_refused_and_an_answer_not_seen_to_work_is_never_typed_again()
     {

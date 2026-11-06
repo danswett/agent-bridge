@@ -38,14 +38,13 @@ public interface IImageShrinker
 // sends; what was sent comes out of the box only once the session has it.
 public sealed class ReplyViewModel : Observable
 {
-    static readonly Dictionary<string, Func<string, string>> OutcomeText = new()
+    static readonly Dictionary<string, string> OutcomeText = new()
     {
-        ["delivered"] = _ => "Delivered",
-        // Describe names the machine itself (ui.md §6.5: "Check at machine before sending it again").
-        ["unconfirmed"] = _ => ReceiptWords.Unconfirmed(null),
-        ["stale"] = _ => "Not sent: the session has ended.",
-        ["busy"] = _ => "Not sent: an answer or another reply to this session is being delivered. Try again in a moment.",
-        ["refused"] = _ => "The machine refused this reply.",
+        ["delivered"] = "Delivered",
+        ["unconfirmed"] = ReceiptWords.Unconfirmed,
+        ["stale"] = "Not sent: the session has ended.",
+        ["busy"] = "Not sent: an answer or another reply to this session is being delivered. Try again in a moment.",
+        ["refused"] = "The machine refused this reply.",
     };
     static readonly Dictionary<string, string> ImageExtensions = new()
     {
@@ -56,7 +55,6 @@ public sealed class ReplyViewModel : Observable
     readonly HostConnection? host;
     readonly IImageShrinker? shrinker;
     readonly string sessionId;
-    readonly string at;
     readonly Func<bool> current;
     Session session;
     bool attach;
@@ -95,7 +93,6 @@ public sealed class ReplyViewModel : Observable
         this.shrinker = shrinker;
         this.current = current ?? (() => true);
         sessionId = session.Id;
-        at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
         this.machineName = machineName;
         receipt = new Receipt(deliveries.Time, deliveries.Ui, Describe, Shown, Said);
         deliveries.Changed += OnDelivery;
@@ -242,8 +239,8 @@ public sealed class ReplyViewModel : Observable
     // Whether that is a failure or a refusal, which a screen reader hears at once (assertively);
     // set before Announcement is raised, so the view reads it with the words.
     public bool AnnouncementUrgent { get; private set; }
-    // The longest outcome's words, which the view keeps room for (ReceiptWords.Room).
-    public string StatusRoom => ReceiptWords.Room(machineName);
+    // The words the view keeps room for (ReceiptWords.Room).
+    public string StatusRoom => ReceiptWords.Room;
 
     // Another machine's way to files over 256 KiB: the relay's blob store, and its device there.
     public IBlobStore? Blobs { get; init; }
@@ -540,7 +537,7 @@ public sealed class ReplyViewModel : Observable
         }
         var outcome = e.Outcome is { } o && OutcomeText.ContainsKey(o) ? o : "unconfirmed";
         if (outcome == "delivered") { return new("delivered", "", null, Tone.None, ReceiptMark.Check, "Reply delivered"); }
-        var t = outcome == "unconfirmed" ? ReceiptWords.Unconfirmed(machineName) : OutcomeText[outcome](at);
+        var t = OutcomeText[outcome];
         if (outcome == "refused" && e.Reason is { } r) { t = $"The machine refused this reply: {r}."; }
         if (outcome == "unconfirmed" && e.Reason is { } u) { t += $" ({u})"; }
         return Said(outcome, t, outcome == "refused" ? Tone.Bad : Tone.Warn);
