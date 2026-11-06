@@ -447,8 +447,15 @@ async Task<int> ServeAsync(HostHandover handover)
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore);
     launcher.SessionStarted += restore.Launched;
     launcher.SeenReadyLate += restore.SeenReadyLate;
-    restore.Restore(launcher);
-    restore.Start();
+    // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
+    // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
+    // agent; the resumes stay held until the look with the pipe open, below, has passed too.
+    var startGate = new HostStartGate(handover, identity.Folder);
+    if (!startGate.StartRestore(restore, launcher))
+    {
+        Log($"stopped from the {Product.App} while starting; not serving");
+        return 0;
+    }
     transfers.Launcher = launcher;
     // No reply into a session whose launch here has not seen its window ready (a restore at folder
     // trust above all): Enter would answer the question (#780).
@@ -653,6 +660,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // Only now: a host stopped while starting, whose pipe the app could not reach, must start no
     // usage probe it would cut short on its way out, past the app's probe hold (#238 review).
     usageMonitor?.Start();
+    startGate.Serving();
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = new ReconnectBackoff();
