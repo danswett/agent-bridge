@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LaunchFollow, sameQuestion, samePrompt, sameFolder, BUSY_FOR_MS, BUSY_SLACK_MS, BUSY_AT_LEAST_MS, LATE_FOLLOW_FOR_MS, LATE_START_SLACK_MS, LATE_SETTLE_MS } from '../../js/launch-follow.js';
+import { LaunchFollow, sameQuestion, samePrompt, sameFolder, BUSY_FOR_MS, BUSY_SLACK_MS, BUSY_AT_LEAST_MS, LATE_FOLLOW_FOR_MS, LATE_START_SLACK_MS, LATE_SETTLE_MS, LATE_AHEAD_MS } from '../../js/launch-follow.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const T0 = Date.parse('2026-05-01T12:00:00.000Z');
@@ -331,6 +331,37 @@ test('a session that started well before a launch was sent is not its own, thoug
   t.follow.session('h1', codexSession({ startedAt: iso(T0 - 5 * 60000) }));
   t.advance(LATE_SETTLE_MS);
   assert.equal(t.started.length, 0);
+});
+
+test('a session that says it started later than now here is not taken, as the machine\'s clock is ahead by an amount not known (#973)', () => {
+  const t = setup();
+  t.follow.follow('h1', codex(), () => false, () => []);
+  // The machine 11 minutes ahead: a session 5 minutes old, in a reconnect's list.
+  t.follow.session('h1', codexSession({ id: 'old', startedAt: iso(T0 + 6 * 60000) }));
+  t.follow.session('h1', codexSession({ id: 'c2', startedAt: iso(T0 + LATE_AHEAD_MS + 1) }));
+  t.advance(LATE_SETTLE_MS);
+  assert.equal(t.started.length, 0);
+  t.follow.session('h1', codexSession({ id: 'c3', startedAt: iso(t.now + LATE_AHEAD_MS) }));
+  t.advance(LATE_SETTLE_MS);
+  assert.deepEqual(t.started.map((s) => s.session), ['c3']);
+});
+
+test('a launch whose question was answered here, Trust or Quit, no longer keeps a later one there unconfirmed, though a newer launch had replaced it (#973)', () => {
+  const claude = (request, trust) => unconfirmed({ request, detail: { trust, launched: { agent: 'claude', workspace: 'bridge', cwd: 'C:\\repos\\bridge' } } });
+  const claudeSession = (id) => ({ id, agent: 'claude', status: 'working', cwd: 'C:\\repos\\bridge', startedAt: iso(T0) });
+  for (const outcome of ['started', 'declined']) {
+    for (const replaced of [false, true]) {
+      const t = setup();
+      t.follow.follow('h1', claude('r1', question()), () => false, () => []);
+      // A launch while the question waits is busy, and replaces the one followed.
+      if (replaced) { t.follow.follow('h1', { state: 'done', outcome: 'busy', request: 'r2', detail: { trust: question() } }, () => false, () => []); }
+      t.follow.answered('h1', question(), outcome);
+      t.follow.follow('h1', claude('r3', null), () => false, () => []);
+      t.follow.session('h1', claudeSession('n1'));
+      t.advance(LATE_SETTLE_MS);
+      assert.deepEqual(t.started.map((s) => [s.request, s.session]), [['r3', 'n1']], `${outcome}${replaced ? ', replaced' : ''}`);
+    }
+  }
 });
 
 test('a launch is not matched by its folder while an earlier one of its agent into that folder may still start (#973)', () => {

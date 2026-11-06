@@ -24,6 +24,10 @@ export const LATE_FOLLOW_FOR_MS = 30 * 60000;
 // but a session started there before the launch, in the same folder, is not this launch's. A
 // clock further behind only leaves the launch unconfirmed, as it was.
 export const LATE_START_SLACK_MS = 2 * 60000;
+// Nor to one that says it started more than this after now here: the machine's clock is then
+// ahead by an amount not known, so how old the session is cannot be told, and the launch stays
+// unconfirmed (#973).
+export const LATE_AHEAD_MS = 30000;
 // A session that looks like a launch's is taken as its own only once nothing else has looked
 // like it for this long: a reconnect's list comes one session at a time, and two that match
 // leave the launch unconfirmed, as a wrong jump is worse than none (#973).
@@ -210,7 +214,7 @@ export class LaunchFollow {
     const kind = KIND[launched?.agent];
     const guessed = !session && kind && kind !== 'copilot' && launched.cwd && !launched.resume && !launched.transfer;
     if (guessed && (entry.outcome === 'started' || entry.outcome === 'unconfirmed')) {
-      this.#unnamed.set(hostId, [...this.#recent(hostId), { request: entry.request, kind, cwd: launched.cwd, at: sent.at }]);
+      this.#unnamed.set(hostId, [...this.#recent(hostId), { request: entry.request, kind, cwd: launched.cwd, at: sent.at, question: entry.detail?.trust ?? null }]);
     }
     if (entry.outcome !== 'unconfirmed') { return false; }
     const question = entry.detail?.trust ?? null;
@@ -245,14 +249,14 @@ export class LaunchFollow {
 
   // Whether a session may be the session of a launch that named none: new since it was first
   // sent, of its agent, in its folder, not another launch's, not ending, and saying it started no
-  // earlier than LATE_START_SLACK_MS before it was sent. One that says nothing of when it started
-  // could be any.
+  // earlier than LATE_START_SLACK_MS before it was sent nor later than LATE_AHEAD_MS after now.
+  // One that says nothing of when it started could be any.
   #candidate(hostId, late, s) {
     const m = late.match;
     if (!m || !s?.id) { return; }
     const started = Date.parse(s.startedAt ?? '');
     if (m.known.has(s.id) || this.#named.get(hostId)?.has(s.id) || s.agent !== m.kind || !sameFolder(s.cwd, m.cwd)) { return; }
-    if (s.status === 'ending' || !Number.isFinite(started) || started < m.sent - LATE_START_SLACK_MS) { m.found.delete(s.id); return; }
+    if (s.status === 'ending' || !Number.isFinite(started) || started < m.sent - LATE_START_SLACK_MS || started > this.now() + LATE_AHEAD_MS) { m.found.delete(s.id); return; }
     m.found.set(s.id, s);
   }
 
@@ -335,11 +339,13 @@ export class LaunchFollow {
   }
   // A folder-trust question on that machine answered here, with its outcome: the launch followed
   // that met it, when Trust started it; null otherwise. Either way, once started or declined, it
-  // is no longer followed.
+  // is no longer followed, nor may it still start a session that a later launch's could be
+  // mistaken for, though a newer launch there is the one followed now.
   answered(hostId, question, outcome) {
+    if (outcome !== 'started' && outcome !== 'declined') { return null; }
+    this.#unnamed.set(hostId, this.#recent(hostId).filter((o) => !sameQuestion(o.question, question)));
     const late = this.#late.get(hostId);
     if (!late || !sameQuestion(late.question, question) || !this.#current(late)) { return null; }
-    if (outcome !== 'started' && outcome !== 'declined') { return null; }
     this.#late.delete(hostId);
     return outcome === 'started' ? { request: late.request, session: late.session, at: late.at, question: late.question } : null;
   }
