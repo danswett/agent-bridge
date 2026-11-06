@@ -103,6 +103,8 @@ with the wrong type):
 | `TrustQuestion` | | `id`, `agent`, `kind`, `folder`, `root`, `rootNote`, `warning`, `answerable` |
 | `SignedCommand` ([v1-transfer.md](v1-transfer.md)) | | `body`, `by`, `mac` |
 | `TransferResult` | | `blob`, `size`, `sha256`, `agent`, `launcher`, `files` |
+| `ManageCommand` (#801) | | `command` |
+| `ManageHaTokenRequest` (#801, held until #55) | | `command`, `secret` |
 
 So, for example, a session with no `status` reads as `idle`, one whose `title` is a number has
 no title, and a `ToolCall` with no `id` is left out of `history`. A question whose `message` is a
@@ -290,6 +292,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.transfer.serve` | `session.transfer`, host to host: this machine hands its ended sessions to the account's other machines on a command a person's device signed ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.restore` | `hello`'s `machine.restore`: what a reboot or a crash took, offered to resume ([What went](#hello)), and the `restored` notification ([Notifications](#notifications)). Without it, a client says nothing of sessions that went
 | `update` | `update.get`, `update.subscribe`, `update.check`, `update.install`: the machine's updates, seen and asked for from a person's other devices, installed by its Windows app ([v1-update.md](v1-update.md)). Through the relay only, and never by a read-only machine |
+| `manage` | `manage.get`, `manage.subscribe`, `manage.restart`: a person's device restarts this host, each press a command it signed for this machine, leaving only through #805's quiet lease ([host-lifecycle.md](../host-lifecycle.md)); with `manage.hooks`, `manage.hooks.repair` repairs the hooks of an agent this installation set up (#801). Through the relay only, to a `pwa` or `app` device that is not this machine's own app, never by a read-only machine or one with `permissions.remoteManage` off. `manage.stop`, `manage.config.*` and `manage.haToken.set` are defined but refused `needs-roster` until the signed device roster (#55), and their capabilities are never offered. See [Managing a machine](#managing-a-machine) |
 
 ### `sessions.list`
 
@@ -1124,6 +1127,74 @@ Request `data`: `{}`. Result: the devices this host notifies, oldest first:
 
 `current` marks the calling device. Endpoints are never sent back: one is a capability to
 notify that device.
+
+### Managing a machine
+
+**New (#801 slice A).** A person's phone, browser or Windows app restarts a machine's host, or
+repairs the hooks of an agent that machine's installation set up, so nobody has to sign in to
+it for either. The design record, with the open and answered questions, is draft
+[#821](https://github.com/danswett/agent-bridge/pull/821); this section is the contract.
+
+| Op | Request `data` | Result |
+|---|---|---|
+| `manage.get` | `{}` | `ManageState` |
+| `manage.subscribe` | `{}` | `ManageState`, then a `manage.state` event with the `ManageState` whenever it changes |
+| `manage.restart` | `ManageCommand` | `ManageResult` |
+| `manage.hooks.repair` | `ManageCommand`; its body's `args` is `{ "agent": "copilot" \| "claude" \| "codex" \| "agency" }` | `ManageResult` |
+| `manage.stop`, `manage.config.get`, `manage.config.set` | `ManageCommand` | `ManageResult`, always refused `needs-roster` until #55 |
+| `manage.haToken.set` | `ManageHaTokenRequest`: `{ "command", "secret" }` | The same; the request is refused before it is read, so the secret is never parsed |
+
+`ManageCommand` is `{ "command": SignedCommand }`: the [signed command](v1-transfer.md) a
+person's device made for this machine, whose body's `action` is the op. It lives at most
+**2 minutes** from `issuedAt` (a transfer's lives 10). The body's `args` and `contentSha256`
+are signed with the rest (the MAC covers the whole body; the vector
+`a-hook-repair-with-args` in [signed-command.json](vectors/signed-command.json)), and are
+optional, so a transfer's bytes are unchanged. An action takes only the arguments it defines
+(Connection, Q-C4 on #886): a restart none, a repair `agent` alone, neither a
+`contentSha256`. Anything else is refused `bad-args`.
+
+**Authorization.** Through the relay only: every `manage.*` op is refused on the local pipe,
+whoever asks ([local-pipe.md](local-pipe.md)), so the #67 guard on `host.restart` is
+untouched. The signer must be the device sending it, connected now, of kind `pwa` or `app`
+(Connection, Q-C1 on #886), and not this machine's own app (the device id the app gave in
+`host.relay.account`), which is refused `local-device` and may not read `manage.get` either.
+**Until #55**, that kind is the one the device declared to the relay in its presence (as
+`update.*` and folder trust read it; Connection, Q-C7): any device signed in to the account
+can claim `pwa`. #55's roster binding replaces it with the kind the owner approved; the
+bounds below are what hold until then. A machine with `permissions.remoteManage` off
+([host-config.md](../host-config.md)), or read-only, offers none of it and refuses all of it,
+reads included; the switch and read-only are looked at again just before a repair runs and
+before a restart commits.
+
+**A restart** leaves only through #805's quiet lease ([host-lifecycle.md](../host-lifecycle.md)):
+`TryAcquireQuiet`, then `AnnouncePlanned`, then `CommitDeparture`; refused at once
+(`not-quiet`, `busy`, `announce-failed`, `changed`) when any step fails, never forced or
+carried out later. It is refused `changed` when its quiet lease ran out before the commit (#885), and
+while the #800 agent sign-in entrypoint is on,
+since a restart cancels a pending sign-in (Connection, Q-C8). At most **2 committed restarts
+every 6 hours** per machine until #55 (`rate-limited`), and 3 presses of each kind per device
+every 10 minutes. Once committed, the result is `accepted` with the planned-state
+`transition`; the host settles its usage probes (#238), then hands over to its replacement
+(#239); a stop that comes meanwhile wins, and no replacement is started. The new host reports `done` (with `tookSeconds`) or `failed` in `last`; a restart a stop won over is `failed` (`changed`), however soon the host is started again.
+
+**A repair** runs only for an agent whose hook ownership record names this profile (else
+`unavailable`), and is only ever Settings' Set up / Repair, never a removal. `done` or
+`failed`, with `restartRequired`.
+
+The owner's other devices get a quiet notice of each restart and repair (Q-O3): a `finished`
+push of class `done`, silent, kept in the tray, naming the machine, what, and which device;
+never a value. A restart waits up to 3 s for it to be sent before it leaves.
+
+`ManageResult`: `{ "request"?, "outcome": "accepted" | "done" | "unchanged" | "refused" | "failed",
+"reason"?, "detail"?, "restartRequired"?, "transition"?, "state"?: ManageState }`. An unknown
+outcome reads as `failed`, an unknown reason as a refusal with its `detail`. A press sent again
+gets its first answer and is never acted on twice. A refusal before the press is verified as a
+person's carries no `state`.
+
+`ManageState`: `{ "phase": "idle" | "restarting" | "repairing", "pending"?: { "request", "kind",
+"by", "at", "transition"? }, "restarts": { "left", "nextAt"? }, "last"?: { "request", "kind",
+"outcome", "by", "at", "reason"?, "tookSeconds"? } }`. `by` is the device's kind and short id
+(`pwa 1a2b3c4d`). Vectors: [manage.json](vectors/manage.json).
 
 ## Notifications
 

@@ -93,6 +93,11 @@ public sealed record CommandBody
     public required string To { get; init; }
     public required long IssuedAt { get; init; }
     public required long ExpiresAt { get; init; }
+    // A management command's arguments (manage.*, docs/protocol/v1-sessions.md, "Managing a machine"), signed with the
+    // rest; absent for a transfer. Null is never written, so a transfer's bytes are as before.
+    public System.Text.Json.JsonElement? Args { get; init; }
+    // manage.haToken.set only: SHA-256 of the secret that travels beside the command.
+    public string? ContentSha256 { get; init; }
 }
 
 public sealed record CommandPrincipal
