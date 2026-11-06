@@ -52,7 +52,9 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/prompt-origin.js` | A prompt the person didn't type (#489, [ui.md](../docs/design/ui.md) §6.4): who sent it (`activity.userMessageFrom`: a schedule, an agent, or other; absent is the person), its label line's words and spoken name, its label cleaned and cut to 64 bytes, its hidden characters as escapes, and `PromptMemory`, which folds a schedule's repeat ("same as last time") and dates a prompt by its turn. Pure, and tested in `test/unit/prompt-origin.test.mjs` |
 | `js/needs-you.js` | The Needs you lane (#165): one entry per pending question across the machines shown, oldest first; what each says (title, machine, agent, age, first line or an approval's whole prompt, a delegate by name) and offers (Approve once and Deny, open the session, or answer at the machine); and the app badge with its count |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
-| `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
+| `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect; how far each has got where the machine says (`sessions.progress`: received, typed, queued) |
+| `js/ui/receipt.js` | The receipt of a reply or an answer (#600, #617): its words at each stage, the quiet window, the dwell, the stalls and what a screen reader hears. The timing is tested on a mocked clock in `test/unit/receipt.test.mjs` |
+| `js/timing.js` | Timing marks for each answer and reply (#600), kept on this device only: tap, each send, each progress stage and the outcome as `performance` marks and measures, with the machine's own `timings` beside them |
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
 | `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session, its files sent first |
 | `js/attachments.js` | A file or image for a reply: named, size-checked (a large image is redrawn smaller), hashed, and sent in chunks from where the machine has got to |
@@ -233,7 +235,51 @@ Before anything is sent the form is checked as the host will check it: `required
 values, Other not empty, 4 KiB of UTF-8 per free text (counted in bytes; a counter appears
 near the limit) and 16 KiB per request. A problem is named and focus goes to its field.
 
-While an answer is on its way the controls are disabled and it says so. If the response is
+While an answer is on its way the controls are disabled. Where it has got is the receipt
+(`js/ui/receipt.js`; ui.md §5.3, §6.5 and §9 as the owner decided them on #617, "quiet unless
+something's wrong"). A machine whose `hello` lists `sessions.progress` is asked for it
+(`"progress": true`, [v1-sessions.md](../docs/protocol/v1-sessions.md); left off a request that
+fits its limit only without it), and says how far it has got: sent once it has it, passed to
+the agent once the keys have gone, up next for a reply into a working session. A stage only
+moves forward, across resends. The normal path shows nothing but the ring on the control that
+sent (Send, the option tapped, or Approve once or Deny in Needs you); its stages are heard, not
+seen ("Sending reply", "Reply sent", "Reply passed to the agent", "Reply up next, after the
+agent's current step"). Delivered, that ring turns to the `check` icon for about a second
+(`sendCheckHoldMs`) and back to the control's own glyph, and a confirmed answer's card resolves
+to "You answered · *value*" in text2: a tap's option, free text's first line with its runs of
+white space as one, cut at a word break within 40 characters, or nothing for a form of several
+fields. A machine from before progress is heard as sending until its outcome, and never as sent.
+The ring and the check sit in a slot each control keeps for them at rest, so they never cover a
+label or a badge and the control never resizes. A host takes a question away as it types the
+answer, before its result: the question stays, its ring on the option that went, until the
+outcome; delivered, it shows the check and then resolves; not confirmed, stale or failed, it stays
+as it went (that option pressed at full opacity, the rest disabled, the line saying why), since a
+host types into a prompt once; busy or refused resolve to the receipt at once.
+
+A line of words appears only for an exception: "Still sending…" after 3 s with nothing heard
+(and for a resend), "Sent · still waiting on *machine*" after 5 s, "Passed to the agent · not
+picked up yet" after 10 s (Up next never stalls), "· still being delivered" after the stage a
+resend met the first copy at, "Waiting for *machine* · it goes when *machine* is back" (the ring
+still, in Send's ink at full opacity), and any outcome but delivered, in today's words. It goes when the next stage or the
+outcome makes it untrue. Nothing is shown or heard for the first 400 ms; after that a screen
+reader hears the furthest stage reached, prefixed "Reply" or "Answer", at most one a second (the
+later of two), and the outcome at once; a failure (refused, failed) is said assertively, on the
+page's alert line and only there (ui.md §9.1 A6), and a file being read is said once as it starts. The thresholds are `ReceiptTiming`. All of it is kept
+by request, so the form, Needs you and the card's receipt after the question has gone share one
+timing and say each change once between them, in a view of the request that is on screen, or
+else on the page's own live line (a session's card while another is open, a receipt gone with
+its question, a reply box moved on to the next reply), never lost and never on a line showing
+another request. A request still on its way when every view of it goes (its session ended, its
+card taken away) is followed to its outcome on the page's line, at its own pace and for 10 minutes
+at most (past the 9-minute give-up); a sign-out takes everything still to be said with it, so
+nothing is spoken on the sign-in screen. In the view that sent it, a delivered answer's line stays
+empty while its check holds, then reads You answered. A Needs you entry whose question the machine clears before
+confirming its answer stays, ring on and nothing to press, apart from the count, until the
+outcome has shown: a check for its second, any other outcome for 5 s, and never past 9 minutes.
+With Other… open, an option tapped instead has the ring and Send answer none. From Send the line keeps the room the longest outcome needs (two lines in a
+box under 640 px wide, one above), empty unless it has something to say, until the box is typed
+in again, so nothing moves the box; a Needs you entry keeps its line's room (two lines on a
+phone) in every state. If the response is
 lost (a timeout, the channel or relay dropping) it is resent with the same `request` on
 the next channel to that machine, so the host returns the first outcome and never types it
 twice; after 9 minutes without an outcome (hosts remember requests for 10) it is reported
@@ -241,7 +287,7 @@ as unconfirmed rather than sent again. Outcomes:
 
 | Outcome | Shown | Then |
 |---|---|---|
-| `delivered` | Delivered. The session has your answer. | The host's upsert takes the question away; the card keeps the line |
+| `delivered` | The check on the control that sent it for about a second, then You answered · *value* | The host's upsert takes the question away; the card keeps the line |
 | `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check at the machine. | Final; nothing offers to send it again |
 | `stale` | Already answered or gone | Final |
 | `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request |
@@ -268,12 +314,14 @@ While the session is asking a question the box is disabled and says to answer fi
 words would answer it. Anything typed stays.
 
 One reply per session is on its way at a time, resent with the same `request` like an
-answer. The words stay in the box until the session has them: a delivered reply takes out
+answer, and shows how far it has got like one (Sent, Passed to the agent, Up next) where the
+machine says.
+The words stay in the box until the session has them: a delivered reply takes out
 what was sent (anything typed meanwhile stays), and every other outcome keeps them.
 
 | Outcome | Shown | Then |
 |---|---|---|
-| `delivered` | Delivered. The session has your reply. | The session's upsert shows it as your last message |
+| `delivered` | Send's check for about a second; no line | The session's upsert shows it as your last message |
 | `unconfirmed`, or unknown | Sent, but not confirmed. Check at the machine before sending it again. | The words stay; sending them again is a new reply |
 | `stale` | Not sent: the session has ended. | |
 | `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s |
@@ -282,6 +330,22 @@ what was sent (anything typed meanwhile stays), and every other outcome keeps th
 A host waits up to a minute for a working session to take a reply, so the request waits
 90 s for its response before it counts as lost. Demo mode replies as a host would
 (`window.agentBridgeDemo.scriptReplies(…)`), only to Copilot sessions.
+
+### Timing marks
+
+Each answer and reply keeps marks on this device (`js/timing.js`, #600), so where the time
+went can be read without a debugger: the tap, each send once the channel has taken it (a resend
+is `sent 2`; one the channel refused is none), each progress
+stage and the outcome, as `performance` measures from the tap named
+`agent-bridge reply 1a2b3c4d typed` (the request's first 8 hex digits, as the host's log
+names it), with the machine's own `timings` from the result (ms since it received the request:
+`typed`, `recorded`, `confirmed`). The last 50 are in `agentBridge.timings()` (in the demo,
+`agentBridgeDemo.timings()`), and each outcome has a line on the console's verbose level.
+None of it is ever sent anywhere.
+
+Demo mode plays a machine with progress: `?progress=0` one from before it,
+`?confirmDelay=<ms>` the wait between typing and the outcome (to see Passed to the agent), and
+`host.holdBefore('typing' | 'result')` with `releaseBefore` hold a delivery at a stage for a test.
 
 ### Attachments
 
@@ -373,11 +437,15 @@ without the worker); `sw.js` shows the same fields elsewhere:
 | Notice | Shown | Tap |
 |---|---|---|
 | `question` | The session's title; "*machine* · waiting on you" and the question. Alerts | Opens that machine and session, scrolled to it, with focus on the question's first control: once that machine's list is current (#269), only if the session still asks that same question and nothing has been pressed, typed or focused since |
-| `finished` | "*machine* · finished" and the start of the response. Alerts | Opens the session |
-| `resolved` | "*machine* · no longer waiting", silently, in place of the question | Opens the session |
+| `finished` | "*machine* · finished" and the start of the response. Alerts, unless the push's class is `done` (below) | Opens the session |
+| `resolved` | "*machine* · no longer waiting": shown silently in place of the question, then closed, so nothing of the session's is left in the tray | Opens the session |
 
 All notices about one session share its tag (`<machine id>:<session id>`), so each
-replaces the last. A tap opens the app at `?host=&session=&question=`, which it takes out
+replaces the last. A push may carry the host's notification class in `data.class` (#913),
+which the worker follows over its own rules: `needsYou` alerts as a question does; `done`
+is always silent and never alerts again, whatever the push's own `silent` says; `fyi`
+shows nothing that stays (shown silently, then closed, since a push that shows nothing
+costs an iOS subscription). An absent or unknown class is as before. A tap opens the app at `?host=&session=&question=`, which it takes out
 of the address once read; an app already open is focused and told where to go instead,
 keeping its connection. The app also closes notifications itself: those for a question it
 answered, and question notifications for questions its machine no longer asks. iOS shows
@@ -469,12 +537,15 @@ running another checkout's tests at the same time. CI splits the run over severa
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
 
 * `test/answer.spec.mjs`, in demo mode at a phone's size: answering every field type and
-  kind, defaults, required fields, the byte limit, every outcome, a resend after a lost
+  kind, defaults, required fields, the byte limit, every outcome, Sent then Passed to the agent
+  then "You answered · value" from a machine with `sessions.progress`, a resend after a lost
   response (typed once), a question changing or going while being answered, a card moving
   while in use, 44 px targets, and the keyboard.
 * `test/reply.spec.mjs`, in demo mode: a reply delivered as one line and taken out of the
   box (keeping what was typed meanwhile), every outcome keeping the words, a resend after a
-  lost response (typed once), the box held while a question is pending, the checks before
+  lost response (typed once), its stages heard and not seen from a machine with
+  `sessions.progress` with the timing marks kept, Send's ring and check, the line's room and a
+  stall's words, forced colours, heard as sending alone from one without it, the box held while a question is pending, the checks before
   sending, 44 px targets, Ctrl/Cmd+Enter, and no box for a machine without `sessions.reply`.
 * `test/attach.spec.mjs`, in demo mode: a picked file and a pasted screenshot shown as
   chips and typed as `@` mentions ahead of the words, files alone, removing one, the size

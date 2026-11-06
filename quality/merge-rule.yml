@@ -64,6 +64,17 @@ main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
 
+# TEMPORARY (2026-11-05): Copilot code review's quota is exhausted for the owner's account; since
+# about 18:02 PT every review ends "insufficient remaining quota", and nothing could merge. The
+# owner decided (hub #689) to waive Copilot's review while Engineering's and Quality's reviews
+# still apply: a pull request with one of these labels may go without a completed Copilot review
+# on its head, but only with a success independent-review receipt on that head from one of
+# independent_review.posters. The label alone waives nothing, and every other requirement stands.
+# Adding a label takes triage rights: the merge coordinator adds it. Remove when quota is restored
+# (#955).
+copilot_waiver:
+  labels: [copilot-waived]
+
 # A pull request that changes any of these paths also needs the independent review. Globs as in
 # quality/catalog.yml (src/**trust** is any path below src/ with "trust" in it, folders included),
 # matched case-insensitively against each changed path and each renamed file's old path. The list

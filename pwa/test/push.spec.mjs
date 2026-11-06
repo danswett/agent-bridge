@@ -67,17 +67,17 @@ test('a push shows a notification, and every later notice about the session repl
   expect(question).toMatchObject({ title: 'Pick the session store', body: 'DEV · waiting on you\nWhich database?', tag: `${MACHINE}:s1`, renotify: true, silent: false });
   expect(question.data).toEqual({ url: `${scope}?host=${MACHINE}&session=s1&question=q1`, kind: 'question', machine: MACHINE, session: 's1', question: 'q1' });
 
-  // Answered at the machine: the same notification, quietly changed.
+  // Answered at the machine: the notification is shown quietly in its place, then withdrawn,
+  // so none of the session's is left in the tray (#913).
   await deliver(notice(scope, 'resolved', 'DEV · no longer waiting'));
   await settled();
-  await expect.poll(async () => (await shown()).map((n) => n.body), { timeout: 15000 }).toEqual(['DEV · no longer waiting']);
-  expect((await shown())[0]).toMatchObject({ silent: true, renotify: false });
+  await expect.poll(shown, { timeout: 15000 }).toEqual([]);
 
   // Whatever arrives, something is shown, and a tap stays in the app.
   await deliver('not json');
   await deliver(notice(scope, 'question', 'x', { tag: 'other', navigate: 'https://evil.example/' }));
   await settled();
-  await expect.poll(shown, { timeout: 15000 }).toHaveLength(3);
+  await expect.poll(shown, { timeout: 15000 }).toHaveLength(2);
   const all = await shown();
   expect(all.map((n) => n.title)).toContain(BRAND.name);
   expect(all.find((n) => n.tag === 'other').data.url).toBe(scope);

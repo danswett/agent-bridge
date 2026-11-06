@@ -17,7 +17,9 @@ the held message) were decided by the owner on 2026-11-03 and added here (§6.7)
 and the boards are in [proposals/519-collaborators.md](proposals/519-collaborators.md). The
 accessibility contract (§9.1) gathers the accessibility rules already decided here and the WCAG
 requirements they rest on, each with the check that enforces it, and the rules the owner
-approved for it on 2026-11-04 (#707).* The
+approved for it on 2026-11-04 (#707). Delegate events in the conversation (§6.4, #661) and the
+history beside them (#292) were decided by the owner on 2026-11-04 and are proposed: not yet
+built (#661 and #292 build them).* The
 owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench", and
 proposals wait for the owner's sign-off in the private design studio
 ([design/README.md](../../design/README.md#owner-sign-off)).
@@ -41,6 +43,8 @@ without them: where they disagree, this page wins and the mock-ups get fixed.
 5. **The interface doesn't explain itself.** No helper sentences inside the UI ("Replies go
    to the main agent…"). If a control needs a sentence, the control is wrong. Tooltips and
    accessibility labels carry the detail.
+6. **Every element has a purpose** (the owner, 2026-11-05). Nothing is drawn twice on one
+   screen. If two elements show the same fact, one goes. A design review checks this first.
 
 ## 2. Status language
 
@@ -95,6 +99,10 @@ they are overlays applied after rules 1–6 (or 8) have picked the glyph and the
 
 While the host ends a session (`status: ending`), none of rules 1–6 apply: the row shows the
 `ended` glyph and "Ending session…" in secondary text, and rule 7's overlay still applies.
+
+An agent that needs sign-in, a turn that ended on an agent error, and a working session that
+has gone silent each have a rule of their own (§6.13, #800). None of them ever reads as idle or
+working.
 
 While a session's machine is away (#269), none of the rules apply: what the row last said may no
 longer be so. It shows the `failed` glyph (a host unreachable, §2.1) and, in secondary text,
@@ -356,7 +364,8 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
 - **Scrolling:** from 760 the window itself never scrolls. The app bar, the rail and the
   reply box stay put; a page scrolls on its own, and on Sessions the list, the conversation
   and the inspector each do (#288). A phone's list scrolls the page; a pushed session's
-  panes scroll on their own.
+  panes scroll on their own. On a phone, the session's header floats over its conversation
+  and collapses as the conversation scrolls (§6.2, #620). From 760 nothing collapses.
 - **A pushed session** takes the whole screen on a phone, with the reply box at its foot: the
   bottom navigation gives way to it, and Back (the header's, or the platform's own) returns
   to the list.
@@ -459,9 +468,9 @@ easing in, its duration out, and how far it travels.
 | Push and pop | Narrow widths (§5.2): list → session → delegate | Opening a row or a delegate; Back, Esc or the system back gesture | The incoming screen's surface covers the old screen at once, and its content slides 24 in from the trailing side and fades in. Pop is the mirror: the screen beneath returns at once, and its content slides 24 in from the leading side. An approval's command never slides: a session asking a question only fades in, and the list's Needs you lane is there at once. Only content fades, never a surface, so two screens never show through each other | `push`: emphasis, decelerate; medium | Windows: `Frame` navigation with `SlideNavigationTransitionInfo`, or a connected animation from the row's title to the session's, configured Direct (never Gravity's lift and shadow). PWA: the tokens on the incoming content. Apple: `NavigationStack`. Android: Material's shared axis X, with predictive back | Cross-fade |
 | Pane and inspector | Wide widths: the delegate inspector, Details | The header's inspector toggle; Details; choosing a delegate | The pane's content slides 12 in from the trailing edge and fades in. The columns take their new widths at once, so text reflows once and not on every frame | `pane`: standard, decelerate; fast out; small | Windows: the tokens on the pane's content. PWA: a transition on transform and opacity. macOS: `.inspector` | Cross-fade |
 | Tab switch | Conversation / Delegates / Tools; machine tabs; the phone's bottom bar | Choosing a tab | The indicator moves to the new tab, as Selection does. The new content fades in without sliding (Fluent's top-level fade) | `tab`: standard, decelerate | Windows: `SelectorBar`'s and `NavigationView`'s own indicators. Apple: `TabView`. Android: `NavigationBar` | Instant |
-| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one; Show prompt's compact disclosure, the tokens on the chevron and the content (`Motion.Turn`, `Motion.Enter`). PWA: the tokens on the chevron and the content | Instant |
-| Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip | A host adds or removes it; a question is asked or answered; Needs you is turned on or off | The item fades in where it lands. Leaving, its space closes at once and it fades out where it was. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: the tokens on the row; a copy of a leaving row, which nothing can find or tap, fades where it was. Until #253 reaches the PWA, its Needs you entries and an approval's command appear at once and never fade or move: only an entry's mark fades in. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
-| Status glyph | A row, the session header, the delegate strip | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
+| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list, a fold of delegate events (§6.4) | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one; Show prompt's compact disclosure, the tokens on the chevron and the content (`Motion.Turn`, `Motion.Enter`). PWA: the tokens on the chevron and the content | Instant |
+| Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip, a delegate event in the conversation, the Jump to latest pill (§6.4) | A host adds or removes it; a question is asked or answered; Needs you is turned on or off; the conversation is scrolled more than a screen from its end, or back to it (the pill) | The item fades in where it lands. Leaving, its space closes at once and it fades out where it was. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: the tokens on the row; a copy of a leaving row, which nothing can find or tap, fades where it was. Until #253 reaches the PWA, its Needs you entries and an approval's command appear at once and never fade or move: only an entry's mark fades in. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
+| Status glyph | A row, the session header, the delegate strip, a delegate event's line in the conversation (§6.4) | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
@@ -469,8 +478,9 @@ easing in, its duration out, and how far it travels.
 | Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
-| Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
+| Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session; Jump to latest is chosen (§6.4), which scrolls to the end as the person asked, scrolled back or not | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
 | Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
+| Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
 **Not in the design:**
 - **Loops** other than the two glyphs and an in-flight progress ring: no pulsing dot, badge
@@ -531,6 +541,8 @@ Sections, top to bottom:
      It is the app's badge (§7): the Windows app's tray and Sessions badge, the PWA's app badge
      where the browser has one, and on Apple the Dock badge, the menu bar extra and the icon
      badge.
+   - A session that needs sign-in is never counted in N nor shown by the filter: the sign-in
+     banner owns it (§6.13, owner decision 2026-11-05). Its row still says so where it lives.
    - A question on a machine that is away, or back but not yet confirmed by its next full list,
      is neither counted in N nor shown by the filter, nor raised as a notification (#269).
    - **Look:** the `needs` glyph (`idle` at none), then "Needs you · N". It is a control, so it
@@ -646,12 +658,70 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 ### 6.2 Session header
 
 - **Title:** the session name.
-- **One meta line:** glyph · status text (rule set §2.2) · machine · repo.
+- **One meta line:** glyph · status text (rule set §2.2) · machine · repo. A phone's is
+  shorter (below).
 - **Actions:** icon buttons with tooltips: Pin, Details (everything removed from rows),
   and toggle inspector. End session lives in Details on desktop, and in the overflow menu
   on phones.
 - **Phone:** Back (to the list) leads the header, and Pin, Details and End session are in its
   overflow menu.
+- **Phone: at rest (#620; the owner, 2026-11-05).** The title, one meta line and the tabs: 152
+  tall at 390 × 844 with a two-line title, in every delegate state.
+  - **The title:** 24/32 bold, between Back and More, **at most two lines** with an ellipsis.
+    The full title is the h2's text, so it is read in full, and it is in Details.
+  - **One meta line, never wrapped:** glyph · status (§2.2) · machine, and the account only
+    when it isn't the person's own ("Delegating to 2 agents · DEV-VM2"). The status is never
+    shortened. The account, then the machine, give way with an ending ellipsis, and their full
+    text is still read. The repository is in Details.
+  - **The tabs, on their own row of 48:** Conversation, Delegates, Tools.
+    - **There is no delegate strip on a phone,** whatever the delegates are doing. The
+      Delegates tab carries what it carried.
+    - **While delegates are running,** the tab's label has their count: "Delegates 2", read as
+      "Delegates, 2 running". With none running, there is no count. The count is the
+      session's own delegates, not the ones they delegate to in turn.
+    - **While a delegate is asking,** the tab leads with the `needs` glyph, and its name says
+      so: "Delegates, 2 running, 1 asking". Asking counts a delegate at any depth, since the
+      question is the person's wherever it comes from. The question itself is in the
+      conversation, naming the delegate (#661, §7.0), and is answered there without opening the tab.
+    - The count and glyph change in place, so the row never changes height.
+    - The tabs are one Tab stop with arrows inside, as every tab list.
+  - Tablet, desktop and the Windows app keep the header above, chips included.
+- **Phone: collapse on scroll (#620).** A session opens with its header in full, as above. The
+  header floats over the conversation's top, and the conversation scrolls under it.
+  - **Near the top,** scrolling down slides the title, meta line and tabs up under a
+    pinned 48 bar: Back, the session's glyph, the title on one line with an ellipsis (17/22,
+    semibold), More. The header follows the scroll with no easing (iOS's large title). The
+    bar's fill, hairline and title fade in (`crossFade`) once the big title is under it (40).
+    Once the header has gone under the bar (the at-rest height less 48), it is compact.
+  - **Mid-conversation,** 64 up in one direction brings the whole header back over the
+    conversation (`collapse`), and 32 down sends it away. The count restarts when the
+    direction changes, so reading back and forth changes nothing. A tap on the bar's title
+    brings it back, and the top always shows it in full. The reply area does the mirror image
+    (§6.5, #935), so the two never both take full room mid-conversation.
+  - **Only the person's own scrolling counts:** a finger, a wheel, a trackpad, the keys or the
+    scroll bar. A scroll the app makes (to a question, a restored position) and a response
+    growing below leave the header as it was, except on a screen shorter than twice the
+    header (a landscape phone), where a scroll to a question folds it to the bar first.
+    There the header is also capped at the conversation's height and scrolls within itself,
+    so focus inside it is never out of view. Overscroll is clamped, so a bounce never reads
+    as a scroll up. Scroll to a question puts it 8 below what the header covers (the bar, or
+    the whole header if it was showing). The question guard (§5.3) is unaffected: the
+    question never moves as the header collapses or returns.
+  - **While the session waits on you,** the bar's glyph is `needs` on its disc.
+  - **The title stays the one h2.** The bar's copy is drawn, not read; the status is read from
+    the meta line. Nothing is announced. Focus moving into the header brings it back, and it
+    stays while focus is there. Focus the app puts on the title as a session opens (#707)
+    doesn't hold it: the person's own scrolling folds it as usual. The conversation's scroll padding is what the header covers
+    plus 8, so focus never lands under it. Tab order is Back, More, the tabs, then
+    the conversation. The tabs are one tab stop, on the selected tab; Left and Right move
+    and select, wrapping, and Home and End go to the first and last.
+  - **Reduced motion:** coming back and going are a cross-fade with no travel; near the top
+    the header still follows the scroll. The thresholds don't change.
+  - **Only the conversation collapses it.** On the Delegates, Tools and Details tabs the header
+    stays whole.
+  - **From 760, and in the Windows app,** the header never collapses. A session never opens
+    collapsed. Native clients use the platform's own: `NavigationStack`'s large title on
+    Apple; `exitUntilCollapsedScrollBehavior` then `enterAlwaysScrollBehavior` on Android.
 - **Details** is a property list: Agent, Machine, Repository, Branch (mono), Folder (mono, and
   a long path gives up its middle, never a word), Model, Started, how long in this state,
   background agents and commands, turns, compactions and the process id; then End session.
@@ -675,8 +745,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Bridge. Finished delegates fold into a single "N finished" item.
 - **macOS:** the same, as a token row labelled "Delegates".
 - **Narrow desktop:** the Delegates tab.
-- **Phone:** one horizontal chip row. iOS opens a sheet with medium and large detents.
-  Android and the PWA open the delegate in place or as a pushed screen.
+- **Phone:** no chips (§6.2, the owner 2026-11-05). The Delegates tab carries the running count
+  and the `needs` glyph, and a delegate's question is answered in the conversation. iOS opens
+  a delegate from the tab in a sheet with medium and large detents. Android and the PWA open it
+  in place or as a pushed screen.
 - **Inspector:**
   - the delegate's name and glyph;
   - a property list: Status, Model, Kind (background or task), ID (mono). A delegate that asks
@@ -688,9 +760,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Choosing:** at three panes a strip item shows its delegate in the inspector, in place of
   Details and Tools, bringing a hidden inspector back; pressed again, it lets go. Below three
   panes the Delegates tab lists every delegate under its parent, finished ones folded, and the
-  one opened is pushed in the list's place with "All delegates" to go back. A phone's chip
-  pressed again lets its delegate go too, unless another tab hides it: then it shows it. A
+  one opened is pushed in the list's place with "All delegates" to go back. A
   delegate stays open across a resize, and as it finishes (its fold opens).
+- **Present tense:** the strip, the Delegates tab and the chips are a delegate's only live
+  status. The conversation keeps a past-tense record of its events (§6.4, #661), and the
+  inspector holds the detail.
 - **A host that lists none** (Claude, Codex, a host before sub-agents) gets no strip; its
   Delegates tab, while it counts background agents, says only how many.
 - **One action:** "Ask main agent to stop it". It pre-fills a reply to the main agent, after
@@ -836,9 +910,80 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   own. "Main agent" only where the host says whose the words are (`activity.source`, `own`
   or a delegate list); otherwise the label is the agent's name ("Claude"), as such a host may
   send a delegate's words as the response.
-- **Delegate events:** one line each, meta style, with an icon: "Started 3 delegates ·
-  26m", "Delegate *Read witness shell logic* reported back · 22m". The name links to the
+- **Delegate events** (#661). *Proposed: decided by the owner on 2026-11-04, not yet built;
+  #661 builds it. No client draws these lines yet.* A past-tense record of the main agent's own delegates starting and reporting back. The strip, the Delegates tab and
+  the chips (§6.3) are the present tense and the only live status, and the
+  inspector holds the detail, so a line never says a delegate is working and never shows the
+  working glyph. A fold's "still working" count (D3, below) is the one exception: a live count
+  taken from the same delegate state (`subagents`), with no glyph. Each line is meta style, with
+  the delegate icon for a start and the outcome's glyph for a report-back. Each name links to its
   delegate, and the word "Delegate" stays outside the link.
+  - **Where (D1):** each event sits between messages by its time. A report-back sits just above
+    the main agent turn it started (subagents.md §3). Events are never gathered under the
+    latest reply.
+  - **One line per delegate per gap (D2):** a delegate that starts and reports back between the
+    same two messages is one line, "Delegate *Run full test suite* · ran 21m, reported back ·
+    2h" ("failed" or "ended" as it ended), aged by its report. A start-only line reads "Started
+    delegate *Tidy changelog* · 9m", and if that delegate reports back before the next message
+    the line becomes the merged form in place. Its glyph and words change as §5.3's "Status
+    glyph" and "Arriving and leaving" rows say. If the longer text wraps onto another line,
+    what is below it moves as §5.3 says for a change in height.
+  - **Every delegate named (D3):** delegates started within 60 s of each other share a line,
+    "Started *Tidy changelog* and *Update screenshots* · 9m". With three or more it reads
+    "Started 3 delegates: *A*, *B* and 1 more", and "1 more" expands the line to name the rest.
+    "*n* more" meets §9.1 A11's size: 44×44 on touch, 32×32 with a pointer. Its text can stay
+    small; the hit area makes up the size.
+    One that reports back in the same gap leaves the shared line for its own merged line, in place.
+  - **Runs fold (D3):** more than 3 lines in a row between two messages fold into one, drawn
+    "5 delegates · 4 reported back › 1 still working". It shows no working glyph. It expands in
+    place to its lines, indented under a rule (Disclosure, §5.3), and is remembered open or
+    closed per session.
+    - **The count is live, and never guessed.** Each delegate in the run is in exactly one
+      count, from its entry in `subagents` ([v1-sessions](../protocol/v1-sessions.md#subagent))
+      while it has one:
+      - `status` `working` or `waiting` counts it **still working**. A live entry wins over
+        anything known before, so a background delegate woken again moves back here;
+      - `idle` or `ended` with `outcome` `done` counts it **reported back**, and with `outcome`
+        `failed`, **failed**;
+      - `idle` or `ended` with no `outcome` (the host never saw it end) counts it **ended**.
+
+      Once its entry leaves `subagents` (the host trims finished ones first), the last outcome
+      known for it, or its report-back event, is kept. A delegate the host left out with no
+      outcome known (only `subagentsMore` counts it) is in the total only, never counted as
+      working or as reported back.
+
+      Counts of 0 are left out ("5 delegates · 3 reported back, 1 failed › 1 still working").
+      They change in place as state arrives. At 0 still working the link goes, and the line is
+      the button alone.
+    - **Focus when the link goes (§9.1 A4):** if focus is on the fold's toggle (its button) or
+      its "still working" link when that link goes: while the fold stays, focus moves to the
+      fold's toggle; if the fold goes too, it moves to that delegate's name in its line, or to
+      the first delegate's name. If the focused control is no longer drawn (hidden in place),
+      it counts as lost focus and follows the same rule. Focus anywhere else stays where it is,
+      and the view never scrolls to follow it (H3a).
+    - **Two sibling targets, never one inside the other:** the fold's button, then the "1 still
+      working" link after it in the tab order.
+    - **The chevron is the button's.** It ends the button's text, inside its target and focus
+      ring, and turns as it opens. The link follows after a 12 gap, with its own focus ring.
+      Each target meets §9.1 A11's size, and the link's target never covers the chevron.
+    - **The link opens a delegate** where the live status shows it (§6.3): its strip item, or
+      its chip on a phone. If the phone's chips give way to the Delegates tab (#629), it opens
+      the delegate's entry there. With one still working, it opens that delegate. With more,
+      "*n* still working" opens the earliest started of them, with the others beside it in
+      the same strip or list, and its accessible name says so ("2 still working, opens the
+      first").
+  - **Earlier (D4):** until history loads (below, #292), the events older than the oldest message
+    shown fold into one line at the top of the conversation, "Earlier · 4 delegates started, 3
+    reported back ›". It expands to their lines, in time order, which don't fold again.
+  - **Time and access:** the age is relative; the tooltip and the accessible name give the
+    absolute time in the viewer's local time ("Started 12:41 PM, reported back 12:55 PM"). The
+    zone is added only where a time could be misread, such as a machine in another zone ("12:41
+    PM PST"). Repository records stay in Pacific; this is the product's display. A fold is a
+    button opened and closed with Enter or Space, with the "1 still working" link beside it,
+    not in it (above). The button's accessible name is the whole summary, in the order shown
+    ("5 delegates · 4 reported back, 1 still working"), as §9.1 A1 asks. Whether it is open is
+    exposed apart from the name, by `aria-expanded` (Windows: the ExpandCollapse pattern), and
+    is never in the name.
 - **Questions** (#253): in the stream, as a card in Needs you colours. It is the one place a
   question's words are drawn, and the one place in the app it is answered. The header reads
   "Main agent asks" or "Delegate *name* asks". Then come the question and the platform's own
@@ -977,6 +1122,63 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
   tool's name and arguments in mono). Not while the session waits on a question: the card says
   what is happening.
+- **History** (#292). *Proposed: decided by the owner on 2026-11-04, each as recommended
+  ([proposals/661-delegate-events.md](proposals/661-delegate-events.md) §3), not yet built;
+  #292 builds it.* Today the Windows app shows only the latest exchange. With history, a session's whole conversation is the one
+  column, oldest at the top, in the app and the PWA alike.
+  - **H0 A turn** is one prompt and everything until the next: the prompt (the person's, or a
+    scheduled or agent-sent one, marked as A prompt you didn't type says, above), the main
+    agent's response, reasoning and tool lines, the delegate events between them, and the
+    questions and approvals asked in it, each with its outcome. Pages, counts and the limit are
+    in turns.
+  - **H1 Scroll-back:** a session opens at its latest message. Scrolling up reads back through
+    the same column; there is no separate history view.
+  - **H2 Loading earlier:** the next page loads on its own as the reader comes within a screen of
+    the top, and a "Load earlier messages" button at the top does the same for a keyboard, a
+    screen reader or a retry. The view keeps the first item on screen where it is, so nothing
+    being read jumps as a page lands above it. While a page loads, the top reads "Loading
+    earlier messages…". A page is about 20 turns.
+  - **H3 Jump to latest:** more than a screen up, a "Jump to latest" pill sits above the reply
+    box. A message that arrives meanwhile is added below without moving the view, and the pill
+    counts it: "2 new · Jump to latest". The pill fades in and out as Arriving and leaving
+    (§5.3), and nothing pops (#659). Choosing it scrolls smoothly to the end, as Scroll to a
+    question does (§5.3). At the end, the view follows new messages; sending a message always goes to the end.
+  - **H3a A question while reading back:** a question or approval that arrives while the person
+    reads history is added at the end like any message, and the pill reads "Question · Jump to
+    latest" in Needs you's text colour. Nothing scrolls on its own (Scroll to a question never
+    scrolls a conversation scrolled back through, §5.3), so no answer control moves under the
+    pointer. Its card's answer guard (500 ms, §5.3) starts as §5.3 says: as the card comes on screen,
+    or, after Jump to latest, where the smooth scroll comes to rest. It arms again whenever its
+    controls move in place (#491).
+  - **H4 What history holds:** everything stays where it happened.
+    - Delegate events follow the rules above. The Earlier line shrinks as pages load, its events
+      taking their places between messages, and goes once the start is reached.
+    - A resolved question stays where it was asked, read-only, as far back as history goes, in
+      place of the latest 20 kept now (Questions, above).
+    - An approval stays as its resolved card, drawn exactly as written and escaped (An
+      approval's card, below), and never offers Approve once again.
+    - The Now line shows only under the latest reply.
+  - **H5 States,** each one meta line:
+    - empty: "No messages yet", centred;
+    - the first page loading: "Loading conversation…", centred, with the reply box usable;
+    - an earlier page failed: "Couldn't load earlier messages" and Try again, at the top, with
+      what is shown kept;
+    - a host that sends no history: "Earlier messages aren't available from this machine",
+      above the oldest message shown;
+    - the start reached: "Start of session · Mon, Nov 9, 8:31 AM", in local time as above;
+    - a turn the host couldn't read: "A turn here couldn't be read", in its place, the turns
+      around it kept;
+    - a turn cut short (over the host's cap): its text as sent, ending "Cut short · see the
+      machine".
+  - **H6 Limit:** a client keeps about 500 turns of a session, draws only those near the screen,
+    and lets the far end go as more load; scrolling back loads them again. A host keeps what its
+    transcript holds, and past that the top reads "Start of available history".
+  - **H7 Search:** none within a session until #289, which searches every turn of every
+    session. A search of the loaded turns alone would miss the rest and read as complete.
+  - **H8 What the design needs from the protocol** (the wire format is #292's): turns with
+    stable ids, in order, each with its time; a page of turns before a given turn (a
+    before-cursor) and whether older ones remain; a flag on a turn cut short or unreadable; and
+    live turns carrying the same ids, so a turn loaded twice is drawn once.
 - **Code blocks** (#296): in the Code role (§4.3), wrapped to the block's width rather than
   scrolled sideways, with Copy in the top-right corner above the code (with the copy icon in the app):
   "Copy", then "Copied" (or "Copy failed") for 1.5 s, named "Copy code" whatever it shows, the
@@ -1066,11 +1268,32 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   (its ring on the option, the option kept pressed, "one attempt per prompt") belong to Send
   answer instead, as §6.4's "While an answer goes" says: the ring is on Send answer, and the
   chosen value stays selected and read-only. No client draws a ring on an option.
+- **Phone: one line at rest (#935, the owner, 2026-11-05).** Below 760 the box starts at one
+  line, 52 tall, with Attach before the text and Send after it, as the native composers do. It
+  grows a line at a time to six lines of text, then scrolls inside.
+- **While a question waits** (§5.3), one line above the box in `needs` text: "Answer its
+  question first. Go to the question". The link is a scroll the app makes to the question
+  (§6.2: it leaves the header as it was) and puts focus on its first choice. With the notice,
+  the reply area is 99 at rest on a phone.
 - **Platform styling:**
   - Windows and the PWA: a card with a 2 px Bridge bottom edge.
   - macOS: a capsule field.
   - iOS: a capsule field over the keyboard.
   - Android: a filled field on `surfaceContainer`.
+- **Phone: compact while reading (#935).** Below 760 the reply area floats over the
+  conversation's foot, and mirrors the header (§6.2). A session opens with it in full.
+  - **Near the end,** it rides down with the scroll, and past its room it is compact: a
+    pinned 48 bar (plus the safe area) holding a one-line copy of the box, the draft's first
+    line or the placeholder. The copy is drawn, not read, and is not a tab stop; a tap on it
+    brings the box back in full and focuses it.
+  - **Away from the end,** 32 up sends it away and 64 down brings it back, with its own
+    count. The end always shows it in full. A draft is never hidden: the bar shows its first
+    line. Like the header, it never expands over the focused control: while that control
+    would be under it, it waits, still counting, until the control would stay in view.
+  - **Focus anywhere in the reply area** brings it back at once and holds it. A scroll the
+    app makes keeps it as it was, unless it lands at the end, where it shows in full. On a
+    screen shorter than twice the header it folds with the header.
+  - **Reduced motion:** a cross-fade, as the header's. From 760 it never collapses.
 
 ### 6.6 Machines
 
@@ -1262,6 +1485,359 @@ never its text. A card with it shows "Driven by an external agent · @*login*" o
 sessions and one line, "Collaborators' sessions: in the Slipgates app". No card approves a held
 message.
 
+### 6.12 Restored sessions (#780)
+
+**Not built yet:** planned for #780 Host B and its client slices; the field names here are the
+plan's, not a shipped contract.
+
+After a reboot or a host crash, the host starts again the sessions that were running and says so.
+Decided 2026-11 on #780; the protocol is #780's plan, and nothing here adds to it. Every element
+below reads one field, named in brackets. A client shows only what the host sends: it never
+works out on its own that a session died or came back.
+
+A restored session always opens idle. Nothing is typed into it, and nothing is sent for you.
+
+**The row mark** (`restored.at`, `restored.cause`)
+
+- **Where:** text on the row's line 2 (§6.1), as one of its two facts. The other fact is the
+  usual one, so it follows the facts-on-a-line rules (#214).
+- **Text:** "Restored after a reboot · 03:12" when `cause` is `reboot`, and "Restored after the
+  host restarted · 03:12" when it is `crash`. The time is `restored.at` in the client's time
+  format, as every time on the row is.
+- **Form:** the row's existing secondary text tokens. No new glyph, no colour, no badge. The
+  status glyph still says what the session is doing (§2.2), which is idle.
+- **Lifetime:** the mark and Continue share one lifetime. Both go when a reply is delivered or
+  the session starts working, whichever comes first, and after 24 h or at the end of this host
+  run at most (the host stops sending `restored` then). Neither ever comes back: a client never
+  keeps the mark longer, and never brings it back once it has gone.
+
+**The machine notice** (`hello.machine.restore`, announced through `hello.changed`, #646)
+
+- **Where and how:** one banner per machine, in the same form as the Discovery held banner
+  (#293, #786): an informational InfoBar over every page, in the window's banner area (§7),
+  below that machine's Discovery held banner (Platforms, below, gives each client's place). It is
+  closable.
+- **Content:** a title and the lines below, with no line limit: every failure and its reason is
+  shown. A line whose list is empty is left out. The banner grows to fit, but the banner area as
+  a whole, every banner included, takes at most a third of the window's height (a quarter on a
+  phone); past that, the area scrolls inside itself. Every notice's full text and buttons stay
+  reachable by keyboard and screen reader, and the page under the banners is never pushed out of
+  view.
+  - Title: "*machine* restarted after a reboot at 03:12" (`cause: reboot`) or "*machine*'s host
+    restarted at 03:12" (`cause: crash`), from `at`. With `signedInAt`, the reboot title ends
+    "… · restored when you signed in at 08:40".
+  - "Restored *n* sessions" (`restored`).
+  - When `midTurn` is non-zero: "Can continue: *title*, *title*". The titles are those of this
+    machine's sessions whose `restored.midTurn` is true, from the client's own session list, so
+    the host sends no extra field. Each title opens its session, where Continue waits. A session
+    continued since, here or on another device, drops out, and the line is left out once none
+    remain. If the list doesn't have them yet, the line reads "*n* were mid-turn", with no promise
+    to continue, until it does.
+  - "Questions lost: *title*, *title*" (`questionsLost[].title`). The question itself died with
+    the session; the notice says so, and nothing reasks it.
+  - "Couldn't be restored: *title* (*reason*)", one per entry in `failed`, with the host's
+    `reason` as sent. The plan's "waiting on folder trust at the machine" is one such reason.
+  - "*n* sessions weren't restored again because they died within 10 minutes" (`loops`).
+- **Offered only:** when the client is read-only beside agent-ha-bridge (G5), or when the
+  machine's `sessions.restoreOnStart` is off (`offered`), the notice still says what died, and
+  the "Restored …" line reads instead "*n* sessions can be restored at the machine". It offers no
+  button: restoring happens at the machine. Under G5 that stays so; with the setting merely off,
+  a Restore button with a confirmation, from any client, is #948.
+- **Dismissal:** per device, as #786's: closing it hides it on this device only, it is not saved
+  across app restarts, and it comes back only if the host sends a new notice. Its close button is
+  named "Dismiss restore notice on *machine*".
+- **Lifetime when not dismissed:** while the host sends `hello.machine.restore` for the machine.
+  It goes when the notice is gone or replaced.
+- **No notice** when nothing died: the host sends none, and the client shows none.
+
+**Continue** (`restored.midTurn`, `restored.continue`, the `session.reply` operation)
+
+- **Where:** a small secondary button, "Continue", in the session pane directly above the reply
+  box (§6.5), left-aligned with it. Never in the row, the card, the notice or a notification.
+- **When:** only while the session's `restored.midTurn` is true, with the mark's lifetime: the
+  host clears it once a reply is delivered or the session starts working, or after 24 h or at the
+  end of this host run at most, and the button goes with it.
+- **What it does:** sends `restored.continue`, verbatim, through the reply box's ordinary Send
+  path: the `session.reply` operation (capability `sessions.reply`) with
+  `{ id, request, text: restored.continue, progress: true }`. The
+  client does not edit, translate or rebuild the text. Whatever is typed in the reply box stays
+  there, unsent.
+- **Progress:** the §6.5 receipt (ring, check, Try again; #600, #617). The `request` follows the
+  ordinary Send rule ([v1-sessions.md, `session.reply`](../protocol/v1-sessions.md#sessionreply),
+  whose `request` has `session.answer`'s semantics): resending after a lost response, and Try
+  again after a failure with no outcome, reuse the same `request`, so the host types it at most
+  once and returns the first outcome. Only Try again after a `busy` or `refused` outcome sends a
+  **new** `request`, because the host remembers each outcome for ten minutes and would only
+  repeat it. `unconfirmed` is never retried: the receipt says to check at the machine, as §6.5's
+  does. While it is in
+  flight the button is disabled and keeps focus (A4).
+- **In the conversation:** shown as the person's own message, exactly as a typed reply is. It is
+  not agent-driven, so #489's marking does not apply.
+- **After:** the button goes once the reply is delivered, with no "Sent" state. Focus moves only
+  if it is still on Continue then, and goes to the session's reply box; focus anywhere else stays
+  where it is (A4, §6.4's receipt rule).
+- **Never automatic:** no client presses it, on start, on reconnect or on a timer.
+
+**Push and toast** (Web Push kind `restored`; `hello.machine.restore`)
+
+- One per machine per start, and only if something died. The host decides; a client never adds
+  one per session.
+- **Text:** title "*machine* restarted", body "Restored *n* sessions · *m* need you" when there
+  are lost questions or failures, else "Restored *n* sessions". When offered only: "*n* sessions
+  can be restored at the machine".
+- **Sound:** none. Decision #764 keeps sound for pending questions and approvals only, so this
+  notice is silent on every platform. The push payload sets `notification.silent: true`, so an
+  older service worker that shows kind `restored` as a `question` stays silent too.
+- **Opening it** opens the machine's session list, with the notice over it.
+- An older service worker shows kind `restored` as a `question`; that is accepted.
+
+**The Settings toggle** (`sessions.restoreOnStart`, per machine, through `SettingsRequest`)
+
+- In the Settings host section, per machine: a switch, "Restore sessions after a reboot or
+  crash", on by default.
+- Help text, one line: "Starts the sessions that were running when this machine stopped. Off:
+  you're told what stopped, and nothing starts."
+- A read-only client shows the switch disabled, with the value the host sends.
+
+**Older clients** (no `sessions.restore` in `hello`)
+
+They ignore `restored` and `hello.machine.restore`: no mark, no notice, no Continue. The
+restored session is an ordinary idle row, and its conversation is intact. The push still
+arrives, as a `question`.
+
+**States**
+
+| | Reboot (`cause: reboot`) | Host crash (`cause: crash`) |
+|---|---|---|
+| Restored, idle | Mark "Restored after a reboot · 03:12"; counted in the notice | Mark "Restored after the host restarted · 03:12"; counted |
+| Restored mid-turn (`midTurn`) | Mark; Continue above the reply box; "mid-turn" line | Same |
+| Offered only (G5 or setting off; `offered`) | No mark (nothing started); notice "*n* sessions can be restored at the machine" | Same |
+| Failed (`failed`) | No mark; notice "Couldn't be restored: *title* (*reason*)" | Same |
+| Loop (`loops`) | No mark; notice "*n* sessions weren't restored again …" | Same |
+| Question lost (`questionLost`, `questionsLost`) | Mark; notice "Questions lost: *title*"; no question shown | Same |
+
+**Accessibility** (§9.1)
+
+- Continue's accessible name includes the session: "Continue *title*" (A1). One verb (A7).
+- The notice is a polite live region, announced once when it arrives, never again on a
+  reconnect or a re-render (A6).
+- Keyboard order: the notice, then its close button, then the next banner's close button or the
+  page (A3, A4).
+- Reduced motion: the notice and Continue appear and go without animation (A10).
+- The mark is text, so it is read with the row; it needs no description of its own.
+
+**Copy**
+
+| Use | Text |
+|---|---|
+| Row mark | "Restored after a reboot · *time*" / "Restored after the host restarted · *time*" |
+| Notice title | "*machine* restarted after a reboot at *time*" / "*machine*'s host restarted at *time*" |
+| Signed in | "restored when you signed in at *time*" |
+| Restored | "Restored *n* sessions"; "Can continue: *title*, *title*"; "*n* were mid-turn" |
+| Offered | "*n* sessions can be restored at the machine" |
+| Lost | "Questions lost: *title*, …" |
+| Failed | "Couldn't be restored: *title* (*reason*)" |
+| Loop | "*n* sessions weren't restored again because they died within 10 minutes" |
+| Close | "Dismiss restore notice on *machine*" |
+| Button | "Continue" (name "Continue *title*") |
+| Push | "*machine* restarted" / "Restored *n* sessions · *m* need you" |
+| Toggle | "Restore sessions after a reboot or crash" |
+
+**Platforms**
+
+- **Windows app:** InfoBar (Informational) in the window's banner area over every page, below
+  that machine's Discovery held InfoBar (§7, Windows: Banners); Continue a standard secondary
+  Button; the toast through the app's ordinary notification path (§7).
+- **PWA:** the same notice as one of §7's app banners, at the top of the content above the page,
+  over every page, after the app banners §7 lists. The PWA has no Discovery held banner (it
+  says "Discovery held" on the machine's row, §6.6), so there is none to sit below. The restore
+  notice alone is an exception to §7's "no icon and no dismiss" app banners; every other PWA
+  banner keeps §7's rule. The push through `sw.js`, kind `restored`.
+- **Apple (#260, owner welshofer):** note only. The same fields; the native form is that track's
+  decision.
+- **Home Assistant:** read only. `sensor.agent_bridge_<machine>_restore` (state: the last restore
+  time; attributes: the notice), a `restored` attribute on each session's status sensor, and one
+  persistent notification per restore. No Continue in Home Assistant.
+
+### 6.13 Sign-in needed, agent errors and Not responding (#800)
+
+A session must never look healthy while its agent is dead. When an agent stops because its
+sign-in expired, because a turn ended on an error, or because it went silent mid-turn, the row
+says so in words. One sign-in fixes every session for that machine, agent and account, so the
+action lives on the machine, not on each row. The field names follow Connection's contract
+(`Session.attention`, #818); one adapter file per client maps them.
+
+**Status rules** (they extend §2.2; first match wins, in this order)
+
+| Where in §2.2 | When | Glyph | Status text | Action |
+|---|---|---|---|---|
+| After rule 1 | `attention.kind: signInNeeded` with `recovery: pending` (signed in; the host hasn't seen the model answer yet) | `idle` | "Signed in · waiting for the session to confirm" | None. A session that died mid-turn is to get a Continue like §6.12's (planned, #780); not built yet |
+| After the row above | `attention.kind: signInNeeded` with any other `recovery` (or none) | `needs` | "Needs sign-in", with the machine as line 2's second fact (§2.2); the agent and "@*account*" are in the banner and Details | **Sign in**, only with the `sessions.signin` capability and `signIn: phone`; no button otherwise (A7) |
+| Refines rule 3 | `working` with `attention.kind: notResponding` | `failed` | "Not responding", with the machine as line 2's second fact; the trailing age says since when, and Details gives the time | None; there is nothing safe to press yet |
+| Before rule 4 | Main agent idle, and `attention.kind: error` | `failed` | "Not authorised", "Rate limited" or "Agent error", from `attention.errorClass` `auth`, `rate` or `other` (an unknown class reads as "Agent error"; a new class gets its words here first), plus "· N delegates still running" when background agents survive the turn | None on the row; Details gives the host's sentence for it (`attention.message`) |
+
+The error rule sits after the question rules and before rules 4 and 5, so background work
+that survives a failed turn never hides the error behind "Delegating".
+
+- Needs you counts questions and approvals only (owner decision, 2026-11-05): the banner owns
+  sign-in, so `signInNeeded` doesn't count in Needs you, its N or the app badge (§6.1, §7), and
+  the filter doesn't show it. Nor do "Not responding", the error rows and "waiting for the
+  session to confirm": nothing a person does on the row fixes them. The row itself is
+  unchanged, found where it lives in the list and by search.
+- **Signing in isn't recovery.** A completed sign-in (`signin.done`) only moves the session to
+  "waiting for the session to confirm". It is recovered only when the host clears
+  `signInNeeded` under #800's clear gate: a main-agent reply with model words or a tool
+  request, dated after the latest sign-in failure, with no newer failure. If the next turn
+  fails sign-in again, the row goes straight back to "Needs sign-in". The client never clears
+  either state on its own.
+- None of them ever shows "Idle", "Working" or a stale "last active" time. An older client that
+  reads an unknown status as idle is the bug this section fixes; the protocol decides whether
+  that needs a capability.
+- `attention.message` is the host's composed sentence (`AgentErrors.Templates`, #841), never
+  the agent's or the CLI's own words. It is shown only in Details, as plain text through the
+  hidden-text check, never as a link or Markdown.
+- **A *reason* is the host's, never the machine's words.** Wherever a line below ends in
+  "· *reason*", the reason is the host's categorised reason in plain words, from a known set.
+  Raw text from the machine or the CLI is never shown, verbatim or trimmed: it belongs in
+  diagnostics (#802). A line with no reason from that set reads without one ("Sign-in
+  refused").
+
+**Machine banner** (one per machine, agent and account, rolled up from the sessions' `attention`)
+
+- An informational banner at the top of the session list, above Needs you, as both clients ship
+  it. One per (machine, agent, account), never one per session. It isn't §6.12's restore notice,
+  which is planned for #780 and goes in the window's banner area over every page.
+- Title: "*Agent* on *machine* needs sign-in" plus "· @*account*" when known. Line 2: "*n*
+  sessions affected: *A*, *B*" ("1 session affected: *A*" for one). Each title is a link that
+  opens that session; there is no separate line of titles. The titles come from the client's own
+  records (never from text in the record).
+- One button, **Sign in**, only with the capability and `signIn: phone`. Without the capability
+  there is no button and no instruction: a missing capability doesn't prove the agent can't sign
+  in from a device.
+- "Sign in at the machine · *reason*" shows only when the host itself says the provider has no
+  device sign-in (`signIn: machine`, with its reason). This is the one line that sends the person
+  to the machine, so it says why, in a reason from the host's set. `attention` has no field for
+  that reason yet (a follow-up); until it has, the line reads "Sign in at the machine" alone.
+  The issue that leaves a provider so carries `needs-rdp` (#696).
+- **A `signIn` value the client doesn't know makes no claim:** the banner and the row say
+  "Needs sign-in" with no button and no instruction, never phone sign-in and never "at the
+  machine".
+- Not dismissible while it lasts: it goes by itself once every affected session is recovered.
+- States (each client's adapter maps them from the sessions' `attention` and `recovery`, and
+  the sign-in request it started):
+
+| State | Banner shows | Button |
+|---|---|---|
+| Needed | Title; "*n* sessions affected: *A*, *B*" | Sign in |
+| At the machine (`signIn: machine`) | "Sign in at the machine · *reason*" | None |
+| Checking (`recovery: checking`; the host is looking for a stored sign-in) | "Checking for a sign-in that still works…" | Sign in |
+| Signing in elsewhere (`recovery: signingIn`, and no request from this device) | "Waiting for sign-in" | Show code (joins the sign-in under way) |
+| Code shown | "Waiting for sign-in · code expires *time*" | None (the sheet is open) |
+| Code expired | "Code expired" | Try again (a new request) |
+| Signed in, confirming (`recovery: pending`) | "Signed in · waiting for *n* sessions to confirm" | None |
+| Recovered (the host cleared `signInNeeded`) | "Signed in · *n* sessions recovered" for 60 s, then gone; or "Recovered by itself" when no person signed in | None |
+| Refused (the host refused the request) | "Sign-in refused · *reason*" | Try again (a new request) |
+| Failed | "Sign-in failed" (`signin.done` carries no reason) | Try again (a new request) |
+
+A session that fails sign-in again while confirming returns the banner to Needed, with its
+count, and its row to "Needs sign-in". Sessions that confirm leave the count one by one.
+
+**The sign-in sheet** (`signin.code`, only on a person's device)
+
+- Opened by **Sign in** on the banner, the row or the push, and only on a person's press. No
+  client starts it on its own.
+- **Before the code arrives:** "Starting *Agent*'s sign-in on *machine*…" with the progress
+  ring, and Cancel. If the host's answer refuses it (`outcome: refused`, or an outcome the
+  client doesn't know), the sheet closes and the banner shows "Sign-in refused · *reason*" with
+  Try again. If the request fails without an outcome (no answer, or an error reply), the sheet
+  closes and the banner shows "Couldn't start sign-in. Try again." as an alert line under its
+  own verb; if the machine can't be reached, the line is "*machine* can't be reached now".
+  Neither ever carries raw text from the machine or the CLI: a reason is the host's, by the
+  rule above.
+- **With the code:**
+  - Line 1: "Open this page and enter the code." The page is the allowlisted URL as plain text
+    (for example `github.com/login/device`) with **Open**.
+  - The code in the monospace face at the display size, with **Copy**.
+  - "Expires *time*", in the device's own time zone and time format, as every time in the app.
+  - Buttons: **Copy** is the one primary, on every client: copying the code is the step that
+    moves a phone's sign-in forward, and Open follows it. Open and Cancel are secondary. Focus
+    starts on Cancel, and Escape is Cancel. Nothing is copied or opened without a press.
+- **A URL not on the allowlist, or a malformed code:** the sheet shows "This sign-in code
+  couldn't be shown." with **Try again** (a new request) and Cancel. No link and no raw text,
+  and it doesn't send the person to the machine: that's only for the host's `signIn: machine`.
+- **Expired:** the code is hidden and the sheet says "Code expired" with Try again, even before
+  the host updates.
+- **Success:** the sheet closes and the banner goes to "Signed in · waiting for *n* sessions to
+  confirm", not to recovered. Nothing is typed for the sessions, so each confirms on its next
+  turn. A session that died mid-turn is to offer a **Continue** like §6.12's, from `signin.done`'s
+  `continue` list; neither is built yet (§6.12's is planned for #780, and it reads only
+  `restored.midTurn`).
+- The code and URL never appear in a notification, a toast, Home Assistant or a log, even after
+  a press. They reach the clipboard only when the person presses Copy.
+
+**Pushes, toasts and Home Assistant notices**
+
+One pattern everywhere: *Agent* on *machine*, then the state. *Agent* is the host's own name
+for it, as the host sends it: Copilot, Claude or Codex. Every channel uses that plain title and
+never adds a count to it; the count, and for Home Assistant the sessions' names, go in the body.
+
+| State | Title (pushes, toasts, HA) | Body |
+|---|---|---|
+| Needs sign-in | "*Agent* on *machine* needs sign-in" | Pushes and toasts: "*n* sessions affected" ("1 session affected"). HA notice: "*n* sessions: *A*, *B*" ("1 session: *A*"), naming three at most |
+| Not responding | "*Agent* on *machine* isn't responding" | `attention.message` |
+| Not authorised | "*Agent* on *machine* wasn't authorised" | `attention.message` |
+| Rate limited | "*Agent* on *machine* hit a rate limit" | `attention.message` |
+| Agent error | "*Agent* on *machine* stopped with an error" | `attention.message` |
+
+- **The body:** for sign-in, one notice per (machine, agent, account): on pushes and toasts the
+  count of sessions affected (`v1-sessions.md`, Push `signIn`), and on Home Assistant's notice
+  the count with the sessions' names (`ha-connector.md`, Needs sign-in). For the other four, the
+  host's composed sentence (`attention.message`, from `AgentErrors.Templates`, #841). Never the
+  agent's or the CLI's own words, the account, the code or the URL. The titles' verbs match those
+  templates, so a notice and the session's line read the same.
+- **Tiers** (how each one interrupts) are #913's.
+- **What sends today:** only sign-in pushes from the host (#928): one per (machine, agent,
+  account), as soon as the first session needs it and again at most hourly while any still
+  does. Home Assistant sends the same sign-in notice to the phones its answer buttons go to.
+  Not responding, Not authorised, Rate limited and Agent error get no push of their own; the
+  row says them, and Home Assistant shows them as the session's status, as shipped.
+- **Sound:** the question sound (owner decision, 2026-11-04, extending #764). A sign-in blocks
+  every session on that machine, agent and account, as a question does. The hourly limit keeps
+  it from nagging. The payload does not set `notification.silent`.
+
+**Accessibility** (§9.1)
+
+- The banner is a polite live region, announced once per new (machine, agent, account) (A6).
+- Sign in's accessible name: "Sign in to *Agent* on *machine*" (A1).
+- The sheet traps focus and starts on Cancel (A3, A4). When it closes, focus goes to the button
+  that opened it if that button still exists (Cancel, failure, expiry). On success the button
+  is gone, so focus goes to the banner's "Signed in · waiting…" line, which takes
+  focus programmatically only; if the banner has already gone, to the session list's heading.
+  A sheet opened from a push uses the same rule. The code is read character by character ("Code: A B C D, 1 2 3 4").
+- Reduced motion: the ring is still; the banner and sheet appear without animation (A10).
+- Every state is told apart by its words as well as its glyph.
+
+**Copy**
+
+| Use | Text |
+|---|---|
+| Row | "Needs sign-in · *machine*"; "Signed in · waiting for the session to confirm"; "Not responding · *machine*" (age trailing); "Not authorised"; "Rate limited"; "Agent error" |
+| Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected: *A*, *B*" ("1 session affected: *A*"); "Checking for a sign-in that still works…"; "Waiting for sign-in"; "Waiting for sign-in · code expires *time*"; "Code expired"; "Signed in · waiting for *n* sessions to confirm"; "Signed in · *n* sessions recovered"; "Recovered by itself"; "Sign-in refused · *reason*"; "Sign-in failed"; "Sign in at the machine · *reason*"; "Couldn't start sign-in. Try again."; "*machine* can't be reached now" |
+| Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in code couldn't be shown." |
+| Buttons | "Sign in"; "Show code"; "Open"; "Copy"; "Cancel"; "Try again" |
+| Push, toast and HA notice titles | "*Agent* on *machine* needs sign-in"; "… isn't responding"; "… wasn't authorised"; "… hit a rate limit"; "… stopped with an error". No channel adds a count to the title. Body for sign-in: "*n* sessions affected" on pushes and toasts; "*n* sessions: *A*, *B*" ("1 session: *A*") on HA's notice. `attention.message` for the others |
+
+**Platforms**
+
+- **Windows app and PWA:** the banner at the top of the session list (in the list's header in the
+  app) and a modal sheet (ContentDialog in the app, a dialog in the PWA).
+- **Apple (#260, owner welshofer):** note only. The same fields; the native form is that
+  track's decision.
+- **Home Assistant:** read-only. The session's status says what the row says ("Needs sign-in",
+  "Not responding", "Not authorised", "Rate limited", "Agent error"). Its sign-in notice follows
+  the pattern above: the plain title, and "*n* sessions: *A*, *B*" as its message. Never the code
+  or URL, and no Sign in.
+
 ## 7. Platform shells
 
 **Notifications, on every client (#253):** a question still pending after 2 s is notified
@@ -1281,7 +1857,8 @@ question, as choosing its row does.
   them, since typing then sending is the card's own pattern; it still checks, before sending,
   that the question is the one shown. Every other question's notification only opens its
   card.
-- The count each platform shows is Needs you's N (§6.1).
+- The count each platform shows is Needs you's N (§6.1), which never counts a session that needs
+  sign-in (§6.13).
 - **Collaborators (#519):** their sessions are never notified, badged or counted. A message
   from an external agent held for you is counted in N but **never pushed on its own**, unlike
   an approval (`agent-principals.md` §5.7, normative). A person can opt in to one aggregated
@@ -1340,7 +1917,8 @@ question, as choosing its row does.
 **Android (Compose, later):**
 - **Sessions:** a Material 3 search bar, filter chips (Needs you · N first), list items, an
   extended "New session" FAB, and a navigation bar.
-- **Session:** a top app bar, assist chips for delegates, and the composer on
+- **Session:** a top app bar, assist chips for delegates on a tablet (a phone has the
+  Delegates tab, §6.2), and the composer on
   `surfaceContainer`.
 
 **PWA:**
@@ -1526,6 +2104,14 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   facts of its own; what is drawn keeps them.
 - **Reduced motion** stops all glyph animation, and turns every other motion into an
   instant change or a short cross-fade (§5.3). Nothing relies on motion alone.
+- **The phone's collapsing header** (§6.2, #620) hides nothing from assistive technology.
+  The folded parts stay in the tree and the tab order, focus reaching them brings the header
+  back, and collapsing is never announced. The bar's one-line copy is drawn only: the title is
+  read from the h2 and the status from the meta line. Nothing focused in the conversation
+  lands under the header, and the header never expands over the focused control. In high contrast the bar is `Canvas` with a
+  `CanvasText` hairline. The reply area's compact bar (§6.5, #935) is the same: its copy of the
+  draft is drawn only, focus anywhere in the reply area brings the box back in full, it never
+  expands over the focused control, and focus never lands on a hidden control.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
@@ -1559,6 +2145,15 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
     and Highlight and HighlightText when pressed). The `needs` glyph is Highlight with
     HighlightText ink, swapped on the pressed toggle's Highlight fill so its disc still shows.
     The Tools link is a system hyperlink.
+- **Delegate events (#661, proposed, not yet built):** a fold of delegate events is a
+  disclosure button named for its whole summary, with `aria-expanded` (Windows: ExpandCollapse)
+  for open or closed. Its "1 still working" link is a sibling after it in the tab order, never
+  nested in the button, and opens that delegate. With none still working, there is only the
+  button (§6.4). If focus is on the toggle or its link when the link goes, it moves to the
+  fold's toggle while the fold stays; if the fold goes too, to that delegate's name in its
+  line, or to the first delegate's name. A focused control no longer drawn counts as lost
+  focus and follows the same rule. Focus anywhere else stays where it is, and the view never
+  scrolls to follow it (A4, H3a). "*n* more" meets A11's size (§6.4).
 - **A question card (#773):** each field is named for its title. A required field says so
   where the role supports it: on a radio group (`radiogroup` with `aria-required`) and on a
   text or number field (`required`; `IsRequiredForForm` on Windows, on the radio list or the
@@ -1593,3 +2188,7 @@ The collaborator surfaces (#519) are drawn on the Proposal #519 boards
 The states #253 added (the toggle's states, rows, the question card's forms, Tools and the
 delegate inspector) are drawn on the Proposal #253 boards, which stay on the canvas as their
 reference ([proposals/253-attention/](proposals/253-attention/)).
+
+The delegate events (#661) and the history (#292) are drawn on the Proposal #661
+boards: before and after, the run fold and Earlier expanded, and history scrolled up, on a phone
+and the desktop, dark and light ([proposals/661-delegate-events.md](proposals/661-delegate-events.md)).
