@@ -27,9 +27,13 @@ public static class AgentWords
         : Has(raw, "used by another process") ? "file in use"
         : "couldn't read";
 
+    // The older bridge that runs a machine, in the one word every row uses for it: "host" (Creative,
+    // 6675472997).
+    const string OlderBridge = "this machine's host is older";
+
     // Hooks the host holds back from this app: "Read-only · why".
     public static string ReadOnly(string detail) => "Read-only · " + (
-        Has(detail, "agent-ha-bridge") ? "an older bridge runs this machine"
+        Has(detail, "agent-ha-bridge") ? OlderBridge
         : Has(detail, "Another bridge profile") ? "another bridge profile owns its hooks"
         // Whether set read-only or read-only for a problem in its config, it's the host's settings
         // (HostSettings.ReadOnlyReason, ProblemReason), and "Read-only · this host is read-only" said
@@ -90,7 +94,7 @@ public static class AgentWords
         $"{(remove ? "Removal" : verb == "Repair" ? "Repair" : "Setup")} failed · " + (
             // A legacy file's path can itself name agent-ha-bridge, so what's wrong with it comes first.
             Has(raw, "legacy registration") ? "an older bridge's hooks are there; migrate them first"
-            : Has(raw, "agent-ha-bridge") ? "an older bridge runs this machine"
+            : Has(raw, "agent-ha-bridge") ? OlderBridge
             : Has(raw, "belongs to another installation") || Has(raw, "Another bridge profile") ? "another bridge profile owns its hooks"
             : Has(raw, "no hook registration owned by this profile") ? "this profile set up nothing to remove"
             : Has(raw, "migration") ? "this profile is being migrated"
