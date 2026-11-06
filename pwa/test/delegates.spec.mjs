@@ -326,6 +326,31 @@ const moreBox = (more) => more.evaluate((el) => {
   return { more: r(el.getBoundingClientRect()), li: r(li.getBoundingClientRect()), first: r(range.getClientRects()[0]), mark: mark.top + mark.height / 2,
     names: [...text.querySelectorAll('.delegate-link:not(.delegate-more)')].flatMap((n) => [...n.getClientRects()].map(r)) };
 });
+// The rows a line's words take, by where each run of them starts (the words for a screen reader
+// alone are not drawn), and the height of its words' box.
+const rows = (li) => li.evaluate((el) => {
+  const text = el.querySelector('.delegate-event-text');
+  const walk = document.createTreeWalker(text, NodeFilter.SHOW_TEXT,
+    { acceptNode: (n) => (n.parentElement.closest('.sr-only') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+  const range = document.createRange();
+  const tops = [];
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    range.selectNodeContents(n);
+    for (const r of range.getClientRects()) {
+      if (r.width && !tops.some((t) => Math.abs(t - r.top) < r.height / 2)) { tops.push(r.top); }
+    }
+  }
+  return { tops: tops.sort((a, b) => a - b), height: text.getBoundingClientRect().height };
+});
+// A line on more than one row whose rows are evenly spaced, each a 44 line box: the same pitch
+// from each row to the next, its words' box that many rows high.
+const expectEvenRows = (box) => {
+  expect(box.tops.length).toBeGreaterThan(1);
+  for (let i = 1; i < box.tops.length; i++) {
+    expect(Math.abs(box.tops[i] - box.tops[i - 1] - 44)).toBeLessThanOrEqual(1);
+  }
+  expect(Math.abs(box.height - 44 * box.tops.length)).toBeLessThanOrEqual(1);
+};
 // A "N more" a whole 44 target in its own line, over no other name, its glyph by its first row.
 const expectMoreTarget = (box) => {
   expect(box.more.right - box.more.left).toBeGreaterThanOrEqual(44);
@@ -580,15 +605,24 @@ test.describe('on a phone', () => {
     expect(box.link.left).toBeGreaterThanOrEqual(box.first.left);
   });
 
-  test('on a phone a line that wraps with its "N more" on a later row keeps its glyph by the first row, and "N more" a 44 target over no name', async ({ page }) => {
+  test('on a phone a line that wraps with its "N more" on a later row keeps its glyph by the first row, "N more" a 44 target over no name, and its rows evenly spaced', async ({ page }, testInfo) => {
     await openDemo(page);
-    const more = card(page).locator('.agent-block .delegate-events .delegate-more');
+    const events = card(page).locator('.agent-block .delegate-events');
+    const more = events.locator('.delegate-more');
     await listOnly(page, THREE(['Read the witness logic end to end', 'Run the full suite on both engines', 'Check the docs']));
     await expect(more).toHaveText('1 more');
     const box = await moreBox(more);
     // Too long for one row at 390: "1 more" falls on a later one.
     expect(box.more.top).toBeGreaterThanOrEqual(box.first.bottom);
     expectMoreTarget(box);
+    // Its 44 target makes no row of the line taller than the others: each is a 44 line box.
+    const line = events.locator('li.delegate-event:has(.delegate-more)');
+    await expect(line).toHaveAttribute('data-wrapped', '');
+    expectEvenRows(await rows(line));
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await testInfo.attach(`delegate-more-wrapped-phone-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+    }
   });
 
   test.describe('with touch', () => {
@@ -609,6 +643,23 @@ test.describe('on a phone', () => {
         await page.emulateMedia({ colorScheme: scheme });
         await testInfo.attach(`delegate-fold-phone-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
       }
+    });
+
+    test('a line that wraps has its rows evenly spaced, each a 44 line box; a line on one row is as it was', async ({ page }) => {
+      await openDemo(page);
+      const events = card(page).locator('.agent-block .delegate-events');
+      await listOnly(page, [
+        { id: 'long', kind: 'background', name: 'Read the witness logic end to end, then every test that covers it', status: 'working', startedAt: 5 },
+        { id: 'short', kind: 'background', name: 'Docs', status: 'working', startedAt: 1 },
+      ]);
+      const long = events.locator('li.delegate-event', { hasText: 'witness logic' });
+      const short = events.locator('li.delegate-event', { hasText: 'Docs' });
+      await expect(long).toHaveAttribute('data-wrapped', '');
+      expectEvenRows(await rows(long));
+      await expect(short).not.toHaveAttribute('data-wrapped');
+      const one = await rows(short);
+      expect(one.tops).toHaveLength(1);
+      expect(one.height).toBeLessThan(44);
     });
   });
 });
