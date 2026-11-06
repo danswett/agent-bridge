@@ -35,14 +35,14 @@ const THEMES = {
 const BOARDS = {
   phone: {
     title: 'PWA on an iPhone (390 × 844): the header collapses as you scroll, and comes back as you scroll up',
-    sub: 'At rest nothing changes: the owner finds it fine. Scrolling down slides the title, the meta line, the delegate chips and the tabs up under one pinned 48 pt bar (Back, the session’s glyph, the title on one line, More), tied to your finger as iOS’s large title is. Scrolling back up 64 pt, or reaching the top, brings it all back, over the conversation. Collapsing never moves what you are reading. Marks on the right: chrome (amber), conversation (Bridge, with its share of the screen) and the reply area (grey), as measured in the PWA.',
+    sub: 'At rest, as the owner ruled on 2026-11-05: the title in at most two lines, one meta line and the tabs, 152 pt, with no delegate strip (the Delegates tab carries the count). Scrolling down slides the title, the meta line and the tabs up under one pinned 48 pt bar (Back, the session’s glyph, the title on one line, More), tied to your finger as iOS’s large title is. Scrolling back up 64 pt, or reaching the top, brings it all back, over the conversation. Collapsing never moves what you are reading. Marks on the right: chrome (amber), conversation (Bridge, with its share of the screen) and the reply area (grey), as measured in the PWA.',
     w: 1900, h: 1060, gap: 24,
     frames: [
       { vp: 'i15', state: 'rest', measure: true, at: 'today', label: 'Today, at rest', notes: ['Header 151, chips 61, tabs 45: 257 pt above the conversation, and the reply area 196 below. The conversation gets 391 pt, 46%: the owner’s “about 45%”.'] },
       { vp: 'i15', state: 'rest', offset: 300, measure: true, at: 'today', label: 'Today, scrolled', notes: ['Exactly the same. Nothing collapses: reading the rest of a turn, or getting to the question, is done through a 391 pt slot.'] },
-      { vp: 'i15', state: 'rest', measure: true, at: 'proposed', label: 'Proposed, at rest: unchanged', notes: ['The at-rest header is today’s, title, meta, chips and tabs. Opening a session always shows it like this, at the top.'] },
+      { vp: 'i15', state: 'rest', decided: true, measure: true, at: 'proposed', label: 'Proposed, at rest: no delegate strip', notes: ['The title in at most two lines, one meta line and the tabs: 152 pt, in every delegate state. No delegate strip: the Delegates tab carries the count (“Delegates 3”). Opening a session always shows it like this, at the top.'] },
       { vp: 'i15', state: 'compact', offset: 240, measure: true, at: 'proposed', label: 'Proposed, scrolled down', notes: ['Once the header has slid under the bar, the conversation gets 600 pt, 71% of the screen: 209 pt more.', 'The needs glyph stays in the bar while the session waits on you.'], sr: 'Nothing is announced. The heading is the same h2, now one line.' },
-      { vp: 'i15', state: 'rest', offset: 260, measure: true, at: 'proposed', label: 'Proposed, scrolled back up', notes: ['64 pt of scrolling up brings the whole header back where you are, over the conversation, as Safari’s and Chrome’s bars come back. Nothing under it moves. Reaching the top does the same.'] },
+      { vp: 'i15', state: 'rest', decided: true, offset: 260, measure: true, at: 'proposed', label: 'Proposed, scrolled back up', notes: ['64 pt of scrolling up brings the whole header back where you are, over the conversation, as Safari’s and Chrome’s bars come back. Nothing under it moves. Reaching the top does the same.'] },
     ],
   },
   sizes: {
@@ -66,9 +66,9 @@ const BOARDS = {
     w: 1600, h: 1080, gap: 24,
     frames: [
       { vp: 'android', state: 'rest', measure: true, at: 'today', label: 'Today, at rest and scrolled', notes: ['Header 133 (the meta line fits in two lines at 412), chips 61, tabs 45: 239 pt. The conversation gets 480 pt, 52%.'] },
-      { vp: 'android', state: 'rest', measure: true, at: 'proposed', label: 'Proposed, at rest: unchanged', notes: ['Today’s header, chips and tabs.'] },
+      { vp: 'android', state: 'rest', decided: true, measure: true, at: 'proposed', label: 'Proposed, at rest: no delegate strip', notes: ['The title in at most two lines, one meta line and the tabs: 152 pt. No delegate strip: the Delegates tab carries the count.'] },
       { vp: 'android', state: 'compact', offset: 240, measure: true, at: 'proposed', label: 'Proposed, scrolled down', notes: ['The 48 pt bar: 671 pt of conversation, 73%. The system back gesture still goes back to the list.'] },
-      { vp: 'android', state: 'rest', offset: 260, measure: true, at: 'proposed', label: 'Proposed, scrolled back up', notes: ['The header returns over the conversation; the tabs are back in reach. Reaching the top does the same.'] },
+      { vp: 'android', state: 'rest', decided: true, offset: 260, measure: true, at: 'proposed', label: 'Proposed, scrolled back up', notes: ['The header returns over the conversation; the tabs are back in reach. Reaching the top does the same.'] },
     ],
   },
   rules: {
@@ -76,12 +76,12 @@ const BOARDS = {
     sub: 'Near the top the header follows your scrolling; further down, thresholds decide. Only your own scrolling counts: a finger, a wheel, the keys. A response growing below, a scroll to an arriving question and a restored position never fold the header. Counting restarts whenever the direction changes, so the small back-and-forth of reading changes nothing. Coming back takes 64 pt, twice the 32 pt that sends it away again.',
     w: 1660, h: 940, gap: 18,
     frames: [
-      { vp: 'i15', k: 0.6, state: 'rest', at: '0 pt', label: 'Opened: at the top', notes: ['A session always opens at rest, header in full.'] },
-      { vp: 'i15', k: 0.6, state: 'rest', ride: 100, at: '↓ 100 pt', label: 'Near the top: it rides with you', notes: ['Until the header is under the bar (209 pt here) it moves with your finger, as iOS’s large title does; the title reappears in the bar on one line. Nothing jumps and no gap opens.'] },
-      { vp: 'i15', k: 0.6, state: 'compact', offset: 240, at: '↓ 209 pt', label: 'Collapsed', notes: ['The bar is all that is left. The header slid off the conversation, which never moved under it.'] },
+      { vp: 'i15', k: 0.6, state: 'rest', decided: true, at: '0 pt', label: 'Opened: at the top', notes: ['A session always opens at rest, header in full.'] },
+      { vp: 'i15', k: 0.6, state: 'rest', decided: true, ride: 100, at: '↓ 100 pt', label: 'Near the top: it rides with you', notes: ['Until the header is under the bar (104 pt here) it moves with your finger, as iOS’s large title does; the title reappears in the bar on one line. Nothing jumps and no gap opens.'] },
+      { vp: 'i15', k: 0.6, state: 'compact', offset: 240, at: '↓ 104 pt', label: 'Collapsed', notes: ['The bar is all that is left. The header slid off the conversation, which never moved under it.'] },
       { vp: 'i15', k: 0.6, state: 'compact', offset: 200, at: '↑ 40 pt', label: 'Back up a little: stays compact', notes: ['Under 64 pt up, the bar stays. Reading back a paragraph doesn’t bring the header over it.'] },
-      { vp: 'i15', k: 0.6, state: 'rest', offset: 150, at: '↑ 64 pt', label: 'Comes back', notes: ['64 pt up in one direction brings the whole header back over the conversation (standard duration and easing); 32 pt down sends it away again. A tap on the bar’s title, or reaching the top, does the same.'] },
-      { vp: 'i15', k: 0.6, state: 'compact', offset: 520, glyph: 'needs', at: 'waiting', label: 'Waiting on you, collapsed', notes: ['The needs glyph, on its disc, leads the bar’s title for as long as the question waits. The bar’s accessible name says it: “Waiting on you”.'], sr: '“Fix the witness timer after a resume, heading level 2. Waiting on you.”' },
+      { vp: 'i15', k: 0.6, state: 'rest', decided: true, offset: 150, at: '↑ 64 pt', label: 'Comes back', notes: ['64 pt up in one direction brings the whole header back over the conversation (standard duration and easing); 32 pt down sends it away again. A tap on the bar’s title, or reaching the top, does the same.'] },
+      { vp: 'i15', k: 0.6, state: 'compact', offset: 520, glyph: 'needs', at: 'waiting', label: 'Waiting on you, collapsed', notes: ['The needs glyph, on its disc, leads the bar’s title for as long as the question waits. The bar’s copy is drawn, not read: the status is read once, from the meta line (ui.md §6.2, §9.2).'], sr: '“Fix the witness timer after a resume, heading level 2” … “Waiting on you · 3 delegates still running · Demo machine”' },
     ],
   },
   rest: {
@@ -113,8 +113,8 @@ const BOARDS = {
     sub: 'The heading is never removed, only restyled; focus is never hidden; and the folded parts stay in the accessibility tree and the tab order, so reaching any of them brings the header back first.',
     w: 1340, h: 1080, gap: 24,
     frames: [
-      { vp: 'i15', state: 'rest', offset: 300, focus: 'tab', at: 'keyboard', label: 'Focus inside the header expands it', notes: ['Shift+Tab from the conversation, or a VoiceOver or TalkBack swipe, reaches the Delegates tab: the header comes back before the focus ring draws, and stays while focus is in it.'] },
-      { vp: 'i15', state: 'compact', offset: 300, focus: 'back', at: 'screen reader', label: 'The bar keeps its heading', notes: ['The same h2, one line. Back and More keep their names; the glyph’s state is in the heading’s description. Collapsing announces nothing and moves no focus.'], sr: '“Back, button” … “Fix the witness timer after a resume, heading level 2” … “Waiting on you”' },
+      { vp: 'i15', state: 'rest', decided: true, offset: 300, focus: 'tab', at: 'keyboard', label: 'Focus inside the header expands it', notes: ['Shift+Tab from the conversation, or a VoiceOver or TalkBack swipe, reaches the Delegates tab: the header comes back before the focus ring draws, and stays while focus is in it.'] },
+      { vp: 'i15', state: 'compact', offset: 300, focus: 'back', at: 'screen reader', label: 'The bar keeps its heading', notes: ['The same h2, one line. Back and More keep their names. The bar’s copy is drawn, not read: the status is read once, from the meta line. Collapsing announces nothing and moves no focus.'], sr: '“Back, button” … “Fix the witness timer after a resume, heading level 2” … “Waiting on you · 3 delegates still running · Demo machine”' },
       { vp: 'i15', state: 'compact', offset: 300, hc: true, at: 'forced colours', label: 'High contrast (Night sky; Desert in light)', notes: ['The bar is Canvas with a CanvasText rule under it; the glyph keeps its system-colour form (§9). Nothing relies on a shadow or a tint to show the bar’s edge.'] },
       { vp: 'i15', state: 'compact', offset: 300, at: 'reduced motion', label: 'Reduced motion: a cross-fade', notes: ['Nothing travels: the full header and the bar cross-fade over crossFade (83 ms). The thresholds are unchanged.'] },
     ],

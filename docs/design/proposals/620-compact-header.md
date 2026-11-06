@@ -126,6 +126,7 @@ This replaces "At rest: unchanged" below. ui.md §6.2 has the spec.
   - "Delegates 2" while two run, read "Delegates, 2 running". No count when none run.
   - While one asks, the tab leads with the `needs` glyph, read "Delegates, 2 running, 1
     asking". The question is answered in the conversation, never only in the tab.
+  - Running counts the session's own delegates; asking counts a delegate at any depth.
   - The row never changes height, so nothing below moves.
 
 **Measured** (the prototype, Chromium and WebKit, a two-line title):
@@ -450,9 +451,9 @@ All the boards on one page: [contact-sheet.png](620-compact-header/contact-sheet
 
 | Board | Dark · light | What it shows |
 |---|---|---|
-| PWA on an iPhone, 390 × 844 | [dark](620-compact-header/proposal-620-phone.png) · [light](620-compact-header/proposal-620-phone-light.png) | Today at rest and scrolled; proposed at rest (unchanged), scrolled down and scrolled back up, with measured heights |
+| PWA on an iPhone, 390 × 844 | [dark](620-compact-header/proposal-620-phone.png) · [light](620-compact-header/proposal-620-phone-light.png) | Today at rest and scrolled; proposed at rest (the owner's 2026-11-05 header: two-line title, one meta line, tabs, no delegate strip), scrolled down and scrolled back up, with measured heights |
 | Four phones | [dark](620-compact-header/proposal-620-sizes.png) · [light](620-compact-header/proposal-620-sizes-light.png) | Today and scrolled at 375 × 667, 390 × 844, 430 × 932 and Android 412 × 915: the table above |
-| PWA on Android, 412 × 915 | [dark](620-compact-header/proposal-620-android.png) · [light](620-compact-header/proposal-620-android-light.png) | The same collapse, read as Material's collapsing top app bar |
+| PWA on Android, 412 × 915 | [dark](620-compact-header/proposal-620-android.png) · [light](620-compact-header/proposal-620-android-light.png) | The same collapse, read as Material's collapsing top app bar; at rest, no delegate strip |
 | The rules | [dark](620-compact-header/proposal-620-rules.png) · [light](620-compact-header/proposal-620-rules-light.png) | At the top; riding up with the finger; compact; 40 up stays; 64 up comes back; waiting on you |
 | Optional, at rest (D3, D4), superseded by the rest-*.png captures above | [dark](620-compact-header/proposal-620-rest.png) · [light](620-compact-header/proposal-620-rest-light.png) | A long title today; a two-line limit; 20/26; tabs and chips in one row; chips in the Delegates tab |
 | Optional, the bottom (D5, D6) | [dark](620-compact-header/proposal-620-bottom.png) · [light](620-compact-header/proposal-620-bottom-light.png) | Today's reply area; a one-line notice; a one-line box; both; the box grown |

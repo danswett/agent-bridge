@@ -59,7 +59,7 @@
             <h2 class="p620f-title" style="font-size: {{titleSize}}px; line-height: {{titleLine}}px; max-height: {{titleMax}}px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: {{clamp}}">{{title}}</h2>
             <div class="p620f-meta" style="color: {{t.text2}}">
               <svg viewBox="0 0 48 48" width="16" height="16" style="margin-top: 1px; color: {{glyph.c}}"><sc-if value="{{glyph.bg}}"><circle cx="24" cy="24" r="23" fill="currentColor"/></sc-if><path d="{{glyph.p1}}" fill="{{glyph.f1}}"/><path d="{{glyph.p2}}" fill="currentColor" fill-opacity="{{glyph.o2}}"/></svg>
-              <span style="white-space: {{metaWrap}}; overflow: hidden; text-overflow: ellipsis"><span style="color: {{glyph.words}}">{{statusText}}</span> · <span style="color: {{t.text}}">Demo machine</span> · danswett/agent-bridge</span>
+              <span style="white-space: {{metaWrap}}; overflow: hidden; text-overflow: ellipsis"><span style="color: {{glyph.words}}">{{statusText}}</span> · <span style="color: {{t.text}}">Demo machine</span>{{repoTail}}</span>
             </div>
           </div>
           <div class="p620f-ib" style="color: {{t.text}}"><dc-import name="Icon" icon="more" size="22" hint-size="22px,22px"></dc-import></div>
@@ -84,7 +84,7 @@
         </div>
       </sc-if>
       <sc-if value="{{showTabs}}">
-        <div class="p620f-tabs" style="height: 45px; border-bottom: 1px solid {{t.stroke2}}">
+        <div class="p620f-tabs" style="height: {{tabsPx}}px; border-bottom: 1px solid {{t.stroke2}}">
           <sc-for list="{{tabs}}" as="tb">
             <div class="p620f-tab" style="color: {{tb.color}}; font-weight: {{tb.weight}}; outline: {{tb.focus}}; outline-offset: 2px">{{tb.text}}<sc-if value="{{tb.sel}}"><span style="position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: {{t.bridge}}"></span></sc-if></div>
           </sc-for>
@@ -221,15 +221,19 @@ class Component extends DCLogic {
     const compact = f.state === 'compact';
     const top = f.top || 'today';
     const long = !!f.long;
+    // The owner's ruling of 2026-11-05 (ui.md §6.2): a phone at rest has the title in at most two
+    // lines, one meta line and a 48 row of tabs, 152 in all, and no delegate strip at all.
+    const decided = !compact && !!f.decided;
     // A clamp of two lines at the today size, or at 20/26 (D3's options).
     const titleSize = top === 'small' ? 20 : 24, titleLine = top === 'small' ? 26 : 32;
-    const lines = long && top === 'today' ? 4 : 2;
-    const clamp = top === 'today' ? 'none' : '2';
+    const lines = long && top === 'today' && !decided ? 4 : 2;
+    const clamp = top === 'today' && !decided ? 'none' : '2';
     let hdrH = v.hdr + (lines - 2) * titleLine;
     const metaSave = v.hdr === 151 ? 36 : 18;
     if (top === 'small') { hdrH = v.hdr - 12 - metaSave; }
     if (top === 'oneline') { hdrH = v.hdr - metaSave; }
-    const showStrip = !compact && top !== 'intab' && top !== 'onerow';
+    if (decided) { hdrH = 104; }
+    const showStrip = !compact && !decided && top !== 'intab' && top !== 'onerow';
     const combo = !compact && top === 'onerow';
     const showTabs = !compact && !combo;
     const bottom = f.bottom || 'today';
@@ -239,7 +243,7 @@ class Component extends DCLogic {
     const boxH = 128;
     const slotH = 8 + 12 + (heldToday ? 42 + 6 : 0) + (heldOne ? 21 + 6 : 0) + (boxOne ? (bottom === 'grown' ? 52 + 120 : 52) : boxH);
     const hdrUsed = compact ? 48 : hdrH;
-    const stripH = showStrip ? 61 : 0, tabsH = showTabs ? 45 : (combo ? 53 : 0);
+    const stripH = showStrip ? 61 : 0, tabsH = showTabs ? (decided ? 48 : 45) : (combo ? 53 : 0);
     // Near the top the header rides up with the conversation under the pinned bar (iOS's large title).
     const fullH = hdrUsed + stripH + tabsH;
     const ride = compact ? 0 : Math.min(f.ride || 0, fullH - 48);
@@ -254,7 +258,7 @@ class Component extends DCLogic {
       { ...chipsWork, name: 'Read witness s…', facts: '17m · 2 nested' },
       { ...chipsWork, name: 'Run full test suite', facts: '16m' },
     ];
-    const tabNames = top === 'intab' ? ['Conversation', 'Delegates · 3', 'Tools'] : ['Conversation', 'Delegates', 'Tools'];
+    const tabNames = top === 'intab' ? ['Conversation', 'Delegates · 3', 'Tools'] : decided ? ['Conversation', 'Delegates 3', 'Tools'] : ['Conversation', 'Delegates', 'Tools'];
     const tabs = tabNames.map((text, i) => ({ text, sel: i === 0, color: i === 0 ? t.text : t.text2, weight: i === 0 ? 600 : 400, focus: f.focus === 'tab' && i === 1 ? `2px solid ${t.focus}` : 'none' }));
     const sw = v.w, sh = sysTop + v.h + sysBot;
     const fw = Math.round(sw * k) + 12, fh = Math.round(sh * k) + 12;
@@ -276,9 +280,10 @@ class Component extends DCLogic {
       radius: v.ios ? 34 : 26, bezel: `6px solid ${t.bezel}`,
       rest: !compact, compact, hdrH, titleSize, titleLine, titleMax: (clamp === 'none' ? lines : 2) * titleLine, clamp,
       title: long ? LONG : TITLE,
-      metaWrap: top === 'oneline' || top === 'small' ? 'nowrap' : 'normal',
+      metaWrap: decided || top === 'oneline' || top === 'small' ? 'nowrap' : 'normal',
+      repoTail: decided ? '' : ' · danswett/agent-bridge',
       statusText: needs ? 'Waiting on you · 3 delegates still running' : 'Working · 3 delegates still running',
-      glyph: g, chips, tabs, showStrip, showTabs, combo,
+      glyph: g, chips, tabs, showStrip, showTabs, tabsPx: decided ? 48 : 45, combo,
       offset: compact ? (f.offset ?? 300) : (f.offset ?? 0),
       qEdge: `${f.hc ? 2 : 1}px solid ${t.needsEdge}`,
       heldToday, heldOne, boxTall: !boxOne, boxOne, boxH,

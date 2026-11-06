@@ -669,10 +669,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     - **There is no delegate strip on a phone,** whatever the delegates are doing. The
       Delegates tab carries what it carried.
     - **While delegates are running,** the tab's label has their count: "Delegates 2", read as
-      "Delegates, 2 running". With none running, there is no count.
+      "Delegates, 2 running". With none running, there is no count. The count is the
+      session's own delegates, not the ones they delegate to in turn.
     - **While a delegate is asking,** the tab leads with the `needs` glyph, and its name says
-      so: "Delegates, 2 running, 1 asking". The question itself is in the conversation, naming
-      the delegate (#661, §7.0), and is answered there without opening the tab.
+      so: "Delegates, 2 running, 1 asking". Asking counts a delegate at any depth, since the
+      question is the person's wherever it comes from. The question itself is in the
+      conversation, naming the delegate (#661, §7.0), and is answered there without opening the tab.
     - The count and glyph change in place, so the row never changes height.
     - The tabs are one Tab stop with arrows inside, as every tab list.
   - Tablet, desktop and the Windows app keep the header above, chips included.
