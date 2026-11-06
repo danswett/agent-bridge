@@ -289,8 +289,8 @@ said and nothing is kept owed, and what earlier starts kept owed is let go. Off 
 `config.json` could not be read, nothing is restored but what died is kept owed, as when it is on.
 
 **For other callers** (#800, sessions an expired sign-in stopped): `ISessionRestorer.RestoreAsync`
-resumes one session the same way, through the same one-at-a-time queue and checks, marks it restored
-with the cause it is given and Continue when it went mid-turn, and is refused while the machine is
+resumes one session the same way, through the same one-at-a-time queue and checks, marks it restored,
+once its window is seen ready (#855), with the cause it is given and Continue when it went mid-turn, and is refused while the machine is
 read-only, or while that session is already running or being restored. It is busy, and starts nothing,
 while the restore record cannot take its stamp first: the recorder did not start (a record that could
 not be set aside) or failed, or the write failed.
