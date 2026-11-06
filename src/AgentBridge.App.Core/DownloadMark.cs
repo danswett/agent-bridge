@@ -85,16 +85,23 @@ public sealed class DownloadMark(string file)
     public bool Vouches(string package, string version, string source) =>
         Read() is { } m && m.Version == version && m.Source == source && m.Digest.Matches(package);
 
-    // Just before install: the file, held open so it cannot be changed or replaced until this
-    // process ends, and checked from that handle against the mark. The installer opens it by its
-    // path once the app has exited, after the hold. Null when it is not the bytes the mark vouches for.
-    public FileStream? Hold(string package, string version, string source)
+    // The checksum the mark keeps for this version from this source, or null when it vouches for
+    // neither (PackageHandoff checks the installer's copy against it).
+    public PackageDigest? DigestFor(string version, string source) =>
+        Read() is { } m && m.Version == version && m.Source == source ? m.Digest : null;
+
+    // The package the mark vouches for, held and checked as Hold(package, digest) does.
+    public FileStream? Hold(string package, string version, string source) =>
+        DigestFor(version, source) is { } digest ? Hold(package, digest) : null;
+
+    // A file, held open so it cannot be changed or replaced until the handle is let go, and
+    // checked from that handle against the digest. Null when it is not those bytes.
+    public static FileStream? Hold(string package, PackageDigest digest)
     {
-        if (Read() is not { } m || m.Version != version || m.Source != source) { return null; }
         FileStream held;
         try { held = new FileStream(package, FileMode.Open, FileAccess.Read, FileShare.Read); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
-        if (m.Digest.Matches(held)) { held.Position = 0; return held; }
+        if (digest.Matches(held)) { held.Position = 0; return held; }
         held.Dispose();
         return null;
     }
