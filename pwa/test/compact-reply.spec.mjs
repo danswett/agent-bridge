@@ -98,10 +98,13 @@ test.describe('on a phone', () => {
     expect(attach.x + attach.width).toBeLessThanOrEqual(text.x);
     expect(text.x + text.width).toBeLessThanOrEqual(send.x);
     for (const r of [attach, send]) { expect(r.y + r.height).toBeCloseTo(text.y + text.height, 0); }
-    // The text is still the box's first stop, before Attach and Send (the desktop's order).
-    await input(v).focus();
+    // Tab meets them in the order they are drawn: Attach, the text, then Send (ui.md §9).
+    await b.getByRole('button', { name: 'Attach a file or image' }).focus();
     await page.keyboard.press('Tab');
-    await expect(b.getByRole('button', { name: 'Attach a file or image' })).toBeFocused();
+    await expect(input(v)).toBeFocused();
+    await page.keyboard.type('Hi');
+    await page.keyboard.press('Tab');
+    await expect(b.getByRole('button', { name: 'Send' })).toBeFocused();
   });
 
   test('it grows a line at a time to six lines, then scrolls inside', async ({ page }) => {
@@ -348,5 +351,7 @@ test.describe('from 760 px up', () => {
     const slot = await v.locator('.reply-slot').boundingBox();
     const sc = await v.locator('.stream-scroll').boundingBox();
     expect(slot.y).toBeCloseTo(sc.y + sc.height, 0);
+    // Attach is beside Send again, after the text, as before.
+    expect(await v.locator('form.reply .attach').evaluate((el) => el.parentElement.className)).toBe('reply-tools');
   });
 });
