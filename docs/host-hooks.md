@@ -85,7 +85,13 @@ saved under `<profile>\hooks\backups`. Malformed Claude hook groups are refused 
 registration or ownership changes, including in dry runs. Claude executable paths are
 shell-escaped so dollar signs, command substitutions and apostrophes remain literal;
 repair/removal still recognize registrations from the older double-quoted format.
-JSON formatting/comments can change. Codex gets a
+JSON formatting/comments can change while hooks are registered. Removal writes back the
+first original settings byte for byte (comments, BOM and line endings included) only when
+the settings without the owned hooks still parse to exactly what that backup holds.
+Otherwise, including after later edits, removal rewrites the current settings without the
+owned hooks, so their formatting and comments can change; their values are kept. A
+settings file is never deleted on removal, and an unreadable backup is reported as a
+warning and left as it is. Codex gets a
 local plugin installed using its supported CLI, never a rewrite of hook trust settings.
 Each selected agent home gets `agent-bridge-owner.json`. Setup is repeatable; failures
 report incomplete setup and retain ownership so retry/removal is possible. Multiple agents

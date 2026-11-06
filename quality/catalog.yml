@@ -856,8 +856,8 @@ suites:
     runner: hosted
     triggers: [pwa/**, design/**]
     # @axe-core/playwright on every view in light, dark and forced colors, plus keyboard-only and
-    # reduced-motion specs. The 6 forced-colors tests are skipped on WebKit. Known issues #365,
-    # #366, #369, #370 and #371 are allowlisted by rule, selector and issue.
+    # reduced-motion specs. The 6 forced-colors tests are skipped on WebKit. A known issue is
+    # allowlisted by rule, selector and issue; none is today (#365, #366 and #371 are fixed).
     command: cd pwa && npx playwright test axe.spec.mjs keyboard.spec.mjs reduced-motion.spec.mjs
     where: ci.yml pwa-ui
     baseline: { files: 3, tests: 58 }
