@@ -221,6 +221,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking that question"); }
             var call = CopilotTranscript.Find(transcript, question.Id);
             if (call.Arguments is not { } arguments) { return Stale("the session's transcript no longer shows that question"); }
+            if (call.Resumed && call.Answer is null) { return Stale("the session was resumed in a new Copilot CLI since it asked that question; answer at the machine"); }
             if (call.Answer is not null || call.SessionEnded) { return Stale("the question has already been answered"); }
             if (!call.IsMainAgent) { return Refused("the question was asked by a subagent; answer at the machine"); }
             // Keys go to whichever prompt the CLI shows, and a permission dialog (a sub-agent's,

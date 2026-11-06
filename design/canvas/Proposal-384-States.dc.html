@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #384: readiness states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,textarea,input{font:inherit}
+</style>
+</helmet>
+<!-- Decided by the owner on 2026-11-03 (docs/design/proposals/384-first-run.md §5); ui.md §6.8 is the spec. Every readiness check
+     in first run, Settings and the PWA takes one of six states. None is drawn in a success
+     colour: tokens.json has none, and a check that works stays Neutral. -->
+<div style="width: 1440px; height: 1000px; box-sizing: border-box; padding: 40px 48px; background: {{t.layer}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 20px; overflow: hidden">
+  <h1 style="margin: 0; font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: 28px; line-height: 36px; font-weight: 600">Readiness: one model, six states</h1>
+  <div style="margin-top: 4px; color: {{t.text2}}">Each check shows its state, its reason, when it was last seen and what fixes it. Checking is the progress ring while a check runs.</div>
+
+  <div role="table" style="margin-top: 24px; display: grid; grid-template-columns: 220px repeat(7, 1fr); border: 1px solid {{t.stroke}}; border-radius: 4px; background: {{t.card}}; overflow: hidden">
+    <div role="row" style="display: contents">
+      <div role="columnheader" style="padding: 12px 16px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}; border-bottom: 1px solid {{t.stroke2}}">Check</div>
+      <sc-for list="{{states}}" as="s">
+      <div role="columnheader" style="padding: 12px; border-bottom: 1px solid {{t.stroke2}}; border-left: 1px solid {{t.stroke}}">
+        <div style="display: flex; align-items: center; gap: 8px">
+          <span style="width: 16px; height: 16px; flex: none; display: inline-grid; place-items: center"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+            <sc-if value="{{s.g.isIdle}}"><circle cx="8" cy="8" r="5.6" fill="none" stroke="{{s.g.c}}" stroke-width="1.6"></circle></sc-if>
+            <sc-if value="{{s.g.isWorking}}"><circle cx="8" cy="8" r="5.8" fill="none" stroke="{{s.g.track}}" stroke-width="2"></circle><path d="M8 2.2a5.8 5.8 0 0 1 5.8 5.8" fill="none" stroke="{{s.g.c}}" stroke-width="2" stroke-linecap="round"></path></sc-if>
+            <sc-if value="{{s.g.isNeeds}}"><circle cx="8" cy="8" r="6.6" fill="{{s.g.c}}"></circle><path d="M8 4.6v4.2" stroke="{{s.g.ink}}" stroke-width="1.9" stroke-linecap="round"></path><circle cx="8" cy="11.3" r="1.1" fill="{{s.g.ink}}"></circle></sc-if>
+            <sc-if value="{{s.g.isDone}}"><circle cx="8" cy="8" r="5.8" fill="none" stroke="{{s.g.c}}" stroke-width="1.5"></circle><path d="M5.3 8.2l1.9 1.9 3.6-3.8" fill="none" stroke="{{s.g.c}}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></sc-if>
+            <sc-if value="{{s.g.isFailed}}"><circle cx="8" cy="8" r="5.8" fill="none" stroke="{{s.g.c}}" stroke-width="1.6"></circle><path d="M5.9 5.9l4.2 4.2M10.1 5.9l-4.2 4.2" stroke="{{s.g.c}}" stroke-width="1.6" stroke-linecap="round"></path></sc-if>
+            <sc-if value="{{s.g.isEnded}}"><circle cx="8" cy="8" r="5.6" fill="none" stroke="{{s.g.c}}" stroke-width="1.4" stroke-dasharray="0.1 2.6" stroke-linecap="round"></circle></sc-if>
+          </svg></span>
+          <span style="font-weight: 600; color: {{s.wc}}">{{s.name}}</span>
+        </div>
+        <div style="margin-top: 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{s.role}}</div>
+      </div>
+      </sc-for>
+    </div>
+    <sc-for list="{{dims}}" as="d">
+    <div role="row" style="display: contents">
+      <div role="rowheader" style="padding: 10px 16px; border-top: 1px solid {{t.stroke}}">{{d.name}}</div>
+      <sc-for list="{{d.cells}}" as="c">
+      <div role="cell" style="padding: 10px 12px; border-top: 1px solid {{t.stroke}}; border-left: 1px solid {{t.stroke}}; font-size: 13px; line-height: 18px; color: {{c.wc}}">{{c.text}}</div>
+      </sc-for>
+    </div>
+    </sc-for>
+  </div>
+
+  <div style="margin-top: 16px; display: flex; gap: 32px; font-size: 12px; line-height: 16px; color: {{t.text2}}">
+    <span>Words carry the state; colour never does alone.</span>
+    <span>Not selected is never counted as working.</span>
+    <span>Working needs evidence: a heartbeat or a written file alone is not a connection.</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme ?? 'dark';
+    const dark = { layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)', text: '#FFFFFF', text2: 'rgba(255,255,255,0.72)', text3: 'rgba(255,255,255,0.54)',
+      amber: '#FFB224', amberInk: '#14100A', amberText: '#FFD27A', danger: '#FF6B6B', dangerText: '#FF9494', neutral: '#8B949E', active: '#4C9AFF', track: '#1E3556' };
+    const light = { layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,0.07)', stroke2: 'rgba(0,0,0,0.12)', text: '#1A1A1A', text2: 'rgba(0,0,0,0.62)', text3: 'rgba(0,0,0,0.58)',
+      amber: '#B87700', amberInk: '#FFFFFF', amberText: '#7A4600', danger: '#C9302C', dangerText: '#C9302C', neutral: '#6E7781', active: '#0B63E5', track: '#CFE0FA' };
+    const t = theme === 'light' ? light : dark;
+    const G = (k, c) => ({ isIdle: k === 'idle', isWorking: k === 'working', isNeeds: k === 'needs', isDone: k === 'done', isFailed: k === 'failed', isEnded: k === 'ended', c, ink: t.amberInk, track: t.track });
+    const states = [
+      { name: 'Not selected', g: G('ended', t.neutral), role: 'Ended glyph · Neutral', wc: t.text3 },
+      { name: 'Missing', g: G('idle', t.neutral), role: 'Idle ring · Neutral', wc: t.text2 },
+      { name: 'Needs action', g: G('needs', t.amber), role: 'Needs you', wc: t.amberText },
+      { name: 'Working', g: G('done', t.neutral), role: 'Ring with check · Neutral', wc: t.text2 },
+      { name: 'Blocked', g: G('failed', t.danger), role: 'Failed glyph · Danger', wc: t.dangerText },
+      { name: 'Failed', g: G('failed', t.danger), role: 'Failed glyph · Danger', wc: t.dangerText },
+      { name: 'Checking', g: G('working', t.active), role: 'Progress ring · Active', wc: t.text2 }
+    ];
+    const D = (name, cells) => ({ name, cells: cells.map((text, i) => ({ text, wc: states[i].wc })) });
+    const dims = [
+      D('Executable, version, home', ['Not selected', 'Not found', 'Update needed: 0.98 is too old', 'Found 1.0.3', 'Blocked: npm not found', 'Install failed: exit code 1', 'Looking']),
+      D('Sign-in', ['Not selected', 'Not signed in', 'Sign-in expired', 'Signed in as danswett', 'Blocked by Copilot CLI', 'Sign-in failed', 'Waiting for you']),
+      D('Access (entitlement)', ['Not selected', 'Not checked', 'Choose a plan', 'Plan includes Codex', 'No access', 'Couldn\'t check: 503', 'Checking']),
+      D('Ownership', ['Not selected', 'Nothing registered', 'Earlier setup to migrate', 'Owned by Agent Bridge', 'Owned by another tool', 'Couldn\'t read hooks.json', 'Reading']),
+      D('Registration', ['Not selected', 'Not registered', 'Out of date', 'Registered', 'Command can\'t run here', 'Couldn\'t register', 'Registering']),
+      D('Activation and trust', ['Not selected', 'Not active', 'Not trusted in Codex', 'Trusted', 'Turned off by policy', 'Couldn\'t check', 'Checking']),
+      D('Host heartbeat', ['Always required', 'Host not running', 'Restart needed', 'Heartbeat 14:52:10', 'Another host is running', 'Host stopped at 14:20', 'Starting']),
+      D('Last hook from a test session', ['Not selected', 'No hook yet', 'New session needed', 'Hook 14:35 from 7f3c', 'Blocked by hook trust', 'No hook within 2 min', 'Waiting for a hook']),
+      D('Launch authorization', ['Not selected', 'No folders approved', 'Folder trust question waiting', '2 folders approved', 'System folder: not allowed', 'Launch failed: exit code 1', 'Launching']),
+      D('Connectivity', ['Local only', 'Not signed in', 'Reconnect', 'Connected 14:52', 'Offline', 'Relay timed out after 10 s', 'Connecting'])
+    ];
+    return { t, states, dims };
+  }
+}
+</script>
+</body>
+</html>
