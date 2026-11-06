@@ -296,6 +296,10 @@ public sealed class RestoreTests : IDisposable
     [InlineData("{ not json")]
     [InlineData("""{ "v": 1, "boot": "not a time", "instance": "run1", "written": "2026-10-28T04:00:00.000Z" }""")]
     [InlineData("""{ "v": 1, "boot": "2026-10-28T04:00:00.000Z", "instance": "run1", "written": "2026-10-28T04:00:00.000Z", "sessions": [null] }""")]
+    // Copilot on #813: an owed entry's judgement missing, never read as a default (no time read as
+    // MinValue, let go at once with its worktree).
+    [InlineData("""{ "v": 1, "boot": "2026-10-28T04:00:00.000Z", "instance": "run1", "written": "2026-10-28T04:00:00.000Z", "owed": [{ "entry": { "id": "a", "agent": "copilot", "cwd": "/work/repo", "seen": "2026-10-28T04:00:00.000Z" }, "cause": "crash", "decided": true }] }""")]
+    [InlineData("""{ "v": 1, "boot": "2026-10-28T04:00:00.000Z", "instance": "run1", "written": "2026-10-28T04:00:00.000Z", "owed": [{ "entry": { "id": "a", "agent": "copilot", "cwd": "/work/repo", "seen": "2026-10-28T04:00:00.000Z" }, "at": "2026-10-28T04:00:00.000Z", "decided": true }] }""")]
     public async Task An_unreadable_record_is_set_aside_offers_nothing_and_keeps_every_worktree(string text)
     {
         File.WriteAllText(Record, text);
@@ -589,6 +593,29 @@ public sealed class RestoreTests : IDisposable
         Assert.Empty(Written().Owed);
     }
 
+    // Copilot on #813: ended while discovery was held, then resumed and gone again before the hold
+    // lifted. Its registration now says it has not ended, which goes before the ending kept: it is
+    // offered and its folder kept, and while held the intake keeps its endings again.
+    [Fact]
+    public async Task An_ending_kept_while_discovery_is_held_gives_way_to_a_registration_that_says_it_has_not_ended()
+    {
+        Previous(Fixture.T0, false, E("a", AgentKind.Codex));
+        source.HeldNow = new DiscoveryHeld("the codex processes could not be listed", [AgentKind.Codex]);
+        ends.Of["a"] = true;
+        await using var r = Recorder();
+        r.Start();
+        Assert.False(r.JudgingEndings);
+
+        ends.Of["a"] = false;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        Assert.True(r.JudgingEndings);
+        source.HeldNow = null;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+
+        Assert.Equal("a", Assert.Single(r.Notice!.Offered).Id);
+        Assert.Single(r.Folders()!);
+    }
+
     [Fact]
     public async Task An_ending_read_while_discovery_is_held_counts_after_its_registration_is_pruned()
     {
@@ -732,6 +759,26 @@ public sealed class RestoreTests : IDisposable
         Time.Advance(RestoreRecorder.Coalesce);
 
         Assert.Equal(launch, Assert.Single(Written().Sessions).Launch);
+    }
+
+    // Copilot on #813: the launches kept are bounded by those not yet seen, never counting the live
+    // ones: with as many live as are kept, a second launch let go of the first before its session was
+    // seen, and it was written with no settings.
+    [Fact]
+    public async Task A_launch_not_yet_seen_keeps_its_settings_however_many_live_sessions_were_launched_here()
+    {
+        var live = Enumerable.Range(0, 256).Select(i => $"live{i:D3}").ToList();
+        source.Sessions.AddRange(live.Select(id => S(id)));
+        await using var r = Recorder();
+        r.Start();
+        foreach (var id in live) { r.Launched(id, new LaunchedWith { Agent = "copilot", Permissions = "ask" }); }
+
+        r.Launched("x", new LaunchedWith { Agent = "agency", Workspace = "Bridge", Worktree = true, Profile = "work", Permissions = "ask" });
+        r.Launched("y", new LaunchedWith { Agent = "copilot", Permissions = "ask" });
+        source.Upsert(S("x"));
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        Assert.Equal(new RestoreLaunch("agency", "Bridge", true, "work", null, null, null, "ask"), Written().Sessions.Single(e => e.Id == "x").Launch);
     }
 
     // Copilot on #813: the pending write's deadline is elapsed time, as its timer is. Compared on the

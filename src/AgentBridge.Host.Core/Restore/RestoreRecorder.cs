@@ -300,12 +300,15 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         lock (gate)
         {
             if (stopped) { return; }
-            if (launched.Count >= LaunchesKept)
+            // Never an owed session's: one held undecided is adopted later through From, which takes
+            // its settings from here. Let go, it was written with none (Copilot on #813). Nor a live
+            // one's, and those do not count to the bound: with LaunchesKept of them, every launch let
+            // go of the one before it before its session was seen (Copilot on #813).
+            var owedIds = owed.Select(w => w.Entry.Id).ToHashSet(StringComparer.Ordinal);
+            var unseen = launched.Keys.Where(id => !live.ContainsKey(id) && !owedIds.Contains(id)).ToList();
+            if (unseen.Count >= LaunchesKept)
             {
-                // Never an owed session's: one held undecided is adopted later through From, which
-                // takes its settings from here. Let go, it was written with none (Copilot on #813).
-                var owedIds = owed.Select(w => w.Entry.Id).ToHashSet(StringComparer.Ordinal);
-                foreach (var id in launched.Keys.Where(id => !live.ContainsKey(id) && !owedIds.Contains(id)).ToList()) { launched.Remove(id); }
+                foreach (var id in unseen) { launched.Remove(id); }
             }
             launched[sessionId] = launch;
             if (running && live.TryGetValue(sessionId, out var e) && e.Launch != launch)
@@ -449,15 +452,20 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             var settled = options.EndsSettled?.Invoke(w.Entry.Agent) ?? true;
             // A Claude or Codex ending is read while discovery is held too, and kept: the intake
             // prunes an ended registration once its process has gone, which may be before the hold
-            // lifts, and its absence then would read as a death.
-            if (held.Contains(w.Entry.Agent) && settled && w.EndedSeen is null && w.Cause != RestoreCause.Reboot
-                && w.Entry.Agent is AgentKind.Claude or AgentKind.Codex && options.Ends.Ended(w.Entry.Agent, w.Entry.Id) == true)
+            // lifts, and its absence then would read as a death. Newer evidence goes first: resumed
+            // since, its registration says it has not ended, and what was kept goes, so the intake
+            // keeps its endings again (JudgingEndings) and it is judged by what it says then
+            // (Copilot on #813).
+            if (held.Contains(w.Entry.Agent) && settled && w.Cause != RestoreCause.Reboot && w.Entry.Agent is AgentKind.Claude or AgentKind.Codex)
             {
-                owed[i] = w = w with { EndedSeen = true };
+                var ended = options.Ends.Ended(w.Entry.Agent, w.Entry.Id);
+                if (ended == true && w.EndedSeen is null) { owed[i] = w = w with { EndedSeen = true }; }
+                else if (ended == false && w.EndedSeen is not null) { owed[i] = w = w with { EndedSeen = null }; }
             }
             var seen = w.EndedSeen;
             var entry = w.Entry;
-            var verdict = RestoreJudge.Judge(entry, w.Cause, running: false, held: held.Contains(entry.Agent), () => seen == true ? true : options.Ends.Ended(entry.Agent, entry.Id),
+            // What its agent records now, and only once that is gone, the ending kept.
+            var verdict = RestoreJudge.Judge(entry, w.Cause, running: false, held: held.Contains(entry.Agent), () => options.Ends.Ended(entry.Agent, entry.Id) ?? (seen == true ? true : null),
                 endsSettled: settled);
             switch (verdict)
             {

@@ -87,7 +87,8 @@ public static class RestoreFiles
             if (file is null) { return (null, "it is empty"); }
             if (file.V != RestoreFile.CurrentVersion) { return (null, $"it is version {file.V}, not {RestoreFile.CurrentVersion}"); }
             // JSON null reads into anything, whatever the record says it holds.
-            if (file.Sessions is null || file.Owed is null || file.Sessions.Any(e => e?.Id is not { Length: > 0 }) || file.Owed.Any(w => w?.Entry?.Id is not { Length: > 0 }))
+            if (file.Sessions is null || file.Owed is null || file.Sessions.Any(e => e?.Id is not { Length: > 0 }) || file.Owed.Any(w => w?.Entry?.Id is not { Length: > 0 })
+                || !OwedWhole(bytes))
             {
                 return (null, "it is malformed");
             }
@@ -98,6 +99,33 @@ public static class RestoreFiles
         {
             return (null, e.Message);
         }
+    }
+
+    // Each owed entry's judgement as written, never a default: one with no time read as MinValue, was
+    // let go at once and its worktree with it, rather than the record set aside (Copilot on #813).
+    // Since may be absent: a null one is not written.
+    static readonly string[] OwedRequired = ["entry", "cause", "at", "decided"];
+
+    static bool OwedWhole(byte[] bytes)
+    {
+        using var doc = JsonDocument.Parse(bytes);
+        if (Find(doc.RootElement, "owed") is not { ValueKind: JsonValueKind.Array } owed) { return true; }
+        foreach (var w in owed.EnumerateArray())
+        {
+            if (w.ValueKind != JsonValueKind.Object || OwedRequired.Any(name => Find(w, name) is not { ValueKind: not JsonValueKind.Null })) { return false; }
+        }
+        return true;
+    }
+
+    // As the record is read: names without regard to case.
+    static JsonElement? Find(JsonElement o, string name)
+    {
+        if (o.ValueKind != JsonValueKind.Object) { return null; }
+        foreach (var p in o.EnumerateObject())
+        {
+            if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) { return p.Value; }
+        }
+        return null;
     }
 
     // Written whole and flushed to the disk before it is renamed into place, so a crash or a power cut

@@ -202,6 +202,12 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         notice = notice with { Waiting = 0, Offered = [.. notice.Offered, new RestoreSession { Id = "s2", Agent = AgentKind.Copilot }] };
         time.Advance(served.HelloCheck);
         Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+
+        // Copilot on #813: only what it says changed, its counts the same (an uncertain session found
+        // live, the cause, time and offers rebuilt from the rest): said again too.
+        notice = notice with { Cause = RestoreCause.Crash, Since = notice.At.AddMinutes(-3), Offered = [new RestoreSession { Id = "s3", Agent = AgentKind.Claude }, .. notice.Offered.Skip(1)] };
+        time.Advance(served.HelloCheck);
+        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
     }
 
     [Fact]

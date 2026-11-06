@@ -402,7 +402,10 @@ public sealed class SessionService
     static string Said(string? readOnly, RestoreNotice? restore, IEnumerable<string> offered) =>
         (readOnly ?? "") + "\n" + Said(restore) + "\n" + string.Join("\n", offered);
 
-    static string Said(RestoreNotice? n) => n is null ? "" : FormattableString.Invariant($"{n.At:O}|{n.Waiting}|{n.Restored}|{n.Loops}|{n.Offered.Count}|{n.OfferedMore}|{n.Why}");
+    // The whole notice as shaped for the channel: its cause, its time and what each offer says change
+    // too, with the counts the same (an uncertain session found live, the rest rebuilt; Copilot on
+    // #813).
+    static string Said(RestoreNotice? n) => n is null ? "" : JsonSerializer.Serialize(n, ProtocolJson.Options);
 
     void WatchHello(IProtocolChannel channel, HelloResult hello, Func<HelloResult, HelloResult>? shape)
     {
