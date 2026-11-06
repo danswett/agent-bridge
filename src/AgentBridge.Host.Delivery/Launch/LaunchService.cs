@@ -1203,7 +1203,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         {
             var p = pending.FirstOrDefault(x => !x.Closed && (x.LiveId == sessionId || x.SessionId == sessionId)
                 && !(x.Decided.Task.IsCompletedSuccessfully && x.Decided.Task.Result.Outcome == LaunchOutcome.Started));
-            if (p is not null) { return NotReady(p.Launcher.Label); }
+            if (p is not null) { return Waiting(p.Launcher.Label, p.Question); }
             if (!neverReady.TryGetValue(sessionId, out held)) { return null; }
         }
         // Outside pendingGate: the source and the transcript are read with no lock of this one's held.
@@ -1215,13 +1215,21 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         var alive = held.Alive();
         lock (pendingGate)
         {
-            if (alive && !past) { return NotReady(held.Label); }
+            if (alive && !past) { return FirstReplyWords.NotSeenReady(held.Label); }
             neverReady.Remove(sessionId);
             return null;
         }
-        static string NotReady(string label) =>
-            $"{label} was started here and its window has not been seen ready, so it may still be asking a startup question (such as whether to trust its folder) that a reply would answer; answer it at the machine (a prompt typed there lets replies through)";
     }
+
+    // What a held reply says while the launch is still followed: the question its window asks,
+    // answered from a device where the bridge allows that for folder trust (#947), else the
+    // machine; and, with no question drawn, only that it has not started yet (#1018).
+    string Waiting(string label, StartupQuestion question) => question switch
+    {
+        StartupQuestion.None => FirstReplyWords.WaitingToStart,
+        StartupQuestion.Trust => FirstReplyWords.AskingTrust(label, RemoteFolderTrust && TrustDevices.Count > 0),
+        _ => FirstReplyWords.AskingAtMachine(label),
+    };
 
 
     // Whether the agent a launch started on this session still runs, as a check to make again later,

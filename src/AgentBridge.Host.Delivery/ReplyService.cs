@@ -4,6 +4,7 @@ using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Delivery.Copilot;
 using AgentBridge.Host.Delivery.AgentReplies;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Host.Delivery.Windows;
 using AgentBridge.Protocol;
@@ -414,18 +415,22 @@ public sealed class ReplyService : ISessionReplier
             // registers its session (inuse.<pid>.lock) while its folder-trust question may still
             // be on screen. So a session with no transcript yet may be asking that, where typed
             // words are dropped and Enter answers "Yes": a reply to one on the test VM trusted
-            // the folder. Only a person at the machine answers it, so nothing is typed, and the
-            // reason says which case this is rather than calling the transcript unreadable.
-            if (!before.Readable && NotYetWritten(transcript, now))
+            // the folder. The window says which: the trust question is drawn in place of the
+            // prompt's box and footer, never beside them (1.0.105 to 1.0.107, seen live), so a
+            // reply goes only when the box and footer are on screen and no startup question is
+            // (#1018); otherwise it is held, with words for the phone, and nothing is typed. The
+            // keys themselves are still held to those rows by the worker (#825).
+            var noTranscriptYet = !before.Readable && NotYetWritten(transcript, now);
+            if (noTranscriptYet)
             {
-                return Done(Refused("Copilot has not started this session's transcript yet (it does with the first prompt), so the host cannot tell whether it is still asking whether to trust its folder, which a reply would answer; send the first prompt at the machine, or launch with a prompt"));
+                if (await FirstReplyHoldAsync(pid, "Copilot") is { } hold) { return Done(Refused(hold)); }
             }
-            if (!before.Readable) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
+            else if (!before.Readable) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
             if (before.Resumed)
             {
                 return Done(Refused("the session was resumed in a new Copilot while a question or approval was open, and its window may still show it, where a reply would answer it; answer or dismiss it at the machine (or type there), then reply"));
             }
-            if (before.Asking) { return Done(Asking()); }
+            if (before.Asking && !noTranscriptYet) { return Done(Asking()); }
             from = before.ScannedTo;
             // Typed only into Copilot's input box, empty and outside shell mode, as the screen
             // shows it now: words left in it would go with the reply, and in shell mode Enter runs
@@ -490,6 +495,30 @@ public sealed class ReplyService : ISessionReplier
         };
 
         static Attempt Done(ReplyResult r) => new(r, null);
+    }
+
+    // Why a reply to a Copilot session with no transcript yet must wait, or null when its window
+    // shows the prompt's box with no startup question over it (#1018). A window that cannot be
+    // read, or does not show the box yet, is "waiting to start", never "at the machine".
+    async Task<string?> FirstReplyHoldAsync(int pid, string label)
+    {
+        ConsoleScreen screen;
+        try { screen = await injector.ReadScreenAsync(pid); }
+        catch (Exception e)
+        {
+            log($"could not read the screen of pid {pid} for a first reply: {e.GetType().Name}: {e.Message}");
+            return FirstReplyWords.WaitingToStart;
+        }
+        if (screen.Rows is not { } rows) { return FirstReplyWords.WaitingToStart; }
+        switch (StartupQuestions.Read(rows))
+        {
+            case StartupQuestion.None: break;
+            case StartupQuestion.Trust: return FirstReplyWords.AskingTrust(label, answerableFromHere: false);
+            default: return FirstReplyWords.AskingAtMachine(label);
+        }
+        // The box drawn at the bottom over its footer, whatever it holds: a draft or shell mode
+        // is named by the check that types, which comes next.
+        return CopilotInputBoxReader.Read(rows) is { Seen: true } or { Box: not null } ? null : FirstReplyWords.WaitingToStart;
     }
 
     // Copilot's input box, as the session's screen shows it now, or why no reply can be typed

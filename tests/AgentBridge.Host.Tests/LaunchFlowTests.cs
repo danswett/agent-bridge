@@ -486,7 +486,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var o = await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
 
         Assert.Equal(LaunchOutcome.Unconfirmed, o.Outcome);
-        Assert.Contains("has not been seen ready", launcher.HeldForReply(Id));
+        Assert.Equal(FirstReplyWords.AskingTrust("Copilot", answerableFromHere: false), launcher.HeldForReply(Id));
         Assert.Null(launcher.HeldForReply("7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f7f"));
         Assert.Empty(screens.Typed);
         screens.Rows = CopilotReady;
