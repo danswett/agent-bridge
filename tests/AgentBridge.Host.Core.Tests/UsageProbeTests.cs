@@ -40,9 +40,10 @@ public sealed class UsageProbeTests : IDisposable
         CodexControlSocket = socket ?? Path.Combine(f.Root, "no-daemon.sock"),
     };
 
-    UsageProbes Probes(ICodexDaemon? daemon = null, FakeLeases? leases = null, string? seen = null) => new()
+    UsageProbes Probes(ICodexDaemon? daemon = null, FakeLeases? leases = null, string? seen = null, Func<string?>? staged = null) => new()
     {
         ClaudeAccountSeen = seen,
+        UpdateStaged = staged,
         Launcher = launcher,
         Processes = f.Processes,
         Find = agent => agent switch { AgentKind.Claude => "/fake/claude", AgentKind.Codex => "/fake/codex", _ => null },
@@ -1497,6 +1498,28 @@ public sealed class UsageProbeTests : IDisposable
 
         Assert.Equal(CodexProbeKind.Reading, outcome.Kind);
         Assert.Null(outcome.Reading!.AccountKey);
+    }
+
+    [Fact]
+    public async Task No_standalone_Codex_probe_starts_while_an_update_waits_to_be_installed_and_one_does_once_none_waits()
+    {
+        // #238 review: Velopack applies a waiting update when the app next starts, or Update.exe by
+        // hand, and either ends this host under the app-server without waiting for it.
+        CodexUsed();
+        AppServer();
+        string? staged = "0.1.700";
+        var codex = new CodexUsageCollector(Options(), time, Probes(staged: () => staged), Log);
+
+        await codex.CollectAsync();
+        await Until(() => codex.Running.IsCompleted);
+
+        Assert.Empty(launcher.Started);
+        Assert.Contains(log, l => l.Contains("an update (0.1.700) is waiting to be installed", StringComparison.Ordinal));
+
+        staged = null;
+        time.Advance(TimeSpan.FromMinutes(16));
+        await codex.CollectAsync();
+        await Until(() => launcher.Started.Count == 1);
     }
 
     [Fact]

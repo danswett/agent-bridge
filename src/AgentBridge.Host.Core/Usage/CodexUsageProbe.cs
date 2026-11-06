@@ -103,6 +103,17 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
             // A runtime (node, bun) whose command line could not be read may be Codex's own.
             if (observed.Processes.Count == 0 && observed.Unidentified.Count == 0)
             {
+                // Not while an update waits to be applied: one applied by anything but the app ends
+                // this host under the app-server (UsageProbes.UpdateStaged). Not knowing is not
+                // permission. The daemon route below leaves nothing tied to this host.
+                string? staged;
+                try { staged = probes.UpdateStaged?.Invoke(); }
+                catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { staged = "one that could not be looked at"; }
+                if (staged is not null)
+                {
+                    reported.TrySetResult(new(CodexProbeKind.Skipped, Why: $"an update ({staged}) is waiting to be installed, which would end this host under the app-server"));
+                    return;
+                }
                 handed = true;
                 await StandaloneAsync(exe, reported, answered, released, lease);
                 return;

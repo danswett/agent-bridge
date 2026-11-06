@@ -38,6 +38,15 @@ public sealed class UsageProbes
     // Codex's managed daemon, over its control socket.
     public ICodexDaemon Daemon { get; init; } = new CodexDaemonSocket();
 
+    // The version of an app update downloaded here and waiting to be applied, or null (#238). Any
+    // apply ends every process in the package, this host too, and with it the input of a
+    // standalone Codex app-server mid-refresh, which can sign Codex out. The app's own installs
+    // wait for the probes, but Velopack also applies a waiting update when the app next starts,
+    // and Update.exe can be run by hand, and neither waits; its hook cannot delay one either
+    // (docs.velopack.io/integrating/hooks). Every such apply needs an update waiting, so while one
+    // is, no standalone app-server is started. Null: nothing here can wait (no package).
+    public Func<string?>? UpdateStaged { get; init; }
+
     // A process's parent, so the Codex probe's own process tree (codex.cmd, node, codex.exe) is not
     // taken for another Codex process.
     public Func<int, int?> ParentOf { get; init; } = AgentBridge.Hooks.Ancestry.ParentOf;
