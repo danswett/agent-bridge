@@ -111,7 +111,8 @@ public sealed class SettingsTests : IAsyncLifetime
             new(ReadinessState.Working, $"Version {version}"),
             new(ReadinessState.NeedsAction, "Explicit hook setup is required."),
             new(ReadinessState.Unknown, "Sign-in has not been verified."),
-            new(ReadinessState.Unknown, "Trust and a new session have not been verified.")),
+            new(ReadinessState.Unknown, "Trust and a new session have not been verified."),
+            HookSetup: HookSetupState.NotSetUp),
     ]);
 
     [Fact]
@@ -166,6 +167,48 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Contains("cancellation completed", settings.AgentInstallStatus);
         Assert.True(settings.HasError);
         Assert.False(settings.Busy);
+    }
+
+    [Fact]
+    public async Task A_CLI_installation_says_installing_on_its_row_then_why_it_failed_and_offers_install_cli_again()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = new(Make.T0, [Agent("claude", "Claude Code", ReadinessState.NeedsAction, installation: ReadinessState.Missing, hooksDetail: NoRecordIntakeOff)]) });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        Assert.Equal(("Not installed", true), (settings.Agents.Single().Installation, settings.Agents.Single().CanInstall));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        const string failed = "Windows Package Manager exited with code 0x8A15000F. Check network access, package policy and required runtime approvals, then check agents again. Partial installations were not removed.";
+        host.OnAsync(HostOps.AgentsInstall, async _ =>
+        {
+            entered.SetResult();
+            await finish.Task;
+            host.Status = host.Status with { AgentInstallation = new AgentInstallProgress("claude", false, failed) };
+            return new AgentInstallResult(false, failed);
+        });
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+        var pending = settings.InstallAgentAsync("claude");
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var installing = settings.Agents.Single();
+            Assert.Equal("Installing…", installing.Installation);
+            Assert.True(installing.Installing);
+            // Install CLI stays pressed and focusable, with Cancel beside it (ui.md §9.1 A4).
+            Assert.True(installing.InstallEnabled);
+            Assert.False(installing.CanInstall);
+            Assert.Equal("Cancel CLI installation", installing.CancelInstallName);
+        }
+        finally { finish.TrySetResult(); }
+        await pending;
+        Assert.True(settings.HasError);
+
+        await Wait.UntilAsync(() => settings.Agents.Single().Installation.StartsWith("Install failed", StringComparison.Ordinal), "the failure on the row",
+            why: () => settings.Agents.Single().Installation);
+        var row = settings.Agents.Single();
+        Assert.Equal("Install failed · Windows Package Manager couldn't install it", row.Installation);
+        Assert.False(row.Installing);
+        Assert.True(row.ShowInstall);
+        Assert.True(row.CanInstall);
     }
 
     [Fact]
@@ -392,7 +435,7 @@ public sealed class SettingsTests : IAsyncLifetime
         await Wait.UntilAsync(() => settings.Agents.SingleOrDefault()?.Installation.Contains("2.3.4") == true && settings.RestartRequired, "the readiness and restart the setup left",
             why: () => $"installation {settings.Agents.SingleOrDefault()?.Installation ?? "none"}, restart required {settings.RestartRequired}");
         Assert.Empty(host.Sent(HostOps.Restart));
-        Assert.Contains("Start new agent sessions", settings.Agents.Single().Status);
+        Assert.Equal("Set up · restart the host, then start a new session to check it", settings.Agents.Single().Status);
         Assert.Contains("Trust and a new session have not been verified", settings.Agents.Single().Checks);
         Assert.False(settings.HasError);
     }
@@ -406,7 +449,7 @@ public sealed class SettingsTests : IAsyncLifetime
 
         await settings.SetUpAgentAsync("claude");
 
-        Assert.Equal("Registered. Restart explicitly.", settings.Agents.Single().Status);
+        Assert.Equal("Set up · restart the host, then start a new session to check it", settings.Agents.Single().Status);
         Assert.Equal("fixture post-setup scan failed", settings.Error);
         Assert.Empty(host.Sent(HostOps.Restart));
     }
@@ -420,7 +463,8 @@ public sealed class SettingsTests : IAsyncLifetime
         await settings.SetUpAgentAsync("claude");
 
         Assert.Equal("Hook setup incomplete: fixture partial work", settings.Error);
-        Assert.Equal(settings.Error, settings.Agents.Single().Status);
+        // The row says why from a known set; the command's own text stays in the page's error and the log.
+        Assert.Equal("Setup failed · the host couldn't finish it", settings.Agents.Single().Status);
         Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
         Assert.Empty(host.Sent(HostOps.Restart));
         Assert.False(settings.Busy);
@@ -435,10 +479,31 @@ public sealed class SettingsTests : IAsyncLifetime
         public void Release() { while (queue.TryDequeue(out var item)) { TestUi.ForTest.Invoke(() => item.Run(item.State)); } }
     }
 
-    static AgentReadiness Agent(string id, string label, ReadinessState hooks, ReadinessState installation = ReadinessState.Working, string hooksDetail = "Fixture hooks.") =>
+    // An agent as a current host reports it: `hookSetup` paired with its hooks as AgentReadinessService.Hooks
+    // pairs them, unless a test says otherwise (HookSetupState.Unknown with any but blocked or failed
+    // hooks is a host from before the field).
+    static AgentReadiness Agent(string id, string label, ReadinessState hooks, ReadinessState installation = ReadinessState.Working, string hooksDetail = "Fixture hooks.", HookSetupState? setup = null) =>
         new(id, label, "fixture-home", $"{id}.exe", "1.2.3",
             new(installation, "Executable found."), new(ReadinessState.Working, "Version 1.2.3"), new(hooks, hooksDetail),
-            new(ReadinessState.Unknown, "Sign-in has not been verified."), new(ReadinessState.Unknown, "Trust has not been verified."));
+            new(ReadinessState.Unknown, "Sign-in has not been verified."), new(ReadinessState.Unknown, "Trust has not been verified."),
+            HookSetup: setup ?? (hooks, hooksDetail) switch
+            {
+                (ReadinessState.Blocked, _) => HookSetupState.Unknown,
+                (_, var d) when d.Contains("did not complete", StringComparison.Ordinal) => HookSetupState.Incomplete,
+                (ReadinessState.Failed, _) => HookSetupState.Unknown,
+                (_, var d) when d.Contains("owned setup record", StringComparison.Ordinal) => HookSetupState.Completed,
+                _ => HookSetupState.NotSetUp,
+            });
+
+    [Theory]
+    [InlineData("Hook setup incomplete: C:\\Users\\dana\\.codex\\agent-ha-bridge-owner.json is a legacy registration; use Migrate", "Setup failed · an older bridge's hooks are there; migrate them first")]
+    [InlineData("agent-ha-bridge is active or cannot be checked (running); use Migrate instead", "Setup failed · an older bridge runs this machine")]
+    [InlineData("Hook setup incomplete: C:\\Users\\dana\\.codex\\agent-bridge-owner.json belongs to another installation; it was left alone", "Setup failed · another bridge profile owns its hooks")]
+    [InlineData("Hook setup incomplete: Access to the path 'C:\\Users\\dana\\.codex\\config.toml' is denied.", "Setup failed · access denied")]
+    public void A_failed_setup_says_why_from_a_known_set_never_its_path(string raw, string words)
+    {
+        Assert.Equal(words, AgentWords.SetupFailed(remove: false, "Set up", raw));
+    }
 
     [Fact]
     public void Each_agent_rows_buttons_are_named_for_its_agent_and_have_ids_of_their_own()
@@ -463,6 +528,9 @@ public sealed class SettingsTests : IAsyncLifetime
     const string UnknownRecord = "The hook ownership record is not recognized. Inspect it before repairing setup.";
     const string DidNotComplete = "Hook setup for this profile did not complete; its registrations may be partial. Repair setup.";
     const string Unreadable = "Hook ownership could not be checked: Access to the path is denied.";
+    const string InUse = "Hook ownership could not be checked: The process cannot access the file because it is being used by another process.";
+    // `hookSetup` unknown beside hooks a current host would have said it of (#784's words).
+    const string OlderHost = "Can't check · this machine's host is older";
 
     [Theory]
     [InlineData(ReadinessState.Missing, "Fixture hooks.", "Set up")]
@@ -516,13 +584,15 @@ public sealed class SettingsTests : IAsyncLifetime
     [InlineData("failed", "Hook setup did not finish. Repair it before relying on these hooks.", "incomplete", "Repair", "")]
     [InlineData("needsAction", RecordIntakeOff, "incomplete", "Repair", "")]
     [InlineData("unknown", RecordIntakeOn, "completed", null, "Not tested yet")]
-    [InlineData("unknown", RecordIntakeOn, "unknown", null, "Not tested yet")]
-    [InlineData("unknown", NoRecordIntakeOn, null, "Set up", "")]
-    [InlineData("blocked", "Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "incomplete", null, "")]
-    [InlineData("failed", UnknownRecord, "unknown", null, UnknownRecord)]
-    [InlineData("failed", Unreadable, "unknown", null, Unreadable)]
+    [InlineData("unknown", RecordIntakeOn, "unknown", null, OlderHost)]
+    [InlineData("unknown", NoRecordIntakeOn, null, null, OlderHost)]
+    [InlineData("needsAction", NoRecordIntakeOff, null, null, OlderHost)]
+    [InlineData("blocked", "Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "incomplete", null, "Read-only · another bridge profile owns its hooks")]
+    [InlineData("failed", UnknownRecord, "unknown", null, "Hook ownership couldn't be checked · couldn't read")]
+    [InlineData("failed", Unreadable, "unknown", null, "Hook ownership couldn't be checked · access denied")]
+    [InlineData("failed", InUse, "unknown", null, "Hook ownership couldn't be checked · file in use")]
     [InlineData("failed", DidNotComplete, "incomplete", "Repair", "")]
-    [InlineData("failed", DidNotComplete, null, "Repair", "")]
+    [InlineData("failed", DidNotComplete, null, null, "Can't check")]
     public void An_agent_row_takes_its_verb_from_the_hosts_hook_setup_and_reads_a_missing_one_as_unknown(string hooks, string detail, string? hookSetup, string? verb, string status)
     {
         var agent = FromWire(hooks, detail, hookSetup);
@@ -556,9 +626,53 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(row.ShowSetUp);
         Assert.False(row.CanSetUp);
         Assert.False(row.ShowRemove);
-        Assert.Equal(UnknownRecord, row.Status);
+        Assert.Equal("Hook ownership couldn't be checked · couldn't read", row.Status);
         Assert.Equal(Tone.None, row.StatusTone);
-        Assert.Equal($"Codex: {UnknownRecord}", row.StatusName);
+        Assert.Equal("Codex: Hook ownership couldn't be checked · couldn't read", row.StatusName);
+    }
+
+    [Fact]
+    public void An_ownership_check_the_host_was_denied_says_why_never_the_path_or_the_exception()
+    {
+        const string denied = "Hook ownership could not be checked: Access to the path 'C:\\Users\\dana\\.codex\\agent-bridge-owner.json' is denied.";
+        var row = new AgentReadinessRow(FromWire("failed", denied, "unknown"), canManage: true);
+
+        Assert.Equal("Hook ownership couldn't be checked · access denied", row.Status);
+        Assert.Contains("Hooks: Hook ownership couldn't be checked · access denied", row.Checks);
+        Assert.DoesNotContain("Access to the path", row.Status + row.Checks + row.Installation);
+        Assert.DoesNotContain("agent-bridge-owner.json", row.Status + row.Checks + row.Installation);
+        // The host's own words go to the app's log.
+        Assert.Contains(denied, row.Raw());
+    }
+
+    [Theory]
+    [InlineData("Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine", "Read-only · an older bridge runs this machine")]
+    [InlineData("Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "Read-only · another bridge profile owns its hooks")]
+    [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "Read-only · this host is set to read-only")]
+    public void Hooks_held_back_from_this_app_say_read_only_and_why_with_no_install_or_verb(string detail, string words)
+    {
+        var row = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Blocked, installation: ReadinessState.Missing, hooksDetail: detail), canManage: true, canInstall: true);
+
+        Assert.Equal(words, row.Status);
+        Assert.Equal(Tone.None, row.StatusTone);
+        Assert.False(row.ShowInstall);
+        Assert.False(row.CanInstall);
+        Assert.False(row.ShowSetUp);
+        Assert.False(row.ShowRemove);
+        Assert.Equal("Not installed · install it on this machine", row.Installation);
+        Assert.Contains($"Hooks: {words}", row.Checks);
+    }
+
+    [Fact]
+    public void A_missing_CLI_is_not_installed_with_install_cli_where_it_can_be_and_says_where_to_install_it_where_not()
+    {
+        var offered = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.NeedsAction, installation: ReadinessState.Missing), canInstall: true);
+        var agency = new AgentReadinessRow(Agent("agency", "Agency", ReadinessState.NeedsAction, installation: ReadinessState.Missing), canInstall: true);
+        var olderHost = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.NeedsAction, installation: ReadinessState.Missing), canInstall: false, installOffered: false);
+
+        Assert.Equal(("Not installed", true), (offered.Installation, offered.ShowInstall));
+        Assert.Equal(("Not installed · install it on this machine", false), (agency.Installation, agency.ShowInstall));
+        Assert.Equal(("Not installed · install it on this machine", false), (olderHost.Installation, olderHost.ShowInstall));
     }
 
     // The host removes only hooks this profile's owned record says it set up, and refuses the rest.
@@ -572,9 +686,11 @@ public sealed class SettingsTests : IAsyncLifetime
     [InlineData("blocked", "Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "incomplete", false)]
     [InlineData("needsAction", NoRecordIntakeOff, null, false)]
     [InlineData("unknown", NoRecordIntakeOn, null, false)]
-    [InlineData("unknown", RecordIntakeOn, null, true)]
-    [InlineData("needsAction", RecordIntakeOff, null, true)]
-    [InlineData("failed", DidNotComplete, null, true)]
+    // An older host can't say whether there's a setup of this profile's to remove (#784: no button
+    // that can't work).
+    [InlineData("unknown", RecordIntakeOn, null, false)]
+    [InlineData("needsAction", RecordIntakeOff, null, false)]
+    [InlineData("failed", DidNotComplete, null, false)]
     [InlineData("failed", UnknownRecord, null, false)]
     public void Remove_is_offered_only_for_hooks_this_profiles_owned_record_set_up(string hooks, string detail, string? hookSetup, bool canRemove)
     {
@@ -608,12 +724,18 @@ public sealed class SettingsTests : IAsyncLifetime
     [Fact]
     public async Task Copilot_CLI_and_Agency_share_what_a_setup_left_of_their_hooks_through_a_fresh_check()
     {
-        // Agency runs on Copilot CLI's hooks, which an older host reads as set up on both rows.
+        // Agency runs on Copilot CLI's hooks, which the host reports set up on both rows. Removing
+        // them can leave Copilot CLI's owned record, which it then reads as a setup that didn't finish.
         await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow,
             [Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), Agent("agency", "Agency", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]) });
         await Wait.UntilAsync(() => settings.Agents.Count == 2, "agent readiness");
         var outcome = new AgentSetupResult(true, "Removed this installation's hook registrations.", false);
-        host.On(HostOps.AgentsSetup, _ => outcome);
+        host.On(HostOps.AgentsSetup, _ =>
+        {
+            host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow,
+                [Agent("copilot", "Copilot CLI", ReadinessState.Failed, hooksDetail: DidNotComplete), Agent("agency", "Agency", ReadinessState.Failed, hooksDetail: DidNotComplete)]) };
+            return outcome;
+        });
         host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
         AgentReadinessRow Row(string id) => settings.Agents.Single(a => a.Id == id);
 
@@ -622,15 +744,15 @@ public sealed class SettingsTests : IAsyncLifetime
 
         Assert.Equal("Set up", Row("agency").SetUpVerb);
         Assert.Equal("", Row("agency").Status);
-        Assert.Equal("Removed this installation's hook registrations.", Row("copilot").Status);
+        Assert.Equal("Removed · sessions already running keep their hooks until they end", Row("copilot").Status);
 
         outcome = new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true);
         await settings.SetUpAgentAsync("agency");
-        await settings.CheckAgentsAsync();
 
+        Assert.Equal("Setup failed · the host couldn't finish it", Row("agency").Status);
+        await settings.CheckAgentsAsync();
         Assert.Equal("Repair", Row("copilot").SetUpVerb);
         Assert.Equal("Repair", Row("agency").SetUpVerb);
-        Assert.Equal("Hook setup incomplete: fixture partial work", Row("agency").Status);
         Assert.Equal("", Row("copilot").Status);
     }
 
@@ -653,18 +775,22 @@ public sealed class SettingsTests : IAsyncLifetime
 
         Assert.Single(host.Sent(HostOps.AgentsRefresh));
         Assert.Equal("Repair", settings.Agents.Single().SetUpVerb);
-        Assert.Equal("Removal incomplete: the Codex plugin is still installed.", settings.Agents.Single().Status);
+        Assert.Equal("Removal failed · the host couldn't finish it", settings.Agents.Single().Status);
         Assert.Equal("Removal incomplete: the Codex plugin is still installed.", settings.Error);
     }
 
     [Fact]
     public async Task A_removal_that_leaves_the_owned_record_offers_set_up_again_through_a_fresh_check()
     {
-        // Copilot CLI's removal keeps its record when other entries share the file, and an older host
-        // then reads it as set up and not tested.
+        // Copilot CLI's removal keeps its record when other entries share the file, and the host then
+        // reads it as a setup that didn't finish.
         await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]) });
         await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
-        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(true, "Removed this installation's hook registrations.", false));
+        host.On(HostOps.AgentsSetup, _ =>
+        {
+            host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.Failed, hooksDetail: DidNotComplete)]) };
+            return new AgentSetupResult(true, "Removed this installation's hook registrations.", false);
+        });
         host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
         Assert.Null(settings.Agents.Single().SetUpVerb);
 
@@ -672,7 +798,7 @@ public sealed class SettingsTests : IAsyncLifetime
         await settings.CheckAgentsAsync();
 
         Assert.Equal("Set up", settings.Agents.Single().SetUpVerb);
-        Assert.Equal("Removed this installation's hook registrations.", settings.Agents.Single().Status);
+        Assert.Equal("Removed · sessions already running keep their hooks until they end", settings.Agents.Single().Status);
     }
 
     [Fact]
@@ -697,35 +823,40 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
-    public void On_a_host_that_cannot_say_a_setup_did_not_finish_a_set_up_agent_whose_own_setup_failed_still_offers_repair()
+    public void On_a_host_from_before_hook_setup_a_row_says_it_cant_check_and_offers_nothing_even_after_its_own_setup_failed()
     {
-        var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), canManage: true,
-            note: new("Hook setup incomplete: fixture partial work", Tone.Bad));
+        var failed = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn, setup: HookSetupState.Unknown), canManage: true,
+            note: new("Setup failed · the host couldn't finish it", Tone.Bad));
+        var quiet = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn, setup: HookSetupState.Unknown), canManage: true);
 
-        Assert.Equal("Repair", row.SetUpVerb);
-        Assert.True(row.CanSetUp);
-        Assert.Equal("Hook setup incomplete: fixture partial work", row.Status);
+        Assert.Equal((null, false, false), (failed.SetUpVerb, failed.CanSetUp, failed.ShowRemove));
+        Assert.Equal("Setup failed · the host couldn't finish it", failed.Status);
+        Assert.Equal((null, false, false), (quiet.SetUpVerb, quiet.CanSetUp, quiet.ShowRemove));
+        Assert.Equal(OlderHost, quiet.Status);
+        Assert.Equal(Tone.None, quiet.StatusTone);
+        Assert.False(quiet.Keeps(new("Setup failed · the host couldn't finish it", Tone.Bad)));
     }
 
     [Fact]
-    public async Task On_a_host_that_cannot_say_a_setup_did_not_finish_a_failure_that_leaves_only_its_owned_record_keeps_its_repair_through_a_fresh_check()
+    public async Task A_setup_that_fails_after_saving_its_record_offers_repair_through_a_fresh_check()
     {
         await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction, hooksDetail: NoRecordIntakeOff)]) });
         await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
-        // The host saved the record, then failed to register: it now reads as set up, not tested.
+        // The host saved the record, then failed to register: it reads as a setup that didn't finish.
         host.On(HostOps.AgentsSetup, _ =>
         {
-            host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]) };
+            host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.Failed, hooksDetail: DidNotComplete)]) };
             return new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true);
         });
         host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
 
         await settings.SetUpAgentAsync("copilot");
+        Assert.Equal("Setup failed · the host couldn't finish it", settings.Agents.Single().Status);
+        Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
         await settings.CheckAgentsAsync();
 
-        Assert.Equal("Hook setup incomplete: fixture partial work", settings.Agents.Single().Status);
-        Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
         Assert.Equal("Repair", settings.Agents.Single().SetUpVerb);
+        Assert.Equal("", settings.Agents.Single().Status);
     }
 
     [Fact]
@@ -766,14 +897,17 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Only_broken_hooks_offer_repair_whatever_the_host_says_of_them()
+    public void Only_a_setup_that_did_not_finish_offers_repair_whatever_the_host_says_of_its_hooks()
     {
         var repair = (from state in Enum.GetValues<ReadinessState>()
                       from detail in new[] { NoRecordIntakeOff, RecordIntakeOff, NoRecordIntakeOn, RecordIntakeOn, UnknownRecord, DidNotComplete }
-                      where new AgentReadinessRow(Agent("copilot", "Copilot CLI", state, hooksDetail: detail), canManage: true).SetUpVerb == "Repair"
-                      select state).Distinct();
+                      from setup in Enum.GetValues<HookSetupState>()
+                      let row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", state, hooksDetail: detail, setup: setup), canManage: true)
+                      where row.SetUpVerb == "Repair"
+                      select (state, row.Setup)).Distinct().ToList();
 
-        Assert.Equal([ReadinessState.Failed], repair);
+        Assert.NotEmpty(repair);
+        Assert.All(repair, r => Assert.True(r.Setup == HookSetup.Incomplete || (r.state == ReadinessState.Failed && r.Setup != HookSetup.Unknown), $"{r}"));
     }
 
     [Fact]
@@ -809,7 +943,7 @@ public sealed class SettingsTests : IAsyncLifetime
         }
         finally { release.TrySetResult(); await pending; }
 
-        Assert.Equal("Registered. Start new agent sessions to verify hooks.", Row("claude").Status);
+        Assert.Equal("Repaired · restart the host, then start a new session to check it", Row("claude").Status);
         Assert.Equal(Tone.Ok, Row("claude").StatusTone);
         Assert.Equal("", Row("copilot").Status);
         Assert.Equal(Tone.None, Row("copilot").StatusTone);
@@ -889,13 +1023,15 @@ public sealed class SettingsTests : IAsyncLifetime
     {
         await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow, [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction)]) });
         await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
-        host.On(HostOps.AgentsSetup, _ => throw new InvalidOperationException("fixture setup refused"));
+        const string refused = "C:\\Users\\dana\\.copilot\\agent-bridge-owner.json belongs to another installation; it was left alone";
+        host.On(HostOps.AgentsSetup, _ => throw new InvalidOperationException(refused));
 
         await settings.SetUpAgentAsync("copilot");
 
-        Assert.Equal("fixture setup refused", settings.Agents.Single().Status);
+        // Why, from a known set: the refusal's own words name a path, so they stay off the row.
+        Assert.Equal("Setup failed · another bridge profile owns its hooks", settings.Agents.Single().Status);
         Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
-        Assert.Equal("fixture setup refused", settings.Error);
+        Assert.Equal(refused, settings.Error);
     }
 
     [Fact]

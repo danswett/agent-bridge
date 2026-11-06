@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
@@ -15,7 +16,7 @@ namespace AgentBridge.App;
 // result as the list it reads.
 static partial class SelfTest
 {
-    static async Task CheckAgentRows(MainWindow window, MainViewModel main, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    static async Task CheckAgentRows(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
         window.ShowPage("settings");
         var view = window.SettingsPage;
@@ -104,6 +105,9 @@ static partial class SelfTest
         }
         window.RootElement.RequestedTheme = ElementTheme.Default;
         check(themed.Count == 0, $"draws a failed setup in the Danger text of the theme its row is drawn in{(themed.Count > 0 ? $" ({string.Join("; ", themed)})" : "")}");
+        // The rows the app can't act on, for Creative's acceptance (#705): each says why in its own
+        // words, never the host's raw text, and offers nothing that can't work.
+        await PictureRowsTheAppCantActOn(window, main, demo, outFile, [ElementTheme.Light, ElementTheme.Dark], check, result);
         // A fresh check takes the rows' results and the failed repair's page-wide error, as it would
         // for a person, so the pages drawn after are as before; Copilot CLI is set up and not tested yet.
         await settings.CheckAgentsAsync();
@@ -171,6 +175,58 @@ static partial class SelfTest
         await Task.Delay(400);
         await Picture(window.RootElement, Path.ChangeExtension(outFile, $".settings-agents.{theme}.png"));
         if (main.Settings is { } after) { await after.CheckAgentsAsync(); }
+    }
+
+    // The demo's rows the app can't act on (DemoHost.ShowAgentsTheAppCantActOn), pictured in each
+    // theme given: Copilot CLI read-only and not installed, with no Install; Claude Code's failed
+    // installation and unreadable hook ownership, each by its reason, with Install CLI offered again;
+    // and Codex on an older host. Checked once: their words, no raw text, no verb or Remove.
+    static async Task PictureRowsTheAppCantActOn(MainWindow window, MainViewModel main, DemoHost demo, string outFile, ElementTheme[] themes,
+        Action<bool, string>? check = null, Dictionary<string, object?>? result = null)
+    {
+        window.ShowPage("settings");
+        if (main.Settings is not { } settings) { check?.Invoke(false, "pictures the rows the app can't act on (no Settings)"); return; }
+        demo.ShowAgentsTheAppCantActOn(true);
+        try
+        {
+            await settings.CheckAgentsAsync();
+            var rows = window.SettingsPage.AgentRows;
+            await Until(() => settings.Agents.Any(a => a.Id == "codex" && a.Status.StartsWith("Can't check", StringComparison.Ordinal)), TimeSpan.FromSeconds(10));
+            rows.UpdateLayout();
+            await Task.Delay(400);
+            if (check is not null)
+            {
+                string[] said = [.. settings.Agents.Select(a => $"{a.Id}: {a.Installation} | {a.Status}")];
+                result?.Add("agentRowsTheAppCantActOn", said);
+                var words = Find<TextBlock>(rows).Select(t => t.Text).ToList();
+                var shown = Buttons(rows).Where(b => b.Button.Visibility == Visibility.Visible).Select(b => b.Id)
+                    .Concat(Find<ToggleButton>(rows).Where(b => b.Visibility == Visibility.Visible).Select(AutomationProperties.GetAutomationId)).ToList();
+                check(said.SequenceEqual([
+                        "copilot: Not installed · install it on this machine | Read-only · an older bridge runs this machine",
+                        "claude: Install failed · Windows Package Manager couldn't install it | Hook ownership couldn't be checked · access denied",
+                        "codex: Installed, version 0.48.0 | Can't check · this machine's host is older"])
+                    && !words.Any(w => w.Contains("Access to the path", StringComparison.Ordinal) || w.Contains("0x8A15000F", StringComparison.Ordinal) || w.Contains("agent-ha-bridge", StringComparison.Ordinal))
+                    && shown.SequenceEqual(["InstallAgent_claude"])
+                    && Status("copilot") is { } readOnly && ReferenceEquals(readOnly.Style, window.SettingsPage.Resources["AgentStatusAbText2"]),
+                    $"says why of each row the app can't act on, in its words and the neutral tone, with nothing on it that can't work ({string.Join(" / ", said)}; shown: {string.Join(", ", shown)}; {(Status("copilot") is { } s ? Colour(s)?.ToString() : "no status")})");
+            }
+            rows.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = 1 });
+            foreach (var theme in themes)
+            {
+                window.RootElement.RequestedTheme = theme;
+                await Task.Delay(400);
+                var name = theme == ElementTheme.Default ? "highcontrast" : theme.ToString().ToLowerInvariant();
+                await Picture(window.RootElement, Path.ChangeExtension(outFile, $".settings-agents-cant-act.{name}.png"));
+            }
+            window.RootElement.RequestedTheme = ElementTheme.Default;
+        }
+        finally
+        {
+            demo.ShowAgentsTheAppCantActOn(false);
+            await settings.CheckAgentsAsync();
+            await Task.Delay(300);
+        }
+        TextBlock? Status(string id) => window.SettingsPage.AgentStatusOf(id);
     }
 
     static IEnumerable<(string Id, string Name, Button Button)> Buttons(ItemsControl rows) => Find<Button>(rows)

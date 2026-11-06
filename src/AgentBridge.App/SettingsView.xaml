@@ -86,8 +86,6 @@
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Agents on this machine" AutomationProperties.HeadingLevel="Level2" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" AutomationProperties.AutomationId="AgentsState" Text="{x:Bind ViewModel.AgentsState, Mode=OneWay}" />
                 <Button Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
-                <TextBlock Text="{x:Bind ViewModel.AgentInstallStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentInstallStatus" />
-                <Button Content="Cancel CLI installation" Click="OnCancelAgentInstall" Visibility="{x:Bind local:Ui.Show(ViewModel.AgentInstallInProgress), Mode=OneWay}" IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}" AutomationProperties.AutomationId="CancelAgentInstall" />
                 <ItemsControl x:Name="AgentList" ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="core:AgentReadinessRow">
@@ -103,14 +101,29 @@
                                          when there is one, and Remove after it as the destructive one, in Danger text
                                          on a standard button, as End session is. -->
                                     <local:WrapRow Spacing="8">
-                                        <Button
-                                            Content="Install CLI"
+                                        <!-- Pressed, with its ring, while its installation runs, and still
+                                             focusable (ui.md §9.1 A4); Cancel beside it then. -->
+                                        <ToggleButton
                                             Tag="{x:Bind Id}"
+                                            IsChecked="{x:Bind Installing}"
                                             Visibility="{x:Bind local:Ui.Show(ShowInstall)}"
-                                            IsEnabled="{x:Bind CanInstall}"
+                                            IsEnabled="{x:Bind InstallEnabled}"
                                             Click="OnInstallAgent"
                                             AutomationProperties.Name="{x:Bind InstallName}"
-                                            AutomationProperties.AutomationId="{x:Bind InstallId}" />
+                                            AutomationProperties.ItemStatus="{x:Bind InstallItemStatus}"
+                                            AutomationProperties.AutomationId="{x:Bind InstallId}">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <ProgressRing Width="16" Height="16" IsActive="{x:Bind Installing}" Visibility="{x:Bind local:Ui.Show(Installing)}" />
+                                                <TextBlock Text="Install CLI" />
+                                            </StackPanel>
+                                        </ToggleButton>
+                                        <Button
+                                            Content="Cancel"
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(Installing)}"
+                                            Click="OnCancelAgentInstall"
+                                            AutomationProperties.Name="{x:Bind CancelInstallName}"
+                                            AutomationProperties.AutomationId="{x:Bind CancelInstallId}" />
                                         <Button
                                             Style="{StaticResource AccentButtonStyle}"
                                             Content="{x:Bind SetUpVerb}"

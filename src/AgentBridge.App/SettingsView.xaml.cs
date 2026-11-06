@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 
@@ -48,7 +49,12 @@ public sealed partial class SettingsView : UserControl
 
     async void OnInstallAgent(object sender, RoutedEventArgs e)
     {
-        if (viewModel is not { CanInstallAgents: true } v || sender is not Button { Tag: string id }) { return; }
+        if (sender is not ToggleButton { Tag: string id } button) { return; }
+        // Pressed only while its installation runs (ui.md §9.1 A4): a press toggles it, so it's put
+        // back, and a press while it runs does nothing more.
+        var row = viewModel?.Agents.FirstOrDefault(a => a.Id == id);
+        button.IsChecked = row?.Installing == true;
+        if (viewModel is not { CanInstallAgents: true } v || row is not { CanInstall: true }) { return; }
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
