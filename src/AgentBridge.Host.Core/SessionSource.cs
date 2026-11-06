@@ -99,7 +99,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         public long? Pending;
         // What the last commit was made from: Commit made again from the same is the same.
         public Session? CommittedFull;
-        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored) CommittedWith;
+        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored, DateTimeOffset? Boundary, bool Prompted, SessionStatus Turn) CommittedWith;
     }
 
     public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null)
@@ -961,9 +961,10 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             driver = _drivers.Shown(full.Id);
             agentsPrompt = _drivers.For(full.Id).PromptIsAgents;
         }
-        // The restore mark too (#780): it is held, cleared and taken away apart from the transcript,
-        // so an unchanged session with a changed mark is shown again.
-        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt, restored);
+        // The restore mark too (#780), and what its boundary decides below: the mark is held, cleared
+        // and taken away apart from the transcript, so an unchanged session with a changed mark is
+        // shown again, its status not left as the interrupted run's.
+        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt, restored, boundary, prompted, turn);
         // The tracker hands back the very session it built last when nothing it reads changed.
         // Fitting and serialising it again (about 37 MB/min, #608) found the same JSON every time.
         // Never while a sign-in recovery overlay is held (#800): each step of it (Checking, then
