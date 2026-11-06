@@ -95,6 +95,8 @@ public sealed class RemoteAuthorization : IDisposable
         var role = Allows(channel) && leases.TryGetValue(channel, out var lease) ? lease.Role : null;
         return hello with
         {
+            // machine.restore names sessions (#780): only for a role that may read them.
+            Machine = role is TrustedPeerStore.Person or TrustedPeerStore.Service ? hello.Machine : hello.Machine with { Restore = null },
             Capabilities = [.. hello.Capabilities.Where(c => role switch
             {
                 TrustedPeerStore.Service => c == Capabilities.SessionsRead,

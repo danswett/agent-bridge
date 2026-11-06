@@ -27,6 +27,12 @@ public sealed class HookIntakeOptions
     // does (Get-ClaudeSessionRegistrations, Get-CodexSessionRegistrations).
     public TimeSpan PruneInterval { get; init; } = TimeSpan.FromSeconds(60);
 
+    // Whether the restore record still reads Claude's and Codex's endings from their registrations
+    // (#780, RestoreRecorder.JudgingEndings): nothing is pruned until it has. A first drain that took
+    // PruneInterval or longer once pruned in the same pass that made the intake Drained, so an
+    // ended session's registration was gone before it was read, and read as a death.
+    public Func<bool> KeepEndings { get; init; } = () => false;
+
     // A Claude registration whose process has gone is deleted once it is this old; a Codex one
     // with no process recorded likewise. ($script:ClaudeSessionStaleMinutes, CodexSessionStaleMinutes.)
     public TimeSpan StaleAfter { get; init; } = TimeSpan.FromMinutes(240);
@@ -143,6 +149,34 @@ public sealed class HookIntake : IAsyncDisposable
     // answer while any is queued (one whose deletion failed after it was handled aside).
     volatile bool _queued;
 
+    // Whether the hook events spooled so far have been taken in, so a registration says what its
+    // session's hooks said. The restore record reads a Claude or Codex session's ending only then
+    // (#780): a SessionEnd written while the host was down sits in the spool until a pass applies
+    // it to the registration. Nothing is pruned (which deletes ended registrations) while the
+    // record still reads endings (KeepEndings), however long the first drain takes. While agent-ha-bridge
+    // has the spool, its daemon applies them to the same registrations, and the spool is not even
+    // listed from here (G5): settled as far as this host can know.
+    public bool Drained
+    {
+        get
+        {
+            // Stood back for the daemon: it applies the spool. Stood back because the claim failed
+            // (another host, or an I/O or access error): nobody here took the spool in, so a
+            // SessionEnd still in it is not settled. Read as drained, a session that ended cleanly
+            // was judged dead from its stale registration (Copilot on #813).
+            lock (_gate)
+            {
+                if (_paused is not null) { return _pausedForDaemon; }
+            }
+            return _passed && !_queued && !Waiting();
+        }
+    }
+
+    volatile bool _passed;
+    // Whether the intake stands back because agent-ha-bridge has the spool, as against a claim that
+    // failed. Under _gate, with _paused.
+    bool _pausedForDaemon;
+
     // A test's way to see each listing of the spool (G5: none once agent-ha-bridge has it).
     internal Action? Listing { get; set; }
 
@@ -164,6 +198,14 @@ public sealed class HookIntake : IAsyncDisposable
     // until it has started. The intake settles only the markers in the runtime it took, so one in
     // another registration root discovery still reads (the default runtime, the legacy temp
     // folder) is never answerable from here: nothing withdraws it once answered at the terminal.
+    // Whether the restore record may read a Claude or Codex session's ending (#780; Copilot's are in
+    // its own events): on a profile never migrated, from the agents' own files, at once; on a migrated
+    // one, once the running intake has drained what the hooks spooled while the host was down; and
+    // while its intake.json cannot be read, never, since no intake runs then. Read as settled there,
+    // a SessionEnd left in the spool made a session that ended cleanly read as one that died.
+    public static Func<AgentKind, bool> EndingsSettled(bool migrated, string? problem, Func<HookIntake?> running) =>
+        agent => agent == AgentKind.Copilot || (problem is null && (!migrated || running() is { Drained: true }));
+
     public static Func<string, string?>? AnswerGate(string? runtimeRoot, string? problem, Func<HookIntake?> running)
     {
         if (problem is not null) { return _ => $"this profile's hook intake is off ({problem}), so Codex approvals left from before cannot be checked; answer at the machine"; }
@@ -235,7 +277,7 @@ public sealed class HookIntake : IAsyncDisposable
         }
         if (!Claim())
         {
-            StandBack("another host is taking this spool (a second profile migrated from the same installation?)");
+            StandBack("another host is taking this spool (a second profile migrated from the same installation?)", daemon: false);
             return 0;
         }
         lock (_gate)
@@ -249,10 +291,11 @@ public sealed class HookIntake : IAsyncDisposable
         if (!ReconcileApprovals(beat)) { return 0; }
         EnsureWatcher();
         var handled = Consume();
+        _passed = true;
         // Each deletion asks first: the markers are the daemon's once it has started.
         if (_handlers.WithdrawalsPending && Paused is null) { _handlers.RetryWithdrawals(); }
         var now = _time.GetUtcNow();
-        if (now - _prunedAt >= _options.PruneInterval)
+        if (now - _prunedAt >= _options.PruneInterval && !_options.KeepEndings())
         {
             // The registrations are the daemon's again if it started during this pass.
             if (Paused is not null) { return handled; }
@@ -268,12 +311,13 @@ public sealed class HookIntake : IAsyncDisposable
         return handled;
     }
 
-    void StandBack(string why)
+    void StandBack(string why, bool daemon = true)
     {
         lock (_gate)
         {
             if (_paused is null) { _log($"standing back from the hook spool: {why}"); }
             _paused = why;
+            _pausedForDaemon = daemon;
         }
         // The heartbeat is the daemon's now; the watcher would only wake passes that do nothing.
         _heartbeatOwned = false;

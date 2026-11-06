@@ -347,7 +347,10 @@ public enum NotificationClass { NeedsYou, Done, Fyi }
 // design G5), for a client to say so rather than only leave the controls out. Instance: this
 // run of the host, new each time it starts, so a client can tell a reconnect to the same process
 // from a restart.
-public sealed record MachineInfo([property: Strict(Strictness.Identity)] string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null);
+// Restore: what went when the host last stopped (#780, RestoreProtocol), for RestoreProtocol.ShownFor
+// after it started; absent when nothing did, or from a host that does not say.
+public sealed record MachineInfo([property: Strict(Strictness.Identity)] string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null,
+    RestoreNotice? Restore = null);
 
 public sealed record HelloResult([property: Strict(Strictness.Identity)] int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 
@@ -398,6 +401,9 @@ public sealed record Session
     // the earliest of question.askedAt and attention.since for NeedsYou, else statusSince.
     // Set with Class, from the same fields, so it never moves updatedAt on its own.
     public DateTimeOffset? ClassSince { get; init; }
+    // Restored by the host after a reboot or a crash (#780, RestoreProtocol). Absent otherwise,
+    // and from a host that does not restore.
+    public SessionRestored? Restored { get; init; }
 
     // The list and event form: everything but the tool history.
     public Session WithoutHistory() => Activity.History is null ? this : this with { Activity = Activity with { History = null } };

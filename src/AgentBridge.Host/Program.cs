@@ -7,6 +7,7 @@ using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.DevBox;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Processes;
+using AgentBridge.Host.Core.Restore;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
@@ -378,6 +379,25 @@ async Task<int> ServeAsync(HostHandover handover)
         push.RevalidateTrust();
     }
     push?.Start();
+    // What a reboot or a crash took (#780, docs/host-launch.md): the sessions live now, written down
+    // as they change, and those an earlier run saw that died with it, offered to resume from Launch.
+    // It starts nothing. After the first discovery pass, so what runs now is known; disposed before
+    // the source, so a clean stop is written while the sessions are still live.
+    await using var restore = new RestoreRecorder(source, new RestoreOptions
+    {
+        Path = Path.Combine(identity.Folder, RestoreFiles.FileName),
+        Instance = machine.Instance!,
+        Ends = SessionEnds.For(options),
+        Logon = new VolatileLogonMarker(identity.Folder),
+        // Claude's and Codex's endings come through the hook intake on a migrated machine: judged once
+        // it has taken in what the hooks spooled while the host was down, and never while it cannot run.
+        EndsSettled = HookIntake.EndingsSettled(migrated: intakeState is not null, intakeProblem, () => runningIntake),
+        RestoreOnStart = settings.RestoreOnStart,
+        ReadOnly = () => ReadOnlyReason() ?? (settings.Launch.Enabled ? null : "launching is turned off (launch.enabled)") ?? g5.Recent(),
+        Log = Log,
+    });
+    if (push is not null) { restore.NoticeReady += push.NotifyRestore; }
+    restore.Start();
     // Each agent's allowance, asked at the pace its sessions set, and never more often than
     // the idle pace while agent-ha-bridge is asking the same vendors for this user; further Copilot
     // accounts at the idle pace. None at all when usage.publish is off: no vendor is asked, and
@@ -417,7 +437,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
-    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate);
+    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore);
+    launcher.SessionStarted += restore.Launched;
     transfers.Launcher = launcher;
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
@@ -452,6 +473,7 @@ async Task<int> ServeAsync(HostHandover handover)
         G5 = g5,
         TrustAnswers = trustAnswers,
         Updates = updates,
+        Restore = () => restore.Notice,
     };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
@@ -471,7 +493,7 @@ async Task<int> ServeAsync(HostHandover handover)
     {
         Log(refreshed);
     }
-    await using var intake = StartIntake(haProbe, stop.Token);
+    await using var intake = StartIntake(haProbe, () => restore.JudgingEndings, stop.Token);
     runningIntake = intake;
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
@@ -723,7 +745,7 @@ async Task<int> ServeAsync(HostHandover handover)
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
 // the profile's config.json approves, and on Windows only for now. The agent starts in a console
 // of its own on this desktop, so the host must run here, as the user, unelevated.
-LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate)
+LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
@@ -736,7 +758,8 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
         CodexHome = options.CodexHome,
         Config = settings.Launch,
-        WorktreeUsage = new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots),
+        // A session waiting to be restored keeps its worktree as a live one does (#780).
+        WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
     }, Log, attachments);
@@ -792,7 +815,7 @@ void RestartSelf()
 // Hook intake (docs/host-hooks.md): only for a profile that has migrated from agent-ha-bridge,
 // and only where agent-ha-bridge's daemon can be seen, since the intake must stand back
 // whenever it runs (G5). Null when off.
-HookIntake? StartIntake(AgentHaBridgeProbe? probe, CancellationToken cancellationToken)
+HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, CancellationToken cancellationToken)
 {
     if (intakeProblem is not null) { Log(intakeProblem); }
     if (intakeState is null) { return null; }
@@ -807,6 +830,7 @@ HookIntake? StartIntake(AgentHaBridgeProbe? probe, CancellationToken cancellatio
         RuntimeRoot = intakeState.RuntimeRoot,
         ClaudeHome = options.ClaudeHome,
         AgentHaBridgeActive = active,
+        KeepEndings = keepEndings,
     }, new SystemProcessInspector(), log: Log);
     intake.Start(cancellationToken);
     var owner = intakeState.Standalone ? "this fresh installation" : $"agent-ha-bridge installation {intakeState.InstallationId}";
