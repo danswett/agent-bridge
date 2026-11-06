@@ -1495,6 +1495,40 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal((SessionStatus.Waiting, "t1"), (real.Get(Id)!.Status, real.Get(Id)!.Question?.Id));
     }
 
+    // Engineering, cr-837j: after a restart the transcript not readable on the first pass, so its
+    // running tool not known when the boundary is read, still knows the stale hook approval by the
+    // key set aside, and it stays hidden once the transcript is read, its key still kept.
+    [Fact]
+    public async Task A_stale_hook_approval_stays_hidden_after_a_restart_whose_first_pass_cannot_read_the_transcript()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999977";
+        var boundary = Fixture.T0.AddSeconds(20);
+        var transcript = f.ClaudeTranscript(Id);
+        Fixture.Append(transcript, Claude.User("go", 1), Claude.Assistant(2, "tool_use", Claude.ToolUse("t0", "Bash", new System.Text.Json.Nodes.JsonObject { ["command"] = "deploy.sh" })));
+        f.ClaudeRegistration(Id, 707, transcript, hookStatus: "waiting", hookAt: Fixture.T0.AddSeconds(3));
+        f.Processes.Run(AgentKind.Claude, 707);
+        IReadOnlyList<string> interrupted;
+        await using (var first = f.Source())
+        {
+            first.Hold(Id, new SessionRestored { At = boundary, Cause = RestoreCause.Reboot, QuestionLost = true });
+            await first.RefreshAsync();
+            Assert.Null(first.Get(Id)!.Question);
+            interrupted = first.Interrupted(Id)!;
+        }
+        var key = Assert.Single(interrupted, k => k.StartsWith("hook:t0@", StringComparison.Ordinal));
+        Previous(Fixture.T0, false, E(Id, AgentKind.Claude) with { Boundary = boundary, Interrupted = interrupted });
+        File.Move(transcript, transcript + ".away");
+
+        await using var real = f.Source();
+        RestoreRecorder.HoldBoundaries(Record, real);
+        await real.RefreshAsync();
+        File.Move(transcript + ".away", transcript);
+        await real.RefreshAsync();
+
+        Assert.Null(real.Get(Id)!.Question);
+        Assert.Contains(key, real.Interrupted(Id)!);
+    }
+
     // Engineering's second-family review: restore a Claude session, then start only the host again.
     // Held from the record before the source first reads it, the boundary keeps the interrupted run's
     // AskUserQuestion from being listed as asked, and answerable from a phone.
