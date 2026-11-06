@@ -163,7 +163,7 @@ bytes.
 | `device.webauthn` | With `presence: webauthn` only: the relying party id, the credential id, the credential's P-256 public key as a SEC1 point (converted from COSE at registration), `attested`: whether the approver verified an attestation statement for it (§3.1), and `backupEligible`: the BE flag of the registration, which every assertion must repeat (§4.6) |
 | `device.kind` | **The bound kind**: `host`, `app`, `pwa`, `phone`. `test` is never rostered |
 | `device.platform` | `windows`, `macos`, `linux`, `ios`, `ipados`, `android`. For a PWA, the system its browser runs on. Shown to people; the approver's client uses it at enrollment to decide which `presence` to record (§4.6), and verifiers never read it for a decision. Like `presence`, it is the enrollee's claim, which the approver sees beside the device it holds |
-| `device.name` | At most 64 Unicode scalar values and 256 UTF-8 bytes. The approver removes every character in the project's hidden-character set (`NeedsYou.HasHidden`, `pwa/js/needs-you.js` `HIDDEN`) before signing. A verifier never alters a signed name: it refuses one over the limits or holding a C0 or C1 control, and shows any other hidden character as a visible escape, one per scalar value (`\uXXXX`, four uppercase hex digits, up to U+FFFF; `\u{X…}` above; an unpaired surrogate as its own `\uXXXX`), as `NeedsYou.Reveal` does. It never refuses those, since unassigned code points differ between platforms' Unicode versions |
+| `device.name` | At most 64 Unicode scalar values and 256 UTF-8 bytes. The approver removes every character in the project's hidden-character set before signing: the one `ShownText.HasHidden` tests in `AgentBridge.Protocol` (with `HiddenText.HasHidden`, its twin in `AgentBridge.App.Core`) and `hasHidden` tests in `pwa/js/hidden-text.js`, which a Swift client ports as it is. **Not** the `HIDDEN` pattern in `pwa/js/attribution.js`: that is a different set, made for one-line labels, and a name stripped by it would sign differently. A verifier never alters a signed name: it refuses one over the limits or holding a C0 or C1 control, and shows any other hidden character as a visible escape, one per scalar value (`\uXXXX`, four uppercase hex digits, up to U+FFFF; `\u{X…}` above; an unpaired surrogate as its own `\uXXXX`), as `ShownText.Reveal` and `hidden-text.js`'s `reveal` do. It never refuses those, since unassigned code points differ between platforms' Unicode versions |
 | `approval` | Exactly one of these member sets, by `method`: `{ "method": "code", "transcript": T }`; `{ "method": "qr", "transcript": T, "shown": "approver" | "joiner" }`, where `shown` says which device displayed the QR (§4.3) and `T` is computed as in §4.2; `{ "method": "grandfather" }` (§8.2), with no transcript, since there was no exchange; `{ "method": "genesis" }`, on the genesis entry only. `T` is 32 bytes, base64url. Any other member, a missing one, or `grandfather` or `genesis` with a transcript, refuses the entry |
 
 The exact field set per `op`:
@@ -195,8 +195,13 @@ envelope. So every valid entry travels in one frame on every path, provided the 
 **canonical**: its members in the order of the table above, with no insignificant whitespace.
 Every sender, and every forwarder (the relay, a gossiping device, an approver at enrollment),
 re-emits the wrapper canonically rather than passing on what it received. Each assertion's
-signature must be minimal DER, as `sig` is (high-S is accepted there, since authenticators produce
-it), so that nobody but the signer can enlarge an entry. A `remove` keeping 512 adds, with both
+signature must be minimal DER **with low-S** (`s ≤ n/2`), as `sig` is. An authenticator may
+produce a high-S signature, so the signer's client normalizes it (`s` to `n − s`, which verifies
+under the same key) before the entry is measured, wrapped or sent, and every verifier refuses an
+assertion signature that is high-S or not minimal DER. Each signature then has exactly one valid
+encoding, so nobody but the signer can enlarge an entry. Were high-S accepted, anyone could
+replace `(r, s)` with `(r, n − s)` without the key, and the minimal DER of the two can differ by
+a byte: an entry exactly at its limit would grow past it under the same entry hash. A `remove` keeping 512 adds, with both
 signers' assertions, is about 25 KiB; an `add` with the longest WebAuthn credential id and name
 is under 6 KiB.
 
@@ -1550,6 +1555,38 @@ roster support does the same toward a peer that is not active in its own copy. R
 intro is as today, so old peers are unaffected until a host enforces, and then they are refused
 anyway.
 
+**Noise IK (#653) carries nothing identifying either.** A device that holds the host's static key
+from an earlier handshake opens with IK instead (`ChannelHub.OpenAsync`). Its first message
+carries its static key, its intro and, where the host lists the op in its `ik` intro, one early
+request; a host's `EarlyOps` is `hello` only. The host's reply carries its intro and, when it
+answered early, that request's result (`ChannelHub.AnswerIkAsync`, `EarlyAsync`). Unlike XX, the
+host knows the initiator before it writes anything, so in `enforce` it decides from the
+initiator's static key before it builds the reply:
+
+* **Not active in its roster** (unknown, pending, removed or void): the reply's intro is exactly
+  `{}`. It has no `name`, no `kind`, no `ik` list (so the opener forgets the host's key and opens
+  with XX next time, where message 2 is `{}` too) and no `early` answer. The early request never
+  reaches the handler: it is not answered from the first message, the opener asks it again once
+  the channel is open, and the gate answers it there as over XX, with `approved: false` and
+  nothing else. This holds whether or not the first message asked anything early. Today the hub
+  runs `PeerAllowed` (`RemoteAuthorization.Allows`) on the first message (`ReadIntro`) and sends
+  nothing to a key it refuses; the roster gate instead lets an unrostered key's handshake
+  complete, so that it can learn it is pending, and so the reply must be emptied rather than
+  withheld. Otherwise the reply's intro and early `hello` would name the machine to a
+  stolen-token key that learned the host's key over XX and then opened with IK.
+* **Active:** the reply is as today, and an early `hello` is answered by the same gate and handler
+  as a `hello` once open. The gate sits in front of the handler for early and ordinary requests
+  alike (`EarlyAsync` and `ServeAsync`), never in `ServeAsync` alone.
+
+The check is made at each reply, against the roster as it is then, so a relay that replays an
+active device's first message after its removal gets `{}`, and cannot read even that: an IK reply
+decrypts only with the opener's ephemeral and static private keys. A device with roster support opening IK to a key
+that is not active in its own roster sends `{}` and no early request in its first message, as it
+does in XX's message 3. In `off` and `observe` the IK reply is as today, as XX's message 2 is:
+`observe` refuses nothing (§8.1), so until a host enforces, a stolen-token key learns from it, on
+either handshake, what it learns today. The host logs each IK opening it would have answered with
+`{}`, with the rest of what `observe` reports.
+
 The host's `ChannelHub` also gets a roster gate. For a channel from a device that is not active
 in the host's roster, the handshake completes so the device can learn why, and then:
 
@@ -1918,6 +1955,15 @@ Each slice adds its own. Together they cover:
 * In `enforce`, a host's Noise message 2 carries an empty intro, as does its message 3 to a
   responder not in its roster: an unrostered initiator or responder never learns the machine's
   name or kind. An active device gets them in the `hello` answer.
+* **IK.** In `enforce`, a host answering a Noise IK first message from a key not active in its
+  roster replies with exactly `{}` and runs no handler, whether the first message asked an early
+  `hello` or nothing early; that key's `hello` once open gets `approved: false` only. The same
+  holds for a replay of an active device's first message received after its removal. So an
+  unrostered device that learned the host's key over XX and opens with IK learns neither the
+  machine's name nor its kind. An active device's IK opening gets the intro, with its early
+  `hello` answered as one sent once open. A device with roster support opening IK to a key not
+  active in its own roster sends `{}` and no early request. In `observe`, the reply is as today,
+  and the host reports the opening it would have answered with `{}`.
 
 **Enrollment**
 * A relay that substitutes keys on either leg: code 1 fails at A and code 2 fails at N. A grinding
@@ -2075,7 +2121,10 @@ Each slice adds its own. Together they cover:
     message and one enrollment frame. An entry within the limits that arrives in a wrapper padded
     with whitespace, where it fits a frame, is accepted, since size is measured over fixed content,
     and whoever forwards it re-emits the wrapper canonically. An assertion whose signature is not
-    minimal DER, as a relay could make one by re-encoding an honest entry: refused.
+    minimal DER, as a relay could make one by re-encoding an honest entry, or is high-S, as anyone
+    could make one from an honest low-S signature without the key: refused. A signer's client
+    whose authenticator returns a high-S assertion signature normalizes it to low-S, and the entry
+    verifies everywhere.
 * Caps and budgets: a roster at its 4,096-entry limit (filled with renames by one device) still
   accepts a removal of that device. The ninth rename of one device, a signer's 65th add, merge or
   removal, and the 513th add of a generation are refused, counted across every branch and
@@ -2516,7 +2565,7 @@ Each slice adds its own. Together they cover:
 * Presence declarations: a WebAuthn registration with a valid attestation from a pinned root is recorded `attested: true`; one without is `attested: false`, and the approver says so.
 
 **Interop**
-* Shared vectors for `F`, entries, signatures (DER, low-S), entry hashes, head order, `C`, `T`, both
+* Shared vectors for `F`, entries, signatures (DER, low-S, for `sig`, `cosig` and WebAuthn assertions alike: a high-S copy of each is refused), entry hashes, head order, `C`, `T`, both
   codes (including leading zeros), the QR MACs and invite hint, head attestations, person commands,
   WebAuthn assertion checks, and the merged state of a forked fixture. They run in C#, the PWA and
   Swift, as the command MAC's vectors do.
@@ -2753,7 +2802,7 @@ on below was made on 2026-11-04 (§11), so none is waiting for one.
 |---|---|---|---|
 | R1 | Roster library: strict parser and negative vectors, entries and signing contexts, per-signer presence proofs, the acceptance rule and state (causal seniority over add entries with lineage-independent cosigners, probation holds for grants only on persisted monotonic time, the removal pass, single-target removals that take the target's approval subtree except a keep list, and their ranks, voiding (bars included), the self-removal rule, precedence between removals (rank, yielding by approval subtree, raw chains), key bars, conflicting adds by seniority, caps, per-signer budgets and the evidence rule with subtrees, quarantine and the window, merges that are never void with adoption only by `adopt: true`, the removal-parent choice, `confirm` and the confirmation rule for cosigned removals), the `approval` member sets, `veto`, person commands, head attestations, WebAuthn assertion checks, signing keys (TPM/DPAPI, WebCrypto), shared vectors (C#, JS); protocol spec `docs/protocol/devices.md` | decisions 1, 2, 9 | No |
 | R2 | Relay: store and appends, the account relay mode (`observe` until a person's device switches it, one way; `enforce` at a new account's genesis), approved/pending admission with invite hints, nothing for pending devices, bound kinds in presence, generation rules with hold and veto, bound tokens with `token-exchange` (unbound until every app exchanges, then issue bound and accept both, then enforce last), pending limits, `removed` close code, administration reset for a squatted genesis. Staging; production only with the owner's approval | R1, decision 5 | Only for accounts with a roster |
-| R3 | Host: state (with quarantine), gate in `ChannelHub`, gossip, `roster.submit` with per-key limits, freshness (monotonic and wall-clock), `selfAttest` and acknowledgements, person commands, modes `off`/`observe`/`enforce`, enrollment over the pipe and `devices join`/`reset`/`sync`/`adopt` with the genesis fingerprint | R1, decision 10 | Only when the mode is changed |
+| R3 | Host: state (with quarantine), gate in `ChannelHub` (XX and IK replies, early requests included), gossip, `roster.submit` with per-key limits, freshness (monotonic and wall-clock), `selfAttest` and acknowledgements, person commands, modes `off`/`observe`/`enforce`, enrollment over the pipe and `devices join`/`reset`/`sync`/`adopt` with the genesis fingerprint | R1, decision 10 | Only when the mode is changed |
 | R4 | Windows app: join (mutual codes, fingerprint), Devices, client rule; **proof** that its presence mechanism (Windows WebAuthn/Hello, or a TPM UI policy) cannot be satisfied by same-user code, including `SendInput`, UI Automation and the project's injector, and the same proof for Windows Hello as browsers reach it, after which its approvers record `webauthn` for device-bound Windows PWA credentials (§4.6). Only after that does it approve or sign person commands | R2, R3, decision 3 | Only after genesis |
 | R5 | PWA: passkey registration (with attestation where offered, and the BE flag recorded so synced passkeys count only as §4.6 allows), join, approve (codes and both QR directions), Devices, confirm after 72 hours, remove, cascade, cosign, person commands, pending screen, client rule | R2, R3, decision 3 | As R4 |
 | R6 | Person-only actions on person commands, with the durable replay store that replaces `CommandMemory`: transfer, folder trust, update, forget/remove; one `RosterKinds.IsPerson`; usage peers and transfer hosts from the roster; docs for #70, #133, #138, #161 and the HA connector note | R3, R5, decisions 7, 8 | In `enforce` |
