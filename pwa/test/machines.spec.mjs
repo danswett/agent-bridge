@@ -132,7 +132,7 @@ test('an answer, a reply with files, and End session from a session go to the ma
   // The laptop's session is working on the reply now: ending it takes two presses. On a phone,
   // End session is in the header's overflow menu (ui.md §6.2), and its second press in Details.
   const end = idle.locator('.end-session .end-button');
-  await idle.locator('.session-header .more').click();
+  await idle.locator('.session-bar .more').click();
   await idle.getByRole('menuitem', { name: 'End session' }).click();
   await expect(end).toBeVisible();
   await expect(end).toHaveAttribute('aria-label', /press again to confirm/);

@@ -320,6 +320,8 @@ export class SessionsPage {
           // click may already be headed, the same wait as a question arriving; so is the lane.
           // Not a move within Sessions (a row chosen), which brings its own wait where it does.
           if (back) {
+            // The session it shows is shown again: its header whole, as a row chosen brings it.
+            this.view.selected?.collapse?.shown();
             this.view.selected?.reshow();
             this.#laneGuard?.arm();
           }
