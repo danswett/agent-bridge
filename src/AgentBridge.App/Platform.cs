@@ -2,6 +2,7 @@ using AgentBridge.App.Core;
 using AgentBridge.Host.Core.Updates;
 using Microsoft.Win32;
 using Velopack;
+using Velopack.Locators;
 using Velopack.Sources;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
@@ -60,10 +61,22 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         manager = new UpdateManager(from);
         // Only for the source this start began with: a change of feed or of "Include pre-releases"
         // drops what was downloaded, which must not come back as ready from the packages folder,
-        // now or at a later start (the mark says which source the package came from).
-        local = first && Local(manager) is { } kept && mark.Vouches(kept.Version.ToString(), key) ? kept : null;
+        // now or at a later start (the mark says which source the package came from, and the
+        // checksum its bytes were verified against, which they must still match).
+        local = first && Local(manager) is { } kept && PackageFile(kept) is { } file && mark.Vouches(file, kept.Version.ToString(), key) ? kept : null;
         return manager;
     }
+
+    // Where Velopack keeps a release's package: its folder (the process's locator, which
+    // UpdateManager uses too), under the release's file name. Null when that can't be told.
+    static string? PackageFile(VelopackAsset release) =>
+        VelopackLocator.IsCurrentSet && VelopackLocator.Current.PackagesDir is { Length: > 0 } folder && release.FileName is { Length: > 0 } name
+            ? Path.Combine(folder, name)
+            : null;
+
+    // The package held for the installer (DownloadMark.Hold): open, read-only to everyone else,
+    // until this process ends, so the bytes checked are the ones Update.exe takes.
+    static FileStream? handedOver;
 
     // A release an earlier run downloaded and nobody has restarted into yet (#516): ready from this
     // start on, before any check, so the app offers Restart to update offline, or while the feed
@@ -129,11 +142,20 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     {
         var from = Manager();
         if (pending is not { } release) { return; }
+        // Velopack takes a package already in its folder under this name for the release without
+        // checking its bytes (one from another feed may be there): checked against the chosen
+        // release's checksum from its feed before and after, and marked only when it matches
+        // (Engineering's second-family review of #719, 6676612221).
+        var target = release.TargetFullRelease;
+        var expected = PackageDigest.Of(target.SHA256, target.SHA1)
+            ?? throw new PackageMismatchException($"the release feed gives no checksum for {target.Version}, so its package cannot be verified");
+        var file = PackageFile(target) ?? throw new PackageMismatchException("the folder Velopack keeps packages in can't be told, so the package can't be verified");
+        DownloadMark.DropMismatch(file, expected);
         await from.DownloadUpdatesAsync(release, p => ui.Post(() => progress(p)));
         if (ReferenceEquals(from, Manager()) && ReferenceEquals(pending, release))
         {
+            mark.Accept(file, target.Version.ToString(), source!, expected);
             downloaded = release;
-            mark.Save(release.TargetFullRelease.Version.ToString(), source!);
         }
     }
 
@@ -148,7 +170,20 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         if (ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded ({ready} is); nothing was installed"); }
         var release = pending?.TargetFullRelease ?? local ?? throw new InvalidOperationException("no downloaded update to install; check for updates again");
         if (release.Version.ToString() != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded; nothing was installed"); }
-        Manager().ApplyUpdatesAndRestart(release, ["--background", "--profile", profile]);
+        // The bytes verified and marked, still, held open and unchangeable until Update.exe takes
+        // them once this process has ended: Velopack finds the package by its name, so the file is
+        // checked from the handle that keeps it.
+        var from = Manager();
+        handedOver?.Dispose();
+        handedOver = (PackageFile(release) is { } file ? mark.Hold(file, version, source!) : null)
+            ?? throw new PackageMismatchException($"the package downloaded for {version} is no longer the bytes verified for it; nothing was installed, so check for updates again");
+        try { from.ApplyUpdatesAndRestart(release, ["--background", "--profile", profile]); }
+        catch
+        {
+            handedOver.Dispose();
+            handedOver = null;
+            throw;
+        }
     }
 }
 

@@ -11,7 +11,9 @@ Every merge to `main` whose CI builds the app publishes a GitHub **pre-release**
 Arm64 (`win-arm64`) channels. Installed apps check every 30 minutes and download a release they
 find in the background, then wait: nothing installs until a person presses **Restart to update**
 at the machine, or **Install** on another device (which then waits until no session there has been
-busy for two minutes, however long that takes; #516, AutoUpdater.cs). An app from before #516
+busy for two minutes, however long that takes; #516, AutoUpdater.cs), unless **When an update is
+ready** is **Install between turns**, which installs at the first gap between turns or at the
+six-hour backstop. A package is installed only if its bytes match its release's checksum. An app from before #516
 still installs by itself once the host is idle, or after 6 hours regardless. Hosts check too,
 for Home Assistant's update entity, and install only when its Install is pressed. They read releases
 **anonymously** from the GitHub API (`GithubSource` with no token: src/AgentBridge.App/Platform.cs,
@@ -28,8 +30,8 @@ build is stopped by not promoting it past Dev, and machines on Beta never see it
    gh release edit v0.1.<run> -R danswett/agent-bridge --draft=true
    ```
    Machines that already **downloaded** it (downloads start as soon as a release is seen;
-   the install waits for the person's Restart to update, #516) may still install it. Treat
-   them as affected.
+   the install waits for the person's Restart to update, #516, unless When an update is ready
+   is Install between turns) may still install it. Treat them as affected.
 2. **Stop the next merge shipping the same bug.** Revert the PR on `main` (through a PR, with
    Quality as merge coordinator, AGENTS.md), or land the fix. Every green `main` run publishes
    a new release, which supersedes the draft.

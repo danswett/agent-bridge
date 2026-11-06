@@ -755,21 +755,97 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     // Velopack keeps a package in its folder whatever the source selected since: a later start
-    // offers it only when it came from the source selected then.
+    // offers it only when it came from the source selected then, and is still the bytes verified.
     [Fact]
     public void A_package_downloaded_from_another_feed_or_pre_release_choice_is_not_vouched_for_at_a_later_start()
     {
+        var package = Package("agent-bridge-0.2.0-full.nupkg", "release from feed A");
         var mark = new DownloadMark(Path.Combine(app, "data", "update-downloaded.txt"));
-        Assert.False(mark.Vouches("0.2.0", "|False"));
+        Assert.False(mark.Vouches(package, "0.2.0", "|False"));
 
-        mark.Save("0.2.0", "https://feed.a|False");
+        mark.Accept(package, "0.2.0", "https://feed.a|False", Digest("release from feed A"));
 
         var restarted = new DownloadMark(Path.Combine(app, "data", "update-downloaded.txt"));
-        Assert.True(restarted.Vouches("0.2.0", "https://feed.a|False"));
-        Assert.False(restarted.Vouches("0.2.0", "https://feed.b|False"));
-        Assert.False(restarted.Vouches("0.2.0", "https://feed.a|True"));
-        Assert.False(restarted.Vouches("0.3.0", "https://feed.a|False"));
+        Assert.True(restarted.Vouches(package, "0.2.0", "https://feed.a|False"));
+        Assert.False(restarted.Vouches(package, "0.2.0", "https://feed.b|False"));
+        Assert.False(restarted.Vouches(package, "0.2.0", "https://feed.a|True"));
+        Assert.False(restarted.Vouches(package, "0.3.0", "https://feed.a|False"));
     }
+
+    // Engineering's second-family review of 8880194f (6676612221, HIGH): Velopack takes a package
+    // already in its folder under the release's name for the release without checking its bytes,
+    // so feed A's package passed for feed B's release of the same name and version, was marked as
+    // B's, and installed after an offline restart. Now the bytes are checked against the chosen
+    // release's checksum before they are marked, and a fresh download from the chosen source then is.
+    [Fact]
+    public void A_cached_package_from_another_feed_under_the_same_name_and_version_is_never_marked_and_a_fresh_download_is()
+    {
+        var package = Package("agent-bridge-0.2.0-full.nupkg", "release from feed A");
+        var mark = new DownloadMark(Path.Combine(app, "data", "update-downloaded.txt"));
+        var fromB = Digest("release from feed B");
+
+        // As Velopack would, had the cached file been left: taken as the download, refused, gone.
+        Assert.Throws<PackageMismatchException>(() => mark.Accept(package, "0.2.0", "https://feed.b|False", fromB));
+        Assert.False(File.Exists(package));
+        Assert.False(mark.Vouches(package, "0.2.0", "https://feed.b|False"));
+        Assert.Null(mark.Hold(package, "0.2.0", "https://feed.b|False"));
+
+        // Before a download, a cached file that is not the chosen release's bytes goes, so the
+        // download fetches B's afresh; that one is marked.
+        Package("agent-bridge-0.2.0-full.nupkg", "release from feed A");
+        DownloadMark.DropMismatch(package, fromB);
+        Assert.False(File.Exists(package));
+        Package("agent-bridge-0.2.0-full.nupkg", "release from feed B");
+        mark.Accept(package, "0.2.0", "https://feed.b|False", fromB);
+        Assert.True(mark.Vouches(package, "0.2.0", "https://feed.b|False"));
+        // The chosen release's own bytes, already there, stay.
+        DownloadMark.DropMismatch(package, fromB);
+        Assert.True(File.Exists(package));
+    }
+
+    // And bytes changed after they were marked are refused at install, and not offered after a
+    // restart; the bytes held for the installer cannot be changed until the app has ended.
+    [Fact]
+    public void A_package_changed_after_it_was_marked_is_refused_at_install_and_the_one_held_cannot_be_changed()
+    {
+        var package = Package("agent-bridge-0.2.0-full.nupkg", "release from feed B");
+        var mark = new DownloadMark(Path.Combine(app, "data", "update-downloaded.txt"));
+        mark.Accept(package, "0.2.0", "https://feed.b|False", Digest("release from feed B"));
+
+        using (var held = mark.Hold(package, "0.2.0", "https://feed.b|False"))
+        {
+            Assert.NotNull(held);
+            Assert.Throws<IOException>(() => File.WriteAllText(package, "tampered"));
+            Assert.Throws<IOException>(() => File.Delete(package));
+        }
+
+        File.WriteAllText(package, "tampered");
+        Assert.Null(mark.Hold(package, "0.2.0", "https://feed.b|False"));
+        Assert.False(new DownloadMark(Path.Combine(app, "data", "update-downloaded.txt")).Vouches(package, "0.2.0", "https://feed.b|False"));
+    }
+
+    // A feed that gives SHA-1 only (an older releases list) is checked against that.
+    [Fact]
+    public void A_release_with_only_a_SHA1_is_checked_against_it_and_one_with_neither_is_never_verified()
+    {
+        var package = Package("agent-bridge-0.2.0-full.nupkg", "release");
+        var sha1 = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes("release")));
+        Assert.Equal(PackageDigest.Sha1, PackageDigest.Of(null, sha1)!.Algorithm);
+        Assert.True(PackageDigest.Of("", sha1)!.Matches(package));
+        Assert.False(PackageDigest.Of(null, new string('0', 40))!.Matches(package));
+        Assert.Null(PackageDigest.Of(null, " "));
+    }
+
+    string Package(string name, string bytes)
+    {
+        var path = Path.Combine(app, "packages", name);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, bytes);
+        return path;
+    }
+
+    static PackageDigest Digest(string bytes) =>
+        new(PackageDigest.Sha256, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(bytes))).ToLowerInvariant());
 
     [Fact]
     [Trait("Category", "Network")]

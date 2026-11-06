@@ -27,7 +27,8 @@ namespace AgentBridge.App.Core;
 // turns, only what keeps it from installing is told so: the machine refusing, a download failing,
 // or a question waiting at the backstop.
 //
-// Installing takes a person's press, by the same path either way: the host stopped over the pipe,
+// Installing takes a person's press, unless When an update is ready is Install between turns
+// (above), by the same path every way: the host stopped over the pipe,
 // then Velopack's ApplyUpdatesAndRestart, whose new version starts the host again; its first start
 // shows a toast saying what changed (Announce).
 // * Restart to update, at this machine (RestartToUpdateAsync): at once, whatever the sessions are
@@ -45,7 +46,8 @@ namespace AgentBridge.App.Core;
 // installation (Velopack stops every process in the package, busy or not, and restarts only this
 // profile). A device's press also waits while the host cannot say what its sessions are doing (not
 // running, or its sessions not yet read in full). Only this app's timer checks and downloads, and
-// only a person's press installs: nothing an agent can reach does.
+// only a person's press installs, unless When an update is ready is Install between turns:
+// nothing an agent can reach does.
 //
 // Asked (#51, docs/protocol/v1-update.md): another of the person's devices pressed Check or
 // Install for this machine, and the host carried it here (UpdateReporter). A check is made at

@@ -413,7 +413,19 @@ into one folder with one version. An app update is a host update, so they never 
     one waits takes its place. A release an earlier run downloaded is
     ready from the next start, before any check (`UpdateManager.UpdatePendingRestart`), so it is
     offered offline or while the feed refuses (#530), but only if it came from the feed and
-    pre-release choice selected now (`update-downloaded.txt` in the app's data says which).
+    pre-release choice selected now and is still the bytes verified for it
+    (`update-downloaded.txt` in the app's data says which, with the checksum).
+  * **Every package is checked against its release** (`DownloadMark`, Engineering's
+    second-family review of #719, 6676612221): Velopack (1.2.161) takes a package already in its
+    folder under the release's file name for the release without checking its bytes, so one
+    downloaded from another feed under the same name and version would pass. Before a download, a
+    package there that doesn't match the chosen release's checksum from its feed (SHA-256 where the
+    feed gives one, else SHA-1) is removed; after it, the package is marked ready only when it
+    matches, and otherwise removed and the download has failed. The mark keeps the checksum and its
+    algorithm. A package offered after a restart must still match it, and just before install the
+    package is checked again from a handle that keeps it open, read-only to everyone else, until
+    the app has exited and the installer takes it. A release whose feed gives no checksum is never
+    installed.
   * **Restart to update** says what a restart would interrupt, when a session here is waiting on
     the person or has a turn running ("Restart to update now?", Not now the default): the agents
     keep running, but a question or approval the host was carrying may then have to be answered
@@ -523,8 +535,9 @@ into one folder with one version. An app update is a host update, so they never 
     nothing, and starts the host on the way out; and an app killed meanwhile starts it at its next
     start, as every start does, with the host's logon task at sign-in behind that.
   * Only the app's own timer checks and downloads, and only a person's press installs (Restart to
-    update here, or Install on another of their devices, below), so nothing an agent can reach
-    does. A development copy and the demo never update.
+    update here, or Install on another of their devices, below), unless When an update is ready is
+    Install between turns, so nothing an agent can reach does. A development copy and the demo
+    never update.
 * **From another device** (#51, [v1-update.md](protocol/v1-update.md)): the PWA and the app on
   another machine show this machine's updates and ask for a check, or for the latest release to
   be installed now. The app here does it, through the same `AutoUpdater` (`UpdateReporter`
