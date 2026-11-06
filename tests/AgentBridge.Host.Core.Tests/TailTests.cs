@@ -72,9 +72,12 @@ public class TailTests
         var path = Path.Combine(f.Root, "t.jsonl");
         File.WriteAllText(path, "one\n");
         var tail = Tail(f, path);
+        var written = File.GetLastWriteTimeUtc(path);
+        // Looked at as soon as it was written, however long the runner took to get here: the real
+        // clock let a runner stalled past the racy window read the rewrite as unchanged (#634 review).
+        tail.UtcNow = () => written;
         var sink = new Recorder();
         tail.Read(sink);
-        var written = File.GetLastWriteTimeUtc(path);
 
         // As a coarse file system clock leaves it.
         File.WriteAllText(path, "uno\n");

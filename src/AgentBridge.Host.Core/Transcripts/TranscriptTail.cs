@@ -56,6 +56,8 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
     internal int Opens { get; private set; }
     // Tests: run once a read has parsed what it found, before it notes where it stopped.
     internal Action? AfterParse { get; set; }
+    // Tests: the wall clock a look is timed by, compared with the file system's own times.
+    internal Func<DateTime> UtcNow { get; set; } = static () => DateTime.UtcNow;
 
     public TailOutcome Read(ILineSink sink)
     {
@@ -69,7 +71,7 @@ internal sealed class TranscriptTail(string path, SessionSourceOptions options)
 
     (long Length, DateTime Written)? Stamp(out DateTime at)
     {
-        at = DateTime.UtcNow;
+        at = UtcNow();
         try
         {
             _info ??= new FileInfo(Path);

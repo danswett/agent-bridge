@@ -89,7 +89,9 @@ baselines, `SessionTrackerBenchmarks.Unchanged` took 331 µs locally and 49 µs 
 `windows-latest`, so compare those two only against a baseline from the same kind of machine.
 Since #608 that benchmark opens nothing once its transcript is older than two seconds: it asks the
 file's size and time, finds them as they were, and hands back the session built last, so its
-baselines from before then are not comparable. `SourceTests` and `TailTests` assert that a pass
+baselines from before then are not comparable. A working session is still built again when the
+Not responding watchdog's answer changes, which the clock or a delegate's own transcript can do
+with the session's transcript unchanged (#800). `SourceTests` and `TailTests` assert that a pass
 with nothing changed builds, serialises and opens nothing, which `dotnet test` checks on every
 push.
 

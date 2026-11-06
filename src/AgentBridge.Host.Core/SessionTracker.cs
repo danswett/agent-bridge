@@ -27,6 +27,9 @@ internal sealed class SessionTracker
     // The last session built, and the nested agents' records it was built with.
     Session? _built;
     IReadOnlyList<ClaudeSubagents.Record> _nested = [];
+    // What the last build asked Stalled, while the session could be called Not responding: null
+    // when it could not (not working, or already showing another attention).
+    (SessionStatus Effective, DateTimeOffset? LastEvent, bool Background, IReadOnlyList<Subagent>? Subagents, int? More)? _stall;
 
     public SessionTracker(DiscoveredSession discovered, SessionSourceOptions options, TimeProvider time)
     {
@@ -49,8 +52,8 @@ internal sealed class SessionTracker
 
     public Session Update(DiscoveredSession discovered)
     {
-        // What Build reads besides the clock it never consults for an unchanged session: the
-        // parsed transcript, its nested agents, discovery's view and the workspace. Every pass
+        // What Build reads: the parsed transcript, its nested agents, discovery's view and the
+        // workspace, and for a working session the clock and its delegates' transcripts. Every pass
         // rebuilt and re-serialised every session, changed or not: about 35 MB/min of the host's
         // allocation (#608).
         var changed = _built is null || discovered != Discovered;
@@ -88,6 +91,15 @@ internal sealed class SessionTracker
             var workspace = _workspace;
             RefreshWorkspace(Path.Combine(dir, "workspace.yaml"));
             changed |= !ReferenceEquals(workspace, _workspace);
+        }
+        // Not responding (#800) comes from the clock and from the delegates' own transcripts, which
+        // nothing above looks at: a hung session is exactly one whose transcript stops changing, so
+        // skipping its build left it working with no attention for ever (#634 review, H1). Asked
+        // again with what the last build asked it; only a different answer builds the session.
+        if (!changed && _stall is { } stall
+            && Stalled(stall.Effective, stall.LastEvent, stall.Background, stall.Subagents, stall.More, _time.GetUtcNow()) != _built!.Attention)
+        {
+            changed = true;
         }
         if (!changed) { return _built!; }
         Builds++;
@@ -237,6 +249,9 @@ internal sealed class SessionTracker
         var ownReasoning = source?.Reasoning is not null || _state.Reasoning is null ? Limits.KeepEnd(_state.OwnReasoning, Limits.Reasoning).Text : null;
         var own = ownResponse is null && ownReasoning is null ? null
             : new OwnActivity { Response = ownResponse, ResponseTruncated = ownCut ? true : null, Reasoning = ownReasoning, At = _state.OwnAt };
+        var lastEvent = Later(_state.LastEventAt, hintAt);
+        var background = agents + shells > 0;
+        _stall = _state.Attention is null && effective == SessionStatus.Working ? (effective, lastEvent, background, subagents, more) : null;
 
         return new Session
         {
@@ -256,7 +271,7 @@ internal sealed class SessionTracker
             WaitingOn = question?.Agent,
             Subagents = subagents,
             SubagentsMore = more,
-            Attention = _state.Attention ?? Stalled(effective, Later(_state.LastEventAt, hintAt), agents + shells > 0, subagents, more, now),
+            Attention = _state.Attention ?? Stalled(effective, lastEvent, background, subagents, more, now),
             Activity = new Activity
             {
                 Response = response,

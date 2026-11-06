@@ -875,11 +875,15 @@ public sealed class SessionSource : ISessionSource
         var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt);
         // The tracker hands back the very session it built last when nothing it reads changed.
         // Fitting and serialising it again (about 37 MB/min, #608) found the same JSON every time.
+        // Never while a sign-in recovery overlay is held (#800): each step of it (Checking, then
+        // Pending), and the clearing of one gone stale, is decided below and nowhere else, often
+        // with the same session and the same time (#634 review, H2). It is held only while a
+        // sign-in is under way.
         if (ReferenceEquals(full, entry.CommittedFull) && inputs == entry.CommittedWith)
         {
             lock (_gate)
             {
-                if (_entries.TryGetValue(full.Id, out var current) && current == entry) { return; }
+                if (_entries.TryGetValue(full.Id, out var current) && current == entry && !_recovery.ContainsKey(full.Id)) { return; }
             }
         }
         var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
