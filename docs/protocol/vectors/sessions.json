@@ -1678,6 +1678,31 @@
           }
         },
         {
+          "name": "a-codex-approval",
+          "json": {
+            "id": "019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01#e2c96713aea78522",
+            "kind": "approval",
+            "message": "Allow **Bash**?\n\n```\ngit push\n```",
+            "fields": [
+              {
+                "name": "decision",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "approve",
+                    "label": "Approve once"
+                  },
+                  {
+                    "value": "deny",
+                    "label": "Deny"
+                  }
+                ]
+              }
+            ],
+            "askedAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
           "name": "truncated",
           "json": {
             "id": "call_q2",

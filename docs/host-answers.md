@@ -247,13 +247,24 @@ or nothing within 15 s is `unconfirmed`.
 
 agent-ha-bridge's `Invoke-PendingCodexApprovals`: `y` to approve or `n` to deny, then
 Enter 300 ms later, as a reply is typed. The approval is the one agent-ha-bridge's
-`PermissionRequest` hook recorded in `<id>.approval.json`, and its `DecisionId` is the
-question's id: the generation. Immediately before typing the host reads the marker again
-and types nothing unless it names this session, holds the same generation, and records no
-attempt of agent-ha-bridge's own (`DeliveryAttempted`). Missing is `stale`; unreadable,
-or anything else its own sender would reject, is `refused`. The host only reads the
+`PermissionRequest` hook recorded in `<id>.approval.json`. The question's id is
+`<DecisionId>#<digest>`: the marker's generation, and a digest of what the person is shown
+(the tool, the whole command, whether it was cut, the hook's preview line, the message, and
+whether it is truncated or answered at the machine), built the way a Copilot permission
+prompt's is. The generation alone does not bind the command: Codex can list the same
+`DecisionId` again with another command, plain, cut or escaped, and an Approve keyed by the
+generation alone was typed into a command the person never saw (#958). An answer naming any
+other id, a bare `DecisionId` included, is `stale`; a listed id that does not parse strictly
+is refused. Immediately before
+typing the host reads the marker again, rebuilds the question from that fresh read, never
+from the cached listing, and types nothing unless it names this session, holds the same
+generation, rebuilds to exactly the id answered, and records no attempt of
+agent-ha-bridge's own (`DeliveryAttempted`). Missing, another generation or another
+content is `stale`; unreadable, or anything else its own sender would reject, is
+`refused`. The host only reads the
 marker: it never writes, renames or removes it, so its attempt is recorded in its own
-ledger (below), not in agent-ha-bridge's file.
+ledger (below), not in agent-ha-bridge's file. That attempt is keyed by the generation, not
+the whole id, so a generation is typed into once whatever it reads as later.
 
 Codex records nothing that says how an approval was answered: the hook removes the marker
 on the next event however it was answered, and the rollout does not name the approval. So
