@@ -57,9 +57,21 @@ node render.js ../../design/canvas ../../docs/design/proposals/536-slipgates-bra
 node contact-sheet.js ../../docs/design/proposals/536-slipgates-brand proposal-536-
 ```
 
-`contact-sheet.js <dir> <prefix> [out.png] [columns]` tiles every `<prefix>*.png` in a folder,
-sorted by name, into `contact-sheet.png` beside them. It uses the same Playwright and Inter as
-the renderer, so it runs offline too.
+Proposal #384 (first-run setup and Settings) draws most of its boards from one parametric
+board, `Proposal-384-Windows.dc.html` (props `theme` = dark, light or hc; `screen`; `width` =
+1440, or 720 for the compact layout). Each `Proposal-384-<Screen>[-Light].dc.html` is a
+one-line `<dc-import>` of it, and only those wrappers are in `canvas.json`'s order. The phone
+board and the states matrix are their own boards. Re-render them, then the contact sheet:
+
+```
+node render.js ../../design/canvas ../../docs/design/proposals/384-first-run Proposal-384-
+node contact-sheet.js ../../docs/design/proposals/384-first-run proposal-384- "--note=decided by the owner on 2026-11-03 · ui.md is the spec"
+```
+
+`contact-sheet.js <dir> <prefix> [out.png] [columns] [--note=<text>]` tiles every
+`<prefix>*.png` in a folder, sorted by name, into `contact-sheet.png` beside them. It uses the
+same Playwright and Inter as the renderer, so it runs offline too. Its subtitle says "proposal
+mockups, not approved" unless `--note` replaces it, as #384's decided note above does.
 
 ## Motion preview
 
