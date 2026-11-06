@@ -15,7 +15,7 @@ export const DOWN = 32; // scrolled down this far in one direction, mid-conversa
 export const UP = 64; // scrolled up this far in one direction, it comes back
 export const TITLE_IN = 40; // the bar's fill and title appear once this much of the header is under it
 
-const PHONE = '(max-width: 759px)';
+export const PHONE = '(max-width: 759px)';
 const REDUCED = '(prefers-reduced-motion: reduce)';
 const QUIET_MS = 120; // an app-made scroll is over once its scroll events have been quiet this long
 const APP_SCROLL_MAX_MS = 2000;
@@ -128,6 +128,8 @@ export class CollapsingHeader {
   #on = false;
   #paused = false;
   #focusInside = false;
+  #byPointer = false; // the person's last input was a pointer, not a key
+  #heldByKey = false; // the last focus move inside the header came by a key
   #fading = false;
   #app = null; // { wasFull, quiet, limit } while the app is scrolling
   #fullH = 0;
@@ -190,6 +192,8 @@ export class CollapsingHeader {
     // A person's touch or wheel on the conversation is done with the header: focus the app put there
     // when the session opened (the title) must not keep it whole.
     for (const type of ['wheel', 'touchstart', 'pointerdown']) { on(sc, type, () => this.#releaseHold(), { passive: true }); }
+    on(this.#doc, 'pointerdown', () => { this.#byPointer = true; }, { capture: true, passive: true });
+    on(this.#doc, 'keydown', () => { this.#byPointer = false; }, { capture: true, passive: true });
     on(sc, 'focusin', () => this.#checkFocusSoon());
     on(this.#head, 'focusin', () => this.#focusIn());
     on(this.#head, 'focusout', (e) => this.#focusOut(e));
@@ -200,7 +204,8 @@ export class CollapsingHeader {
     for (const end of ['touchend', 'touchcancel']) { on(this.#top, end, () => { this.#pan = null; }, { passive: true }); }
     if (typeof this.#win.ResizeObserver === 'function') {
       this.#observer = new this.#win.ResizeObserver(() => this.#measure());
-      for (const el of [this.#top, this.#bar, this.#view, sc, this.#stream]) { if (el) { this.#observer.observe(el); } }
+      // The header's border box: its own padding growing moves what it covers as much as its content.
+      for (const el of [this.#top, this.#bar, this.#view, sc, this.#stream]) { if (el) { this.#observer.observe(el, el === this.#top ? { box: 'border-box' } : undefined); } }
     }
     this.#measure();
   }
@@ -251,8 +256,18 @@ export class CollapsingHeader {
   #measure() {
     if (!this.#on) { return; }
     const v = this.#view;
+    if (this.#top.offsetHeight === 0) { return; }
+    // On another tab the conversation is not drawn and its scroller has no height; the header still
+    // floats over that tab, whose top padding is --head-h, so the header alone is measured.
     const stageH = this.#scroller.clientHeight;
-    if (this.#top.offsetHeight === 0 || stageH === 0) { return; }
+    if (stageH === 0) {
+      this.#fullH = this.#top.offsetHeight;
+      this.#barH = Math.max(BAR, this.#bar.offsetHeight);
+      this.#room = Math.max(0, this.#fullH - this.#barH);
+      v.style.setProperty('--head-h', `${this.#fullH}px`);
+      this.#render();
+      return;
+    }
     if (stageH !== this.#stageH) {
       this.#stageH = stageH;
       v.style.setProperty('--stage-h', `${stageH}px`);
@@ -360,6 +375,7 @@ export class CollapsingHeader {
   }
 
   #focusIn() {
+    this.#heldByKey = !this.#byPointer;
     this.#focusInside = true;
     if (this.#paused) { return; }
     const before = this.#hidden();
@@ -375,8 +391,12 @@ export class CollapsingHeader {
     this.#render();
   }
 
+  // A touch, wheel or pointer on the conversation ends the hold of the title's opening focus (#707)
+  // and of a control a tap focused (Chrome focuses a tapped button; WebKit's :focus-visible can't
+  // tell): focus a person moved into the header with keys (a tab, Back, More) holds it until it leaves.
   #releaseHold() {
-    if (!this.#focusInside) { return; }
+    const a = this.#doc.activeElement;
+    if (!this.#focusInside || (this.#heldByKey && !a?.matches?.('.session-title'))) { return; }
     this.#focusInside = false;
     this.#render();
   }
@@ -444,7 +464,13 @@ export class CollapsingHeader {
     const before = t.scrollTop;
     t.scrollTop = before + dy;
     const rest = dy - (t.scrollTop - before);
-    if (rest !== 0) { this.#scroller.scrollTop += rest; }
+    if (rest !== 0) {
+      // The person is scrolling the conversation, as with a touch or wheel on it: the app's
+      // scroll is over, and the title's opening focus no longer holds the header whole.
+      this.#endApp();
+      this.#releaseHold();
+      this.#scroller.scrollTop += rest;
+    }
   }
 
   #wheel(e) {

@@ -38,10 +38,10 @@ import { EndSession } from './stop-view.js';
 import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.js';
-import { aloud, backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
+import { aloud, backgroundCounts, delegateEvents, delegateList, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
-import { CollapsingHeader } from './collapse-header.js';
+import { CollapsingHeader, PHONE } from './collapse-header.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 
@@ -459,7 +459,10 @@ export class SessionCard {
   #prompts = new PromptMemory();
   #promptOpen = false;
   #promptAt = null;
-
+  // The Delegates tab's count on a phone (#629): what the last update counted, and the width that shows it.
+  #tabCounts = { running: 0, asking: 0 };
+  #phone = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(PHONE) : null;
+  #onPhone = () => this.#renderTabCount();
   // hostId: the machine the session is on, which everything the view sends goes to.
   // fetchDetail(id) -> Promise<Session|null>, for the tool history (session.get).
   // answering() -> { service, replies, stops, hostId, capabilities } | null: who answers
@@ -538,7 +541,12 @@ export class SessionCard {
     // Conversation / Delegates / Tools, where the inspector isn't a pane of its own (ui.md §6.3).
     // Delegates is there only while the host lists any.
     e.tabC = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabC, 'aria-controls': this.ids.conversation, onclick: () => this.setTab('conversation') }, 'Conversation');
-    e.tabD = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabD, 'aria-controls': this.ids.delegates, hidden: true, onclick: () => this.setTab('delegates') }, 'Delegates');
+    // On a phone, with no strip, the tab carries what the strip did (#629): "Delegates 2" while two
+    // run, led by the needs glyph while one asks, and named for both. In place: never a new height.
+    e.tabNeeds = glyph('needs', { size: 16 });
+    e.tabNeeds.setAttribute('hidden', '');
+    e.tabCount = h('span', { class: 'tab-count', 'aria-hidden': 'true' });
+    e.tabD = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabD, 'aria-controls': this.ids.delegates, hidden: true, onclick: () => this.setTab('delegates') }, e.tabNeeds, 'Delegates', e.tabCount);
     e.tabT = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabT, 'aria-controls': this.ids.tools, onclick: () => this.setTab('tools') }, 'Tools');
     e.tabs = h('div', { class: 'view-tabs', role: 'tablist', 'aria-label': 'Session' }, e.tabC, e.tabD, e.tabT);
     e.tabs.addEventListener('keydown', (ev) => {
@@ -634,6 +642,7 @@ export class SessionCard {
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
       e.head, h('div', { class: 'view-body' }, e.conversation, e.inspector));
     this.collapse = new CollapsingHeader({ view: this.view, head: e.head, top: e.top, bar: e.bar, scroller: e.scroll });
+    this.#phone?.addEventListener('change', this.#onPhone);
     this.#applyTab();
     // A question that stays where it is can still move (#491): a title wrapping, a tool line
     // coming or going, the response or reasoning or your message changing above it, a note,
@@ -802,9 +811,29 @@ export class SessionCard {
     e.delegateCounts.hidden = !counts;
     e.delegates.hidden = !listed && !counts;
     e.tabD.hidden = e.delegates.hidden;
+    // Running as the strip counts them, the main agent's own; asking at any depth, since a
+    // question waits on the person whoever asks it.
+    const d = listed ? delegateList(s) : null;
+    this.#tabCounts = d
+      ? { running: d.active.filter((r) => r.running && (!r.parent || r.parent === r.id)).length, asking: d.active.filter((r) => r.status === 'waiting').length }
+      : { running: 0, asking: 0 };
+    this.#renderTabCount();
     if (e.tabD.hidden && this.#tab === 'delegates') { this.setTab('conversation'); }
     this.#linkDelegatesTab();
     this.#renderEvents(s, now);
+  }
+
+  // From 760 the strip says all this, and the tab is plain "Delegates".
+  #renderTabCount() {
+    const e = this.els;
+    const { running, asking } = this.#phone?.matches ? this.#tabCounts : { running: 0, asking: 0 };
+    // The leading space keeps the visible text "Delegates 2", within the name (WCAG 2.5.3); the
+    // flex row draws only the gap.
+    e.tabCount.textContent = running ? ` ${running}` : '';
+    // An <svg> has no hidden property; the attribute is what app.css hides.
+    e.tabNeeds.toggleAttribute('hidden', !asking);
+    const said = [running && `${running} running`, asking && `${asking} asking`].filter(Boolean);
+    if (said.length) { e.tabD.setAttribute('aria-label', ['Delegates', ...said].join(', ')); } else { e.tabD.removeAttribute('aria-label'); }
   }
 
   // Pushed in the list's place, the delegate open is what the Delegates tab shows: the tab
@@ -1175,6 +1204,7 @@ export class SessionCard {
     this.detail.dispose();
     this.#moves?.stop();
     this.collapse?.destroy();
+    this.#phone?.removeEventListener('change', this.#onPhone);
     clearTimeout(this.#history.timer);
   }
 

@@ -340,17 +340,14 @@ test.describe('the system\'s Back on a phone', () => {
 
   test('opening another delegate over one replaces it and its step, so Back from there is its session', async ({ page }) => {
     const v = await openDelegate(page, AS.androidInstalled);
-    // From the conversation's events, the witness opens in the suite's place.
+    // From the conversation's events, another opens in the suite's place: one step still, now its.
     await v.getByRole('tab', { name: 'Conversation' }).click();
     await expect.poll(() => step(page)).toBeNull();
-    await v.locator('.delegate-events .delegate-link').first().click();
-    const opened = await pane(page).locator('.delegate-title').textContent();
-    await expect.poll(() => step(page)).not.toBeNull();
-    // Then another, from the conversation's events again: one step still, now the second's.
-    await v.getByRole('tab', { name: 'Conversation' }).click();
-    await v.locator('.delegate-events .delegate-link').nth(1).click();
-    await expect(pane(page).locator('.delegate-title')).not.toHaveText(opened);
-    await expect.poll(() => step(page)).not.toBeNull();
+    const other = v.locator('.delegate-events .delegate-link').first();
+    const otherId = await other.getAttribute('data-id');
+    await other.click();
+    await expect(pane(page).locator('.delegate-title')).not.toHaveText('Run full test suite');
+    await stepTaken(page, otherId);
     await page.goBack();
     await expect(pane(page)).toHaveCount(0);
     await expect(v).toBeVisible();

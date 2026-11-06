@@ -20,8 +20,16 @@ async function openDemo(page) {
   await page.waitForSelector('html[data-demo-ready]');
 }
 
+// A test that captured may see the screenshot machinery's own style element refused (WebKit);
+// the page's own violations were checked before it, by shot().
+let captured = false;
+const own = async (page) => {
+  const seen = await page.evaluate(() => window.__cspViolations ?? []);
+  return captured ? seen.filter((v) => v !== 'style-src-elem inline') : seen;
+};
+test.beforeEach(() => { captured = false; });
 test.afterEach(async ({ page }) => {
-  expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
+  expect(await own(page)).toEqual([]);
 });
 
 const upsert = (page, id, change) => page.evaluate(({ id, change }) => {
@@ -87,6 +95,42 @@ async function folded(v, y = 300) {
   return m;
 }
 
+// The header's motion run out (the slide or cross-fade, and the bar's fill and title fading), so
+// what is read or captured is where it rests. A working glyph turns for ever; that is not waited on.
+async function rested(v) {
+  await expect(v).not.toHaveClass(/\b(animating|fading)\b/);
+  await v.evaluate((el) => Promise.all(el.getAnimations({ subtree: true })
+    .filter((a) => Number.isFinite(a.effect?.getComputedTiming().endTime))
+    .map((a) => a.finished.catch(() => {}))));
+}
+
+// A capture for the review (#718). The caret left as it is: hiding it injects a style the page's
+// CSP refuses in WebKit, which still adds one of its own; the page's violations are checked first.
+async function shot(page) {
+  expect(await own(page)).toEqual([]);
+  captured = true;
+  return page.screenshot({ caret: 'initial' });
+}
+
+// The header at rest, whole: its title, meta line and tabs each in a box of their own, and nothing
+// of the bar drawn over them (#631 review: a return captured mid-fade overlapped).
+async function wholeHeader(v) {
+  const boxes = await v.evaluate((el) => ['.session-title', '.status-line', '.view-tabs'].map((sel) => {
+    const r = el.querySelector(`.session-top ${sel}`).getBoundingClientRect();
+    return { sel, top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height };
+  }));
+  for (const b of boxes) { expect(b.height, b.sel).toBeGreaterThan(0); }
+  for (let i = 0; i < boxes.length; i += 1) {
+    for (let j = i + 1; j < boxes.length; j += 1) {
+      const [a, b] = [boxes[i], boxes[j]];
+      const overlap = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5 && Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5;
+      expect(overlap, `${a.sel} and ${b.sel} overlap`).toBe(false);
+    }
+  }
+  await expect(v.locator('.bar-title')).toBeHidden();
+  expect(await v.locator('.session-bar').evaluate((bar) => getComputedStyle(bar, '::before').opacity)).toBe('0');
+}
+
 for (const scheme of ['light', 'dark']) {
   test.describe(`on a phone, ${scheme}`, () => {
     test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, colorScheme: scheme });
@@ -114,7 +158,7 @@ for (const scheme of ['light', 'dark']) {
         expect(await read(v), `at ${y}`).toMatchObject({ ty: -y, solid: false, titled: false });
         expect((await v.locator('.session-top').boundingBox()).y, `at ${y}`).toBeCloseTo(-y, 0);
       }
-      await info.attach(`riding-${scheme}.png`, { body: await page.screenshot(), contentType: 'image/png' });
+      await info.attach(`riding-${scheme}.png`, { body: await shot(page), contentType: 'image/png' });
       await scrollTo(v, 40);
       expect(await read(v)).toMatchObject({ ty: -40, solid: true, titled: true });
       await expect(v.locator('.bar-title')).toBeVisible();
@@ -123,7 +167,8 @@ for (const scheme of ['light', 'dark']) {
       const m = await folded(v, 400);
       expect(m.covered).toBe(m.bar);
       expect(m.bar).toBeGreaterThanOrEqual(48);
-      await info.attach(`folded-${scheme}.png`, { body: await page.screenshot(), contentType: 'image/png' });
+      await rested(v);
+      await info.attach(`folded-${scheme}.png`, { body: await shot(page), contentType: 'image/png' });
     });
 
     test('mid-conversation 64 px up brings the header back and 32 px down hides it, and a change of direction restarts the count', async ({ page }, info) => {
@@ -133,7 +178,9 @@ for (const scheme of ['light', 'dark']) {
       for (const y of [270, 240, 237]) { await scrollTo(v, y); await is(-room, `up to ${y}`); }
       await scrollTo(v, 236);
       await is(0, '64 px up');
-      await info.attach(`returned-${scheme}.png`, { body: await page.screenshot(), contentType: 'image/png' });
+      await rested(v);
+      await wholeHeader(v);
+      await info.attach(`returned-${scheme}.png`, { body: await shot(page), contentType: 'image/png' });
       await scrollTo(v, 267);
       await is(0, '31 px down');
       await scrollTo(v, 268);
@@ -232,6 +279,71 @@ for (const scheme of ['light', 'dark']) {
       expect(seen).toEqual(['back', 'more', 'view-tab', 'conversation']);
     });
 
+    test('the Delegates tab says how many run, leads with needs while one asks, and changes in place', async ({ page }, info) => {
+      await openDemo(page);
+      const v = await open(page, 'demo-delegates');
+      const tab = v.locator('.view-tab').nth(1);
+      const parts = async () => ({
+        name: await tab.evaluate((t) => t.getAttribute('aria-label') ?? t.textContent),
+        count: (await tab.locator('.tab-count').textContent()).trim(),
+        needs: await tab.locator('.glyph').isVisible(),
+        height: (await tab.boundingBox()).height,
+        row: (await v.locator('.session-top .view-tabs').boundingBox()).height,
+      });
+      const set = (statuses) => page.evaluate(({ statuses, at }) => {
+        const d = window.agentBridgeDemo;
+        const s = d.host.get('demo-delegates');
+        d.upsert({ ...s, updatedAt: at, subagents: s.subagents.map((a) => (statuses[a.id] ? { ...a, ...statuses[a.id] } : a)) });
+      }, { statuses, at: later() });
+      // Two the main agent started are running; the one the witness started is the witness's.
+      await expect(tab).toHaveAccessibleName('Delegates, 2 running');
+      const at = await parts();
+      expect(at).toMatchObject({ count: '2', needs: false });
+      await set({ 'demo-agent-witness': { status: 'waiting' } });
+      await expect(tab).toHaveAccessibleName('Delegates, 2 running, 1 asking');
+      await expect(tab.locator('.glyph')).toHaveAttribute('data-glyph', 'needs');
+      expect(await parts()).toMatchObject({ count: '2', needs: true, height: at.height, row: at.row });
+      await info.attach(`delegates-tab-asking-${scheme}.png`, { body: await shot(page), contentType: 'image/png' });
+      // A nested delegate's question waits on the person as much as a top one's.
+      await set({ 'demo-agent-witness': { status: 'working' }, 'demo-agent-grep': { status: 'waiting' } });
+      await expect(tab).toHaveAccessibleName('Delegates, 2 running, 1 asking');
+      // None running: no count, and the tab just "Delegates", still the same height.
+      await set(Object.fromEntries(['demo-agent-witness', 'demo-agent-suite', 'demo-agent-grep'].map((id) => [id, { status: 'ended', outcome: 'done' }])));
+      await expect(tab).toHaveAccessibleName('Delegates');
+      expect(await parts()).toMatchObject({ name: 'Delegates', count: '', needs: false, height: at.height, row: at.row });
+      // From 760 the strip says it: the tab is plain "Delegates" however many run, and a phone's
+      // width again brings the count back.
+      await set({ 'demo-agent-witness': { status: 'waiting' }, 'demo-agent-suite': { status: 'working' } });
+      await expect(tab).toHaveAccessibleName('Delegates, 2 running, 1 asking');
+      await page.setViewportSize({ width: 900, height: 844 });
+      await expect(tab).toHaveAccessibleName('Delegates');
+      await expect(tab).toHaveText('Delegates');
+      await expect(tab.locator('.glyph')).toBeHidden();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(tab).toHaveAccessibleName('Delegates, 2 running, 1 asking');
+    });
+
+    test('a tab\'s focus ring is whole: the header, which scrolls within itself, keeps room for it', async ({ page }, info) => {
+      await openDemo(page);
+      const v = await open(page, 'demo-delegates');
+      await v.locator('.session-bar .more').focus();
+      await page.keyboard.press('Tab');
+      const tab = v.locator('.view-tab[aria-selected="true"]');
+      await expect(tab).toBeFocused();
+      await rested(v);
+      const ring = await tab.evaluate((t) => {
+        const cs = getComputedStyle(t);
+        const reach = parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset);
+        const r = t.getBoundingClientRect();
+        const clip = t.closest('.session-top').getBoundingClientRect();
+        return { style: cs.outlineStyle, reach, below: clip.bottom - r.bottom, left: r.left - clip.left, right: clip.right - r.right, above: r.top - clip.top };
+      });
+      expect(ring.style).toBe('solid');
+      expect(ring.reach).toBe(5);
+      for (const side of ['below', 'left', 'right', 'above']) { expect(ring[side], side).toBeGreaterThanOrEqual(ring.reach); }
+      await info.attach(`tab-focus-${scheme}.png`, { body: await shot(page), contentType: 'image/png' });
+    });
+
     test('the tabs are one stop: Left and Right wrap, Home and End go to the first and last, and the conversation stays where it was', async ({ page }) => {
       const v = await session(page);
       await folded(v);
@@ -285,20 +397,42 @@ for (const scheme of ['light', 'dark']) {
     test('Home, End, Page Up and Page Down are scrolling, and Home brings the full header back', async ({ page }) => {
       const v = await session(page);
       const { room } = await read(v);
-      await v.locator('.stream-scroll').evaluate((sc) => { sc.tabIndex = -1; sc.focus(); });
-      await page.keyboard.press('End');
-      await expect.poll(async () => (await read(v)).ty).toBe(-room);
-      await page.keyboard.press('PageUp');
-      await expect.poll(async () => (await read(v)).ty).toBe(0);
-      await page.keyboard.press('PageDown');
-      await expect.poll(async () => (await read(v)).ty).toBe(-room);
-      await page.keyboard.press('PageUp');
-      await expect.poll(async () => (await read(v)).ty).toBe(0);
-      await page.keyboard.press('End');
-      await expect.poll(async () => (await read(v)).ty).toBe(-room);
-      await page.keyboard.press('Home');
-      await expect.poll(async () => (await read(v)).scroll).toBe(0);
-      expect(await read(v)).toMatchObject({ ty: 0, solid: false, titled: false });
+      const sc = v.locator('.stream-scroll');
+      await sc.evaluate((el) => { el.tabIndex = -1; el.focus(); });
+      // Each key's scroll run out before the next: WebKit animates these keys, and one pressed while
+      // the last still runs starts from wherever that was. The positions it passed are kept, so a
+      // scroll that stops short says where.
+      const key = async (name) => {
+        await sc.evaluate((el) => {
+          const seen = [];
+          window.__keyScroll = seen;
+          const frame = () => { seen.push(Math.round(el.scrollTop)); if (seen.length < 600 && window.__keyScroll === seen) { requestAnimationFrame(frame); } };
+          frame();
+        });
+        await page.keyboard.press(name);
+        await settle(v);
+        const path = await sc.evaluate(() => {
+          const seen = window.__keyScroll;
+          window.__keyScroll = null;
+          return seen.filter((t, i) => t !== seen[i - 1]).join(' ');
+        });
+        return `${name} scrolled ${path}`;
+      };
+      const ty = async () => (await read(v)).ty;
+      let path = await key('End');
+      await expect.poll(ty, { message: path }).toBe(-room);
+      path = await key('PageUp');
+      await expect.poll(ty, { message: path }).toBe(0);
+      path = await key('PageDown');
+      await expect.poll(ty, { message: path }).toBe(-room);
+      path = await key('PageUp');
+      await expect.poll(ty, { message: path }).toBe(0);
+      path = await key('End');
+      await expect.poll(ty, { message: path }).toBe(-room);
+      path = await key('Home');
+      expect((await read(v)).scroll, path).toBe(0);
+      await expect.poll(ty, { message: path }).toBe(0);
+      expect(await read(v)).toMatchObject({ solid: false, titled: false });
     });
 
     test('the bar grows with the text, and what it covers with it', async ({ page }) => {
@@ -374,6 +508,73 @@ test.describe('on a phone, with the person\'s settings', () => {
     })).toBe(true);
   });
 
+  test('a wheel on the header scrolls the conversation, and the title\'s opening focus no longer holds the header whole', async ({ page }) => {
+    const v = await session(page);
+    // Opened, focus is on the title (#707), inside the header: the hold.
+    expect(await v.evaluate((el) => el.querySelector('.session-head').contains(document.activeElement))).toBe(true);
+    const { room } = await read(v);
+    const box = await v.locator('.session-top .session-title').boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, 400);
+    await expect.poll(async () => (await read(v)).scroll).toBeGreaterThan(room);
+    await expect.poll(async () => (await read(v)).ty).toBe(-room);
+  });
+
+  test('on another tab the header is still measured: its growth moves what that tab puts under it', async ({ page }) => {
+    const v = await session(page);
+    await v.getByRole('tab', { name: 'Tools' }).click();
+    const was = await read(v);
+    // The header grows by 40 px, as a wrapped title or a longer meta line would.
+    await v.locator('.session-top').evaluate((top) => { top.style.paddingBottom = `${parseFloat(getComputedStyle(top).paddingBottom) + 40}px`; });
+    expect((await read(v)).full).toBe(was.full + 40);
+    await expect.poll(() => v.evaluate((el) => parseFloat(el.style.getPropertyValue('--head-h')))).toBe(was.full + 40);
+  });
+
+  test('focus a person moved to a tab holds the header whole through a wheel on the conversation', async ({ page }) => {
+    const v = await session(page);
+    await v.getByRole('tab', { name: 'Conversation' }).focus();
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowLeft');
+    const box = await v.locator('.stream-scroll').boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height - 100);
+    for (let i = 0; i < 4; i += 1) { await page.mouse.wheel(0, 120); }
+    await expect.poll(async () => (await read(v)).scroll).toBeGreaterThan(300);
+    await settle(v);
+    expect((await read(v)).ty).toBe(0);
+    await expect(v.getByRole('tab', { name: 'Conversation' })).toBeFocused();
+  });
+
+  test('a tab a tap chose does not hold the header: the conversation\'s scroll still folds it', async ({ page }) => {
+    const v = await session(page);
+    const { room } = await read(v);
+    await v.getByRole('tab', { name: 'Tools' }).click();
+    await v.getByRole('tab', { name: 'Conversation' }).click();
+    const box = await v.locator('.stream-scroll').boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height - 100);
+    for (let i = 0; i < 4; i += 1) { await page.mouse.wheel(0, 120); }
+    await expect.poll(async () => (await read(v)).scroll).toBeGreaterThan(300);
+    await expect.poll(async () => (await read(v)).ty).toBe(-room);
+  });
+
+  test('Shift+Tab from the conversation onto a folded header\'s tab brings the header back', async ({ page }) => {
+    const v = await session(page);
+    const { room } = await folded(v);
+    await v.locator('.stream').evaluate((stream) => {
+      const sc = stream.parentElement;
+      const b = document.createElement('button');
+      b.id = 'probe';
+      b.textContent = 'Probe';
+      b.style.cssText = `position:absolute;left:16px;height:44px;top:${sc.scrollTop + 300}px`;
+      stream.style.position = 'relative';
+      stream.prepend(b);
+      b.focus({ preventScroll: true });
+    });
+    expect((await read(v)).ty).toBe(-room);
+    await page.keyboard.press('Shift+Tab');
+    await expect(v.locator('.view-tab:focus')).toHaveCount(1);
+    await expect.poll(async () => (await read(v)).ty).toBe(0);
+  });
+
   test('a window widened from a phone\'s leaves nothing of the collapse behind', async ({ page }) => {
     const v = await session(page);
     await folded(v);
@@ -386,7 +587,17 @@ test.describe('on a phone, with the person\'s settings', () => {
     const v = await session(page);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     const { room } = await folded(v, 300);
-    await scrollTo(v, 230);
+    // The return is the fade alone: in its first frame the header is already where it ends, not sliding.
+    const back = await v.evaluate((el) => new Promise((resolve) => {
+      const sc = el.querySelector('.stream-scroll');
+      const top = el.querySelector('.session-top');
+      sc.addEventListener('scroll', () => requestAnimationFrame(() => {
+        const s = getComputedStyle(top);
+        resolve({ slides: /transform|all/.test(s.transitionProperty) && parseFloat(s.transitionDuration) > 0, y: new DOMMatrix(s.transform).m42 });
+      }), { once: true });
+      sc.scrollTo({ top: 230, behavior: 'instant' });
+    }));
+    expect(back).toEqual({ slides: false, y: 0 });
     expect((await read(v)).ty).toBe(0);
     const fade = await v.evaluate((el) => new Promise((resolve) => {
       const sc = el.querySelector('.stream-scroll');
@@ -423,6 +634,8 @@ test.describe('on a phone, in forced colours', () => {
     expect(await v.locator('.session-top').evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(probe.canvas);
     expect(await v.locator('.session-bar').evaluate((el) => getComputedStyle(el, '::before').backgroundColor)).toBe(probe.canvas);
     await expect(v.locator('.bar-title')).toHaveCSS('color', probe.text);
+    // Only the bar's fill opts out: the header's text, its tab labels and its focus ring are the system's.
+    expect(await v.locator('.session-top').evaluate((el) => getComputedStyle(el).forcedColorAdjust)).toBe('auto');
   });
 });
 

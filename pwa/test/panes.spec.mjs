@@ -118,7 +118,9 @@ const pageScroll = (page) => page.evaluate(() => document.scrollingElement.scrol
 async function scrollsOnItsOwn(page, pane) {
   await pane.evaluate((el) => { el.scrollTop = 0; });
   expect(await pane.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
-  await pane.hover();
+  // Near its foot: on a phone the session's header lies over the top of the conversation (ui.md §6.2).
+  const box = await pane.boundingBox();
+  await pane.hover({ position: { x: box.width / 2, y: box.height - 12 } });
   await page.mouse.wheel(0, 120);
   await expect.poll(() => pane.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   expect(await page.evaluate(() => scrollY)).toBe(0);

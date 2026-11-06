@@ -764,10 +764,15 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 /* Conversation and Tools, where the inspector isn't a pane of its own. */
 .view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); }
 .view-tab {
-  position: relative; flex: none; min-height: var(--tap); min-width: var(--tap); padding: 0 2px;
+  position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: var(--tap); min-width: var(--tap); padding: 0 2px;
   font: inherit; font-size: var(--type-row); line-height: var(--type-row-line); color: var(--ab-text2);
   background: none; border: 0; cursor: pointer; white-space: nowrap;
 }
+/* A phone's Delegates tab: the running count, and the needs glyph leading while one asks (#629). */
+.view-tab .tab-count { font-weight: 400; color: var(--ab-text2); }
+.view-tab .tab-count:empty { display: none; }
+.view-tab > .glyph { flex: none; }
 .view-tab:hover { color: var(--ab-text); }
 .view-tab[aria-selected="true"] { color: var(--ab-text); font-weight: 600; }
 .view-tab[aria-selected="true"]::after {
@@ -1340,6 +1345,8 @@ form.reply, form.answer { container: receipt / inline-size; }
   .session-head, .session-top { display: contents; }
 }
 @media (max-width: 759px) {
+  /* Resting values; collapse-header.js overrides them inline on the view. */
+  .session-view { --ty: 0px; --covered: 0px; --head-h: 0px; --stage-h: none; }
   .session-view:not([hidden]) { position: relative; grid-template-rows: minmax(0, 1fr); }
   .session-view > .view-body { grid-row: 1; }
   .session-head { position: absolute; top: 0; left: 0; right: 0; z-index: 2; pointer-events: none; }
@@ -1355,9 +1362,13 @@ form.reply, form.answer { container: receipt / inline-size; }
   .delegate-strip:not([hidden]) { display: none; }
   .stream-scroll {
     padding-top: calc(var(--head-h, 0px) + var(--ab-space-4));
-    scroll-padding-top: calc(var(--covered, 0px) + 8px);
+    scroll-padding-top: calc(var(--covered, 0px) + var(--ab-space-2));
   }
   .inspector { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); }
+  /* The header scrolls within itself, so the tabs, its last row, keep room below them for a
+     focus ring's 5 px (3 px outline and 2 px offset), and the chosen tab's line keeps to the border. */
+  .session-top .view-tabs { padding-bottom: var(--ab-space-1); }
+  .session-top .view-tab[aria-selected="true"]::after { bottom: calc(-1px - var(--ab-space-1)); }
 
   .session-bar {
     position: absolute; top: 0; left: 0; right: 0; z-index: 1; display: flex; align-items: center; gap: var(--ab-space-1);
@@ -1385,8 +1396,8 @@ form.reply, form.answer { container: receipt / inline-size; }
   .fading .session-top { transition: opacity var(--ab-motion-cross-fade) linear; opacity: 0; }
 }
 @media (max-width: 759px) and (forced-colors: active) {
-  .session-top, .session-bar::before { forced-color-adjust: none; background: Canvas; color: CanvasText; }
-  .session-bar::before { border-bottom-color: CanvasText; }
+  .session-top { background: Canvas; color: CanvasText; }
+  .session-bar::before { forced-color-adjust: none; background: Canvas; border-bottom-color: CanvasText; }
   .bar-title { color: CanvasText; }
 }
 /* A button's pressed fill keeps its label at 4.5:1 (ui.md §9) rather than fading the whole
