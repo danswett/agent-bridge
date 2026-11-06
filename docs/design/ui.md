@@ -122,6 +122,12 @@ longer be so. It shows the `failed` glyph (a host unreachable, §2.1) and, in se
 "Offline · last seen 2m ago" once the machine has left the relay's presence, or "Reconnecting…"
 while it is listed but its link is down; rule 7's overlay does not apply. A row's line 2 is
 "Offline · *machine*". Nothing on it can be acted on (§6.1, "A machine away").
+- **Not during a return's grace (#950).** For 3 s after the app comes back to the screen, every
+  row looks as it last did: no `failed` glyph and no "Reconnecting…", though nothing on it can
+  be acted on until its machine's list is whole (§6.1, "Coming back to the app"). Only once the
+  grace has run out does a machine that isn't back show these away states, changing the glyph
+  and words in place. Before #950 they showed from the first moment the link was down, so a
+  reconnect of under a second flashed every row red.
 
 A message from an external agent held for you (§6.7) is a pending question on its target
 session: rule 1 applies, Needs you counts it, and the status reads "Waiting on you · message
@@ -489,11 +495,11 @@ easing in, its duration out, and how far it travels.
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
 | Send and Answer | The reply box; a question card | Send, Send answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button that sent it (Send or Send answer, never an option, #773) shows the platform's progress ring, which stops with the request. Decided, not yet built (#600; builds in #616, #625): the ring is the only in-flight signal (§6.5), turning while the request is open and still while this device waits for a machine that isn't connected. Delivered, the ring cross-fades to the `check` icon, which holds about 1 s and cross-fades back to the button's rest glyph; the button never changes size or fill. An exception's line (§6.5) fades in place in the room reserved for it under the box, or on the question card, and fades out in place when it goes; nothing pops and nothing below it moves. Today both clients show Sending…, Sending again… and "Delivered. The session has your reply." for a reply, and "Delivered. The session has your answer." for a question card's answer. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
-| Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
+| Toast and banner | In-app toasts; banners such as a new version being ready (a machine going offline is never a banner, §6.1, #950) | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
 | Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session; Jump to latest is chosen (§6.4), which scrolls to the end as the person asked, scrolled back or not | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
-| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
+| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle; an order change arriving during a return's grace (§6.1, #950) | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
 **Not in the design:**
@@ -611,11 +617,12 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 **A machine away (#269).** A host's relay link drops now and then (a restart, an update, a
 network blip), often for under a minute. While its machine has left the relay's presence, and the
 client's own relay link is up on the same account:
-- Its rows stay where they are, read as stale (§2.2), and so do the session open, its machine tab,
-  your order and pins.
+- Its rows stay where they are, read as stale (§2.2; after a return, only once the grace below has
+  run out), and so do the session open, its machine tab, your order and pins.
 - Nothing on them can be done: answering, Approve once and Deny, replying, attaching, End session,
   and launching or resuming on that machine are disabled. Their questions leave Needs you, the
-  badges and notifications.
+  badges and notifications. In an offline machine's session, the reply box and the question say
+  why in place of their actions (§6.4, §6.5; #950).
 - Back again, they can be acted on only once the machine's next full list (its snapshot) has
   confirmed that the session and its question still exist, never on the copy kept meanwhile. A
   session that ended meanwhile goes to Ended then, and a question that ended never becomes
@@ -625,6 +632,61 @@ client's own relay link is up on the same account:
   again once that list is whole (#427).
 - After **15 minutes** away its rows go, and the machine is listed as offline (§6.6). It goes at
   once when it is forgotten, when the client is signed out or refused, or when the account changes.
+
+**Coming back to the app (#950).** A phone suspends the PWA when it leaves the screen, and its
+links drop; coming back, they reconnect, usually in well under a second. Coming back is calm:
+the list keeps what it last knew while it catches up, it stays honest about what can't be done
+yet, and connection news shows only when it is news. These are interaction rules; the visual
+language doesn't change. Decided 2026-11-05 (Creative; Product accepted rules 1–7), with rule 8
+added the same evening; the timeline is drawn in
+[proposals/950-calm-return.md](proposals/950-calm-return.md).
+1. **A 3-second grace.** It starts when the app comes back to the screen: the PWA's
+   `visibilitychange` to visible, `pageshow` from the back/forward cache, or `online`; the
+   Windows app waking from sleep or changing network. While it lasts, every row, the open
+   session and its machine tab look exactly as they last did: no `failed` glyph, no
+   "Reconnecting…", no strip and no banner. Anything that arrives updates in place, and an order
+   change uses §5.3's Reorder motion.
+2. **The hold still applies, at once.** As in "A machine away" (#427), nothing on a session is
+   acted on until its machine's full list is whole again. Its controls are `aria-disabled` at
+   once, so a screen reader is never told a held action works. They are drawn disabled only once
+   the hold has lasted 600 ms. A press before then does nothing and shows "Updating…" in text2
+   under that control, never a toast. Opening a session and reading it work throughout.
+3. **A quiet cue only when it's news.** If any machine's list is still not whole 1 s after the
+   return, the title row shows "Updating…" in text2, in a fixed slot beside the title. It
+   doesn't move, isn't announced, and goes the moment every list is whole. A return that
+   finishes in under 1 s changes nothing on screen.
+4. **When the grace runs out (3 s),** a machine that isn't back shows the away states on its rows
+   (§2.2): the glyph and words change in place. If the client's own link is still down, the
+   connection strip takes the title row's place, at the same height (§7). It is announced once,
+   politely.
+5. **Nothing pushes the rows.** There are no "Connecting…" rows above the sessions, ever. A
+   machine with no kept list says so in the same fixed slot ("Connecting to 2 machines…"), never
+   as rows. Banners already showing stay put. A new connection banner is never inserted above
+   the list.
+6. **A real outage reads as it always has** once the grace is over, including the 15-minute
+   rule above. Notifications and Needs you follow the hold as they do now.
+7. **Platforms:** the PWA first. The Windows app takes rules 1–5 on waking from sleep, with the
+   same 3 s. Apple and Android take them through §7 when they are un-parked.
+8. **A machine's connection news is never a sentence over the list.** Offline, Connecting,
+   Opening a channel and Couldn't reach all go from above the list (the PWA's lines from
+   `hostNote()`, #396).
+   - Inside an offline machine's session, the reply box and the question say why, in text2, in
+     place of their usual actions: "*machine* is offline · you can answer once it's back" (§6.4,
+     §6.5).
+   - The machine tab and the Machines page (§6.6) carry the machine's own state.
+   - Only an error the person can act on (Couldn't reach, unsupported) shows, in rule 3's fixed
+     slot, on one line, naming the machine.
+
+| Time after the return | Rows, open session, machine tab | A held session's controls | Title row's slot | Connection strip |
+|---|---|---|---|---|
+| 0 (return) | As they last were; anything arriving updates in place | `aria-disabled` until the machine's list is whole; drawn as they were. A press does nothing and shows "Updating…" under the control | Empty | None |
+| Every list whole before 1 s | Fresh data, in place | Back to normal | Never shown | None |
+| 600 ms, hold still on | As they last were | Drawn disabled | Empty | None |
+| 1 s, any list not whole | As they last were | Drawn disabled | "Updating…", or "Connecting to N machines…" for machines with no kept list; it goes when every list is whole | None |
+| 3 s, grace over | A machine not back: the away states (§2.2), in place. The rest as they are | Disabled as §6.1 says; an offline machine's session says why (rule 8) | As at 1 s, unless the strip has taken the title row's place | Only if the client's own link is down: in the title row's place, at its height, announced once, politely |
+
+The owner may change the 3 s grace; the 1 s cue and the 600 ms point stand with it unless the
+owner changes them too.
 
 **Row anatomy (two lines):**
 - **Leading:** the status glyph, aligned to line 1.
@@ -1047,7 +1109,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       an option", "Enter a number"), and the error is said once (§9.2). It is absent where
       the card can't be answered here (`answerAtMachine`, `truncated`, resolved, a
       collaborator's read-only view, §6.7) and while a sent answer's outcome forbids sending
-      another (§6.5). While its machine is away it stays, disabled, as §6.1's controls do. Why
+      another (§6.5). While its machine is away it stays, disabled, as §6.1's controls do; once
+      that machine is offline, the card says "*machine* is offline · you can answer once it's
+      back" in text2 in place of its actions (§6.1, #950 rule 8). Why
       visible and not hidden until complete: the rule that a button which doesn't apply is
       absent, not disabled (A7), is about actions that do nothing in the current state, and
       an open question's Send answer always applies. Hidden until complete, the card's only
@@ -1300,6 +1364,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   question first. Go to the question". The link is a scroll the app makes to the question
   (§6.2: it leaves the header as it was) and puts focus on its first choice. With the notice,
   the reply area is 99 at rest on a phone.
+- **While its machine is offline** (§6.1, #950 rule 8), the box says why in text2, in place of
+  its usual actions: "*machine* is offline · you can answer once it's back". During a return's
+  hold, its controls are held as §6.1's rule 2 says.
 - **Platform styling:**
   - Windows and the PWA: a card with a 2 px Bridge bottom edge.
   - macOS: a capsule field.
@@ -2230,6 +2297,11 @@ question, as choosing its row does.
   push an hour at most, with a count and no text ("3 agent messages are waiting"), which opens
   Needs you.
 
+**Coming back to the app, on every client (#950):** §6.1's "Coming back to the app" rules hold
+where each client comes back: the PWA first, on returning to the screen or a network change; the
+Windows app, rules 1–5, on waking from sleep, with the same 3 s grace; Apple and Android when
+they are un-parked.
+
 **Windows (WinUI 3):**
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
   and a centred search box. System caption buttons.
@@ -2250,7 +2322,10 @@ question, as choosing its row does.
   comes back only as an owner-approved spec here first.
 - **Banners** sit over every page, `InfoBar`s in this order (#293):
   - What stops the app from its job: the host not running, refusing the app, connecting, or
-    view only. Warning, with no close button: it goes once that is put right.
+    view only. Warning, with no close button: it goes once that is put right. On waking from
+    sleep or changing network, "connecting" is not raised during §6.1's 3-second grace (#950). What
+    shows after the grace if the link is still down is not decided yet: rule 5 inserts no new
+    connection banner above the list ([proposals/950-calm-return.md](proposals/950-calm-return.md) §5).
   - "Discovery held: …" ([v1-sessions.md](../protocol/v1-sessions.md#discovery-held)), one per
     held machine, its name first when there is more than one. Informational, with the
     `InfoBar`'s close button, named "Dismiss Discovery held on *machine*" (§9.1 A1) and reached
@@ -2300,6 +2375,12 @@ question, as choosing its row does.
     is the way to Launch.
   - The app bar comes back only as a strip while the connection has news (connecting,
     reconnecting, paused, an error), and as the search row while searching.
+    - **The strip takes the title row's place, at the same height** (#950), so nothing below it
+      moves. After a return it shows only once §6.1's 3-second grace has run out with this
+      client's own link still down, and it is announced once, politely. A machine's own news
+      is never the strip's: it is on its rows, its tab and the Machines page (§6.1, rule 8).
+      Before #950 the strip and connection lines were inserted above the list, and the rows
+      jumped down and back up on every return.
 - **App banners** sit at the top of the content, above the page, one card each (`card` fill,
   `stroke2`), with no icon and no dismiss, in this order:
   - "A new version of the app is ready." · Reload (primary). A release is offered only once it
@@ -2460,6 +2541,13 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   an answer). Delivered is Send's check, never a line or a badge. Older hosts use the same
   words, less the stages they don't report. Never "typed", "queued", "injected", "in the
   terminal" or "Sending again…". Never "answered" before the host confirms.
+- **Return words (#950):** "Updating…" (the title row's cue, and under a held control pressed);
+  "Connecting to N machines…" (the same slot, for machines with no kept list); "*machine* is
+  offline · you can answer once it's back" (the reply box and the question). An error the person
+  can act on (Couldn't reach, unsupported) is one line in the same slot, naming the machine.
+  Never a sentence over the list about a machine's connection: no "*machine* is offline. Its
+  sessions are as it last sent them…", "Connecting to *machine*…" or "Opening an end-to-end
+  encrypted channel to *machine*…" there.
 
 ## 9. Accessibility
 
@@ -2527,6 +2615,10 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   every failure says itself in words. Under reduced motion the ring is still, the ring, the
   check and the rest glyph swap over `crossFade`, and a line fades in over `crossFade`
   instead of rising; the quiet window and the announcement limit still apply.
+- **Coming back to the app (#950, §6.1):** a held control is `aria-disabled` from the moment
+  of the return, before it is drawn disabled at 600 ms, so it is never said to work while it is
+  held. The "Updating…" cue is never announced. The connection strip, if the grace runs out with
+  the client's own link down, is announced once, politely.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
@@ -2663,3 +2755,7 @@ First-run setup and Settings (#384, §6.8–§6.10) are drawn on the Proposal #3
 step, every Settings section, the compact layout, high contrast, the PWA phone's read-only view
 and the readiness states ([proposals/384-first-run/](proposals/384-first-run/), on one
 [contact sheet](proposals/384-first-run/contact-sheet.png)).
+
+Coming back to the app (#950, §6.1) changes when things show, not how they look, so it has no
+boards: its timeline and the captures its build must show are in
+[proposals/950-calm-return.md](proposals/950-calm-return.md).
