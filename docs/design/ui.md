@@ -1285,7 +1285,8 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   status glyph still says what the session is doing (§2.2), which is idle.
 - **Lifetime:** it shows while the session carries `restored`. The host keeps that for this host
   run or 24 h at most, and the mark also goes when the next turn starts (the session starts
-  working). A client never keeps it longer, and never brings it back once it has gone.
+  working; a delivered reply, Continue's included, starts one). A client never keeps it longer,
+  and never brings it back once it has gone.
 
 **The machine notice** (`hello.machine.restore`, announced through `hello.changed`, #646)
 
@@ -1294,8 +1295,9 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   below that machine's Discovery held banner (Platforms, below, gives each client's place). It is
   closable.
 - **Content:** a title and the lines below, with no line limit: every failure and its reason is
-  shown. A line whose list is empty is left out. The banner grows to fit; past half the window's
-  height it scrolls inside itself, so the page stays visible.
+  shown. A line whose list is empty is left out. The banner grows to fit, but the banner area as
+  a whole, every banner included, takes at most half the window's height; past that, the
+  restore notices scroll inside it, so every line stays reachable and the page stays visible.
   - Title: "*machine* restarted after a reboot at 03:12" (`cause: reboot`) or "*machine*'s host
     restarted at 03:12" (`cause: crash`), from `at`. With `signedInAt`, the reboot title ends
     "… · restored when you signed in at 08:40".
@@ -1333,14 +1335,16 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   client does not edit, translate or rebuild the text. Whatever is typed in the reply box stays
   there, unsent.
 - **Progress:** the §6.5 receipt (ring, check, Try again; #600, #617). Resending after a lost
-  response reuses the same `request`, so the host returns the first outcome without typing
-  again. Try again after a `busy`, `refused` or failed outcome sends a **new** `request`, because
-  the host remembers each outcome for ten minutes and would only repeat it. While it is in
+  response, and Try again after a failure with no outcome, reuse the same `request`, as the
+  ordinary Send path does, so the host types it at most once and returns the first outcome.
+  Only Try again after a `busy` or `refused` outcome sends a **new** `request`, because the host
+  remembers each outcome for ten minutes and would only repeat it. `unconfirmed` is never
+  retried: the receipt says to check at the machine, as §6.5's does. While it is in
   flight the button is disabled and keeps focus (A4).
 - **In the conversation:** shown as the person's own message, exactly as a typed reply is. It is
   not agent-driven, so #489's marking does not apply.
-- **After:** the button goes once the reply is delivered, with no "Sent" state, and focus moves
-  to the reply box.
+- **After:** the button goes once the reply is delivered, with no "Sent" state. If focus is
+  still on Continue then, it moves to the reply box; focus anywhere else stays where it is (A4).
 - **Never automatic:** no client presses it, on start, on reconnect or on a timer.
 
 **Push and toast** (Web Push kind `restored`; `hello.machine.restore`)
