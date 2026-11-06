@@ -1662,8 +1662,9 @@ verbs). Every state is words on the row, with at most one verb:
 - **Set up, not yet tested:** an agent whose hooks are set up but that no new session has
   tested yet reads "Not tested yet" (#705), never Ready.
 - **A host the app can't act on:** "Read-only · *reason*" when the host reports `blocked`
-  (for example "Read-only · an older bridge runs this machine"); "Hook ownership couldn't be
-  checked · *reason*" (or "Hook intake couldn't be checked · *reason*") when the hooks have
+  (for example "Read-only · this machine's host is older", in the one word every row uses for
+  it, #959); "Hook ownership couldn't be checked · *reason*" (or "Hook intake couldn't be
+  checked · *reason*") when the hooks have
   failed and their `hookSetup` is `unknown`, the reason being one of access denied, file in use
   or couldn't read ("Can't check" alone when the host gives neither); and "Can't check · this
   machine's host is older" only when `hookSetup` is `unknown` and the hooks are neither blocked
