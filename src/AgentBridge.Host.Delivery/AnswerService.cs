@@ -382,7 +382,7 @@ public sealed class AnswerService : ISessionAnswerer
             ConsoleScreen screen;
             try { screen = await injector.ReadScreenAsync(pid); }
             catch (Exception e) { return Failed(AnswerOutcome.Refused, $"could not read the screen of {Short(session.Id)} for permission {Short(requestId)}", e); }
-            if (screen.Rows is not { } rows) { return Refused(screen.Problem ?? "the host could not read the session's screen; answer at the machine"); }
+            if (screen.Rows is not { } rows) { return Refused(DeliveryReasons.Of(screen.Problem ?? "the host could not read the session's screen; answer at the machine")); }
             var (choice, problem) = CopilotPermissionScreen.Locate(rows, approve, pending.Probes);
             if (choice is null) { return Refused($"{problem}; answer at the machine"); }
             // Again after the screen was read: what is on it is this request only if this
@@ -626,7 +626,7 @@ public sealed class AnswerService : ISessionAnswerer
         {
             case InjectionStatus.NothingTyped:
                 ledger.Release(attempt);
-                return Refused(typed.Detail);
+                return Refused(DeliveryReasons.Of(typed.Detail));
             case InjectionStatus.Interrupted:
                 return Unconfirmed(typed.Detail == DeliveryReasons.CouldNotDeliver ? typed.Detail : $"{typed.Detail}; part of the answer may have reached the session");
             default:

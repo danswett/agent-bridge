@@ -407,10 +407,10 @@ public sealed class ReplyService : ISessionReplier
         {
             InjectionStatus.NothingTyped => Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                 ? "Copilot's input box changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
-                : result.Detail)),
+                : DeliveryReasons.Of(result.Detail))),
             InjectionStatus.Interrupted when result.Detail == WorkerInjector.ScreenChangedPartway =>
                 new Attempt(Unconfirmed("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent and its words are still in the box"), null, KeysWent: true),
-            InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session"), null, KeysWent: true),
+            InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true),
             _ => new Attempt(null, new Typed(() => ConfirmAsync(transcript, from, words, staged, timeline)), KeysWent: true),
         };
 
@@ -424,7 +424,7 @@ public sealed class ReplyService : ISessionReplier
         ConsoleScreen screen;
         try { screen = await injector.ReadScreenAsync(pid); }
         catch (Exception e) { return (null, Logged($"could not read the screen of pid {pid} for a reply", e), false, null); }
-        if (screen.Rows is not { } rows) { return (null, screen.Problem ?? "the host could not read the session's screen; reply at the machine", false, null); }
+        if (screen.Rows is not { } rows) { return (null, DeliveryReasons.Of(screen.Problem ?? "the host could not read the session's screen; reply at the machine"), false, null); }
         return CopilotInputBoxReader.Read(rows);
     }
 
@@ -479,7 +479,7 @@ public sealed class ReplyService : ISessionReplier
             ConsoleScreen screen;
             try { screen = await injector.ReadScreenAsync(pid); }
             catch (Exception e) { return Done(Failed(AnswerOutcome.Refused, $"could not read the screen of {name} {Short(session.Id)} for a reply", e)); }
-            if (screen.Rows is not { } rows) { return Done(Refused(screen.Problem ?? "the host could not read the session's screen; reply at the machine")); }
+            if (screen.Rows is not { } rows) { return Done(Refused(DeliveryReasons.Of(screen.Problem ?? "the host could not read the session's screen; reply at the machine"))); }
             var box = Find(agent, rows);
             if (box is null)
             {
@@ -542,9 +542,9 @@ public sealed class ReplyService : ISessionReplier
             case InjectionStatus.NothingTyped when !sent:
                 return Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                     ? $"{name}'s screen changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
-                    : result.Detail));
+                    : DeliveryReasons.Of(result.Detail)));
             case InjectionStatus.NothingTyped or InjectionStatus.Interrupted:
-                return new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session"), null, KeysWent: true);
+                return new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true);
         }
 
         await SubmitAsync(session.Id, agent, pid, transcript, from, plan, timeline);

@@ -186,6 +186,9 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     {
         injector.Result = new InjectionResult(InjectionStatus.NothingTyped, "could not attach to the session's console");
         Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "could not attach to the session's console"), await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen)));
+        // #995: a worker that did not start is the machine not delivering it, in the answer's words.
+        injector.Result = new InjectionResult(InjectionStatus.NothingTyped, AgentBridge.Host.Delivery.Windows.WorkerInjector.NotStarted);
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "the machine couldn't deliver it"), await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen)));
 
         injector.Result = new InjectionResult(InjectionStatus.Typed, "ok");
         injector.OnInject = _ => Fixture.Append(claude, Recorded());

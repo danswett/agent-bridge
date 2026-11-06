@@ -68,8 +68,8 @@ public sealed class WorkerInjector : IConsoleInjector
         start.ArgumentList.Add("--screen");
         Process? process;
         try { process = ProcessLaunch.Start(start); }
-        catch (Exception e) { return new ConsoleScreen(null, NotStarted(processId, e)); }
-        if (process is null) { return new ConsoleScreen(null, "the injector could not start"); }
+        catch (Exception e) { return new ConsoleScreen(null, CouldNotStart(processId, e)); }
+        if (process is null) { return new ConsoleScreen(null, NotStarted); }
         using (process)
         {
             process.StandardInput.Close();
@@ -122,8 +122,8 @@ public sealed class WorkerInjector : IConsoleInjector
         start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
         Process? process;
         try { process = ProcessLaunch.Start(start); }
-        catch (Exception e) { return Nothing(NotStarted(processId, e)); }
-        if (process is null) { return Nothing("the injector could not start"); }
+        catch (Exception e) { return Nothing(CouldNotStart(processId, e)); }
+        if (process is null) { return Nothing(NotStarted); }
 
         using (process)
         {
@@ -202,10 +202,15 @@ public sealed class WorkerInjector : IConsoleInjector
         _ => $"the injector could not type ({stage} error {code}); answer at the machine",
     };
 
-    string NotStarted(int processId, Exception e)
+    // The worker did not start, so nothing was typed. Fixed words: each caller says it in its own
+    // (a reply or an answer "the machine couldn't deliver it", DeliveryReasons.Of; Launch's folder
+    // trust its own, #995), and why goes to the host's log only (#802).
+    public const string NotStarted = "the injector could not start";
+
+    string CouldNotStart(int processId, Exception e)
     {
         log($"the injector could not start for pid {processId}: {e.GetType().Name}: {e.Message}");
-        return DeliveryReasons.CouldNotDeliver;
+        return NotStarted;
     }
 
     static InjectionResult Nothing(string detail) => new(InjectionStatus.NothingTyped, detail);

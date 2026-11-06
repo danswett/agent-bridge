@@ -891,6 +891,10 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         injector.Result = new InjectionResult(InjectionStatus.NothingTyped, "the session runs as administrator");
         Assert.Equal(("refused", "the session runs as administrator"), await ReplyAsync(ch, "hello again"));
+
+        // #995: a worker that did not start is the machine not delivering it, in the reply's words.
+        injector.Result = new InjectionResult(InjectionStatus.NothingTyped, AgentBridge.Host.Delivery.Windows.WorkerInjector.NotStarted);
+        Assert.Equal(("refused", "the machine couldn't deliver it"), await ReplyAsync(ch, "and again"));
     }
 
     // ---- attachments ----

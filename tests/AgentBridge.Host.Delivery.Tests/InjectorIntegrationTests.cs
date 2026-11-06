@@ -275,8 +275,8 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         output.WriteLine(result.Detail);
     }
 
-    // #995, #802: a worker that cannot be started says only that the machine couldn't deliver it,
-    // and why goes to the host's log: the detail reaches a person's receipt.
+    // #995, #802: a worker that cannot be started says only that it did not start, in fixed words
+    // its callers turn into their own, and why goes to the host's log: the detail reaches a receipt.
     [WindowsFact]
     public async Task A_worker_that_cannot_start_types_nothing_and_its_exception_goes_to_the_log_only()
     {
@@ -288,9 +288,9 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var typed = await injector.InjectAsync(1, new KeyPlan([new KeySend("x", true, 10, 0)]));
         var screen = await injector.ReadScreenAsync(1);
 
-        Assert.Equal((InjectionStatus.NothingTyped, "the machine couldn't deliver it"), (typed.Status, typed.Detail));
+        Assert.Equal((InjectionStatus.NothingTyped, WorkerInjector.NotStarted), (typed.Status, typed.Detail));
         Assert.Null(screen.Rows);
-        Assert.Equal("the machine couldn't deliver it", screen.Problem);
+        Assert.Equal(WorkerInjector.NotStarted, screen.Problem);
         Assert.Equal(2, logged.Count(l => l.StartsWith("the injector could not start for pid 1: Win32Exception: ", StringComparison.Ordinal)));
     }
 
