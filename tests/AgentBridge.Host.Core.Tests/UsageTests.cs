@@ -567,6 +567,60 @@ public sealed class UsageTests : IDisposable
         Assert.Equal(report, monitor.Current.Report);
     }
 
+    [Theory]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    [InlineData(double.NaN)]
+    public async Task A_reading_JSON_cannot_carry_is_that_agents_failure_and_stops_neither_the_others_nor_the_next_good_one(double figure)
+    {
+        // #238 review: kept, it made every later report throw, and no agent's usage went out again.
+        var bad = true;
+        var copilot = new FakeCollector(AgentKind.Copilot, () => Reading(AgentKind.Copilot, 40, time.GetUtcNow()));
+        var codex = new FakeCollector(AgentKind.Codex, () => Reading(AgentKind.Codex, bad ? figure : 20, time.GetUtcNow()));
+        await using var monitor = Monitor(new FakeSessions(), null, copilot, codex);
+
+        Assert.True(await monitor.PassAsync());
+
+        var report = monitor.Current.Report;
+        Assert.Equal(40, Assert.Single(report.Agents, a => a.Agent == AgentKind.Copilot).Windows[0].Percent);
+        var failed = Assert.Single(report.Agents, a => a.Agent == AgentKind.Codex);
+        Assert.Empty(failed.Windows);
+        Assert.Contains("not a number", failed.Error, StringComparison.Ordinal);
+        Assert.NotEmpty(JsonSerializer.Serialize(report, ProtocolJson.Options));
+
+        bad = false;
+        time.Advance(Options().IdleInterval);
+        Assert.True(await monitor.PassAsync());
+        Assert.Equal(20, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Windows[0].Percent);
+    }
+
+    [Theory]
+    [InlineData("\"NaN\"")]
+    [InlineData("\"Infinity\"")]
+    [InlineData("\"-Infinity\"")]
+    [InlineData("1e400")]
+    [InlineData("-1e400")]
+    public void A_figure_that_is_not_a_finite_number_is_unknown_in_every_agents_reading(string figure)
+    {
+        using var probe = JsonDocument.Parse("{\"rateLimits\":{\"primary\":{\"usedPercent\":" + figure + "}}}");
+        Assert.Null(CodexUsageProbe.Map(probe.RootElement, Now, null, null));
+        Assert.Null(CodexUsageCollector.Parse("{\"payload\":{\"rate_limits\":{\"primary\":{\"used_percent\":" + figure + "}}}}", Now));
+        using var claude = JsonDocument.Parse("{\"limits\":[{\"kind\":\"session\",\"percent\":" + figure + "}]}");
+        Assert.Null(ClaudeUsageCollector.Convert(claude.RootElement, null, null, Now));
+        using var entitlement = JsonDocument.Parse("{\"quota_snapshots\":{\"premium_interactions\":{\"entitlement\":" + figure + ",\"remaining\":10}}}");
+        Assert.Null(CopilotUsageCollector.Convert(entitlement.RootElement, UsageSource.Api, Now, time));
+        using var remaining = JsonDocument.Parse("{\"quota_snapshots\":{\"premium_interactions\":{\"entitlement\":100,\"remaining\":" + figure + "}}}");
+        Assert.Null(CopilotUsageCollector.Convert(remaining.RootElement, UsageSource.Api, Now, time));
+    }
+
+    [Fact]
+    public void A_reset_past_what_a_time_can_hold_is_no_reset_rather_than_a_failed_read()
+    {
+        using var probe = JsonDocument.Parse("""{"rateLimits":{"primary":{"usedPercent":10,"resetsAt":1e300}}}""");
+        Assert.Null(Assert.Single(CodexUsageProbe.Map(probe.RootElement, Now, null, null)!.Windows).ResetsAt);
+        Assert.Null(Assert.Single(CodexUsageCollector.Parse("""{"payload":{"rate_limits":{"primary":{"used_percent":10,"resets_at":1e300}}}}""", Now)!.Windows).ResetsAt);
+    }
+
     [Fact]
     public async Task A_collector_that_fails_to_take_its_pace_is_still_asked_and_so_is_every_other()
     {

@@ -484,12 +484,11 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
         if (UsageRead.Property(document.RootElement, "cachedUsageUtilization") is not { } cached
             || UsageRead.String(cached, "accountUuid") is not { } cachedFor
             || !string.Equals(cachedFor.Trim(), uuid.Trim(), StringComparison.OrdinalIgnoreCase)
-            || UsageRead.Number(cached, "fetchedAtMs") is not { } fetched || fetched <= 0
+            || UsageRead.UnixMilliseconds(UsageRead.Number(cached, "fetchedAtMs")) is not { } measured
             || UsageRead.Property(cached, "utilization") is not { } utilization)
         {
             return new(uuid, key, null);
         }
-        var measured = DateTimeOffset.FromUnixTimeMilliseconds((long)fetched);
         return new(uuid, key, Convert(utilization, key, null, measured, UsageSource.Cache));
     }
 
@@ -497,8 +496,7 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
     {
         using var document = UsageRead.Json(path, maxBytes);
         return document is not null && UsageRead.Property(document.RootElement, "cachedUsageUtilization") is { } cached
-            && UsageRead.Number(cached, "fetchedAtMs") is { } fetched && fetched > 0
-            ? DateTimeOffset.FromUnixTimeMilliseconds((long)fetched)
+            ? UsageRead.UnixMilliseconds(UsageRead.Number(cached, "fetchedAtMs"))
             : null;
     }
 

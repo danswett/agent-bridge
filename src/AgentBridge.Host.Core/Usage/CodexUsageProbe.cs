@@ -360,7 +360,7 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         foreach (var (name, fallback) in new[] { ("primary", "5h limit"), ("secondary", "Weekly") })
         {
             if (UsageRead.Property(s, name) is not { } window || UsageRead.Number(window, "usedPercent") is not { } percent) { continue; }
-            DateTimeOffset? resets = UsageRead.Number(window, "resetsAt") is { } seconds and > 0 ? DateTimeOffset.FromUnixTimeSeconds((long)seconds) : null;
+            DateTimeOffset? resets = UsageRead.UnixSeconds(UsageRead.Number(window, "resetsAt"));
             windows.Add(UsageRead.Window(name, CodexUsageCollector.WindowLabel(UsageRead.Number(window, "windowDurationMins"), fallback), percent, resets));
         }
         if (windows.Count == 0) { return null; }

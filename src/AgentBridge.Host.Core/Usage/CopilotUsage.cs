@@ -151,8 +151,14 @@ public sealed class CopilotUsageCollector(UsageOptions options, IUsageHttp http,
     {
         if (UsageRead.Property(response, "quota_snapshots") is not { } snapshots || UsageRead.Property(snapshots, "premium_interactions") is not { } premium) { return null; }
         if (UsageRead.Number(premium, "entitlement") is not { } limit || limit <= 0) { return null; }
+        // None given is none left over; one given that is no figure (NaN, an infinity) is unknown,
+        // not taken for none and drawn as the whole plan spent (#238 review).
+        if (UsageRead.Property(premium, "remaining") is not null && UsageRead.Number(premium, "remaining") is null) { return null; }
         var remaining = UsageRead.Number(premium, "remaining") ?? 0;
         var used = Math.Max(0, limit - remaining);
+        // Finite figures can still overflow between them (a limit near the largest double, a
+        // remaining as far below zero).
+        if (!double.IsFinite(used) || !double.IsFinite(100.0 * used / limit)) { return null; }
         var resets = UsageRead.Instant(response, "quota_reset_date_utc");
         // Monthly, resetting on the first, so the window began a month before it ends: taken
         // from the reset date rather than from today, so it holds whenever it is read.

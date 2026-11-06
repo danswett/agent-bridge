@@ -365,7 +365,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
             {
                 if (UsageRead.Property(limits, name) is not { } limit || UsageRead.Number(limit, "used_percent") is not { } percent) { continue; }
                 var label = WindowLabel(UsageRead.Number(limit, "window_minutes"), fallback);
-                DateTimeOffset? resets = UsageRead.Number(limit, "resets_at") is { } seconds and > 0 ? DateTimeOffset.FromUnixTimeSeconds((long)seconds) : null;
+                DateTimeOffset? resets = UsageRead.UnixSeconds(UsageRead.Number(limit, "resets_at"));
                 // No start: Codex says when a window resets but not when it began, and guessing it
                 // from the length would quietly turn a rolling window into a fixed one.
                 windows.Add(UsageRead.Window(name, label, percent, resets));

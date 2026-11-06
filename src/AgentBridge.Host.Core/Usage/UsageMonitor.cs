@@ -196,9 +196,19 @@ public sealed class UsageMonitor : IAsyncDisposable
                 continue;
             }
             read = UsageProtocol.FitAgent(read);
+            string signature;
+            try { signature = Signature(read); }
+            // A reading JSON cannot carry (a NaN or an infinity a collector let through) is never
+            // kept: kept, it made every later report throw, and no agent's usage went out until the
+            // host restarted (#238 review). Said as this agent's failure; the others go on.
+            catch (Exception e) when (e is ArgumentException or JsonException or NotSupportedException)
+            {
+                read = UsageProtocol.FitAgent(UsageRead.Failure(collector.Agent, $"Usage for {collector.Agent.ToString().ToLowerInvariant()} could not be read: it gave a figure that is not a number", now) with { Slot = collector.Slot });
+                plain = read.Error;
+                signature = Signature(read);
+            }
             Say(collector, state, read, plain);
             lock (sync) { state.Latest = read; }
-            var signature = Signature(read);
             if (signature == state.Signature && now - state.PublishedAt < options.Republish) { continue; }
             state.Signature = signature;
             state.PublishedAt = now;
