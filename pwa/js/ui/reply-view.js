@@ -22,6 +22,7 @@ import { AttachmentLimits, describeSize, prepareAttachment } from '../attachment
 import { CANCELLED } from '../reply-service.js';
 import { isSendKey, shortcutHints } from '../platform.js';
 import { ReceiptClock, describeInFlight, drawReceipt, drawn, dropCheck, holdCheck, receiptLive } from './receipt.js';
+import { PHONE } from './collapse-header.js';
 
 let seq = 0;
 const kib = (n) => `${(n / 1024).toFixed(1)} KiB`;
@@ -30,6 +31,9 @@ const capitalise = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const SHOWN = /^image\/(png|jpeg|gif|webp|heic|heif)$/;
 // Above this a thumbnail is not worth a second copy of the photo in memory.
 const THUMBNAIL_MAX = 16 * 1024 * 1024;
+// A phone's box grows a line at a time to six lines (24 each, and 10 above and below), then
+// scrolls inside (ui.md §6.5, #935).
+const GROW_MAX = 164;
 
 // After busy, Send comes back after this long, as for an answer.
 export const REPLY_BUSY_PAUSE_MS = 2000;
@@ -101,6 +105,11 @@ export class ReplyBox {
   #edited = null;
   // Why nothing can be sent now (its machine offline, #269), or null.
   #offline = null;
+  // Below 760 (a phone): the box is one line at rest and grows with its words.
+  #phone = null;
+  #resize = null;
+  #width = 0;
+  #fitFrame = 0;
 
   // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
   // largeMax: the largest it takes through the blob store, 0 for none.
@@ -111,7 +120,20 @@ export class ReplyBox {
     this.idBase = `r${++seq}`;
     this.#attach = attach;
     this.#largeMax = largeMax;
+    this.#phone = globalThis.matchMedia?.(PHONE) ?? null;
     this.#build();
+    this.#phone?.addEventListener('change', this.#onPhone);
+    // The box's width decides where its words wrap, and it has none until it is drawn.
+    if (typeof globalThis.ResizeObserver === 'function') {
+      this.#resize = new ResizeObserver(() => {
+        const w = this.els.form.offsetWidth;
+        if (w === this.#width) { return; }
+        this.#width = w;
+        cancelAnimationFrame(this.#fitFrame);
+        this.#fitFrame = requestAnimationFrame(() => this.fit());
+      });
+      this.#resize.observe(this.els.form);
+    }
     this.#receipt = new ReceiptClock({
       describe: (entry, { stalled }) => describeReply(entry, { machineName: this.machineName, stalled }),
       draw: (d) => drawReceipt(this.els.status, 'answer-status reply-status', d),
@@ -128,7 +150,31 @@ export class ReplyBox {
     this.#unwatch?.();
     this.#receipt.destroy();
     clearTimeout(this.#busyTimer);
+    this.#phone?.removeEventListener('change', this.#onPhone);
+    this.#resize?.disconnect();
+    if (this.#fitFrame) { cancelAnimationFrame(this.#fitFrame); }
     for (const f of this.#files) { if (f.url) { URL.revokeObjectURL(f.url); } }
+  }
+
+  #onPhone = () => { this.#sync(); };
+
+  // A phone's box as tall as its words, from one line to six, then it scrolls inside. From 760 the
+  // box is as the stylesheet draws it.
+  fit() {
+    const t = this.els.input;
+    if (!this.#phone?.matches) {
+      t.style.removeProperty('height');
+      t.style.removeProperty('overflow-y');
+      return;
+    }
+    if (!t.getClientRects().length) { return; }
+    const top = t.scrollTop;
+    // Its least height (the stylesheet's one line) first, so the words alone decide.
+    t.style.height = '0px';
+    const full = t.scrollHeight;
+    t.style.height = `${Math.min(full, GROW_MAX)}px`;
+    t.style.overflowY = full > GROW_MAX ? 'auto' : 'hidden';
+    t.scrollTop = top;
   }
 
   get text() { return this.els.input.value; }
@@ -264,6 +310,7 @@ export class ReplyBox {
     e.send.disabled = off;
     if (!off && (pending || this.#busyTimer)) { e.send.setAttribute('aria-disabled', 'true'); } else { e.send.removeAttribute('aria-disabled'); }
     e.resend.disabled = !!this.#offline;
+    this.fit();
   }
 
   #clearError() {
