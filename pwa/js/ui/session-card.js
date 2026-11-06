@@ -1067,6 +1067,8 @@ export class SessionCard {
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
+    // Shown again (a row chosen, the browser's Back or Forward): its header whole, the scroll kept.
+    if (selected) { this.collapse?.shown(); }
     // Shown now, in the page it was put into: what holds it there can move its question too.
     // Hidden, nothing of it is read or watched.
     if (selected) {

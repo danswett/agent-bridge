@@ -129,7 +129,8 @@ export class CollapsingHeader {
   #paused = false;
   #focusInside = false;
   #fading = false;
-  #gone = false; // the view was not drawn (another screen showed) at the last measure
+  #again = false; // shown again (shown()): whole at the first measure that finds it drawn
+  #againFrame = 0;
   #app = null; // { wasFull, quiet, limit } while the app is scrolling
   #fullH = 0;
   #barH = BAR;
@@ -218,10 +219,11 @@ export class CollapsingHeader {
     for (const t of this.#timers) { clearTimeout(t); }
     this.#timers.clear();
     this.#win.cancelAnimationFrame(this.#frame);
+    this.#win.cancelAnimationFrame(this.#againFrame);
     this.#app = null;
     this.#pan = null;
     this.#fading = false;
-    this.#gone = false;
+    this.#again = false;
     this.#focusInside = false;
     this.#fold = new Fold();
     this.#shown = {};
@@ -246,6 +248,21 @@ export class CollapsingHeader {
     this.#render();
   }
 
+  // The session shown again (a row chosen, the browser's Back or Forward, Sessions back from another
+  // page), as its owner says: the header whole, as it is back from another tab, and the
+  // conversation where it was left. Said, not inferred from a hidden header a resize frame
+  // measured: a quick Back and Forward can fall between two frames. Its pane may only be drawn
+  // later in the same task, so a frame later too: by then it is laid out, or it was measured
+  // hidden and the observer measures it as it is drawn.
+  shown() {
+    if (!this.#on) { return; }
+    this.#again = true;
+    this.#measure();
+    if (!this.#again) { return; }
+    this.#win.cancelAnimationFrame(this.#againFrame);
+    this.#againFrame = this.#win.requestAnimationFrame(() => this.#measure());
+  }
+
   #whole() {
     const f = this.#fold;
     f.sync(this.#scroller.scrollTop, this.#max());
@@ -258,11 +275,9 @@ export class CollapsingHeader {
   #measure() {
     if (!this.#on) { return; }
     const v = this.#view;
-    if (this.#top.offsetHeight === 0) { this.#gone = true; return; }
-    // The session shown again (a row chosen, or the browser's Back or Forward): the header whole,
-    // as it is back from another tab, and the conversation where it was left.
-    if (this.#gone) {
-      this.#gone = false;
+    if (this.#top.offsetHeight === 0) { return; }
+    if (this.#again) {
+      this.#again = false;
       if (!this.#paused) { this.#whole(); }
     }
     // On another tab the conversation is not drawn and its scroller has no height; the header still

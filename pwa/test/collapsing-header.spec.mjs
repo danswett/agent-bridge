@@ -638,6 +638,24 @@ test.describe('on a phone, with the person\'s settings', () => {
     expect(m.scroll).toBe(300);
     expect(m.ty).toBe(0);
     await wholeHeader(v);
+    // Back, and Forward straight from Back's popstate, before a frame need have drawn it hidden:
+    // whole again all the same (#941 review: it was inferred from a hidden header measured by a
+    // ResizeObserver frame, which a quick Back and Forward can fall between).
+    await folded(v, 400);
+    await page.evaluate(() => new Promise((resolve) => {
+      addEventListener('popstate', () => {
+        addEventListener('popstate', () => resolve(), { once: true });
+        history.forward();
+      }, { once: true });
+      history.back();
+    }));
+    await expect(v).toBeVisible();
+    await expect.poll(async () => (await read(v)).ty).toBe(0);
+    await settle(v);
+    const again = await read(v);
+    expect(again.scroll).toBe(400);
+    expect(again.ty).toBe(0);
+    await wholeHeader(v);
   });
 
   test('on another tab, what focus scrolls to stays clear of the whole header', async ({ page }) => {
