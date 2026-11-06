@@ -179,18 +179,27 @@ public sealed class SystemBootClock(TimeProvider? time = null) : IBootClock
 // machine rather than rebooting it, so the boot time stays as it was. Either reads as a reboot.
 public interface ILogonMarker
 {
+    // Whether the marker is missing: only read, never made here.
     bool Fresh();
+
+    // Made once the start that read it fresh has written its record: made before, a crash in between
+    // left the old record with the sign-out's evidence gone, so the next start read sessions the
+    // shutdown ended as ending normally, and let their worktrees go (Copilot on #813).
+    void Commit() { }
 }
 
 // A volatile registry key of this profile's, HKCU\Software\AgentBridge\logon-<hash of the profile
 // folder>: Windows keeps it in memory only, so it is gone once the user's hive is unloaded at
 // sign-out or shutdown. It is only a marker, empty: no value, nothing of the person's. There when
-// asked: the same logon. Missing: a fresh one, and it is made for the next start. Never a guess
-// that it is fresh when it cannot be read: that would offer every session that ended normally.
+// asked: the same logon. Missing: a fresh one, and it is made for the next start once this one has
+// written its record (Commit). Never a guess that it is fresh when it cannot be read: that would
+// offer every session that ended normally.
 public sealed class VolatileLogonMarker(string profileFolder) : ILogonMarker
 {
     const string Parent = @"Software\AgentBridge";
     const string Prefix = "logon-";
+
+    string Name => Prefix + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(profileFolder).ToUpperInvariant())))[..16];
 
     // At uninstall (the app's BeforeUninstall): every profile's marker, in case one was ever left
     // behind, and the app's key once nothing else is in it.
@@ -212,17 +221,30 @@ public sealed class VolatileLogonMarker(string profileFolder) : ILogonMarker
     public bool Fresh()
     {
         if (!OperatingSystem.IsWindows()) { return false; }
-        var name = Prefix + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(profileFolder).ToUpperInvariant())))[..16];
+        try
+        {
+            using var parent = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(Parent);
+            // No key of the app's at all: never made in this logon either.
+            if (parent is null) { return true; }
+            using var existing = parent.OpenSubKey(Name);
+            return existing is null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException) { return false; }
+    }
+
+    public void Commit()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
         try
         {
             // The parent made as an ordinary key first: one made volatile could take no ordinary
             // key of the app's beneath it.
             using var parent = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(Parent, writable: true);
-            using (var existing = parent.OpenSubKey(name)) { if (existing is not null) { return false; } }
-            using var made = parent.CreateSubKey(name, writable: true, Microsoft.Win32.RegistryOptions.Volatile);
-            return true;
+            using var made = parent.CreateSubKey(Name, writable: true, Microsoft.Win32.RegistryOptions.Volatile);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException) { return false; }
+        // Not made: the next start reads a fresh logon again, and offers what it would after a
+        // reboot. Never the other way.
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException) { }
     }
 }
 // Whether a session that is not running ended normally, as its agent records it: true, false, or

@@ -23,11 +23,11 @@ public sealed class RestoreTests : IDisposable
     RestoreFile Written() => RestoreFiles.Read(Record).File!;
 
     RestoreRecorder Recorder(bool restoreOnStart = true, bool freshLogon = false, Func<AgentKind, bool>? endsSettled = null, TimeProvider? clock = null,
-        Func<string?>? readOnly = null, List<string>? logs = null)
+        Func<string?>? readOnly = null, List<string>? logs = null, ILogonMarker? marker = null)
     {
         var r = new RestoreRecorder(source, new RestoreOptions
         {
-            Path = Record, Instance = "run2", Ends = ends, RestoreOnStart = restoreOnStart, Boot = boot, Logon = new Logon(freshLogon), Time = clock ?? Time, EndsSettled = endsSettled,
+            Path = Record, Instance = "run2", Ends = ends, RestoreOnStart = restoreOnStart, Boot = boot, Logon = marker ?? new Logon(freshLogon), Time = clock ?? Time, EndsSettled = endsSettled,
             ReadOnly = readOnly ?? (() => null), Log = logs is null ? null : s => logs.Add(s),
         });
         r.NoticeReady += told.Add;
@@ -98,6 +98,30 @@ public sealed class RestoreTests : IDisposable
         var n = Assert.Single(told);
         Assert.Equal(RestoreCause.Reboot, n.Cause);
         Assert.Equal(["a", "b"], n.Offered.Select(o => o.Id).Order(StringComparer.Ordinal));
+    }
+
+    // Copilot on #813: the logon is marked seen only once a start has written its record. Marked
+    // first, a start that went down before its first write left the old record, and the next start,
+    // reading the same logon, took the sessions the sign-out ended as ending normally.
+    [Fact]
+    public async Task A_fresh_logon_stays_fresh_for_the_next_start_when_the_first_goes_down_before_writing_its_record()
+    {
+        Previous(Fixture.T0, true, E("b"));
+        ends.Of["b"] = true;
+        var key = new VolatileKey();
+        // Goes down after reading the logon and judging, before its first write (and never stops cleanly).
+        await using var first = Recorder(marker: key, readOnly: () => throw new InvalidOperationException("broken"));
+        first.Start();
+        Assert.Equal("run1", Written().Instance);
+        Assert.False(key.Made);
+
+        await using var second = Recorder(marker: key);
+        second.Start();
+
+        var n = Assert.Single(told);
+        Assert.Equal((RestoreCause.Reboot, "b"), (n.Cause, Assert.Single(n.Offered).Id));
+        Assert.Equal(["/work/repo"], second.Folders()!);
+        Assert.True(key.Made);
     }
 
     [Fact]
@@ -804,6 +828,14 @@ public sealed class RestoreTests : IDisposable
     sealed class Logon(bool fresh) : ILogonMarker
     {
         public bool Fresh() => fresh;
+    }
+
+    // The volatile key's behaviour: missing until made, and made only by Commit.
+    sealed class VolatileKey : ILogonMarker
+    {
+        public bool Made;
+        public bool Fresh() => !Made;
+        public void Commit() => Made = true;
     }
 
     sealed class FixedBoot(DateTimeOffset at) : IBootClock

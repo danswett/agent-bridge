@@ -105,6 +105,8 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
     readonly Action<string> log;
     readonly DateTimeOffset boot;
     readonly bool freshLogon;
+    // A fresh logon's marker, still to be made: once a record of this start's judgement is written.
+    bool logonPending;
     // Sessions this run judged from the last run's live ones, as against those it carried over
     // owed: only these are news, and only they make the push.
     readonly HashSet<string> judgedNow = new(StringComparer.Ordinal);
@@ -150,6 +152,7 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
         log = options.Log ?? (_ => { });
         boot = (options.Boot ?? new SystemBootClock(time)).Boot();
         freshLogon = options.Logon?.Fresh() == true;
+        logonPending = freshLogon;
     }
 
     // hello's machine.restore: for RestoreProtocol.ShownFor after the host started. Why is read as
@@ -602,6 +605,12 @@ public sealed class RestoreRecorder : IRestorePending, IAsyncDisposable
             writeProblem = e.Message;
             ScheduleWriteLocked(TimeSpan.FromSeconds(5));
             return;
+        }
+        // Written: a crash from here leaves this start's judgement, so the logon can be marked seen.
+        if (logonPending)
+        {
+            logonPending = false;
+            options.Logon?.Commit();
         }
         if (nextGone is { } at) { ScheduleWriteLocked(at - now > Coalesce ? at - now : Coalesce); }
     }
