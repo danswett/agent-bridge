@@ -658,6 +658,37 @@ test.describe('on a phone, with the person\'s settings', () => {
     await wholeHeader(v);
   });
 
+  test('under reduced motion, a session Back and Forward show again while its header fades out stays whole once the fade would have ended', async ({ page }) => {
+    const v = await session(page);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await folded(v, 300);
+    await rested(v);
+    await scrollTo(v, 230);
+    await rested(v);
+    // Start the fade out, then Back and Forward inside its 83 ms (#941 review: the fade's end folded
+    // the header shown again).
+    const fading = await v.evaluate((el) => new Promise((resolve) => {
+      const sc = el.querySelector('.stream-scroll');
+      sc.addEventListener('scroll', () => requestAnimationFrame(() => {
+        const was = el.classList.contains('fading');
+        addEventListener('popstate', () => {
+          addEventListener('popstate', () => resolve(was), { once: true });
+          history.forward();
+        }, { once: true });
+        history.back();
+      }), { once: true });
+      sc.scrollTo({ top: 262, behavior: 'instant' });
+    }));
+    expect(fading).toBe(true);
+    await expect(v).toBeVisible();
+    await expect.poll(async () => (await read(v)).ty).toBe(0);
+    await page.waitForTimeout(300);
+    await rested(v);
+    const m = await read(v);
+    expect(m.scroll).toBe(262);
+    expect(m.ty).toBe(0);
+  });
+
   test('on another tab, what focus scrolls to stays clear of the whole header', async ({ page }) => {
     const v = await session(page);
     await v.getByRole('tab', { name: 'Tools' }).click();

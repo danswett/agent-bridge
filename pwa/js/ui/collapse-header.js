@@ -256,6 +256,9 @@ export class CollapsingHeader {
   // hidden and the observer measures it as it is drawn.
   shown() {
     if (!this.#on) { return; }
+    // A reduced-motion fade out still running would fold the whole header again when it ends
+    // (#941 review: Back and Forward during the fade left it folded).
+    if (this.#fading) { this.#endFade(); }
     this.#again = true;
     this.#measure();
     if (!this.#again) { return; }
@@ -264,6 +267,7 @@ export class CollapsingHeader {
   }
 
   #whole() {
+    if (this.#fading) { this.#endFade(); }
     const f = this.#fold;
     f.sync(this.#scroller.scrollTop, this.#max());
     f.returned = f.last > 0;
