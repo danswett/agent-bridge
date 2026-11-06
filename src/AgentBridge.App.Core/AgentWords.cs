@@ -38,7 +38,7 @@ public static class AgentWords
         // Whether set read-only or read-only for a problem in its config, it's the host's settings
         // (HostSettings.ReadOnlyReason, ProblemReason), and "Read-only · this host is read-only" said
         // it twice (Creative, 6675018272).
-        : "set in this host's settings");
+        : "set in this bridge's settings");
 
     // Hooks the host found broken in a way it can't repair: an ownership record it couldn't read or
     // doesn't recognise, or this profile's intake record it couldn't use (AgentReadinessService.Hooks).
@@ -80,13 +80,13 @@ public static class AgentWords
         : Has(detail, "cleanup could not be confirmed") ? "the installer's processes may still be running"
         : Has(detail, "launch settings") ? "this profile's launch settings have a problem"
         : Has(detail, "Another CLI installation") ? "another installation was running"
-        : Has(detail, "read-only") || Has(detail, "agent-ha-bridge") ? "this host is read-only"
-        : "the host couldn't install it";
+        : Has(detail, "read-only") || Has(detail, "agent-ha-bridge") ? "this bridge is read-only"
+        : "the machine couldn't install it";
 
     // What a setup, repair or removal left, said on its row.
     public static string SetupResult(bool remove, string? verb, AgentSetupResult result) => result.Completed
         ? remove ? "Removed · sessions already running keep their hooks until they end"
-            : $"{(verb == "Repair" ? "Repaired" : "Set up")} · {(result.RestartRequired ? "restart the host, then start a new session to check it" : "start a new session to check it")}"
+            : $"{(verb == "Repair" ? "Repaired" : "Set up")} · {(result.RestartRequired ? "restart the bridge, then start a new session to check it" : "start a new session to check it")}"
         : SetupFailed(remove, verb, result.Detail);
 
     // A setup the host refused or that failed part-way, by why (StandaloneHooks.Preflight's refusals).
@@ -98,11 +98,11 @@ public static class AgentWords
             : Has(raw, "belongs to another installation") || Has(raw, "Another bridge profile") ? "another bridge profile owns its hooks"
             : Has(raw, "no hook registration owned by this profile") ? "this profile set up nothing to remove"
             : Has(raw, "migration") ? "this profile is being migrated"
-            : Has(raw, "read-only") ? "this host is read-only"
+            : Has(raw, "read-only") ? "this bridge is read-only"
             : Has(raw, "native hook is missing") ? "the app's hook is missing; reinstall the app"
             : Has(raw, "denied") ? "access denied"
             : Has(raw, "used by another process") ? "file in use"
-            : "the host couldn't finish it");
+            : "the machine couldn't finish it");
 
     static bool Has(string text, string part) => text.Contains(part, StringComparison.OrdinalIgnoreCase);
 }
