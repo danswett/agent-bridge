@@ -2502,6 +2502,11 @@ they are un-parked.
   agent or machine has it. Rows don't move while it narrows the list.
 - **A folder-trust question** waiting on a machine that takes no launches puts a Needs you dot on
   the way to Launch (the rail's Launch, the phone's New).
+- **A launch not confirmed whose session registers late** (#891, #896) says "Session started." in
+  its status, on Launch for that machine only. The PWA follows one such launch per machine, and the
+  app follows one launch in all. A launch whose outcome names no session (a Codex's) is not
+  followed until the host names it (#983), and a start whose session isn't known (no card to open)
+  says "Session started. Open it from the list."
 - **Under the sessions,** one line of each agent's fullest usage leads to Usage.
 - **Usage names the account** (#225), on every group and every figure ("GitHub Copilot ·
   danswett 12%"), in full: two of one agent's accounts differ by nothing else. Short of room the
