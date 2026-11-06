@@ -207,10 +207,12 @@ static partial class SelfTest
                     && installPeer.GetPattern(PatternInterface.Invoke) is not null && AutomationProperties.GetItemStatus(install.Button!) == "",
                     $"offers Install CLI again after a failed installation, a button named for the product with no toggle state ({install.Name}; toggle: {installPeer?.GetPattern(PatternInterface.Toggle) is not null})");
                 check(said.SequenceEqual([
-                        "copilot: Not installed · install it on this machine | Read-only · an older bridge runs this machine",
+                        "copilot: Not installed · install it on this machine | Read-only · this machine's host is older",
                         "claude: Install failed · Windows Package Manager couldn't install it | Hook ownership couldn't be checked · access denied",
                         "codex: Installed, version 0.48.0 | Can't check · this machine's host is older"])
                     && !words.Any(w => w.Contains("Access to the path", StringComparison.Ordinal) || w.Contains("0x8A15000F", StringComparison.Ordinal) || w.Contains("agent-ha-bridge", StringComparison.Ordinal))
+                    // Each reason once, on the status line: the checks beneath say only the fact (Creative, 6675472997).
+                    && words.Count(w => w.Contains("Read-only ·", StringComparison.Ordinal)) == 1 && words.Count(w => w.Contains("· access denied", StringComparison.Ordinal)) == 1
                     && shown.SequenceEqual(["InstallAgent_claude"])
                     && Status("copilot") is { } readOnly && ReferenceEquals(readOnly.Style, window.SettingsPage.Resources["AgentStatusAbText2"]),
                     $"says why of each row the app can't act on, in its words and the neutral tone, with nothing on it that can't work ({string.Join(" / ", said)}; shown: {string.Join(", ", shown)}; {(Status("copilot") is { } s ? Colour(s)?.ToString() : "no status")})");

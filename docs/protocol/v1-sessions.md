@@ -26,7 +26,7 @@ the channel go through the relay's blob store (`sessions.attach.blob`, in
   bytes of text. Clients must read both forms.
 * **Clients ignore fields and enum values they don't know.** An unknown value reads as:
   `agent` → `unknown` (shown generically), `status` → `idle`, tool `status` → `done`,
-  question `kind` → `form`, field `type` → `text`, `driver` → `person`. Hosts never remove or rename a field
+  question `kind` → `form`, field `type` → `text`, `driver` → `person`; an unknown `class` reads as absent. Hosts never remove or rename a field
   within a protocol version.
 * Times are UTC with milliseconds and a `Z`, always in this exact form:
   `2026-10-28T04:22:43.182Z`. Clients can compare them as strings.
@@ -95,6 +95,7 @@ with the wrong type):
 | `LaunchAgent` ([v1-launch.md](v1-launch.md)) | `id` | |
 | `LaunchWorkspace` | `label` | |
 | `ResumableSession` | `id`, `launcher` | |
+| `RestoreSession` | `id` | |
 | `LaunchDefaults`, `LaunchedWith` | | `permissions` |
 | `LaunchedTransfer` | `from` | |
 | `TrustQuestion` | | `id`, `agent`, `kind`, `folder`, `root`, `rootNote`, `warning`, `answerable` |
@@ -234,13 +235,33 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 
 `machine.id` is the host's device id (S4). `os` is `windows`, `macos` or `linux`. `machine` also carries `dev` and `sessions`, for a status line ([v1-usage.md](v1-usage.md#machine-status)), and `readOnly` while the machine takes nothing from other devices: because its config makes it read-only (`delivery.readOnly`, [host-config.md](../host-config.md)), or because agent-ha-bridge runs there for the same user (design G5). It is the reason, in words, which a client shows on the machine's status line and on its read-only questions. Absent otherwise. The `readOnly` agent-ha-bridge gives and the capabilities it takes away (below) come from one look at it, at most 2 s old, shared by hellos in that time (#607). Nothing is acted on from that look: an answer, reply, stop, launch or update looks again immediately before it acts, and is refused with the reason if agent-ha-bridge started meanwhile. `machine.instance`, when present, names this run of the host: it is new each time the host starts and the same on every connection to that run, so a client can tell a reconnect from a restart before sending a request again that only the first run remembers (a reply, an answer or a launch, `session.launch`, whose outcome was lost).
 
+**What went (`machine.restore`).** A host that offers `sessions.restore` keeps a record of the sessions it sees live (#780, [host-launch.md](../host-launch.md#restoring-after-a-reboot-or-a-crash)), and when it starts again says in `machine.restore` what a machine reboot, a crash of the host, or its clean restart took with it, for this run of the host and at most 24 hours:
+
+```json
+"restore": { "at": "2026-11-04T16:02:11.000Z", "cause": "reboot", "since": "2026-11-04T15:58:40.512Z", "restored": 0, "loops": 0, "waiting": 0, "why": "pending",
+  "offered": [ { "id": "0f3c…", "agent": "copilot", "title": "Pick the session store", "midTurn": true }, { "id": "7a21…", "agent": "claude", "questionLost": true } ] }
+```
+
+| Field | Notes |
+|---|---|
+| `at` | When this run of the host started and compared |
+| `cause` | `reboot` (the machine started again, or the person signed out, so every agent went with it), `crash` (the host stopped without saying so, on the same boot) or `restart` (it stopped cleanly, on the same boot, and sessions went while it was away). A client reads a cause it doesn't know as `crash` |
+| `since` | When the earlier run last wrote down what was live: about when the sessions went |
+| `restored`, `loops` | Sessions restored, idle, through the resume path, and seen ready, and those not restored again because they died again within 10 minutes of a restore (offered, and among `offered`) |
+| `waiting` | Sessions still being judged: their agent's discovery is held ([Discovery held](#discovery-held)), or its hooks' endings are not yet taken in, so whether they still run, or ended, cannot be told yet. They are never read as gone; once judged, `restore` changes and `hello.changed` says so |
+| `why` | Why the sessions in `offered` are offered rather than restored: `pending` (kept for a person to resume from Launch: the restore was refused or failed, or it died again too soon), `readOnly` (the machine takes no launches now, for example beside agent-ha-bridge, design G5; kept until it does) or `off` (`sessions.restoreOnStart` is off, [host-config.md](../host-config.md); only said). A client reads a value it doesn't know as `pending` |
+| `offered` | The sessions that died, newest first, at most 20: `id`, `agent`, `title`, `midTurn: true` if a turn was running when it went, `questionLost: true` if a question or approval was waiting in it, which went with it. Never the question's words, a prompt or a response. The notice stays within 8 KiB as JSON: past that, titles are shortened (to 60 bytes), then dropped, then the last names are left out and counted in `offeredMore`; the counts, `cause` and the times are never trimmed. The `restored` notification is made from the same notice |
+| `offeredMore` | How many more died than `offered` names: past 20, or left out to keep the notice within 8 KiB. Absent when none |
+
+Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. A client that does not know `restore` ignores it. It names sessions, so a peer that may not read them (one pinned as a `host`, [trusted peers](../host-config.md#trusted-peers-disposable-host-foundation)) is not told it.
+
 **Changes (`hello.changed`).** What hello says changes without a new connection: agent-ha-bridge starting or stopping (G5) takes answering, replying, stopping and launching away or gives them back, with `readOnly`; `update` comes and goes. A client used to ask hello again every 10 s to see it, on every connection: about 36 hellos a minute at a host from the account's other machines' Windows apps (#640). Of a host that offers `hello.changed`, a client asks `{ "changes": true }` in its hello, and from then on, for as long as that channel is open, the host sends the event
 
 ```json
 {"ev": "hello.changed", "seq": 12, "data": {}}
 ```
 
-once whenever `machine.readOnly` or `capabilities` would differ from what it last told that channel, and the client asks hello again (with `changes` again, which is what it was last told from then on). The event carries nothing more on purpose: what a channel's hello says depends on who is asking (a pinned peer's role, an agent on the pipe), and only hello itself says it. For the same reason what is compared is what that channel's hello would say, after its role or caller kind has shaped it, so a channel hears only of a change it could see: a `service` peer, whose hello offers only `sessions.read`, hears nothing when `update` comes or goes (#651). The host looks every 10 s, as often as clients asked before; other `machine` fields (`sessions`, say) changing alone send nothing. A client that asked still asks hello again now and then (the Windows app: every 5 min of another machine's host; its own host, which it also asks `host.status`, every 10 s over the pipe as before), in case it missed a change; one that did not ask, or a host that does not offer `hello.changed` (which ignores `changes`), is asked as before. Like every event it is numbered in the channel's `seq`. Nothing is acted on from it: every op is checked afresh when it arrives.
+once whenever `machine.readOnly`, `machine.restore` or `capabilities` would differ from what it last told that channel, and the client asks hello again (with `changes` again, which is what it was last told from then on). The event carries nothing more on purpose: what a channel's hello says depends on who is asking (a pinned peer's role, an agent on the pipe), and only hello itself says it. For the same reason what is compared is what that channel's hello would say, after its role or caller kind has shaped it, so a channel hears only of a change it could see: a `service` peer, whose hello offers only `sessions.read`, hears nothing when `update` comes or goes (#651). The host looks every 10 s, as often as clients asked before; other `machine` fields (`sessions`, say) changing alone send nothing. A client that asked still asks hello again now and then (the Windows app: every 5 min of another machine's host; its own host, which it also asks `host.status`, every 10 s over the pipe as before), in case it missed a change; one that did not ask, or a host that does not offer `hello.changed` (which ignores `changes`), is asked as before. Like every event it is numbered in the channel's `seq`. Nothing is acted on from it: every op is checked afresh when it arrives.
 
 `capabilities` lists what this host supports, and a client hides anything missing:
 
@@ -264,6 +285,7 @@ once whenever `machine.readOnly` or `capabilities` would differ from what it las
 | `sessions.launch` | `launch.options`, `session.launch`: starting or resuming a session in a workspace approved at the machine ([v1-launch.md](v1-launch.md)) |
 | `sessions.transfer` | `session.launch` takes a `transfer`: a session that ended on another of the account's machines, brought here and resumed as a copy ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.transfer.serve` | `session.transfer`, host to host: this machine hands its ended sessions to the account's other machines on a command a person's device signed ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
+| `sessions.restore` | `hello`'s `machine.restore`: what a reboot or a crash took, offered to resume ([What went](#hello)), and the `restored` notification ([Notifications](#notifications)). Without it, a client says nothing of sessions that went
 | `update` | `update.get`, `update.subscribe`, `update.check`, `update.install`: the machine's updates, seen and asked for from a person's other devices, installed by its Windows app ([v1-update.md](v1-update.md)). Through the relay only, and never by a read-only machine |
 
 ### `sessions.list`
@@ -614,7 +636,7 @@ permission prompts goes beyond it, at the user's request:
 | Copilot CLI | Any other permission request (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read, or any on a host with `permissions.remoteApproval` off | `approval` | No: `answerAtMachine` | |
 | Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
 | Claude Code | Permission prompt (from agent-ha-bridge's hook) | `approval` | No: `answerAtMachine` | |
-| Codex | Approval recorded by its `PermissionRequest` hook (agent-ha-bridge's, or this host's intake) | `approval`: `Allow **<tool>**?` and the whole command in a fence longer than any run of backticks inside it. One whose marker holds only the hook's 300-character preview, or whose command is past 16,384 characters, is `truncated` (#209) | Yes, unless `truncated` | Never: Codex records nothing that says how an approval was answered, so a typed one is `unconfirmed` |
+| Codex | Approval recorded by its `PermissionRequest` hook (agent-ha-bridge's, or this host's intake) | `approval`: `Allow **<tool>**?` and the whole command in a fence longer than any run of backticks inside it. One whose marker holds only the hook's 300-character preview, or whose command is past 16,384 characters, is `truncated` (#209). Its `id` is `<DecisionId>#<digest>`: the marker's generation and 16 lowercase hex digits of a digest of what is shown (tool, whole command, whether it was cut, the hook's preview line, the message, and whether it is `truncated` or answered at the machine), so a generation Codex lists again with another command is another question (#958) | Yes, unless `truncated`; the host rebuilds the question from the marker as it reads immediately before typing and types nothing unless its id is still the one answered | Never: Codex records nothing that says how an approval was answered, so a typed one is `unconfirmed` |
 | Codex | Approval seen only in the rollout, or one agent-ha-bridge already typed into | `approval` | No: `answerAtMachine` | |
 
 #### Copilot permission prompts
@@ -1046,12 +1068,113 @@ A host with `push` notifies every subscribed device when one of its sessions nee
 person or has something to say, whether or not the app is open, the same moments
 agent-ha-bridge notifies a phone through Home Assistant.
 
+### Notification class (#913)
+
+**New (#913).** One notification policy for every client: the host decides which tier each
+session is in, and the Windows app, the PWA and Home Assistant follow it rather than rules of
+their own (#253, #610, #754 and #764 were each one client's). The session carries its tier in
+`class`, and each push the tier of what it says in `data.class` ([The payload](#the-payload)).
+
+| `class` | Tier | The host sets it when (first match wins) |
+|---|---|---|
+| `fyi` | | `status` is `ending`: the person asked for the session to end |
+| `needsYou` | Needs you: interrupts | a `question` is pending, the session's own or a delegate's (`waitingOn`), a form or an approval alike, one marked `answerAtMachine` included; or `attention` is present: `signInNeeded`, `error` (an errored turn) or `notResponding` |
+| `done` | Done: waits | `status` is `idle` with a non-empty response of the main agent's own: `own.response` while `source.response` names a delegate, `response` otherwise (the same text a `finished` push quotes). Delegates still running in the `background` do not change it, as they do not hold back a `finished` push |
+| `fyi` | FYI: never notifies | anything else: working, or idle (delegating or not) with nothing of the main agent's own said |
+
+The wire names are the owner's tier names from #913 in this protocol's camelCase, as
+`signInNeeded` is, so the spec, the code and ui.md say each tier with one word. They are short
+because every session carries one.
+
+`classSince` says when the session entered its present tier, the start of the episode, for the
+reminder to count from; no client shows it. While `class` stays the same, `classSince` stays
+what the host last sent, whatever changes under it: a delegate's question arriving beside the
+session's own, one question answered as the next is asked, working and idle within `fyi`. It is
+never worked out again per question, so a new question while the session is already `needsYou`
+does not restart the reminder. When `class` changes, or the host sends a session for the first
+time (after the host starts, or when it finds the session), it is taken from the fields that
+put the session in the tier: for `needsYou` the earliest of `question.askedAt` and
+`attention.since` that are present, the oldest thing waiting on the person; for `done` and
+`fyi` it is `statusSince` (for `ending`, when the end was asked for). A snapshot, a list or a
+resumed subscription carries the same `classSince` the host last sent; only a restart of the
+host can start the episode again from those fields.
+
+* **A state, not an event.** `class` says which tier the session is in now. A client alerts
+  for a change it sees live: a session entering `needsYou`, or a new reason within it (another
+  question `id`, another `attention.kind`), and entering `done` with a new `turnCount`. What a
+  snapshot, a list or a resumed subscription gives it is not news, as a session already idle
+  when the host starts is not. A push is decided by the host's rules below (once per question,
+  once per finished turn, the 10-minute collapse) and carries its tier in `data.class`.
+* **Delegates roll up.** A delegate never has a class of its own and never notifies on its own.
+  Its question is its parent session's (`question` with `agent`, and `waitingOn`), so the parent
+  is `needsYou`, and its notice keeps the session's tag and is titled
+  "Delegate *name* asks · *title*", as now. A delegate's progress, its words, its error and its
+  finishing never change the parent's class: only the main agent's own answer makes a session
+  `done`, and an error in the parent's own turn makes it `needsYou`.
+* **One notification per session, replaced in place, withdrawn when answered.** Every notice
+  about a session shares its tag, `<machine id>:<session id>`
+  ([Replacing and collapsing](#replacing-and-collapsing)), so a device shows at most one per
+  session, the newer replacing the older, never stacked. When a session leaves `needsYou`
+  because its question was answered (on any device, or at the machine) or its attention went, a
+  client withdraws that session's notification. For a push, the host sends `resolved` to the
+  devices that were shown the question, which replaces it silently ("no longer waiting"): Web
+  Push must show something. A session ended with its question pending is `fyi`, and its
+  question's notice is withdrawn the same way, with "· session ended".
+* **The class is not the delivery rules.** Watch and Mute, the device in use, grouping a burst,
+  the reminder after 15 minutes and agent-driven turns (#489's `userMessageFrom`, and `driver`)
+  decide who is alerted for a tier, and how (ui.md §7.0). They never change the tier: a Muted
+  session's question is still `needsYou`, and a turn an agent drove is still `done` (only its
+  push is stopped). Mute still lets every approval and sign-in through, an approval marked
+  `answerAtMachine` included: the person has to act, and its notice keeps "waiting at the
+  machine". Their protocol is later #913 work.
+* **Done is silent everywhere** (the owner's answer B), older clients and Home Assistant
+  included. The host sends every `finished` push with `silent: true`, and a client also keeps a
+  `done` notice silent whatever `silent` says, as a second safeguard. A Done notice still shows
+  (on the lock screen, for a Watched session); it never interrupts.
+* **The reminder** (ui.md §7.0 rule 5) is the clients': once per session, 15 minutes after its
+  `needsYou` alert, counted from `classSince`, and never repeated. A new question while the
+  session is already `needsYou` replaces its notification in place and does not restart the
+  reminder; answering everything ends the episode and cancels it.
+* **Additive and optional.** An older client ignores `class`, `classSince` and `data.class`, as
+  any field it does not know. A newer client reading a session or a push without them (an older
+  host) keeps today's behaviour: the rules in [When a host notifies](#when-a-host-notifies), and
+  its own. A `class` value it does not know, or one of the wrong type, reads as absent, so it
+  keeps today's behaviour then too: read as `needsYou`, a newer host could interrupt people with
+  something an older client can't explain. `class` changes only with the fields it comes from, and `classSince` only with `class`, so
+  they never move `updatedAt` or send an upsert on their own, and the
+  [session budget](#session-budget) never trims them.
+
+**What a host classes today:** every session it sends, and its `question`, `finished` and
+`signIn` pushes, and a `restored` push after a crash. Not by the host:
+* **A machine offline unexpectedly (#805)**, which its host cannot say. Each client classes it
+  `needsYou` from the relay's presence, once #269's grace period has passed, so a short drop
+  never is. #805 owns the threshold.
+* **A session restored after a crash (#780)**: the machine's `restored` notice after a crash is
+  `needsYou`. Hosts set a restored session's `restored` field, but in this version its `class`
+  does not follow `restored`: it comes from `status`, `question` and `attention` like any other
+  session's (it is restored idle, so `done` if its last turn left an answer of the main agent's
+  own, else `fyi`). Whether `restored` after a crash should make the session itself `needsYou`
+  is an open Product decision, tracked on #780.
+
+`signInNeeded` pushes as the `signIn` notice of #800, at most once an hour per machine, agent
+and account (ui.md §6.13). The rest of `attention` has no push of its own yet. Being `needsYou`,
+it will push: an errored turn once per turn, its body's first line "`<machine>` · stopped: *reason*", a rate limit
+or quota included. `notResponding` alerts **once per episode**: an episode is a stretch in which
+the session is `needsYou`, beginning at `classSince`. If the session recovers and stops
+responding again within 2 minutes, that is the same episode: its notification is replaced
+silently, not alerted again. A recurrence after more than 2 minutes is a new episode and may
+alert. Each episode gets the one reminder at 15 minutes, never repeated. Telling episodes apart,
+and the reminder, are the clients' to time; the host only sends `attention` and `classSince`.
+Home Assistant's notifications are to follow `class` too, `done` only for a Watched session, and
+silently (ui.md §7.0; later #913 work).
+
 ### When a host notifies
 
 | `kind` | When | Once per |
 |---|---|---|
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
 | `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified. Nor is a turn that ended on an error or a failed sign-in (`attention` `error` or `signInNeeded`): it is idle with the previous turn's answer still beside it, which a `finished` would quote as the new one's; one already due or held for the session is withdrawn while that attention lasts. A `finished` that would have replaced an answered question and does not go (withdrawn so, or refused by a device) sends that question's `resolved` instead to the devices still showing it, unless it is asked again | Finished turn: the same `turnCount` and response seen ending again is not repeated |
+| `restored` | With `sessions.restore`: the host started again after a reboot or a crash took sessions with it ([What went](#hello)). Sent once every session it saw live is judged and those that died are restored, or 10 minutes after it started if some are still being judged then; not at all if none of them died. It says how many were restored and counts those offered, naming only the sessions that went mid-turn or with a question waiting and leaving the rest to Launch; sessions an earlier start already offered stay in `machine.restore` but are not notified again. To every subscribed device | Start of the host
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
 | `signIn` | **New (#800).** Sessions of the machine need sign-in: `attention` `signInNeeded`, except while its `recovery` is `pending` (signed in, waiting for the session to show it). Sent as soon as the first of them does, with no delay, to every subscribed device, on screen or not: a turn that ended on a 401 is `idle` with the previous turn's answer beside it, and nothing else tells the person every one of those sessions has stopped. Then again each hour while any still does, counted from when one reached a device, a restart of the host included (one that never went is made again by the next host). Once none does, one still waiting to be sent is withdrawn, and the next failure is notified at once. Never one per session, and never for an `error` or `notResponding` (ui.md §6.13): the row says those | Machine, agent and account, per hour |
 
@@ -1091,6 +1214,7 @@ Every notice about one session on one machine shares:
 | `question`, `resolved` | 24 h | `high`, `normal` |
 | `finished` | 6 h | `normal` |
 | `signIn` | 6 h | `high` |
+| `restored` | 24 h | `normal` |
 
 ### The payload
 
@@ -1117,10 +1241,11 @@ service worker shows from the same fields everywhere else:
 | `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. `signIn`: "*Agent* on *machine* needs sign-in" (ui.md §6.13). At most 120 bytes |
 | `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". `signIn`: "*n* sessions affected" ("1 session affected"); the title names the machine. Never the account, a code, a URL or any of the agent's words. Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
 | `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. `signIn`: `host` and `signin=<agent>` only, never `session` or `question` (#800 6646515428): an older client, which reads the kind as `question`, opens the machine and no question view or answer controls. A client opens that machine and session, and the question ready to answer |
-| `silent` | `true` for `resolved`, which replaces a question without alerting again. Absent for `signIn`, which has the question sound (owner, 2026-11-04, ui.md §6.13) |
-| `data.kind` | `question`, `finished`, `resolved` or `signIn`. A client reads a kind it doesn't know as `question` |
+| `silent` | `true` for `resolved`, which replaces a question without alerting again, and for `finished`: Done never alerts (#913), so a client that predates `data.class`, and Safari's Declarative Web Push, which shows without the service worker, play nothing for it. Absent for `signIn`, which has the question sound (owner, 2026-11-04, ui.md §6.13) |
+| `data.kind` | `question`, `finished`, `resolved`, `signIn` or `restored`. A client reads a kind it doesn't know as `question`. A `restored` notice is titled `<machine> restarted` (a reboot) or `<machine> · the host stopped`, its body counts the sessions that went and names those mid-turn or with a question lost; its `navigate` has only `host` (the subscription's `app` with any `host`, `session` and `question` it carried replaced, not appended to; the rest of its query kept), its tag is `<machine id>:~restore`, and its `data.session` is empty and `data.question` absent, so an app that reads it as a question (one from before `restored`, whose service worker adds no actions) shows these words and opens the machine, with nothing to answer |
 | `data.machine`, `data.session`, `data.question` | The machine's device id, the session's `id`, the question's `id` (not for `finished`). Neither `session` nor `question` for `signIn`, which is about the machine |
 | `data.agent`, `data.sessions` | `signIn` only: whose sign-in it is (`copilot`, `claude`, `codex`), and how many of the machine's sessions need it |
+| `data.class` | **New (#913).** The notice's [notification class](#notification-class-913): `needsYou` for `question` and `signIn`, and for `restored` after a crash; `done` for `finished`, never `needsYou` (a turn that ends with a question pending sends that question as its own `question` notice). Absent on `resolved`, which withdraws a notice rather than being one, on a `restored` after a reboot or a restart of the host, and from an older host, whose push a client handles as today. Unknown reads as absent |
 | `data.at` | When the host sent it |
 
 The JSON as encrypted is at most **3 KiB**: under RFC 8291's one 4096-byte record (3993
@@ -1177,8 +1302,11 @@ is for disposable evaluation, not production service enrollment.
 | `driverPrincipal` | string? | With `driver` `agent`, which agent, when the host knows: at most 128 bytes, plain text, shown as secondary detail only. Absent otherwise |
 | `subagents` | [Subagent](#subagent)[]? | The sub-agents the session started, at any depth ([design/subagents.md](../design/subagents.md)): running ones (`working`, `waiting`) first, newest start first, then the most recently finished. At most 20, and fewer if the [session budget](#session-budget) trims them. Absent when there are none. Finished ones stay until the session ends. Only Copilot sends them so far |
 | `subagentsMore` | number? | Entries left out of `subagents`, by the host's limit or the budget. Absent when none are |
+| `restored` | object? | Set on a session its host restored, idle, after a reboot or a crash (#780), once its window has been seen ready (never on one that may be asking whether to trust its folder), for that run of the host and at most 24 hours: `at`, `cause`, `midTurn` (it went while working, and no prompt has arrived since the restore), `questionLost` (a question was waiting in it) and, with `midTurn` only, `continue`: the words a client offers to send as an ordinary `session.reply` when a person presses Continue, with no more trust than any reply; the host never sends that reply itself. Hosts set `restored` on each session they restore ([What went](#hello)); it does not change the session's `class` ([Notification class](#notification-class-913)). `midTurn` and `continue` go once a prompt arrives after the restore. A question the interrupted run left waiting is not shown as `question` (`questionLost` says it went) |
 | `waitingOn` | string? | Status precedence rule 2: the id of the sub-agent whose question is `question`, while the session has none of its own. Absent otherwise |
 | `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
+| `class` | `"needsYou"` \| `"done"` \| `"fyi"`? | **New (#913).** The session's notification tier, which every client follows instead of its own rules: [Notification class](#notification-class-913). Absent from an older host; a client then keeps today's behaviour. A client that does not know a value reads it as absent |
+| `classSince` | time? | **New (#913).** When the session entered its present tier, the episode's start, which the 15-minute reminder counts from. Kept while `class` is unchanged (a further question does not move it); on a change of `class`, for `needsYou` the earliest of `question.askedAt` and `attention.since`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
 
 **Status precedence** with sub-agents (first match wins): the session's own question
 (`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn
@@ -1498,7 +1626,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string | The id of the tool call that asked it, or for a Copilot permission prompt `<requestId>#<digest>` ([Copilot permission prompts](#copilot-permission-prompts)). It stays the same while the question is pending |
+| `id` | string | The id of the tool call that asked it, or for a Copilot permission prompt `<requestId>#<digest>` ([Copilot permission prompts](#copilot-permission-prompts)), or for a Codex approval its hook recorded `<DecisionId>#<digest>` (#958). Either digest covers what the question shows, so different content is a different id. Clients treat every id as opaque. It stays the same while the question is pending |
 | `kind` | `"form"` \| `"approval"` | `approval` is a permission prompt with fixed choices (Codex approvals, Copilot and Claude permission prompts). It always has exactly one `choice` field, named `decision`, with the options `approve` ("Approve once") and `deny`, so a client can style them. An answer to one is `{ "decision": "approve" }` or `{ "decision": "deny" }` |
 | `message` | string (Markdown) | What the agent wrote, at most 8 KiB |
 | `fields` | Field[] | In order. Empty for a plain message |
@@ -1602,7 +1730,7 @@ session is at most 40 KiB.
 |---|---|---|---|
 | Copilot CLI | `~/.copilot/session-state/<id>/` with a live `inuse.<pid>.lock`, plus `workspace.yaml` | From `events.jsonl`: `user.message`, `assistant.message` (`content`, `toolRequests`), `tool.execution_start` and `_complete`, `assistant.turn_start` and `_end`, `session.compaction_complete`, `session.model_change`, and `session.error` for [`attention`](#attention) | A `tool.execution_start` with `toolName: "ask_user"`, using its `arguments.message` and `arguments.requestedSchema`. Pending until a `human_response.recorded` or `tool.execution_complete` with the same `toolCallId`. A `permission.requested` (its `promptRequest`, else its `permissionRequest`) is an `approval`, pending until the `permission.completed` with the same `requestId` |
 | Claude Code | The bridge's registration files, else Claude Code's own `~/.claude/sessions/<pid>.json` (an interactive CLI, its pid running, written no earlier than that process started); and `~/.claude/projects/<slug>/<id>.jsonl` | Transcript `assistant` entries (`text`, `thinking`, `tool_use`) and `user` entries | A `tool_use` named `AskUserQuestion`, pending until a `tool_result` with its id. Claude Code 2.1.312 writes that `tool_use` only once the question is answered, so without agent-ha-bridge's `PreToolUse` hook a waiting question is not seen. A permission prompt, which only agent-ha-bridge's hook reports (its status `waiting`, newer than the transcript, over a running tool), is an `approval` with that tool's id, `answerAtMachine` |
-| Codex | The bridge's registration files, else (Windows) `~/.codex/thread-writer-locks/<id>.lock`, as the Restart Manager reports who holds it open. The lock must be held by exactly one running `codex.exe`, and that one must be an interactive terminal: its command line read, with no subcommand (a prompt at most), `resume` or `fork`, and no `app-server` or `mcp-server` argument. That is a Codex run with `--no-daemon`, not `exec`, `review`, `migrate-rollouts` and the like. A lock shared with the daemon or with an unreadable Codex names nobody. Each decision is checked again after 30 s. A terminal holding several locks is the session of the one whose rollout `session_meta` is its own top-level thread (`id` and `session_id` equal, `thread_source` "user") with an event since it started, else of none. A lone lock whose rollout names another thread (a sub-agent's) is not a session either. A registration agent-ha-bridge marked ended keeps its thread from being found this way; and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | An approval agent-ha-bridge's hook recorded in `<id>.approval.json` beside the registration: an `approval` whose `id` is the marker's `DecisionId` (its generation), `answerAtMachine` once the marker records agent-ha-bridge's own attempt (`DeliveryAttempted`). An `exec_approval_request` or `apply_patch_approval_request` in the rollout with no marker is an `approval` keyed by its `call_id`, `answerAtMachine` |
+| Codex | The bridge's registration files, else (Windows) `~/.codex/thread-writer-locks/<id>.lock`, as the Restart Manager reports who holds it open. The lock must be held by exactly one running `codex.exe`, and that one must be an interactive terminal: its command line read, with no subcommand (a prompt at most), `resume` or `fork`, and no `app-server` or `mcp-server` argument. That is a Codex run with `--no-daemon`, not `exec`, `review`, `migrate-rollouts` and the like. A lock shared with the daemon or with an unreadable Codex names nobody. Each decision is checked again after 30 s. A terminal holding several locks is the session of the one whose rollout `session_meta` is its own top-level thread (`id` and `session_id` equal, `thread_source` "user") with an event since it started, else of none. A lone lock whose rollout names another thread (a sub-agent's) is not a session either. A registration agent-ha-bridge marked ended keeps its thread from being found this way; and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | An approval agent-ha-bridge's hook recorded in `<id>.approval.json` beside the registration: an `approval` whose `id` is the marker's `DecisionId` (its generation), `#`, and a digest of what it shows (#958), `answerAtMachine` once the marker records agent-ha-bridge's own attempt (`DeliveryAttempted`). An `exec_approval_request` or `apply_patch_approval_request` in the rollout with no marker is an `approval` keyed by its `call_id`, `answerAtMachine` |
 
 Copilot, Claude Code and Codex report `background` and `subagents`, each from what its own
 transcript says (below, and [design/subagents.md](../design/subagents.md) §3). A host

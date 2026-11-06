@@ -1,5 +1,13 @@
 # The Home Assistant connector
 
+**Current compatibility, not the target architecture.** The owner redirected HA
+delivery on 2026-11-02 in [#387](https://github.com/danswett/agent-bridge/issues/387):
+the separate [integration and companion card](https://github.com/danswett/agent-bridge-home-assistant/issues/1)
+own HA entities/actions/presentation. Bridge retains generic protocol/core logic
+and host-enforced authorization. The stages, settings and operator procedures
+below describe the existing compatibility connector unless explicitly labeled
+target or historical; they are not installation instructions for its successor.
+
 A machine moved off agent-ha-bridge's PowerShell daemon onto `agent-bridge-host` stays on the
 existing Home Assistant dashboard: its cards, answering, replies, attachments, launch, stop,
 usage, fleet status, update buttons and phone notifications, as today (decided 2026-10-29;
@@ -20,13 +28,14 @@ The plan, with every stage done, is below.
 
 ### Retaining HA without a legacy daemon (#317)
 
-The owner decided on 2026-11-02 to keep the HA dashboard after the legacy daemon is
-retired. #318 implements native shared dashboard/card publication; #319 depends on it
-for an explicit writer handover, rollback and disposable-HA rehearsal. This is not
-permission to bypass G7: the current connector still does not publish shared resources,
-and writer migration remains refused until the replacement is verified.
+The owner requires HA functionality without a legacy daemon. The later redirect
+in #387 supersedes the permanent native shared dashboard/card publisher direction
+of #318, **not the functionality and not completion of #318**. #317 remains the
+parent goal; #319 remains the explicit writer cutover, rollback and disposable-HA
+rehearsal gate. G7 still refuses writer migration. A target diagram or fixture
+pass does not authorize cutover.
 
-The first implementation slice ports protocol 1's policy validation, ordinal canonical
+**Merged compatibility evidence (#322).** The first implementation slice ports protocol 1's policy validation, ordinal canonical
 policy JSON/digest/resource URL, receipt-progress checks and writer/artifact authorization
 to `HaPublicationPolicy`. Exact rollback pins independently verify the served inline
 card's version and bytes; an opaque file URL cannot prove a pin. It is internal
@@ -46,6 +55,52 @@ tree, stubs local settings in memory and performs no HA or installed-config acce
 Malformed resources are not absence, observers cannot acquire writer authority, and
 generation/high-water regressions remain refusals. Policy validation additionally
 rejects duplicate JSON members instead of letting a parser silently select one.
+
+### Publisher work disposition (#387)
+
+Verified against main `95983d6031dfc690b5c6a122b2e8f4ac8cac955e` and actual PR
+metadata/file inventories on 2026-11-05 PT. These are preservation/extraction
+boundaries, not permission to close PRs, remove trees or merge the held stack.
+
+| Work | Retain / extract / supersede |
+|---|---|
+| [#322](https://github.com/danswett/agent-bridge/pull/322), merged as `d2c40f62e07467a897947a0568a37154e96df194` | **Retain** `HaPublicationPolicy`, `PublicationTests`, `Fixtures/ha-publication.json` and `Export-HaPublication.ps1` as current compatibility/rollback evidence. This internal contract is not a running shared publisher. Final lifetime/placement belongs to #387/#389 |
+| [#331](https://github.com/danswett/agent-bridge/pull/331), closed unmerged 2026-11-05 at 12:45 PT; branch kept, retained head `b58fcd42f7b936ef1316ccab42ee88a29908b4ff` | **Preserve** authority observation, protected high-water receipts and recorded malformed/missing/regression cases. **Extract** relevant migration failure evidence through reviewed replacement slices; no claim its receipt runtime is on main |
+| [#337](https://github.com/danswett/agent-bridge/pull/337), closed unmerged 2026-11-05 at 12:45 PT; branch kept, retained head `ac1fd159cecff4231ae09e5f5e660e7a52f79898` | Permanent host renderer/writer is **superseded**. **Preserve/extract** card behavior, templates, whole-view recordings, exact-pin/upgrade/conflict tests for HA-side delivery. Keep source commit, exporter recipe, card-byte provenance and `Publication/LICENSE` with any approved extraction; do not copy bundled third-party content without license review |
+| [#345](https://github.com/danswett/agent-bridge/pull/345), closed unmerged 2026-11-05 at 00:59:49 PT; retained head `0f81009b434414ccd9209ac103108e6c7db9fa73` | Permanent opt-in host fleet publisher is **superseded**. **Preserve/extract** mixed-fleet reconciliation, selector repair, retirement and restart/rollback failure cases; do not adopt host publication configuration or drift jobs by inertia. Closure is withdrawal, not authorization for cleanup or cutover |
+
+Preserve all commits/worktrees while ownership and extraction are resolved.
+[The canonical whole-HA audit](https://github.com/danswett/agent-bridge/issues/389#issuecomment-6617977766)
+routes cleanup through #389 and its existing children: #525 runtime/generic seams,
+#526 credential/config lifecycle, #527 CI/tooling. No bulk HA string purge:
+generic dashboard UI, `driver`/`driverPrincipal`, licenses and historical results
+are not obsolete merely because they mention HA.
+
+### Target prerequisites and existing owners
+
+The merged [connector read profile](protocol/connector-read.md) (#534) describes
+existing application reads and host-backed reference fixtures, **not** released
+enrollment, encrypted transport certification or an installable integration.
+[The agent-principals design](design/agent-principals.md) (#522) is design, not a
+service-identity implementation. #388/#519 and #55/#391 retain identity, grants,
+attribution and roster ownership; this redirect does not design a competing path.
+Initial connector reads do not imply any action grant, and agents must never
+answer approvals or folder trust.
+
+[#394](https://github.com/danswett/agent-bridge/pull/394)'s original architecture and
+enrollment proposal at `d9382fd31dc9fad9d34919317bf7a3265de43c18` is preserved
+historical, **unadopted** evidence. That proposal is withdrawn from the corrected
+documentation-only #394; preserving its source does not adopt its enrollment
+design or protocol audit. Enrollment interface work remains Trust-owned under #388.
+
+#258 (Settings/health) and #175 (sub-agents/shadow) remain existing compatibility
+work with their existing owners. Closed #78 is historical token-propagation
+scope, not a request to restore that path. No issue is closed or reassigned here.
+The supported legacy configuration window, final fixture placement, notification/
+action parity and credential revocation/rollback retention still need decisions
+on #387 with those owners. Keep current connector credentials/settings and G5/G6/G7
+and owner-only management guards until verified #319 replacement/rollback; only
+then may #389 remove obsolete dependencies.
 
 ## What it never does
 
@@ -1114,8 +1169,13 @@ publishes with, and the agent's (`homeAssistant.agentTokenEnvVar`, default
 card agent-driven (the purple edge) when the `context.user_id` on the state change that carried
 the input is in `homeAssistant.agentUserIds`. The connector keeps that split: it publishes with
 the user's token only, reads `context.user_id` off each command's state change and matches it
-against its own `homeAssistant.agentUserIds` to set `driver` (stage 2). Agents driving a
-migrated machine go on using their own token, unchanged.
+against its own `homeAssistant.agentUserIds` to set `driver` (stage 2).
+`migrate` imports `agentTokenEnvVar` as metadata only; the native launcher does not
+resolve that name or inject an HA token. A child may inherit its host's environment,
+but that is not managed token propagation or the proposed native agent credential.
+See [host-launch.md](host-launch.md) and [host-config.md](host-config.md).
+The target uses separately reviewed Bridge identities/attribution, not permanent
+per-host HA agent tokens; this does not change current command authorization.
 
 **Notifications.** The phone flow (`notify.mobile_app_*` with answer buttons, and
 `mobile_app_notification_action` events back) is stage 5b (above). A tap is attributed as a

@@ -263,6 +263,71 @@ public class SelectorTests
         Assert.Empty(selection.Unclaimed);
     }
 
+    [Theory]
+    [InlineData("src/hostcore/Parser.cs")]
+    [InlineData("src/HostCORE/Parser.cs")]
+    [InlineData("SRC/HOSTCORE/PARSER.CS")]
+    public void A_path_in_another_case_selects_what_its_canonical_spelling_does(string alias)
+    {
+        // Windows compiles src/hostcore/X.cs into src/HostCore. A catch-all trigger claimed the
+        // alias, so the fail-safe never fired and the package shipped what no test had run on.
+        var catalog = Catalog.Parse(Fixture.CatalogYaml + """
+
+              - id: package
+                kind: packaging
+                ring: 1
+                select: affected
+                platforms: [win-x64]
+                runner: hosted
+                builds: src/Host
+                triggers: ['src/**']
+                status: planned
+              - id: core
+                kind: unit
+                ring: 0
+                select: affected
+                platforms: [win-x64]
+                runner: local
+                triggers: [src/HostCore/**]
+                status: planned
+            """);
+        var selector = new Selector(catalog, Fixture.Graph());
+
+        var canonical = selector.Select(["src/HostCore/Parser.cs"], ring: 1);
+        var aliased = selector.Select([alias], ring: 1);
+
+        Assert.Equal(["protocol", "host", "homeassistant", "ha-integration", "codeql", "package", "core"], Fixture.Ids(canonical));
+        Assert.Equal(Fixture.Ids(canonical), Fixture.Ids(aliased));
+        Assert.Equal("affected", aliased.Mode);
+        Assert.Empty(aliased.Unclaimed);
+        Assert.Equal([alias], Fixture.ReasonFor(aliased, "host", "project tests/Host.Tests reaches src/HostCore").Files);
+        Assert.Equal([alias], Fixture.ReasonFor(aliased, "package", "builds src/Host, which reaches src/HostCore").Files);
+    }
+
+    [Fact]
+    public void A_project_reference_in_another_case_still_reaches_the_project_it_names()
+    {
+        // MSBuild on Windows resolves ..\..\SRC\host to src/Host, so the edge must not drop out.
+        var graph = new ProjectGraph(Fixture.Graph().Projects.Where(p => p.Folder != "tests/Host.Tests")
+            .Append(Project.Create("tests/Host.Tests", ["SRC/host"], ["tests/fixtures/shared/*"], isTestProject: true)));
+
+        var selection = new Selector(Fixture.Catalog(), graph).Select(["src/Host/Program.cs"], ring: 0);
+
+        Assert.Equal(["protocol", "host"], Fixture.Ids(selection));
+        Assert.Equal(["src/Host/Program.cs"], Fixture.ReasonFor(selection, "host", "project tests/Host.Tests reaches src/Host").Files);
+        Assert.Empty(selection.Unclaimed);
+    }
+
+    [Fact]
+    public void A_no_test_path_in_another_case_is_not_docs_only()
+    {
+        // no_test_paths take suites away, so only their exact spelling does.
+        var selection = Fixture.Selector().Select(["DOCS/status.md"], ring: 1);
+
+        Assert.Equal("affected", selection.Mode);
+        Assert.Contains("protocol", Fixture.Ids(selection));
+    }
+
     [Fact]
     public void The_json_lists_each_suite_with_its_reasons_and_the_os_matrix()
     {

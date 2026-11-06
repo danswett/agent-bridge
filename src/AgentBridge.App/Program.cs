@@ -172,8 +172,9 @@ static class Lifecycle
     }
 
     // Everything the app put outside its folder: owned hooks, the host stopped, its logon task,
-    // the app's Run entry and toast registration. The host's profile (key, account, config) stays,
-    // like any app's data, so reinstalling picks up where it was; docs/app-windows.md.
+    // the app's Run entry, toast registration and the host's logon marker (#780). The host's profile
+    // (key, account, config) stays, like any app's data, so reinstalling picks up where it was;
+    // docs/app-windows.md.
     public static void BeforeUninstall()
     {
         if (Refused("uninstall")) { return; }
@@ -199,5 +200,6 @@ static class Lifecycle
         try { manager.SetStartAtSignIn(false); } catch (Exception e) { AppLog.Write($"uninstall: the logon task stays: {e.Message}"); }
         try { new RunKey(Paths.Exe).Set(false); } catch (Exception e) { AppLog.Write($"uninstall: the Run entry stays: {e.Message}"); }
         try { ToastActivator.Unregister(); } catch (Exception e) { AppLog.Write($"uninstall: the toast registration stays: {e.Message}"); }
+        try { AgentBridge.Host.Core.Restore.VolatileLogonMarker.RemoveAll(); } catch (Exception e) { AppLog.Write($"uninstall: the host's logon marker stays: {e.Message}"); }
     }
 }

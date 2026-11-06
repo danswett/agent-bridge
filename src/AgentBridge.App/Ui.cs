@@ -13,8 +13,19 @@ public static class Ui
     public static Visibility Count(int n) => n > 0 ? Visibility.Visible : Visibility.Collapsed;
     public static bool Not(bool on) => !on;
     public static double Opaque(bool on) => on ? 1.0 : 0.55;
+    // A glyph that cross-fades with another in the same place (Send's arrow, ring and check, ui.md §6.5).
+    public static double Fade(bool on) => on ? 1.0 : 0.0;
 
     public static Brush Brush(string key) => (Brush)Application.Current.Resources[key];
+
+    // A reply's or an answer's receipt (ui.md §6.5, decided on #617): its stalls and waits, and
+    // You answered, in text2; the exceptions in their own tone. In a contrast theme every word is
+    // the window's text (§9), read from the system as it is now: the line is painted again as
+    // Windows' colours change (ReceiptMarkView.Tone), maybe before XAML's own resources follow.
+    public static Brush ReceiptBrush(Tone tone) =>
+        new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? new SolidColorBrush(SystemColours.Of(Windows.UI.ViewManagement.UIElementType.WindowText))
+        : tone == Tone.Progress ? Brush("AbText2")
+        : ToneBrush(tone);
 
     public static Brush ToneBrush(Tone tone) => Brush(ToneKey(tone));
 

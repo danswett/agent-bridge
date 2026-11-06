@@ -7,7 +7,7 @@
 
 ## How releases reach machines today
 
-Every merge to `main` publishes a GitHub **pre-release** (`v0.1.<run>`), with x64 (`win`) and
+Every merge to `main` whose CI builds the app publishes a GitHub **pre-release** (`v0.1.<run>`), with x64 (`win`) and
 Arm64 (`win-arm64`) channels. Installed apps and hosts check every 30 minutes and install when
 the host is idle, or after 6 hours regardless (AutoUpdater.cs). They read releases
 **anonymously** from the GitHub API (`GithubSource` with no token: src/AgentBridge.App/Platform.cs,
@@ -28,6 +28,16 @@ build is stopped by not promoting it past Dev, and machines on Beta never see it
 2. **Stop the next merge shipping the same bug.** Revert the PR on `main` (through a PR, with
    Quality as merge coordinator, AGENTS.md), or land the fix. Every green `main` run publishes
    a new release, which supersedes the draft.
+
+   **A publish that failed, or a `main` run that never published, is recovered by a new `main`
+   run only:** a fresh push to `main` (the next merge, through Quality, who owns recovery and
+   admission), whose run uses the current workflow and recomputes its plan, from the last green
+   `main` run, and every gate. A run by hand (`workflow_dispatch`) refuses `main` and never
+   publishes. **Never re-run a `main` run started before #938 queued publishes (`queue: max`),
+   neither all of it (`gh run rerun`) nor its failed jobs (`gh run rerun --failed`):** a re-run
+   keeps the workflow its run started
+   with, so its publish waits under the old concurrency, where the next to arrive replaces the
+   one waiting, and can evict a newer run's waiting publish (docs/app-windows.md).
 3. **Machines that installed it.** Installs never downgrade (owner's rule, #451), so the fix
    is a newer build. **Owner, at the machine** (guard #67: host management isn't done from
    agent sessions):

@@ -694,6 +694,23 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Contains(new ResumableStore(copilot, root, root).Read(["copilot"]), e => e.Id == Id(9999));
     }
 
+    // Copilot on #837: a Copilot session with no summary and no prompt is left off the list, but one
+    // asked for by its id (a restore after a reboot) is found, with a title to show.
+    [Fact]
+    public void A_copilot_session_with_nothing_to_call_it_by_is_not_listed_but_is_found_by_its_id()
+    {
+        var copilot = Path.Combine(root, ".copilot");
+        const string Id = "00000007-0000-4000-8000-000000000000";
+        var dir = Directory.CreateDirectory(Path.Combine(copilot, "session-state", Id)).FullName;
+        File.WriteAllText(Path.Combine(dir, "workspace.yaml"), "cwd: C:\\repos\\app\n");
+        var store = new ResumableStore(copilot, root, root);
+
+        Assert.DoesNotContain(store.Read(["copilot"]), e => e.Id == Id);
+        var found = store.Find(Id, ["copilot"]);
+        Assert.NotNull(found);
+        Assert.Equal((Id, "Copilot session", @"C:\repos\app"), (found.Id, found.Summary, found.Folder));
+    }
+
     [Fact]
     public void Agencys_listings_are_read_as_it_prints_them()
     {

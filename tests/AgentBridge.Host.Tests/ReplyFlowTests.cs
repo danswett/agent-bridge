@@ -164,6 +164,52 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.False(other.Events.TryRead(out _));
     }
 
+    // #780: what a reboot or a crash took is said in hello, and a client that asked hears when it
+    // changes, as a session whose agent's discovery was held is judged later.
+    [Fact]
+    public async Task Hello_says_what_a_reboot_took_and_a_client_that_asked_hears_when_that_changes()
+    {
+        var time = new FakeTimeProvider();
+        RestoreNotice? notice = null;
+        served = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: Answerer(), replies: Replier())
+        {
+            Drivers = drivers,
+            Time = time,
+            Restore = () => notice,
+        };
+        host.Hub.Handler = served.HandleAsync;
+        var ch = await OpenAsync();
+
+        var asked = (await ch.RequestAsync(Ops.Hello, new { changes = true })).GetProperty("result");
+        Assert.Contains(RestoreProtocol.Capability, asked.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        Assert.False(asked.GetProperty("machine").TryGetProperty("restore", out _));
+
+        notice = new RestoreNotice
+        {
+            At = new DateTimeOffset(2026, 11, 4, 16, 2, 11, TimeSpan.Zero),
+            Cause = RestoreCause.Reboot,
+            Waiting = 1,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }],
+        };
+        time.Advance(served.HelloCheck);
+        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+        var restore = (await ch.RequestAsync(Ops.Hello, new { changes = true })).GetProperty("result").GetProperty("machine").GetProperty("restore");
+        Assert.Equal(("reboot", 1, "s1", true), (restore.GetProperty("cause").GetString(), restore.GetProperty("waiting").GetInt32(),
+            restore.GetProperty("offered")[0].GetProperty("id").GetString(), restore.GetProperty("offered")[0].GetProperty("midTurn").GetBoolean()));
+
+        // The held session judged: said again.
+        notice = notice with { Waiting = 0, Offered = [.. notice.Offered, new RestoreSession { Id = "s2", Agent = AgentKind.Copilot }] };
+        time.Advance(served.HelloCheck);
+        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+
+        // Copilot on #813: only what it says changed, its counts the same (an uncertain session found
+        // live, the cause, time and offers rebuilt from the rest): said again too.
+        notice = notice with { Cause = RestoreCause.Crash, Since = notice.At.AddMinutes(-3), Offered = [new RestoreSession { Id = "s3", Agent = AgentKind.Claude }, .. notice.Offered.Skip(1)] };
+        time.Advance(served.HelloCheck);
+        Assert.Equal(Events.HelloChanged, (await ch.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+    }
+
     [Fact]
     public async Task Hello_offers_replying_only_while_agent_ha_bridge_is_not_running_and_only_where_a_replier_can_deliver()
     {
@@ -660,6 +706,41 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
+    // A new CLI resumed the session while an approval was open, and wrote nothing of it again: it may
+    // still be on the screen, where a reply's Enter would accept it. The reply waits; one typed at the
+    // machine since (the input was free) lets replies through again.
+    [Fact]
+    public async Task A_permission_left_open_when_a_new_cli_resumed_the_session_keeps_a_reply_out_until_the_person_types_at_the_machine()
+    {
+        var ch = await OpenAsync();
+        Fixture.Append(events, Copilot.Event("permission.requested", new { requestId = "r1", permissionRequest = new { kind = "shell", toolCallId = "c9" } }, second++),
+            Copilot.Event("session.resume", new { }, second++));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Question);
+
+        var (outcome, reason) = await ReplyAsync(ch, "carry on");
+
+        Assert.Equal("refused", outcome);
+        Assert.StartsWith("the session was resumed in a new Copilot while a question or approval was open", reason);
+        Assert.Empty(injector.Plans);
+        Fixture.Append(events, Prompt("typed at the machine"), Copilot.TurnStart(second++), Copilot.TurnEnd(second++));
+        Assert.Equal("delivered", (await ReplyAsync(ch, "carry on")).Outcome);
+    }
+
+    // A session whose launch here has not yet seen its window ready (a restore at folder trust) is
+    // not typed into: Enter would answer the question.
+    [Fact]
+    public async Task A_reply_is_refused_while_the_launch_of_its_session_has_not_seen_its_window_ready()
+    {
+        var replier = Replier();
+        replier.LaunchHeld = id => id == Id ? "Copilot was started here and its window has not been seen ready" : null;
+        Serve(Answerer(), replier);
+        var ch = await OpenAsync();
+
+        Assert.Equal(("refused", "Copilot was started here and its window has not been seen ready"), await ReplyAsync(ch, "carry on"));
+        Assert.Empty(injector.Plans);
+    }
+
     [Fact]
     public async Task A_transcript_that_cannot_be_read_cannot_say_nothing_is_asking_so_nothing_is_typed()
     {
@@ -756,6 +837,20 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         probe.Answers = new Queue<string?>([null, "agent-ha-bridge is running for this user"]);
         Assert.Equal(("refused", "agent-ha-bridge is running for this user"), await ReplyAsync(ch, "hello"));
+        Assert.Empty(injector.Plans);
+    }
+
+    // #780: Continue is an ordinary reply. Its words earn no trust a reply does not have: beside
+    // agent-ha-bridge it is refused like any other, and nothing is typed.
+    [Fact]
+    public async Task A_reply_with_continues_words_is_refused_beside_agent_ha_bridge_like_any_reply()
+    {
+        var ch = await OpenAsync();
+        probe.Reason = "agent-ha-bridge is running for this user";
+
+        var words = AgentBridge.Host.Core.Restore.RestoreRecorder.ContinueText(RestoreCause.Reboot, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc);
+
+        Assert.Equal(("refused", probe.Reason), await ReplyAsync(ch, words));
         Assert.Empty(injector.Plans);
     }
 

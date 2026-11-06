@@ -64,14 +64,14 @@ public sealed class PushNotifierTests : IDisposable
 
     PushPeer Peer(string device, string account = Account, bool inAccount = true) => new(device, device == Phone ? "iPhone" : "Laptop", account, inAccount);
 
-    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null)
+    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null, string app = "https://danswett.github.io/agent-bridge/app/")
     {
         if (!browsers.TryGetValue(device, out var b)) { browsers[device] = b = (P256KeyPair.Generate(), System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)); }
         var data = JsonSerializer.SerializeToElement(new
         {
             endpoint = endpoint ?? $"https://web.push.apple.com/{device}",
             keys = new { p256dh = B64Url.Encode(b.Key.Public), auth = B64Url.Encode(b.Auth) },
-            app = "https://danswett.github.io/agent-bridge/app/",
+            app,
             device = name ?? (device == Phone ? "iPhone" : "Laptop"),
         });
         return notifier.Handle(peer ?? Peer(device), Ops.PushSubscribe, data);
@@ -122,6 +122,97 @@ public sealed class PushNotifierTests : IDisposable
         source.Upsert(S("s1", SessionStatus.Waiting, response: "thinking", question: Q("q1")));
         await After(TimeSpan.FromSeconds(10));
         Assert.Single(sender.Sent);
+    }
+
+    // #780: what a reboot took, to every device, as words only. An app from before restored reads
+    // it as a question; with no question and no session named, it opens the machine and nothing
+    // that could be answered.
+    [Fact]
+    public async Task What_a_reboot_took_reaches_every_device_naming_no_question_and_opening_only_the_machine()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = RestoreCause.Reboot,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }, new RestoreSession { Id = "s2", Agent = AgentKind.Claude, QuestionLost = true }],
+        });
+        await After(TimeSpan.Zero);
+
+        var received = Received();
+        Assert.Equal([Phone, Laptop], received.Select(r => r.Device).Order(StringComparer.Ordinal));
+        var (_, n, ttl, urgency, topic) = received.Single(r => r.Device == Phone);
+        Assert.Equal("restored", Kind(n));
+        Assert.Equal("DEV restarted", n.GetProperty("title").GetString());
+        Assert.Equal("2 sessions went with it.\nMid-turn: Fix the login.\nA question went unanswered in Claude session.\nResume them from Launch.", n.GetProperty("body").GetString());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}", n.GetProperty("navigate").GetString());
+        Assert.Equal("", n.GetProperty("data").GetProperty("session").GetString());
+        Assert.False(n.GetProperty("data").TryGetProperty("question", out _));
+        Assert.Equal((86400, "normal", PushNotice.Topic(Machine, "~restore")), (ttl, urgency, topic));
+    }
+
+    // A subscribed URL that already routes somewhere (the page it was installed from was a session's)
+    // still opens only the machine: its routing is replaced, not appended to, and nothing else in it
+    // is lost.
+    [Fact]
+    public async Task What_a_reboot_took_opens_only_the_machine_from_an_app_url_that_already_routes_to_a_session()
+    {
+        Start();
+        Subscribe(Phone, app: "https://danswett.github.io/agent-bridge/app/?v=2&host=other&session=s9&question=q9#top");
+
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = RestoreCause.Crash,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login" }],
+        });
+        await After(TimeSpan.Zero);
+
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?v=2&host={Machine}", n.GetProperty("navigate").GetString());
+    }
+
+    // #780 Host B: what was restored is said first, and what was not after it, with those that died
+    // again too soon after a restore counted.
+    [Fact]
+    public async Task What_a_reboot_took_says_how_many_were_restored_and_which_are_left_to_resume()
+    {
+        Start();
+        Subscribe(Phone);
+
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = RestoreCause.Reboot,
+            Why = RestoreWhy.Pending,
+            Restored = 3,
+            Loops = 1,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login" }],
+        });
+        await After(TimeSpan.Zero);
+
+        var (_, n, _, _, _) = Assert.Single(Received());
+        Assert.Equal("3 sessions were restored, idle.\n1 more went with it.\n1 died again soon after a restore, so it wasn't restored again.\nResume them from Launch.", n.GetProperty("body").GetString());
+    }
+
+    // Restored or not, a turn cut short and a question nobody answered are said.
+    [Fact]
+    public async Task What_restored_sessions_lost_is_said_when_every_session_was_restored()
+    {
+        Start();
+        Subscribe(Phone);
+
+        notifier.NotifyRestore(new RestoreNotice { At = T, Cause = RestoreCause.Reboot, Why = RestoreWhy.Pending, Restored = 2 },
+            [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }, new RestoreSession { Id = "s2", Agent = AgentKind.Claude, QuestionLost = true }]);
+        await After(TimeSpan.Zero);
+
+        var (_, n, _, _, _) = Assert.Single(Received());
+        Assert.Equal("2 sessions were restored, idle.\nMid-turn: Fix the login.\nA question went unanswered in Claude session.", n.GetProperty("body").GetString());
     }
 
     [Fact]
@@ -200,6 +291,107 @@ public sealed class PushNotifierTests : IDisposable
         Assert.False(n.GetProperty("data").TryGetProperty("question", out _));
         Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}&session=s1", n.GetProperty("navigate").GetString());
         Assert.Equal((21600, "normal"), (ttl, urgency));
+    }
+
+    // #913: each notice says its tier, so a client follows the host's class rather than its own
+    // rules. A resolved notice withdraws one and is none itself.
+    [Fact]
+    public async Task A_question_goes_as_needs_you_its_finished_turn_as_done_and_its_withdrawal_with_no_class()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        notifier.Answered(Laptop, "s1", "q1");
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Postgres it is.", turns: 2));
+        await After(TimeSpan.FromSeconds(3));
+
+        var classes = Received()
+            .Select(r => (Kind(r.Notification), r.Notification.GetProperty("data").TryGetProperty("class", out var c) ? c.GetString() : null))
+            .Distinct().ToList();
+        Assert.Equal(new (string, string?)[] { ("question", "needsYou"), ("resolved", null), ("finished", "done") }, classes);
+    }
+
+    // #913 (the owner's B): a finished turn is Done, which waits and never alerts, on any client.
+    // The question before it still alerts.
+    [Fact]
+    public async Task A_finished_turn_goes_silent_while_a_question_does_not()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Postgres it is.", turns: 2));
+        await After(TimeSpan.FromSeconds(3));
+
+        var silent = Received()
+            .Select(r => (Kind(r.Notification), r.Notification.TryGetProperty("silent", out var s) && s.GetBoolean()))
+            .Where(r => r.Item1 != "resolved").Distinct().ToList();
+        Assert.Equal(new[] { ("question", false), ("finished", true) }, silent);
+    }
+
+    // #913 Q3: a finished push is always done, even for a session whose own class is needsYou at
+    // the time (here it stopped responding as its turn ended), so no client alerts it as finished.
+    [Fact]
+    public async Task A_finished_push_is_never_needs_you_even_when_its_session_is()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(1));
+        var stalled = S("s1", SessionStatus.Idle, response: "Postgres it is.", turns: 2) with
+        {
+            Attention = new Attention { Kind = AttentionKind.NotResponding, Since = T, LastEventAt = T },
+        };
+        Assert.Equal(NotificationClass.NeedsYou, AgentBridge.Host.Core.NotificationClasses.Of(stalled));
+        source.Upsert(stalled);
+        await After(TimeSpan.FromSeconds(3));
+
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal(("finished", "done"), (Kind(n), n.GetProperty("data").GetProperty("class").GetString()));
+    }
+
+    // #913: sign-in needed and sessions a crash took are needsYou; a planned reboot or restart of
+    // the host is no tier of #913's, so its notice carries none and clients keep today's rules.
+    [Theory]
+    [InlineData(RestoreCause.Crash, "needsYou")]
+    [InlineData(RestoreCause.Reboot, null)]
+    [InlineData(RestoreCause.Restart, null)]
+    public async Task What_a_crash_took_goes_as_needs_you_and_a_reboot_with_no_class(RestoreCause cause, string? expected)
+    {
+        Start();
+        Subscribe(Phone);
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = cause,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }],
+        });
+        await After(TimeSpan.Zero);
+
+        var data = Assert.Single(Received()).Notification.GetProperty("data");
+        Assert.Equal(expected, data.TryGetProperty("class", out var c) ? c.GetString() : null);
+    }
+
+    [Fact]
+    public async Task A_sign_in_notice_goes_as_needs_you()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with
+        {
+            Attention = new Attention { Kind = AttentionKind.SignInNeeded, Since = T, Agent = AgentKind.Copilot, Provider = "github" },
+        });
+        await After(TimeSpan.Zero);
+
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal(("signIn", "needsYou"), (Kind(n), n.GetProperty("data").GetProperty("class").GetString()));
     }
 
     [Fact]
@@ -467,6 +659,60 @@ public sealed class PushNotifierTests : IDisposable
 
         time.Advance(TimeSpan.FromMinutes(61));
         Assert.Equal(Timeout.InfiniteTimeSpan, await notifier.PumpAsync());
+    }
+
+    // #945: the relay came back a second before the hourly repeat was due, and the push it was
+    // waiting for was still in flight when that hour passed. Refused, it left nothing to wake
+    // the notifier, and an idle signed-out machine sent no more reminders.
+    [Fact]
+    public async Task A_sign_in_repeat_that_comes_due_while_a_push_in_flight_is_dropped_still_goes()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        await After(TimeSpan.FromMinutes(59) + TimeSpan.FromSeconds(59));
+        sender.Connected = true;
+        sender.Respond = _ =>
+        {
+            time.Advance(TimeSpan.FromSeconds(2));
+            return new PushResult(400, "bad request");
+        };
+
+        var wait = await notifier.PumpAsync();
+        Assert.Equal(0, SignInsSent());
+        Assert.InRange(wait, TimeSpan.FromMilliseconds(1), TimeSpan.FromSeconds(1));
+
+        sender.Respond = null;
+        await After(wait);
+        Assert.Equal(1, SignInsSent());
+    }
+
+    // ...and one that did reach the device counts the next hour from then (v1-sessions.md, Push signIn).
+    [Fact]
+    public async Task A_sign_in_push_delivered_after_its_repeat_came_due_counts_the_next_hour_from_its_delivery()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        await After(TimeSpan.FromMinutes(59) + TimeSpan.FromSeconds(59));
+        sender.Connected = true;
+        sender.Respond = _ =>
+        {
+            time.Advance(TimeSpan.FromSeconds(2));
+            return new PushResult(201, null);
+        };
+
+        await notifier.PumpAsync();
+        Assert.Equal(1, SignInsSent());
+        sender.Respond = null;
+        await After(TimeSpan.FromMinutes(59) + TimeSpan.FromSeconds(59));
+        Assert.Equal(1, SignInsSent());
+        await After(TimeSpan.FromSeconds(1));
+        Assert.Equal(2, SignInsSent());
     }
 
     // D (#800 P0): Daily's own session at 09:52:24 PT on 2026-11-05, captured read-only from its

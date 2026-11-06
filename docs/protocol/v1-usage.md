@@ -27,7 +27,7 @@ A machine is **online** while it is in the relay's presence list, as before. `he
 
 A client shows a machine as `3 sessions · 0.1.0 (dev)`, and an offline one as `offline`.
 It can learn this about a machine it is not viewing with a short channel: `hello`, then
-`usage.get` if offered, then close. The PWA does that once a minute for each other online
+`usage.get` if offered, then close. The PWA does that every five minutes for each other online
 machine while it is in front, and never more often.
 
 ## Capability

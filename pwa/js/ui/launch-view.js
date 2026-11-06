@@ -528,14 +528,14 @@ export class LaunchPanel {
       const remote = this.#resumable()?.remote;
       const selection = this.#selection;
       this.#signing = true;
-      this.els.launch.disabled = true;
+      this.#lock();
       try { launch.transfer.command = await target.transfers.sign(remote, launch.transfer.session); }
       catch (e) {
         this.#local({ text: `Not launched: couldn't sign the request for ${remote?.machineName ?? 'the other machine'}: ${sentence(e?.message ?? String(e))}`, tone: 'bad' });
         return;
       } finally {
         this.#signing = false;
-        this.els.launch.disabled = false;
+        this.#lock();
       }
       if (this.#selection !== selection) { return; }
     }
@@ -750,6 +750,13 @@ export class LaunchPanel {
     e.resend.hidden = entry?.state !== 'failed';
     e.resend.disabled = !!this.#target?.held;
     e.open.hidden = !(entry?.state === 'done' && entry.detail?.session);
-    e.launch.disabled = this.#pending(entry) || !!this.#target?.held;
+    this.#lock(entry);
+  }
+
+  // Not disabled when it can't be pressed: a disabled button loses focus, which fell to the top
+  // of the page while a launch went (#369). #press does nothing meanwhile.
+  #lock(entry = this.#target ? this.service.get(this.#target.hostId) : null) {
+    const off = this.#pending(entry) || this.#signing || !!this.#target?.held;
+    if (off) { this.els.launch.setAttribute('aria-disabled', 'true'); } else { this.els.launch.removeAttribute('aria-disabled'); }
   }
 }

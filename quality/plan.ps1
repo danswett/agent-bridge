@@ -35,8 +35,8 @@ param(
     # The ci.yml jobs the plan gates; each gets a true or false output.
     [Parameter(Mandatory)]
     [string[]] $Jobs,
-    # A ring-1 selection to report beside a ring-2 run, as what the pull request's own plan chose:
-    # when main fails, it says at once whether the PR would have run the failing job (§4.8).
+    # A ring-1 selection to report beside a ring-2 run, as what ring 1 would have chosen: when a
+    # whole-ring main run fails, it says at once whether ring 1 would have run the failing job (§4.8).
     [switch] $CompareRing1
 )
 
@@ -47,7 +47,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $tool = Join-Path $root 'tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll'
 if (-not (Test-Path $tool)) { throw "Build the selector first: dotnet build tools/AgentBridge.Quality -c Release" }
 if ($FastRing) {
-    if ($CompareRing1) { throw '-CompareRing1 is for main''s ring 2, not -FastRing.' }
+    if ($CompareRing1) { throw '-CompareRing1 is for a ring-2 run, not -FastRing.' }
     $Ring = 0
 }
 # The fast ring runs on Linux only. Otherwise no --platform: CI plans for every platform at once,

@@ -59,6 +59,9 @@ public static class ProtocolVectors
 
     static readonly MachineInfo Machine = new(MachineId, "DEV-VM1", "windows", "0.1.200", Dev: true, Sessions: 3, ReadOnly: "agent-ha-bridge is running for this user", Instance: "9a8b7c6d5e4f30211203f4e5d6c7b8a9");
 
+    static readonly RestoreSession RestoredMidTurn = new() { Id = SessionId, Agent = AgentKind.Copilot, Title = "Fix the login page", MidTurn = true };
+    static readonly RestoreSession RestoredAsking = new() { Id = "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d", Agent = AgentKind.Claude, QuestionLost = true };
+
     static readonly ToolCall Running = new() { Id = "call_7", Name = "powershell", Summary = "Run the protocol tests", Status = ToolStatus.Running, StartedAt = T1 };
     static readonly ToolCall Finished = new() { Id = "call_6", Name = "edit", Summary = "src/AgentBridge.Protocol/Sessions.cs", Status = ToolStatus.Done, StartedAt = T0, EndedAt = T0.AddSeconds(2) };
 
@@ -90,6 +93,9 @@ public static class ProtocolVectors
         Id = "req-41#3f9a", Kind = QuestionKind.Approval, Message = "Run `git push`?", AskedAt = T0,
         Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new("approve", "Approve once"), new("deny", "Deny")] }],
     };
+    // A Codex approval as a host lists it: its id is the hook marker's DecisionId and a digest
+    // of what is shown (#958; the host's MappingTests pin this one). Opaque to a client.
+    static readonly Question CodexApproval = Approval with { Id = "019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01#e2c96713aea78522", Message = "Allow **Bash**?\n\n```\ngit push\n```" };
     static readonly Question ManyTexts = new()
     {
         Id = "call_q3", Kind = QuestionKind.Form, Message = "Notes", AskedAt = T0,
@@ -204,6 +210,7 @@ public static class ProtocolVectors
             .Valid("form", Form)
             .Valid("plain", Plain)
             .Valid("approval", Approval)
+            .Valid("a-codex-approval", CodexApproval)
             .Valid("truncated", Plain with { Truncated = true, Fields = [] })
             .Valid("a-delegates-question-answered-at-the-machine", Plain with { AnswerAtMachine = true, Agent = "agent-1" })
             .Reads("an-unknown-kind-reads-as-a-form", """{"id":"q","kind":"wizard","message":"m","fields":[],"askedAt":"2026-10-28T04:22:43.182Z"}""")
@@ -268,6 +275,16 @@ public static class ProtocolVectors
         f.Record<DiscoveryChanged>(Host)
             .Valid("held", new DiscoveryChanged(Held))
             .Valid("released", new DiscoveryChanged());
+        // What a reboot or a crash took (#780; v1-sessions.md, What went).
+        f.Record<RestoreSession>(Host)
+            .Valid("mid-turn", RestoredMidTurn)
+            .Valid("a-question-lost", RestoredAsking);
+        f.Record<RestoreNotice>(Host)
+            .Valid("after-a-reboot", new RestoreNotice { At = T1, Cause = RestoreCause.Reboot, Since = T0, Why = RestoreWhy.Pending, Offered = [RestoredMidTurn, RestoredAsking] })
+            .Valid("still-judging-on-a-read-only-machine", new RestoreNotice { At = T1, Cause = RestoreCause.Crash, Waiting = 2, Why = RestoreWhy.ReadOnly, Offered = [RestoredAsking], OfferedMore = 3 });
+        f.Record<SessionRestored>(Host)
+            .Valid("after-a-crash", new SessionRestored { At = T1, Cause = RestoreCause.Crash })
+            .Valid("mid-turn-with-a-question-lost", new SessionRestored { At = T1, Cause = RestoreCause.Reboot, MidTurn = true, QuestionLost = true });
         f.Record<ListRequest>(Client)
             .Valid("first-page", new ListRequest())
             .Valid("next-page", new ListRequest("c2Vzc2lvbnM6Mg"));

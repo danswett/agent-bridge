@@ -1134,7 +1134,7 @@ export class SessionCard {
 
   // A phone's overflow menu: Pin, Details and End session (ui.md §6.2).
   #openMore() {
-    const end = this.#stop && !this.#stop.element.querySelector('.end-button')?.disabled ? this.#stop : null;
+    const end = this.#stop?.pressable ? this.#stop : null;
     this.#menu.show(this.els.header, [
       { label: this.#pinned ? 'Unpin' : 'Pin', run: () => this.onPin(this, !this.#pinned) },
       { label: 'Details', run: () => { this.setTab('details'); this.focusDetails(); } },

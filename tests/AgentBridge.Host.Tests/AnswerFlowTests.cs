@@ -218,6 +218,21 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
+    // Copilot on #837: a new CLI resumed the session after it asked. The host's view may still list the
+    // question, but keys typed for it would go to whatever the new CLI shows: refused as stale.
+    [Fact]
+    public async Task An_answer_to_a_question_asked_before_the_session_was_resumed_is_stale_and_types_nothing()
+    {
+        var ch = await OpenAsync();
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, second++));
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("stale", outcome);
+        Assert.Contains("resumed in a new Copilot CLI", reason);
+        Assert.Empty(injector.Plans);
+    }
+
     // #173: the session's own question is the one listed while a delegate's permission prompt
     // also waits, and the CLI may be showing that dialog: keys typed for the form could approve
     // it. The transcript is read just before typing, as the host's view may be a pass behind.

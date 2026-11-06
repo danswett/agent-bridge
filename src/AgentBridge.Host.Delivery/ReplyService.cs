@@ -136,6 +136,12 @@ public sealed class ReplyService : ISessionReplier
 
     string CopilotTranscript(string sessionId) => Path.Combine(options.CopilotHome, "session-state", sessionId, "events.jsonl");
 
+    // Why a session this host started (a launch, a resume, a restore) is not to be typed into yet:
+    // its window has not been seen ready, and may still show a startup question (folder trust)
+    // that Enter would answer. The resume's transcript already exists, so the no-transcript-yet
+    // check below never catches it. Set once the launcher exists (LaunchService.HeldForReply).
+    public Func<string, string?>? LaunchHeld { get; set; }
+
     void OnSessionChanged(object? sender, SessionChange change)
     {
         if (change.Kind == SessionChangeKind.Removed)
@@ -231,6 +237,7 @@ public sealed class ReplyService : ISessionReplier
             try
             {
                 if (session.Question is { } asking) { return Asking(asking); }
+                if (LaunchHeld?.Invoke(session.Id) is { } held) { return Refused(held); }
                 if (refs.Count > 0)
                 {
                     (claim, var problem) = attachments!.Claim(peer, refs);
@@ -322,6 +329,8 @@ public sealed class ReplyService : ISessionReplier
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
             if (now.Question is { } asking) { return Done(Asking(asking)); }
+            // Again once its turn has come: a launch of it may have begun meanwhile.
+            if (LaunchHeld?.Invoke(session.Id) is { } held) { return Done(Refused(held)); }
             working = now.Status == SessionStatus.Working;
             // The transcript, read now, may be ahead of the session source: a question asked a
             // moment ago is there first, and a subagent's is only there. One that cannot be
@@ -338,6 +347,10 @@ public sealed class ReplyService : ISessionReplier
                 return Done(Refused("Copilot has not started this session's transcript yet (it does with the first prompt), so the host cannot tell whether it is still asking whether to trust its folder, which a reply would answer; send the first prompt at the machine, or launch with a prompt"));
             }
             if (!before.Readable) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
+            if (before.Resumed)
+            {
+                return Done(Refused("the session was resumed in a new Copilot while a question or approval was open, and its window may still show it, where a reply would answer it; answer or dismiss it at the machine (or type there), then reply"));
+            }
             if (before.Asking) { return Done(Asking()); }
             from = before.ScannedTo;
             // Typed only into Copilot's input box, empty and outside shell mode, as the screen
@@ -460,6 +473,8 @@ public sealed class ReplyService : ISessionReplier
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
             if (now.Question is { } asking) { return Done(Asking(asking)); }
+            // Again once its turn has come: a launch of it may have begun meanwhile.
+            if (LaunchHeld?.Invoke(session.Id) is { } held) { return Done(Refused(held)); }
             working = now.Status == SessionStatus.Working;
             ConsoleScreen screen;
             try { screen = await injector.ReadScreenAsync(pid); }

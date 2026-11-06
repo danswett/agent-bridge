@@ -220,7 +220,7 @@ public sealed class FleetTests : IAsyncLifetime
 
         ui.Post(() => q.Choose(q.Fields[0].Options.Single(o => o.Value == "sqlite")));
 
-        await Wait.UntilAsync(() => q.StatusText == "Delivered. The session has your answer.", "delivered");
+        await Wait.UntilAsync(() => q.StatusText == "You answered · \u2068sqlite\u2069", "delivered");
         Assert.Equal("there", Assert.Single(remoteHost.Sent(Ops.SessionAnswer)).GetProperty("id").GetString());
         Assert.Empty(localHost.Sent(Ops.SessionAnswer));
     }
@@ -437,7 +437,7 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Contains(main.Ended, e => e.Title == "A session");
 
         ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
-        await Wait.UntilAsync(() => question.StatusText == "Delivered. The session has your answer.", "delivered");
+        await Wait.UntilAsync(() => question.StatusText == "You answered · \u2068sqlite\u2069", "delivered");
         Assert.Single(remoteHost.Sent(Ops.SessionAnswer));
     }
 

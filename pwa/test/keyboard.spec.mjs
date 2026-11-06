@@ -6,6 +6,7 @@ import { row, view } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CLAUDE = '6f1c2b7e-claude-example';
+const DELEGATING = 'demo-delegates';
 
 async function openDemo(page, query = '') {
   await page.addInitScript(() => {
@@ -222,7 +223,7 @@ test.describe('on a desktop', () => {
     await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.answerLog.map((a) => a.fields))).toEqual([{ mode: 'fast', notes: 'by keyboard' }]);
   });
 
-  test('a reply is typed and sent with Tab and Space, and End session is pressed twice with Space', async ({ page }) => {
+  test('a reply is typed and sent with Tab and Space, and End session is pressed twice with Space, focus staying on each while it goes', async ({ page }) => {
     await openDemo(page);
     await tabTo(page, row(page, CLAUDE).locator('.row-main'));
     await page.keyboard.press('Enter');
@@ -230,22 +231,64 @@ test.describe('on a desktop', () => {
     await expect(v).toBeVisible();
     await tabTo(page, v.getByRole('textbox', { name: 'Reply' }));
     await page.keyboard.type('Ship it.');
-    await tabTo(page, v.getByRole('button', { name: 'Send' }));
+    const send = v.getByRole('button', { name: 'Send' });
+    await tabTo(page, send);
+    // Held, so the reply stays on its way while focus is looked at (#369).
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
     await page.keyboard.press('Space');
-    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.replyLog.map((r) => r.text))).toEqual(['Ship it.']);
+    await expect(v.locator('form.reply')).toHaveAttribute('data-reply', 'sending');
+    await expect(send).toBeFocused();
+    await expect(send).toHaveAttribute('aria-disabled', 'true');
+    // Pressed again while it goes: nothing more is sent.
+    await page.keyboard.press('Space');
+    await page.keyboard.press('Enter');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+    await expect(v.locator('form.reply')).not.toHaveAttribute('data-reply', 'sending');
+    // Its outcome keeps the words (this agent takes no replies yet), and focus where it was.
+    await expect(send).toBeFocused();
+    expect(await page.evaluate(() => window.agentBridgeDemo.host.replyLog.map((r) => r.text))).toEqual(['Ship it.']);
     // A working session ends on a second press.
     const end = v.locator('.end-session').getByRole('button', { name: /^End session/ });
     await tabTo(page, end);
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
     await page.keyboard.press('Space');
+    await expect(v.locator('.end-session')).toHaveAttribute('data-stop', 'sending');
+    await expect(end).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
     await expect(v.locator('.end-session')).toHaveAttribute('data-stop', 'confirm');
-    // The press disabled it while it went, which took its focus (#369): Tab finds it again.
-    await tabTo(page, end);
+    // Focus stayed on it while the first press went, so the second press is the next key.
+    await expect(end).toBeFocused();
+    const ids = await page.locator('#list-pane .session[data-id]').evaluateAll((rows) => rows.map((r) => r.dataset.id));
+    const at = ids.indexOf(CLAUDE);
+    expect(at, 'a row comes after the one ended').toBeLessThan(ids.length - 1);
     await page.keyboard.press('Space');
     await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.stopLog.length)).toBe(2);
     await expect(row(page, CLAUDE)).toHaveCount(0);
+    // The ended session's view went with it, and its focus to the row that took its place, never
+    // the page (§9.1 A4): the next Tab goes on from there, not from the top.
+    const next = row(page, ids[at + 1]).locator('.row-main');
+    await expect(next).toBeFocused();
+    expect((await focused(page)).shown, 'focus shown on the row').toBe(true);
   });
 
-  test('Launch is reached on the rail and opened with Enter, and a session starts with Tab, typing and Enter', async ({ page, browserName }) => {
+  test('a row with focus whose session ends gives it to the row before when it was last, and to the Sessions heading when none are left', async ({ page }) => {
+    await openDemo(page);
+    const ids = await page.locator('#list-pane .session[data-id]').evaluateAll((rows) => rows.map((r) => r.dataset.id));
+    expect(ids.length).toBeGreaterThan(1);
+    const remove = (id) => page.evaluate((id) => window.agentBridgeDemo.host.remove(id), id);
+    const last = ids.at(-1);
+    await tabTo(page, row(page, last).locator('.row-main'));
+    await remove(last);
+    await expect(row(page, last)).toHaveCount(0);
+    await expect(row(page, ids.at(-2)).locator('.row-main')).toBeFocused();
+    for (const id of ids.slice(0, -2)) { await remove(id); }
+    await expect(row(page, ids.at(-2)).locator('.row-main')).toBeFocused();
+    await remove(ids.at(-2));
+    await expect(page.locator('#list-pane .session[data-id]')).toHaveCount(0);
+    await expect(page.locator('#sessions-h')).toBeFocused();
+  });
+
+  test('Launch is reached on the rail and opened with Enter, and a session starts with Tab, typing and Enter, focus staying on Launch while it goes', async ({ page, browserName }) => {
     await openDemo(page);
     await reachLink(page, browserName, page.locator('#nav [data-nav="launch"]'));
     await page.keyboard.press('Enter');
@@ -253,8 +296,17 @@ test.describe('on a desktop', () => {
     await expect(panel).toBeVisible();
     await tabTo(page, panel.locator('[name="prompt"]'));
     await page.keyboard.type('Add pagination.');
-    await tabTo(page, panel.getByRole('button', { name: 'Launch' }));
+    const launch = panel.getByRole('button', { name: 'Launch' });
+    await tabTo(page, launch);
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
     await page.keyboard.press('Enter');
+    await expect(panel.locator('.launch-status')).toHaveText(/^Starting/);
+    await expect(launch).toBeFocused();
+    await expect(launch).toHaveAttribute('aria-disabled', 'true');
+    // Pressed again while it goes: nothing more is sent.
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Space');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
     await expect(panel.locator('.launch-status')).toHaveText('Session started in a new worktree.');
     expect((await page.evaluate(() => window.agentBridgeDemo.host.launchLog)).map((l) => l.prompt)).toEqual(['Add pagination.']);
   });
@@ -263,7 +315,7 @@ test.describe('on a desktop', () => {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
-  test('a session opens from its row with Enter, Shift+Tab reaches Back, and Space returns to the list with focus on the row', async ({ page }) => {
+  test('a session opens from its row with Enter, Shift+Tab reaches Back, and Space returns to the list with focus on the row, as Escape does', async ({ page }) => {
     await openDemo(page);
     const open = row(page, CLAUDE).locator('.row-main');
     await tabTo(page, open);
@@ -274,6 +326,116 @@ test.describe('on a phone', () => {
     await expect(v.locator('.session-title')).toBeFocused();
     await tabTo(page, v.getByRole('button', { name: 'Sessions' }), { key: 'Shift+Tab', max: 3 });
     await page.keyboard.press('Space');
+    await expect(v).toBeHidden();
+    await expect(open).toBeFocused();
+    // Escape is Back too (ui.md §5.3, §9.1 A5), and it pops the session's entry as Back does,
+    // back to the list's own.
+    const listed = await page.evaluate(() => location.hash);
+    await page.keyboard.press('Enter');
+    await expect(v.locator('.session-title')).toBeFocused();
+    const entries = await page.evaluate(() => history.length);
+    await page.keyboard.press('Escape');
+    await expect(v).toBeHidden();
+    await expect(open).toBeFocused();
+    await expect.poll(() => page.evaluate(() => location.hash)).toBe(listed);
+    expect(await page.evaluate(() => history.length)).toBe(entries);
+    // On the list, with nothing pushed, Escape goes nowhere.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    await expect(page.locator('#list-pane')).toBeInViewport();
+    await expect(open).toBeFocused();
+  });
+
+  // A session pushed over the list from its row, by the keyboard: its view, and the row's control.
+  async function pushed(page, query = '', id = CLAUDE) {
+    await openDemo(page, query);
+    const open = row(page, id).locator('.row-main');
+    await tabTo(page, open);
+    await page.keyboard.press('Enter');
+    const v = view(page, id);
+    await expect(v.locator('.session-title')).toBeFocused();
+    return { v, open };
+  }
+
+  // Still pushed after a moment: a pop on its way has had time to land (the browser's back is a task away).
+  async function stillPushed(page, v) {
+    await page.waitForTimeout(250);
+    await expect(v).toBeInViewport();
+    expect(await page.evaluate(() => history.state?.overList ?? false)).toBe(true);
+  }
+
+  test('Escape closes the overflow menu first, leaving the session pushed, and the next Escape returns to the list', async ({ page }) => {
+    const { v, open } = await pushed(page);
+    const more = v.getByRole('button', { name: 'More' });
+    await tabTo(page, more, { max: 6 });
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('menu')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await stillPushed(page, v);
+    await expect(more).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(v).toBeHidden();
+    await expect(open).toBeFocused();
+  });
+
+  test('Escape in the reply box is the box\'s, and in search, which a pushed session goes back to the list for, it closes search and goes no further', async ({ page }) => {
+    const { v, open } = await pushed(page);
+    const list = await page.evaluate(() => history.length);
+    // The reply box keeps its words and its focus.
+    const reply = v.getByRole('textbox', { name: 'Reply' });
+    await tabTo(page, reply);
+    await page.keyboard.type('half a thought');
+    await page.keyboard.press('Escape');
+    await stillPushed(page, v);
+    await expect(reply).toBeFocused();
+    await expect(reply).toHaveValue('half a thought');
+    // Out of the box, Escape is Back.
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Escape');
+    await expect(v).toBeHidden();
+    await expect(open).toBeFocused();
+    // Search lives on the list: Ctrl+K from a pushed session goes back there first, and Escape in
+    // search closes it, with the list still shown and its entry still the one beneath.
+    await page.keyboard.press('Enter');
+    await expect(v.locator('.session-title')).toBeFocused();
+    await page.keyboard.press('Control+K');
+    const search = page.getByRole('searchbox', { name: 'Search sessions' });
+    await expect(search).toBeFocused();
+    await expect(v).toBeHidden();
+    await page.keyboard.type('claude');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('body')).not.toHaveClass(/\bsearching\b/);
+    await page.waitForTimeout(250);
+    await expect(page.locator('#list-pane')).toBeInViewport();
+    expect(await page.evaluate(() => [history.length, history.state?.overList ?? false])).toEqual([list, false]);
+  });
+
+  test('an Escape that ends a composition leaves the session pushed, and the next returns to the list', async ({ page }) => {
+    const { v, open } = await pushed(page);
+    // As an input method sends it: the key that cancels what is being composed.
+    await page.evaluate(() => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true, cancelable: true })));
+    await stillPushed(page, v);
+    await expect(v.locator('.session-title')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(v).toBeHidden();
+    await expect(open).toBeFocused();
+  });
+
+  test('Escape from a delegate goes back to its session with focus on its row, then to the list with focus on the session\'s', async ({ page }) => {
+    const { v, open } = await pushed(page, '&delegates=1', DELEGATING);
+    await v.getByRole('tab', { name: 'Delegates' }).click();
+    const summary = v.locator('.delegates .delegate[data-id="demo-agent-suite"] .delegate-summary');
+    await summary.click();
+    const pane = v.locator('.delegate-pane');
+    await expect(pane.locator('.delegate-title')).toHaveText('Run full test suite');
+    await expect.poll(() => page.evaluate(() => history.state?.delegate ?? null)).toBe('demo-agent-suite');
+    await page.keyboard.press('Escape');
+    await expect(pane).toHaveCount(0);
+    await expect(summary).toBeFocused();
+    await expect.poll(() => page.evaluate(() => history.state?.delegate ?? null)).toBeNull();
+    await stillPushed(page, v);
+    await page.keyboard.press('Escape');
     await expect(v).toBeHidden();
     await expect(open).toBeFocused();
   });
