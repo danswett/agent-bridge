@@ -133,12 +133,15 @@ public static class ReceiptWords
         return null;
     }
 
-    // ui.md §6.5: the first line, runs of white space as one space, cut at the last word break
+    // ui.md §6.5: the first line, runs of spaces and tabs as one space, cut at the last word break
     // within 40 characters (or at 40, with no break after the 20th), and "…" when there is more.
+    // Only spaces, tabs and line breaks: any other blank-looking character (U+00A0 and the like)
+    // is left for Reveal to escape. Normalised as white space, "yes\u00A0no" read "yes no" and a
+    // leading one vanished (#625, Copilot 4487937096).
     static string? FirstLine(string text)
     {
-        var lines = text.Trim().Split(["\r\n", "\r", "\n", "\u0085", "\u2028", "\u2029"], StringSplitOptions.None);
-        var first = string.Join(' ', lines[0].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var lines = text.Trim(Blank).Split(["\r\n", "\r", "\n", "\u0085", "\u2028", "\u2029"], StringSplitOptions.None);
+        var first = string.Join(' ', lines[0].Split(Spaces, StringSplitOptions.RemoveEmptyEntries));
         if (first.Length == 0) { return null; }
         var chars = first.EnumerateRunes().ToList();
         var cut = chars.Count > ValueMax;
@@ -150,6 +153,9 @@ public static class ReceiptWords
         }
         return HiddenText.Reveal(cut || lines.Length > 1 ? $"{shown}…" : shown);
     }
+
+    static readonly char[] Spaces = [' ', '\t'];
+    static readonly char[] Blank = [' ', '\t', '\r', '\n', '\u0085', '\u2028', '\u2029'];
 
     // Drawn in a direction of its own (ui.md §6.5): an answer in Hebrew or Arabic can't carry the
     // words or the "·" around it into its own direction. The isolates are layout only: nothing
@@ -186,6 +192,10 @@ public sealed class Receipt : IDisposable
         public bool PendingUrgent;
         public TimeSpan SaidAt = TimeSpan.MinValue;
         public ITimer? SayTimer;
+        // Which SayTimer a posted Flush came from: disposing a timer doesn't take back a Flush it
+        // already posted, which then said the next announcement inside the same second (#625,
+        // Copilot 4487937120). Moved on by every flush and every timer set.
+        public int SayGeneration;
         public readonly List<Receipt> Voices = [];
         // Last seen still on its way: its quiet window and stalls are still being timed.
         public bool InFlight;
@@ -390,7 +400,11 @@ public sealed class Receipt : IDisposable
         if (h.Pending is null) { return; }
         var wait = h.SaidAt == TimeSpan.MinValue ? TimeSpan.Zero : h.SaidAt + ReceiptTiming.AnnounceGap - Now();
         if (wait <= TimeSpan.Zero) { Flush(h); }
-        else { h.SayTimer ??= time.CreateTimer(_ => ui.Post(() => Flush(h)), null, wait, Timeout.InfiniteTimeSpan); }
+        else if (h.SayTimer is null)
+        {
+            var mine = ++h.SayGeneration;
+            h.SayTimer = time.CreateTimer(_ => ui.Post(() => { if (h.SayGeneration == mine) { Flush(h); } }), null, wait, Timeout.InfiniteTimeSpan);
+        }
     }
 
     // The request's timer, not this receipt's: said by whichever receipt shows the request then.
@@ -398,6 +412,7 @@ public sealed class Receipt : IDisposable
     {
         h.SayTimer?.Dispose();
         h.SayTimer = null;
+        h.SayGeneration++;
         if (h.Pending is not { } text) { return; }
         h.Pending = null;
         h.Said.Add(text);

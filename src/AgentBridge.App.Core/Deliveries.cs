@@ -301,7 +301,7 @@ public sealed class Deliveries
     void Update(string key, Func<Delivery, Delivery> change)
     {
         Delivery next;
-        bool done;
+        bool done, failed;
         lock (gate)
         {
             if (!entries.TryGetValue(key, out var e)) { return; }
@@ -310,10 +310,14 @@ public sealed class Deliveries
             if (ReferenceEquals(next, e)) { return; }
             entries[key] = next;
             done = next.State == DeliveryState.Done && e.State != DeliveryState.Done;
+            failed = next.State == DeliveryState.Failed && e.State != DeliveryState.Failed;
         }
         // Shown first: the log line is a diagnostic, and nothing it does may hold up the page.
         Publish(next);
         if (done) { Finished(next); }
+        // A failure is logged too, or one never sent again left no line at all (#625, Copilot
+        // 4487937060). Its marks stay: Send again is the same request, timed from the same tap.
+        else if (failed) { Finished(next, keep: true); }
     }
 
     static string? KindOf(string op) => op == Ops.SessionReply ? "reply" : op == Ops.SessionAnswer ? "answer" : null;
@@ -390,14 +394,19 @@ public sealed class Deliveries
     // An answer's or a reply's outcome: its marks and the host's timings (the result's, ms since the
     // host received it), as one line in the app's log, named by the request's first 8 hex digits
     // as the host's own log names it.
-    void Finished(Delivery done)
+    void Finished(Delivery done, bool keep = false)
     {
-        Marks? run;
+        Marks run;
+        List<(string What, long Ms)> marked;
         lock (gate)
         {
-            if (!marks.Remove(done.Request, out run)) { return; }
+            if (!marks.TryGetValue(done.Request, out var found)) { return; }
+            if (!keep) { marks.Remove(done.Request); }
+            run = found;
+            // A copy: a resend adds to the same list.
+            marked = [.. run.At];
         }
-        var at = run.At.Select(m => $"{m.What} {m.Ms} ms").Append($"result {(long)time.GetElapsedTime(run.Start).TotalMilliseconds} ms");
+        var at = marked.Select(m => $"{m.What} {m.Ms} ms").Append($"result {(long)time.GetElapsedTime(run.Start).TotalMilliseconds} ms");
         var outcome = done.Outcome is { } o && LoggedOutcomes.Contains(o) ? o : "other";
         var line = $"{run.Kind} {done.Request[..Math.Min(8, done.Request.Length)]} {outcome}: {string.Join(", ", at)}";
         if (done.Result.ValueKind == JsonValueKind.Object && done.Result.TryGetProperty("timings", out var timings) && timings.ValueKind == JsonValueKind.Object)

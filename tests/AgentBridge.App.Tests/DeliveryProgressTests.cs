@@ -75,6 +75,25 @@ public sealed class DeliveryProgressTests : IAsyncLifetime
         Assert.Matches(new Regex($@"^answer {entry.Request[..8]} delivered: sent \d+ ms, received \d+ ms, typed \d+ ms, result \d+ ms; host: typed 40 ms, confirmed 90 ms$"), Logged(entry.Request)!);
     }
 
+    // #625, Copilot 4487937060: only an outcome wrote the line, so a failure never sent again left none.
+    [Fact]
+    public async Task A_reply_that_fails_logs_its_timings_as_other_and_sent_again_logs_them_once_more_from_the_same_tap()
+    {
+        await StartAsync(progress: false);
+        var calls = 0;
+        host.On(Ops.SessionReply, _ => ++calls == 1 ? throw new InvalidOperationException("the host failed") : new ReplyResult(AnswerOutcome.Delivered));
+
+        var entry = deliveries.Submit("reply|s1", Ops.SessionReply, r => new ReplyRequest { Id = "s1", Request = r, Text = "carry on" }, _ => false, replayAfterRestart: false);
+        string[] Lines() { lock (log) { return [.. log.Where(l => l.StartsWith($"reply {entry.Request[..8]} ", StringComparison.Ordinal))]; } }
+        await Wait.UntilAsync(() => deliveries.Get(entry.Key)!.State == DeliveryState.Failed, "the failure");
+        await Wait.UntilAsync(() => Lines().Length == 1, "the failure's timing line");
+        Assert.Matches(new Regex($@"^reply {entry.Request[..8]} other: sent \d+ ms, result \d+ ms$"), Lines()[0]);
+
+        deliveries.Resend(entry.Key, Ops.SessionReply, r => new ReplyRequest { Id = "s1", Request = r, Text = "carry on" });
+        await Wait.UntilAsync(() => Lines().Length == 2, "the resend's timing line");
+        Assert.Matches(new Regex($@"^reply {entry.Request[..8]} delivered: sent \d+ ms, sent 2 \d+ ms, result \d+ ms$"), Lines()[1]);
+    }
+
     [Fact]
     public async Task A_reply_typed_into_a_working_session_is_Up_next_and_a_stage_behind_it_changes_nothing_not_even_its_timing_marks()
     {

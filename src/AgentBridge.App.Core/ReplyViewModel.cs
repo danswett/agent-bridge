@@ -381,6 +381,13 @@ public sealed class ReplyViewModel : Observable
     {
         if (!ShowResend || deliveries.Get(Key) is not { State: DeliveryState.Failed, Payload: List<ReplyAttachment> files } || sent is null) { return; }
         var sentText = sent.Value.Text;
+        // The line's room again, as Send kept it: typing after the failure let it go, and the check
+        // of a resend that delivers showed with the line collapsing under it (#625, Copilot 4487937147).
+        if (!keepRoom)
+        {
+            keepRoom = true;
+            Raise(nameof(ShowStatus));
+        }
         deliveries.Resend(Key, Ops.SessionReply, r => Request(r, sentText, files), (call, progress) => UploadAsync(call, files, progress));
     }
 

@@ -285,6 +285,43 @@ public sealed class ReceiptTests
         Assert.Equal(["Answer sent", "Answer delivered"], said);
     }
 
+    // #625, Copilot 4487937120: a Flush posted by a timer since disposed said the next announcement
+    // inside the same second.
+    [Fact]
+    public void An_announcement_timers_flush_posted_before_a_newer_one_was_set_says_nothing_and_the_newer_waits_its_second()
+    {
+        var ui = new HeldDispatcher();
+        var heard = new List<string>();
+        using var r = new Receipt(clock, ui, (e, stalled) => QuestionViewModel.Describe(e, "ULTRA", stalled), _ => { }, (s, _) => heard.Add(s));
+        Show(r, e => e with { Stage = DeliveryProgress.Received });
+        Tick(400);
+        Assert.Single(heard);
+        Tick(500);
+        // Passed to the agent within the second: its timer is set for the second's end.
+        Show(r, e => e with { Stage = DeliveryProgress.Typed });
+        ui.Holding = true;
+        Tick(500);
+        var late = ui.Take();
+        Assert.Single(late);
+        // A refresh at the second's end says it, and the outcome after it waits a second of its own.
+        Show(r);
+        Assert.Equal(2, heard.Count);
+        Show(r, e => e with { State = DeliveryState.Done, Outcome = "delivered" });
+
+        foreach (var flush in late) { flush(); }
+        Assert.Equal(2, heard.Count);
+        Tick(1000);
+        Assert.Equal(3, heard.Count);
+    }
+
+    sealed class HeldDispatcher : IUiDispatcher
+    {
+        readonly List<Action> held = [];
+        public bool Holding;
+        public void Post(Action action) { if (Holding) { held.Add(action); } else { action(); } }
+        public List<Action> Take() { Holding = false; List<Action> taken = [.. held]; held.Clear(); return taken; }
+    }
+
     [Fact]
     public void A_reply_box_moved_on_to_the_next_reply_never_says_the_last_ones_outcome_on_its_line()
     {
@@ -351,6 +388,17 @@ public sealed class ReceiptTests
 
         Assert.Equal("You answered · \u2068PostgreSQL (Recommended)\u2069", line.Whole);
         Assert.Equal("Answer delivered. You answered PostgreSQL (Recommended)", line.Speech);
+    }
+
+    // #625, Copilot 4487937096: normalised as white space, U+00A0 read as a space, and a leading one vanished.
+    [Fact]
+    public void A_free_text_answers_blank_looking_characters_are_escaped_and_only_spaces_and_tabs_run_together()
+    {
+        var text = Make.Choice() with { Fields = [] };
+        string? Value(string answer) => ReceiptWords.AnsweredValue(text, new AnswerRequest { Id = "s1", Question = "q1", Request = "r", Text = answer });
+        Assert.Equal("yes\\u00A0no", Value("yes\u00A0no"));
+        Assert.Equal("\\u00A0yes", Value("\u00A0yes"));
+        Assert.Equal("yes no", Value(" yes \t  no\t"));
     }
 
     [Fact]

@@ -443,6 +443,25 @@ public sealed class CardTests : IAsyncLifetime
         r.Detach();
     }
 
+    // #625, Copilot 4487937147: typing after a failure let the line's room go, and Send again never kept it.
+    [Fact]
+    public async Task A_reply_sent_again_after_typing_keeps_the_lines_room_through_its_check()
+    {
+        var calls = 0;
+        host.On(Ops.SessionReply, _ => ++calls == 1 ? throw new InvalidOperationException("the host failed") : new ReplyResult(AnswerOutcome.Delivered));
+        var r = new ReplyViewModel(Make.Session(), attach: false, deliveries, connection, machineName: "Test PC");
+
+        r.Text = "carry on";
+        r.Send();
+        await Wait.UntilAsync(() => r.ShowResend, "Send again");
+        r.Text = "carry on, and the docs";
+        r.Resend();
+
+        await Wait.UntilAsync(() => r.SendCheck, "Send's check");
+        Assert.Equal(("", true), (r.StatusText, r.ShowStatus));
+        r.Detach();
+    }
+
     [Fact]
     public async Task A_reply_that_is_not_delivered_returns_Send_to_rest_at_once_with_no_check_and_says_why_on_the_line()
     {
