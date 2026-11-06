@@ -31,13 +31,14 @@ import { renderMarkdown } from '../markdown.js';
 import { ATTENTION_RULES, rowAt, sessionStatus, silentSince, statusLabel } from '../status.js';
 import { clockTime } from '../auth-state.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
+import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, receiptLive } from './receipt.js';
 import { answerability } from '../answers.js';
 import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
 import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.js';
-import { backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
+import { aloud, backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
@@ -372,6 +373,11 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
 }
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// An answer whose panel stays once its question has gone (SessionCard #leave): one on its way, and
+// any outcome §6.5 draws on the panel. Busy and refused, which would offer its options again for a
+// question that has gone, resolve to the card's receipt at once.
+const leaves = (entry) => entry.state === 'sending' || entry.state === 'waiting' || entry.state === 'failed'
+  || (entry.state === 'done' && entry.outcome !== 'busy' && entry.outcome !== 'refused');
 
 // Why nothing can be given for a session now, for under its controls, or null (#269): its
 // machine is offline, reconnecting, back and its whole list not yet in, or no longer offering
@@ -393,6 +399,8 @@ export class SessionCard {
   #history = { loaded: false, loading: false };
   #panel = null;
   #receipt = null;
+  // The panel of a question its host took away while its answer was still on its way (#leave).
+  #leaving = null;
   #orphan = null;
   #reply = null;
   // The host the reply box is for, and what it held when it last went away (the machine
@@ -408,6 +416,8 @@ export class SessionCard {
   // the words that said so when last drawn, which move on with the clock.
   #stale = null;
   #shownStale = null;
+  // The row's name but for its age, as #nameRow puts it together: { drawn, unsaid }.
+  #rowName = { drawn: [], unsaid: [] };
   // The question last drawn (undefined before the first drawing), and whether a finger or a
   // mouse button is on the conversation: what decides a scroll to a question that arrives.
   #asked = undefined;
@@ -481,10 +491,12 @@ export class SessionCard {
     e.rowLine1 = h('span', { class: 'row-line1' }, e.rowTitle);
     e.rowFacts = h('span', { class: 'row-facts' });
     e.rowAge = h('time', { class: 'row-age' });
-    // The row reads as its glyph's name: "title, status, machine" (ui.md §9).
-    e.open = h('button', { type: 'button', class: 'row-main', id: this.ids.row, 'aria-labelledby': this.ids.glyph, onclick: () => this.onSelect(this) },
-      h('span', { class: 'row-glyph' }, e.rowGlyph),
-      h('span', { class: 'row-text' }, e.rowLine1, e.rowFacts),
+    // Named by #nameRow (ui.md §9.1 A1). The spaces between its lines draw nothing in the grid,
+    // but without them the title, the facts and the age read as run-together words
+    // ("…AppWaiting on you"), which no name can contain (axe label-content-name-mismatch, #365).
+    e.open = h('button', { type: 'button', class: 'row-main', id: this.ids.row, onclick: () => this.onSelect(this) },
+      h('span', { class: 'row-glyph' }, e.rowGlyph), ' ',
+      h('span', { class: 'row-text' }, e.rowLine1, ' ', e.rowFacts), ' ',
       e.rowAge);
     this.element = h('div', { class: 'session' }, e.open);
   }
@@ -670,14 +682,31 @@ export class SessionCard {
     // The row.
     e.rowTitle.textContent = title;
     setGlyph(e.rowGlyph, words.glyph, { size: 16, driven: words.driven, label: statusLabel(words, { title: s.title, machine: this.machineName }) });
+    // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words; not over
+    // rules 10-12 (#800), which say what is wrong. The glyph keeps the driven badge either way.
+    const drivenDrawn = words.driven && !ATTENTION_RULES.has(words.rule);
     if (this.#changed('row', [words.text, words.tone, words.driven, words.rule, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
-      // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words; not over
-      // rules 10-12 (#800), which say what is wrong. The glyph keeps the driven badge either way.
-      const status = words.driven && !ATTENTION_RULES.has(words.rule)
+      const status = drivenDrawn
         ? h('span', { class: 'row-status driver', dataset: { tone: 'agent' }, title: s.driverPrincipal ?? null }, 'Driven by an agent')
         : h('span', { class: 'row-status', dataset: { tone: words.tone } }, words.facts[0]);
       setFacts(e.rowFacts, [status, this.labelled && this.machineName ? h('span', { class: 'machine-label' }, this.machineName) : whereView()]);
     }
+    // The row's name (ui.md §9.1 A1, #365) starts with the words it draws, in the order drawn:
+    // its title, its second line's facts, then its age (#nameRow). What else §9.2's name holds
+    // follows, so nothing it said before goes unsaid: the status's later facts, or all of it
+    // under "Driven by an agent", the driver under a rule 10-12 status drawn in its place, and
+    // its machine while the row doesn't show it. Both halves key off drivenDrawn, as the row
+    // does, or a driven row needing sign-in reads "Driven by an agent" over "Needs sign-in".
+    // A status fact can carry a delegate's name, read without its commas there, as in the
+    // glyph's name (§9.2).
+    this.#rowName = {
+      drawn: [title, drivenDrawn ? 'Driven by an agent' : aloud(words.facts[0]), this.labelled && this.machineName ? this.machineName : where],
+      unsaid: [
+        drivenDrawn ? words.spoken : words.facts.slice(1).map(aloud).join(' \u00b7 '),
+        words.driven && !drivenDrawn ? 'driven by an agent' : null,
+        this.labelled ? null : this.machineName,
+      ],
+    };
 
     // The header: one meta line, glyph · status · machine · repository.
     e.titleText.textContent = title;
@@ -957,7 +986,6 @@ export class SessionCard {
     if (unread && !e.unread) {
       e.unread = h('span', { class: 'unread-dot' }, h('span', { class: 'sr-only', id: this.ids.unread }, 'New activity'));
       e.rowLine1.append(e.unread);
-      e.open.setAttribute('aria-labelledby', `${this.ids.glyph} ${this.ids.unread}`);
       this.element.classList.add('unread');
       // Activity dot (ui.md §5.3): fades in, and later out; it never pulses or repeats.
       enter(e.unread, 'activityDot');
@@ -965,9 +993,16 @@ export class SessionCard {
       leave(e.unread, 'activityDot');
       e.unread.remove();
       e.unread = null;
-      e.open.setAttribute('aria-labelledby', this.ids.glyph);
     }
     this.element.classList.toggle('unread', unread);
+    this.#nameRow();
+  }
+
+  // The row's name with its age, or "New activity" where the dot is drawn in the age's place.
+  #nameRow() {
+    const e = this.els;
+    const { drawn, unsaid } = this.#rowName;
+    e.open.setAttribute('aria-label', [...drawn, e.unread ? 'New activity' : e.rowAge.textContent, ...unsaid].filter(Boolean).join(', '));
   }
 
   setPinned(pinned) {
@@ -1116,6 +1151,7 @@ export class SessionCard {
     this.#stop?.destroy();
     this.#stop = null;
     this.#menu.close(false);
+    this.#dropLeaving();
     this.#dropReceipt();
     this.delegates.dispose();
     this.detail.dispose();
@@ -1184,8 +1220,15 @@ export class SessionCard {
     if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held])) { return; }
     // Drawn by the app, not by the person typing in it: whatever this moves counts.
     this.#moves?.notOwn();
+    // A new question while the last one's answer is still on its way: that answer goes on as a receipt.
+    if (q && this.#leaving) {
+      const { panel } = this.#leaving;
+      this.#dropLeaving();
+      this.#watchReceipt(panel.answering, panel.q);
+    }
     const old = this.#panel;
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
+    let leaving = false;
     if (old && !sameQuestion) {
       // The question changed or went while it was being answered. Text the person typed
       // and hasn't sent is kept in the view, not dropped with the form; an answer that went
@@ -1194,11 +1237,17 @@ export class SessionCard {
       const entry = old.entry;
       if (draft) {
         this.#orphan = { text: draft, why: !q || q.id !== old.questionId ? 'changed' : 'unanswerable' };
+      } else if (entry && !q && leaves(entry)) {
+        // Whichever came first, the question going or the answer's result: the same panel, so a
+        // result that arrived first keeps its check, or its pressed option and its words, as the
+        // other order does.
+        this.#leave(old);
+        leaving = true;
       } else if (entry) {
-        this.#watchReceipt(old.answering, old.questionId);
+        this.#watchReceipt(old.answering, old.q);
       }
     }
-    old?.destroy();
+    if (!leaving) { old?.destroy(); }
     this.#panel = null;
     let view = '';
     if (q && answerable) {
@@ -1224,7 +1273,7 @@ export class SessionCard {
     // update is drawn (#bringQuestion), as long as the conversation was read to its end.
     const arrived = this.#asked !== undefined && !!q && q.id !== this.#asked;
     this.#asked = q?.id ?? null;
-    this.els.question.replaceChildren(...[this.#orphanView(), this.#receipt?.element, view].filter(Boolean));
+    this.els.question.replaceChildren(...[this.#orphanView(), this.#receipt?.element, this.#leaving?.panel.element, view].filter(Boolean));
     // An approval's command never slides: a push still under way stops travelling.
     if (view) { stopTravel(view); }
     if (this.#receipt?.fresh) {
@@ -1406,18 +1455,33 @@ export class SessionCard {
     });
   }
 
-  #watchReceipt({ service, hostId, sessionId }, questionId) {
+  // question: the one answered, which says what a confirmed answer's value was (answeredValue).
+  #watchReceipt({ service, hostId, sessionId }, question) {
     this.#dropReceipt();
-    const element = h('p', { class: 'answer-receipt', role: 'status', 'aria-live': 'polite' });
-    const receipt = { element, final: false, unwatch: null, fresh: true };
+    const questionId = question.id;
+    // The line, and apart from it the one a screen reader hears it on (receipt.js).
+    const line = h('p', { class: 'answer-receipt' });
+    const live = receiptLive();
+    const element = h('div', { class: 'answer-receipt-slot' }, line, live);
+    // The same request's clock as the form's was: an answer the form left at Passed to the agent
+    // still stalls here, and a handoff inside the quiet window or a dwell still waits it out.
+    const clock = new ReceiptClock({
+      describe: (entry, { stalled }) => describeAnswer(entry, this.machineName, { question, stalled }),
+      draw: (d) => {
+        // Its words change as the answer goes, above a question that may stay: whatever they move counts.
+        this.#moves?.notOwn();
+        // "You answered · value" says whose answer it is; anything else says it is about the answer.
+        drawReceipt(line, 'answer-receipt', !d?.text || d.key === 'delivered' ? d : { ...d, text: `Your answer: ${d.text}` }, { enters: false });
+      },
+      say: (text) => { live.textContent = text; },
+      heard: () => drawn(live),
+      follow: (fn) => service.watch(hostId, sessionId, questionId, fn),
+    });
+    const receipt = { element, final: false, unwatch: null, fresh: true, clock };
     const show = (entry) => {
       if (!entry) { return; }
-      // Its words change as the answer goes, above a question that may stay: whatever they move counts.
-      this.#moves?.notOwn();
-      const { text, tone } = describeAnswer(entry, this.machineName);
-      element.className = `answer-receipt ${tone}`;
-      element.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
-      element.textContent = `Your answer: ${text}`;
+      line.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
+      clock.show(entry);
       receipt.final = entry.state === 'done';
     };
     receipt.unwatch = service.watch(hostId, sessionId, questionId, show);
@@ -1425,8 +1489,60 @@ export class SessionCard {
     this.#receipt = receipt;
   }
 
+  // A host takes a question away as it types the answer, before its result comes back. The panel
+  // stays, with its ring on the control that sent the answer (ui.md §6.5, tap to answer, #617):
+  // delivered, its check holds for sendCheckHold, then the card resolves to "You answered". Not
+  // confirmed, stale or failed, it stays as §6.5 draws them: the option that went still pressed, the
+  // rest disabled (answerControls), and the line saying why; a failed one's Try again resends the
+  // same request. Busy or refused would enable its options again for a question that has gone, so
+  // the card resolves to its receipt at once, before one could be tapped.
+  #leave(panel) {
+    this.#dropLeaving();
+    const { service, hostId, sessionId } = panel.answering;
+    const leaving = { panel, unwatch: null, timer: null };
+    const resolve = () => {
+      if (this.#leaving !== leaving) { return; }
+      this.#leaving = null;
+      leaving.unwatch?.();
+      this.#watchReceipt(panel.answering, panel.q);
+      if (panel.element.isConnected) {
+        this.#moves?.notOwn();
+        panel.element.replaceWith(this.#receipt.element);
+        this.#receipt.fresh = false;
+        enter(this.#receipt.element, 'acknowledge', { dy: 1 });
+      }
+      panel.element.remove();
+      panel.destroy();
+    };
+    const settle = (entry) => {
+      if (this.#leaving !== leaving || leaving.timer || !entry || entry.state === 'sending' || entry.state === 'waiting') { return; }
+      if (entry.state === 'done' && entry.outcome === 'delivered') {
+        // For what is left of its check: all of it, unless the result came before the question went.
+        const until = panel.checkUntil;
+        leaving.timer = setTimeout(resolve, until === null ? ReceiptTiming.sendCheckHoldMs : Math.max(0, until - Date.now()));
+      } else if (entry.state === 'done' && (entry.outcome === 'busy' || entry.outcome === 'refused')) {
+        // After the watchers being told now, the panel's own among them: none is told of a view it has left.
+        queueMicrotask(resolve);
+      }
+    };
+    this.#leaving = leaving;
+    leaving.unwatch = service.watch(hostId, sessionId, panel.questionId, settle);
+    settle(service.get(hostId, sessionId, panel.questionId));
+  }
+
+  #dropLeaving() {
+    const l = this.#leaving;
+    if (!l) { return; }
+    this.#leaving = null;
+    clearTimeout(l.timer);
+    l.unwatch?.();
+    l.panel.element.remove();
+    l.panel.destroy();
+  }
+
   #dropReceipt() {
     this.#receipt?.unwatch?.();
+    this.#receipt?.clock.destroy();
     this.#receipt?.element.remove();
     this.#receipt = null;
   }
@@ -1457,6 +1573,7 @@ export class SessionCard {
       e.since.closest('.fact')?.toggleAttribute('hidden', !since);
     }
     e.rowAge.textContent = ago(rowAt(s), now);
+    this.#nameRow();
     e.agentAge.textContent = ago(mainVoice(s).at ?? s.updatedAt, now);
     if (this.#promptAt) { e.promptAge.textContent = ago(this.#promptAt, now); }
     this.delegates.refreshTimes(now);

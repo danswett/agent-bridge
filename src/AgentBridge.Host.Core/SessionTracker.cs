@@ -24,6 +24,12 @@ internal sealed class SessionTracker
     DateTimeOffset? _lastUpdatedAt;
     IReadOnlyList<Subagent>? _lastSubagents;
     DateTimeOffset _firstSeen;
+    // The last session built, and the nested agents' records it was built with.
+    Session? _built;
+    IReadOnlyList<ClaudeSubagents.Record> _nested = [];
+    // What the last build asked Stalled, while the session could be called Not responding: null
+    // when it could not (not working, or already showing another attention).
+    (SessionStatus Effective, DateTimeOffset? LastEvent, bool Background, IReadOnlyList<Subagent>? Subagents, int? More)? _stall;
 
     public SessionTracker(DiscoveredSession discovered, SessionSourceOptions options, TimeProvider time)
     {
@@ -41,8 +47,16 @@ internal sealed class SessionTracker
 
     public DiscoveredSession Discovered { get; private set; }
 
+    // Tests: the transcript being followed.
+    internal TranscriptTail? Tail => _tail;
+
     public Session Update(DiscoveredSession discovered)
     {
+        // What Build reads: the parsed transcript, its nested agents, discovery's view and the
+        // workspace, and for a working session the clock and its delegates' transcripts. Every pass
+        // rebuilt and re-serialised every session, changed or not: about 35 MB/min of the host's
+        // allocation (#608).
+        var changed = _built is null || discovered != Discovered;
         Discovered = discovered;
         if (discovered.TranscriptPath is { } path)
         {
@@ -50,20 +64,50 @@ internal sealed class SessionTracker
             {
                 _tail = new TranscriptTail(path, _options);
                 _subagents = null;
+                _nested = [];
                 _parser.Reset();
+                changed = true;
             }
-            _tail.Read(_parser);
+            // Unreadable too: a read can parse new lines and then fail (the anchor after them), and
+            // the parser has moved though the read says it failed. A transcript that stays
+            // unreadable is rebuilt each pass, which is rare and costs no revision (the JSON is
+            // the same).
+            changed |= _tail.Read(_parser) is TailOutcome.Appended or TailOutcome.Restarted or TailOutcome.Unreadable;
             // A nested Claude delegate's start and parent are written only beside the session's
             // transcript; one can exist only once a delegate of the session's does.
             if (_parser is ClaudeParser claude && _state.Background.HasAgents)
             {
                 _subagents ??= new ClaudeSubagents();
-                foreach (var record in _subagents.Read(path)) { claude.Nested(record); }
+                var nested = _subagents.Read(path);
+                // What Nested took counts as well as which records there are: a child sorted before
+                // its parent (spawnDepth left out reads as 2) is taken a pass later, from the same
+                // records (#634).
+                foreach (var record in nested) { changed |= claude.Nested(record); }
+                if (!nested.SequenceEqual(_nested)) { (_nested, changed) = (nested, true); }
             }
         }
-        if (discovered.StateDirectory is { } dir) { RefreshWorkspace(Path.Combine(dir, "workspace.yaml")); }
-        return Settle(Build());
+        if (discovered.StateDirectory is { } dir)
+        {
+            var workspace = _workspace;
+            RefreshWorkspace(Path.Combine(dir, "workspace.yaml"));
+            changed |= !ReferenceEquals(workspace, _workspace);
+        }
+        // Not responding (#800) comes from the clock and from the delegates' own transcripts, which
+        // nothing above looks at: a hung session is exactly one whose transcript stops changing, so
+        // skipping its build left it working with no attention for ever (#634 review, H1). Asked
+        // again with what the last build asked it; only a different answer builds the session.
+        if (!changed && _stall is { } stall
+            && Stalled(stall.Effective, stall.LastEvent, stall.Background, stall.Subagents, stall.More, _time.GetUtcNow()) != _built!.Attention)
+        {
+            changed = true;
+        }
+        if (!changed) { return _built!; }
+        Builds++;
+        return _built = Settle(Build());
     }
+
+    // Tests: how many times the session was built.
+    internal int Builds { get; private set; }
 
     // updatedAt moves only when something a client shows changed. An event can be of a
     // kind that usually matters (a turn starting) and still change nothing (the session
@@ -205,6 +249,9 @@ internal sealed class SessionTracker
         var ownReasoning = source?.Reasoning is not null || _state.Reasoning is null ? Limits.KeepEnd(_state.OwnReasoning, Limits.Reasoning).Text : null;
         var own = ownResponse is null && ownReasoning is null ? null
             : new OwnActivity { Response = ownResponse, ResponseTruncated = ownCut ? true : null, Reasoning = ownReasoning, At = _state.OwnAt };
+        var lastEvent = Later(_state.LastEventAt, hintAt);
+        var background = agents + shells > 0;
+        _stall = _state.Attention is null && effective == SessionStatus.Working ? (effective, lastEvent, background, subagents, more) : null;
 
         return new Session
         {
@@ -224,7 +271,7 @@ internal sealed class SessionTracker
             WaitingOn = question?.Agent,
             Subagents = subagents,
             SubagentsMore = more,
-            Attention = _state.Attention ?? Stalled(effective, Later(_state.LastEventAt, hintAt), agents + shells > 0, subagents, more, now),
+            Attention = _state.Attention ?? Stalled(effective, lastEvent, background, subagents, more, now),
             Activity = new Activity
             {
                 Response = response,

@@ -1,5 +1,8 @@
+using System.Globalization;
+using System.Net;
 using System.Text.Json;
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
@@ -48,12 +51,16 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         public Exception? CheckFails;
         // Held until released, as a check that takes its time.
         public TaskCompletionSource? CheckGate;
+        // What the check asks first, as Velopack asks its source for the release list.
+        public Func<Task>? Asks;
         public string? InstalledVersion { get; set; } = "0.1.0";
+        public DateTimeOffset? DiscoveredAt { get; set; }
         public string? PendingNotes => Found is null ? null : $"What {Found} changes";
         public async Task<string?> CheckAsync()
         {
             Checks++;
             if (CheckGate is { } gate) { await gate.Task; }
+            if (Asks is { } ask) { await ask(); }
             if (CheckFails is { } e) { throw e; }
             return Found;
         }
@@ -552,13 +559,62 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal("5e1f0c2a-7d3b-4c9e-8a61-0f2b3c4d5e6f", auto.State.Request);
     }
 
+    // GitHub's limit as the machine's ReleaseDiscovery says it (#530), with GitHub's reset.
+    static ReleaseDiscoveryException Limited(DateTimeOffset retryAt) =>
+        new("GitHub is limiting how often this network can check for updates.", retryAt, limited: true);
+
+    // GitHub's API, answering the release list as a test says.
+    sealed class FakeGitHub(Func<HttpResponseMessage> answer) : HttpMessageHandler
+    {
+        public Func<HttpResponseMessage> Answer = answer;
+        public int Requests;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Requests);
+            return Task.FromResult(Answer());
+        }
+    }
+
+    // #709 review (M1): GitHub's list comes through ReleaseDiscovery, whose limit the hold did not
+    // know, so the checks went on every half hour and the devices never heard when the next one
+    // was. A fake GitHub's 403, through the real ReleaseDiscovery, to the update state.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task GitHubs_limit_as_release_discovery_says_it_holds_the_checks_until_its_reset_and_tells_the_devices_when()
+    {
+        updater.Found = null;
+        var reset = DateTimeOffset.FromUnixTimeSeconds((time.GetUtcNow() + TimeSpan.FromMinutes(45)).ToUnixTimeSeconds());
+        using var github = new FakeGitHub(() => new HttpResponseMessage(HttpStatusCode.Forbidden)
+        {
+            Headers = { { "X-RateLimit-Remaining", "0" }, { "X-RateLimit-Reset", reset.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture) } },
+        });
+        using var discovery = new ReleaseDiscovery(Path.Combine(app, "discovery"), github, time, random: () => 0);
+        updater.Asks = () => discovery.ReleasesAsync(ReleaseDiscovery.ReleasesUrl("https://github.com/danswett/agent-bridge"), CancellationToken.None);
+        await StartAsync();
+
+        await auto.TickAsync();
+
+        Assert.Equal(1, updater.Checks);
+        Assert.Equal(UpdateOutcome.Failed, auto.State.Last!.Outcome);
+        Assert.Contains($"checking again after {reset.ToLocalTime():t}", auto.State.Last.Reason);
+
+        // Not at the next half hour: at GitHub's reset.
+        time.Advance(TimeSpan.FromMinutes(44));
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Checks);
+        github.Answer = () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[]") };
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+        Assert.Equal((2, 2), (updater.Checks, github.Requests));
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_rate_limit_reset_five_minutes_away_is_retried_then_even_after_a_press_just_before_it()
     {
         updater.Found = null;
         await StartAsync();
-        updater.CheckFails = new UpdateRateLimitedException("403 (rate limit exceeded)", time.GetUtcNow() + TimeSpan.FromMinutes(5));
+        updater.CheckFails = Limited(time.GetUtcNow() + TimeSpan.FromMinutes(5));
         await auto.TickAsync();
         Assert.Equal(1, updater.Checks);
         updater.CheckFails = null;
@@ -592,7 +648,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     {
         updater.Found = null;
         await StartAsync();
-        updater.CheckFails = new UpdateRateLimitedException("403 (rate limit exceeded)", time.GetUtcNow() + TimeSpan.FromSeconds(30));
+        updater.CheckFails = Limited(time.GetUtcNow() + TimeSpan.FromSeconds(30));
         await auto.TickAsync();
         Assert.Equal(1, updater.Checks);
         updater.CheckFails = null;
@@ -666,7 +722,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         // The feed's own word on when to ask again is taken, and success ends the backoff.
         time.Advance(AutoUpdater.CheckBackoffAtMost);
-        updater.CheckFails = new UpdateRateLimitedException("403 (rate limit exceeded)", time.GetUtcNow() + TimeSpan.FromMinutes(45));
+        updater.CheckFails = Limited(time.GetUtcNow() + TimeSpan.FromMinutes(45));
         await auto.TickAsync();
         Assert.Equal(5, updater.Checks);
         updater.CheckFails = null;
@@ -1023,6 +1079,22 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.False(state.Automatic);
         Assert.Null(state.Request);
         Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_check_answered_from_the_machines_shared_copy_tells_the_devices_when_GitHub_was_asked_not_when_it_was_read()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        var asked = time.GetUtcNow() - TimeSpan.FromMinutes(8);
+        updater.DiscoveredAt = asked;
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Check);
+        await auto.TickAsync();
+
+        Assert.Equal(1, updater.Checks);
+        Assert.Equal(("0.2.0", asked), (auto.State.Available, auto.State.CheckedAt));
     }
 
     [Fact]

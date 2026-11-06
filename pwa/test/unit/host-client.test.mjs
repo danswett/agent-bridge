@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HostClient } from '../../js/host-client.js';
+import { Limits, hostJsonBytes } from '../../js/answers.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 
 // A transport that records what the client sends and lets the test play the host.
@@ -51,6 +52,27 @@ test('a request on a dead transport fails at once instead of timing out', async 
   t.send = () => Promise.reject(new Error('not connected to the relay'));
   const client = new HostClient(t, { timeoutMs: 60000 });
   await assert.rejects(client.request('hello'), /not connected to the relay/);
+});
+
+test('a reply or answer is said to have gone once its transport has taken it, and never when the transport refuses it', async () => {
+  const t = fakeTransport();
+  let take;
+  t.send = (m) => { t.sent.push(m); return new Promise((r) => { take = r; }); };
+  const client = new HostClient(t, { timeoutMs: 60000 });
+  const went = [];
+
+  client.reply({ id: 's1', request: 'r1', text: 'go' }, { onSent: () => went.push('r1') }).catch(() => {});
+  assert.deepEqual(went, [], 'not as the call returns');
+  await flush();
+  assert.deepEqual(went, [], 'nor while the transport still has it');
+  take();
+  await flush();
+  assert.deepEqual(went, ['r1']);
+
+  t.send = () => Promise.reject(new Error('not connected to the relay'));
+  await assert.rejects(client.answer({ id: 's1', question: 'q1', request: 'r2', text: 'yes' }, { onSent: () => went.push('r2') }), /not connected/);
+  assert.deepEqual(went, ['r1']);
+  client.close();
 });
 
 test('closing the transport fails every pending request', async () => {
@@ -315,4 +337,78 @@ test('what holds the host\'s discovery arrives with the snapshot and with each c
   assert.equal(store.held, null);
   t.host({ ev: 'discovery.changed', seq: 4, data: { discoveryHeld: { reason: 42 } } });
   assert.equal(store.held, null);
+});
+
+// ---- progress (sessions.progress, #600) ----
+
+async function greeted(capabilities) {
+  const t = fakeTransport();
+  const client = new HostClient(t, { timeoutMs: 1000 });
+  const p = client.hello();
+  await flush();
+  t.host({ re: t.lastRequest('hello').id, ok: true, result: { protocol: 1, machine: { id: 'm' }, capabilities } });
+  await p;
+  return { t, client };
+}
+
+test('a reply asks for progress only from a host that offers sessions.progress', async () => {
+  const older = await greeted(['sessions.read', 'sessions.reply']);
+  older.client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.deepEqual(older.t.lastRequest('session.reply').data, { id: 's1', request: 'r1', text: 'go' });
+  const newer = await greeted(['sessions.read', 'sessions.reply', 'sessions.answer', 'sessions.progress']);
+  newer.client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: () => {} }).catch(() => {});
+  newer.client.answer({ id: 's1', question: 'q1', request: 'r2', text: 'yes' }, { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.equal(newer.t.lastRequest('session.reply').data.progress, true);
+  assert.equal(newer.t.lastRequest('session.answer').data.progress, true);
+  older.client.close();
+  newer.client.close();
+});
+
+test('an answer that fits the 16 KiB only without the progress flag goes without it, rather than be refused for asking', async () => {
+  const { t, client } = await greeted(['sessions.read', 'sessions.answer', 'sessions.progress']);
+  const answer = (text) => ({ id: 's1', question: 'q1', request: '00000000-0000-4000-8000-000000000000', text });
+  // 8 bytes under the limit as it is: "progress":true would put it 8 over, and the host refuse it.
+  const text = 'x'.repeat(Limits.request - 8 - hostJsonBytes(answer('')));
+  assert.equal(hostJsonBytes(answer(text)), Limits.request - 8);
+  client.answer(answer(text), { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.equal('progress' in t.lastRequest('session.answer').data, false);
+  client.answer(answer('short'), { onProgress: () => {} }).catch(() => {});
+  await flush();
+  assert.equal(t.lastRequest('session.answer').data.progress, true);
+  client.close();
+});
+
+test('progress frames tell a reply how far it has got, in order, and never settle it', async () => {
+  const { t, client } = await greeted(['sessions.read', 'sessions.reply', 'sessions.progress']);
+  const heard = [];
+  let settled = false;
+  const p = client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: (s) => heard.push(s) }).finally(() => { settled = true; });
+  await flush();
+  const re = t.lastRequest('session.reply').id;
+  t.host({ re, progress: { stage: 'received' } });
+  t.host({ re, progress: { stage: 'typed', working: true } });
+  // A stage this app doesn't know, from a newer host, settles nothing either: the service passes it over.
+  t.host({ re, progress: { stage: 'pondering' } });
+  await flush();
+  assert.equal(settled, false);
+  assert.deepEqual(heard, [{ stage: 'received', working: false }, { stage: 'typed', working: true }, { stage: 'pondering', working: false }]);
+  t.host({ re, ok: true, result: { outcome: 'delivered', timings: { typed: 352, recorded: 1190, confirmed: 1361, bogus: 'x' } } });
+  assert.deepEqual(await p, { outcome: 'delivered', reason: null, timings: { typed: 352, recorded: 1190, confirmed: 1361 } });
+});
+
+test('a progress frame for a request the client is not waiting on is ignored', async () => {
+  const { t, client } = await greeted(['sessions.read', 'sessions.reply', 'sessions.progress']);
+  const heard = [];
+  const p = client.reply({ id: 's1', request: 'r1', text: 'go' }, { onProgress: (s) => heard.push(s) });
+  await flush();
+  const re = t.lastRequest('session.reply').id;
+  t.host({ re: re + 7, progress: { stage: 'typed', working: false } });
+  t.host({ re, ok: true, result: { outcome: 'delivered' } });
+  assert.deepEqual(await p, { outcome: 'delivered', reason: null });
+  // Nor one for the request after its response: it is settled and gone.
+  t.host({ re, progress: { stage: 'received' } });
+  assert.deepEqual(heard, []);
 });

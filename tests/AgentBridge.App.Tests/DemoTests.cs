@@ -29,6 +29,28 @@ public sealed class DemoTests
         Assert.Equal("Your answer: Delivered. The session has your answer.", choice.ReceiptText);
     }
 
+    // A completed setup moves the demo's readiness on as a real host's does (it saves intake with the
+    // owned record), so the row that showed "Hooks registered…" no longer offers Set up (#705 review).
+    [Fact]
+    public async Task A_completed_demo_setup_moves_its_agent_on_so_its_row_offers_no_set_up()
+    {
+        await using var demo = DemoHost.Start();
+        await using var connection = new HostConnection(ct => LocalClient.ConnectAsync(demo.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        connection.Start();
+        await Wait.UntilAsync(() => connection.Status is not null, "the demo's status");
+        async Task<AgentReadinessRow> Copilot() =>
+            new((await connection.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh)).Agents.Single(a => a.Id == "copilot"), canManage: true);
+        Assert.Equal("Set up", (await Copilot()).SetUpVerb);
+
+        var result = await connection.CallAsync<AgentSetupResult>(HostOps.AgentsSetup, new AgentSetupRequest("copilot", "install"));
+        var row = await Copilot();
+
+        Assert.True(result.Completed);
+        Assert.Null(row.SetUpVerb);
+        Assert.Equal("Not tested yet", row.Status);
+        Assert.DoesNotContain("intake is off", row.Checks);
+    }
+
     [Fact]
     public async Task Heavy_sessions_added_reach_the_window_and_the_heavy_one_gives_its_whole_tool_history()
     {

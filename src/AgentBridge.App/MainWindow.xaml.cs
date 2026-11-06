@@ -111,6 +111,7 @@ public sealed partial class MainWindow : Window
     public bool IsInFront => active && AppWindow.IsVisible;
 
     internal SessionsPage Sessions => SessionsView;
+    internal SettingsView SettingsPage => SettingsPane;
     internal FrameworkElement RootElement => Root;
     internal NavigationView Rail => Nav;
     internal TitleBar Bar => AppTitleBar;

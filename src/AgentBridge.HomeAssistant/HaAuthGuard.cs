@@ -83,6 +83,16 @@ public sealed class HaAuthGuard
     DateTimeOffset? lostAt;
     // What the record said when this process last read or wrote it.
     string? readText;
+    // The record's size and write time just before it was last read, and when they were looked
+    // at: read again only once they change. Every request read and parsed it (1.9 MB/min, #608).
+    FileInfo? info;
+    (long Length, DateTime Written)? readStamp;
+    DateTime stampedAt;
+    // A write within this of a look may not have moved the time the file system keeps (a coarse
+    // clock), so a record that recent is read again whatever its stamp says.
+    static readonly TimeSpan Racy = TimeSpan.FromSeconds(2);
+    // Tests: how many times the record was read.
+    internal int Reads { get; private set; }
     // The record was read again, with whatever another process recorded: what Problem says may have
     // changed, and the app is told (Notify), not only the connector that will skip its pass.
     bool reread;
@@ -643,7 +653,35 @@ public sealed class HaAuthGuard
 
     // Reads the record again, for what another process has recorded since, and writes what this
     // one could not record before.
-    void Refresh() => Sync(null);
+    void Refresh()
+    {
+        // Under the lock, whoever calls: what Unchanged reads (pending, the stamp) is what Sync
+        // changes. The callers hold it already, and it is re-entrant.
+        lock (gate)
+        {
+            if (Unchanged()) { return; }
+            Sync(null);
+        }
+    }
+
+    // Whether the record is as this process last read it, so reading it again would change
+    // nothing: only with nothing of this process's waiting to be written, and the record readable
+    // the last time. Called under the lock (Refresh).
+    bool Unchanged() =>
+        path is not null && !unavailable && pending.Count == 0
+        && readStamp is { } last && Stamp(out _) is { } now && now == last && now.Written < stampedAt - Racy;
+
+    (long Length, DateTime Written)? Stamp(out DateTime at)
+    {
+        at = DateTime.UtcNow;
+        try
+        {
+            info ??= new FileInfo(path!);
+            info.Refresh();
+            return info.Exists ? (info.Length, info.LastWriteTimeUtc) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
+    }
 
     // Brings state up to the record, applies what this process changed that the record does not
     // have yet (pending) and change, and writes the result when anything changed. Readers take the
@@ -709,6 +747,9 @@ public sealed class HaAuthGuard
     string? Load(out State? basis)
     {
         basis = null;
+        // Before the read, so a write after it is a change the next look finds.
+        var stamp = Stamp(out var at);
+        readStamp = null;
         string text;
         try
         {
@@ -722,6 +763,7 @@ public sealed class HaAuthGuard
             }
             using var reader = new StreamReader(new FileStream(path!, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
             text = reader.ReadToEnd();
+            Reads++;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -732,6 +774,7 @@ public sealed class HaAuthGuard
             if (text != readText) { reread = true; }
             readText = text;
             basis = read;
+            (readStamp, stampedAt) = (stamp, at);
             return null;
         }
         // First, before what this process could not write yet: an acceptance waiting to be written

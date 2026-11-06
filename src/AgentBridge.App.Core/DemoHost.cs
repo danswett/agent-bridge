@@ -189,7 +189,7 @@ public sealed partial class DemoHost : IAsyncDisposable
                 {
                     var hello = new HelloResult(1, new MachineInfo(MachineId, MachineName, "windows", version, Dev: true, Sessions: Count), remote
                         ? [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, AuthState.Capability]
-                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability]);
+                        : [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsApprove, Capabilities.SessionsReply, Capabilities.SessionsAttach, Capabilities.SessionsAttachDirect, Capabilities.SessionsStop, UsageProtocol.Capability, LaunchProtocol.Capability, HostOps.Capability, HostOps.AgentReadinessCapability, HostOps.AgentSetupCapability, HostOps.AgentInstallCapability]);
                     // Held for a test: the reply a recovery reads before it subscribes again.
                     if (HoldHello is { } hold) { HoldHello = null; return After(hold.Task, hello); }
                     return Done(hello);
@@ -246,6 +246,13 @@ public sealed partial class DemoHost : IAsyncDisposable
                     _ = Change(s with { Status = SessionStatus.Working, StatusSince = now, UpdatedAt = now, Activity = s.Activity with { UserMessage = r.Text } });
                     return Done(new ReplyResult(AnswerOutcome.Delivered));
                 }
+            case HostOps.AgentsRefresh when !remote:
+                return Done(Agents());
+            case HostOps.AgentsSetup when !remote:
+                return SetUpAsync(data.Deserialize<AgentSetupRequest>(ProtocolJson.Options)!);
+            // The demo installs nothing: Install CLI is offered only on the rows of its pictures.
+            case HostOps.AgentsInstall when !remote:
+                return Done(new AgentInstallResult(false, "Windows Package Manager is unavailable. Install or update Microsoft's App Installer, then try again. No CLI was installed."));
             case LaunchProtocol.Options:
                 lock (gate) { return Done(LaunchChoices()); }
             case LaunchProtocol.Launch:
@@ -707,6 +714,78 @@ public sealed partial class DemoHost : IAsyncDisposable
         Relay = new RelayStatus(RelayState.SignedOut),
         SignIn = new SignInStatus(SignInState.Idle),
         Settings = new HostSettingsView(true, "Demo machine"),
+        Agents = Agents(),
+        AgentInstallation = CantActOn ? new AgentInstallProgress("claude", false, FailedInstall) : null,
+    };
+
+    // Settings › Agents on this machine (#678): one agent per hook state, so the page shows each
+    // verb: Copilot CLI to set up, Claude Code to repair, and Codex set up but not tested yet, as a
+    // healthy agent reads on a real host (Unknown, its setup completed), with none. Each carries its
+    // `hookSetup` as a current host sends it. The demo writes no files, but its readiness moves as a
+    // real host's does after a setup (#705 review): one that completes leaves the setup completed
+    // with intake on, so the row offers no Set up beside "Hooks registered…"; a removal leaves
+    // intake on without it. Claude Code's setup didn't finish, the Failed a host can repair; its
+    // repair fails.
+    readonly Dictionary<string, (ReadinessCheck Check, HookSetupState Setup)> hooks = new(StringComparer.Ordinal)
+    {
+        ["copilot"] = (new(ReadinessState.NeedsAction, "Hook intake is off for this profile. Explicit setup or migration is required."), HookSetupState.NotSetUp),
+        ["claude"] = (new(ReadinessState.Failed, "Hook setup for this profile did not complete; its registrations may be partial. Repair setup."), HookSetupState.Incomplete),
+        ["codex"] = (new(ReadinessState.Unknown, SetUpHooks), HookSetupState.Completed),
+    };
+    const string SetUpHooks = "An owned setup record exists and setup completed; registration and activation still need verification.";
+    const string RemovedHooks = "Intake is enabled; this agent's registration and ownership have not been verified.";
+    bool cantActOn;
+
+    // For the self-test's pictures of the rows the app can't act on (Creative's ruling on #705): Copilot
+    // CLI not installed beside agent-ha-bridge (Read-only, no Install), Claude Code's installation
+    // failed and its hook ownership unreadable, and Codex on a host from before `hookSetup` (Can't
+    // check). The host's raw words are in them, as a real host sends them, for the rows to word.
+    public void ShowAgentsTheAppCantActOn(bool on) { lock (gate) { cantActOn = on; } }
+    bool CantActOn { get { lock (gate) { return cantActOn; } } }
+    const string FailedInstall = "Windows Package Manager exited with code 0x8A15000F. Check network access, package policy and required runtime approvals, then check agents again. Partial installations were not removed.";
+
+    AgentReadinessReport Agents()
+    {
+        static AgentReadiness Agent(string id, string label, string version, (ReadinessCheck Check, HookSetupState Setup) hooks, bool installed = true) => new(id, label, $"C:\\Users\\demo\\.{id}",
+            installed ? $"C:\\Program Files\\{label}\\{id}.exe" : null, installed ? version : null,
+            installed ? new(ReadinessState.Working, "Executable found using the launch configuration.") : new(ReadinessState.Missing, "Not installed. Install this CLI, then check again."),
+            installed ? new(ReadinessState.Working, $"Version {version}") : new(ReadinessState.Unknown, "Version not checked."),
+            hooks.Check,
+            new(ReadinessState.Unknown, "CLI sign-in and entitlement have not been verified."),
+            new(ReadinessState.Unknown, "Folder trust, hook activation and a new session have not been verified."),
+            HookSetup: hooks.Setup);
+        lock (gate)
+        {
+            return new(DateTimeOffset.UtcNow, cantActOn
+            ? [
+                Agent("copilot", "Copilot CLI", "1.0.105", (new(ReadinessState.Blocked, "Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine"), HookSetupState.Unknown), installed: false),
+                Agent("claude", "Claude Code", "2.1.4", (new(ReadinessState.Failed, "Hook ownership could not be checked: Access to the path 'C:\\Users\\demo\\.claude\\agent-bridge-owner.json' is denied."), HookSetupState.Unknown), installed: false),
+                Agent("codex", "Codex", "0.48.0", (new(ReadinessState.Unknown, "An owned setup record exists; registration and activation still need verification."), HookSetupState.Unknown)),
+            ]
+            : [
+                Agent("copilot", "Copilot CLI", "1.0.105", hooks["copilot"]),
+                Agent("claude", "Claude Code", "2.1.4", hooks["claude"]),
+                Agent("codex", "Codex", "0.48.0", hooks["codex"]),
+            ]);
+        }
+    }
+
+    // As long as a real setup takes to write, so its row says "Setting up…" before its result.
+    async Task<object?> SetUpAsync(AgentSetupRequest r)
+    {
+        await Task.Delay(TimeSpan.FromMilliseconds(600));
+        var result = SetUp(r);
+        if (result.Completed)
+        {
+            lock (gate) { hooks[r.Agent] = r.Action == "remove" ? (new(ReadinessState.Unknown, RemovedHooks), HookSetupState.NotSetUp) : (new(ReadinessState.Unknown, SetUpHooks), HookSetupState.Completed); }
+        }
+        return result;
+    }
+    static AgentSetupResult SetUp(AgentSetupRequest r) => r switch
+    {
+        { Action: "remove" } => new(true, "Removed this installation's hooks. Existing sessions keep theirs until they end.", true),
+        { Agent: "claude" } => new(false, "Repair incomplete: the demo cannot write Claude Code's settings.", false),
+        _ => new(true, "Hooks registered. Restart the host, then start a new session to check them.", true),
     };
 
     // Another machine's sessions: a Claude question and a Codex turn under way, so the demo
