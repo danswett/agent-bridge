@@ -612,7 +612,7 @@ anything but `delivered`, and `timings` for a request that asked for progress
 | `outcome` | Meaning | Typed? |
 |---|---|---|
 | `delivered` | The host typed the answer and the agent's transcript recorded it | Yes |
-| `unconfirmed` | The host typed it, but could not confirm the agent recorded it (for example the session stopped answering). It never retries on its own; the client says to check at the machine | Yes |
+| `unconfirmed` | The host typed it, but could not confirm the agent recorded it (for example the session stopped answering). It never retries on its own; the client says to check the conversation | Yes |
 | `stale` | The session is no longer asking that question: answered at the machine or by another device, or gone | No |
 | `busy` | Another answer or a reply to this session is being delivered | No |
 | `refused` | The host will not type it: an invalid answer, a question the client should not answer remotely (`truncated` or `answerAtMachine`), a prompt the host has already typed an answer into once, an elevated or otherwise unreachable session, an agent or platform without delivery, or agent-ha-bridge active for this user | No |

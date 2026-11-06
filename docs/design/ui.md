@@ -1981,7 +1981,7 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   again after a failure with no outcome, reuse the same `request`, so the host types it at most
   once and returns the first outcome. Only Try again after a `busy` or `refused` outcome sends a
   **new** `request`, because the host remembers each outcome for ten minutes and would only
-  repeat it. `unconfirmed` is never retried: the receipt says to check at the machine, as §6.5's
+  repeat it. `unconfirmed` is never retried: the receipt says to check the conversation, as §6.5's
   does. While it is in
   flight the button is disabled and keeps focus (A4).
 - **In the conversation:** shown as the person's own message, exactly as a typed reply is. It is
