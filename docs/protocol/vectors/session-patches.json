@@ -21,7 +21,9 @@
             "startedAt": "2026-10-28T03:00:00.000Z",
             "updatedAt": "2026-10-28T03:30:00.000Z",
             "processId": 100,
-            "activity": {}
+            "activity": {},
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -55,7 +57,9 @@
             "activity": {
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -89,7 +93,9 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -123,7 +129,9 @@
               "userMessage": "Run the suite and check the witness logic, both in the background.",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -202,7 +210,9 @@
                 "startedAt": "2026-10-28T04:00:03.296Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -263,7 +273,9 @@
                 "startedAt": "2026-10-28T04:00:03.296Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -350,7 +362,9 @@
                 "startedAt": "2026-10-28T04:00:03.296Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -410,7 +424,9 @@
                 "startedAt": "2026-10-28T04:00:03.296Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -521,7 +537,9 @@
                 },
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -603,7 +621,9 @@
                 "line": "Start the suite in the background and watch it.",
                 "shells": 1
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -617,7 +637,8 @@
               "updatedAt": "2026-10-28T04:00:09.999Z",
               "activity": {
                 "turnCount": 1
-              }
+              },
+              "class": "done"
             }
           },
           "session": {
@@ -673,7 +694,9 @@
                 "line": "Start the suite in the background and watch it.",
                 "shells": 1
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -768,7 +791,9 @@
                 "line": "Start the suite in the background and watch it.",
                 "shells": 1
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -843,7 +868,9 @@
                 "line": "Start the suite in the background and watch it.",
                 "shells": 1
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -938,7 +965,9 @@
                 },
                 "shells": 1
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -1067,7 +1096,9 @@
                 },
                 "shells": 1
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -1188,7 +1219,9 @@
                 },
                 "shells": 1
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -1289,7 +1322,9 @@
                 },
                 "shells": 1
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -1411,7 +1446,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -1509,7 +1546,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -1601,7 +1640,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -1706,7 +1747,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -1720,7 +1763,8 @@
               "updatedAt": "2026-10-28T04:00:50.220Z",
               "activity": {
                 "turnCount": 0
-              }
+              },
+              "class": "fyi"
             }
           },
           "session": {
@@ -1795,7 +1839,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -1896,7 +1942,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -1984,7 +2032,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -2091,7 +2141,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -2193,7 +2245,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -2321,7 +2375,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -2344,7 +2400,8 @@
                   "response": null
                 },
                 "currentTool": null
-              }
+              },
+              "class": "done"
             }
           },
           "session": {
@@ -2422,7 +2479,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -2538,7 +2597,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -2577,7 +2638,9 @@
                 "askedAt": "2026-10-28T04:00:58.775Z",
                 "agent": "c204b7f2-6d3e-4f81-a0c9-2e4d6b8f1a37"
               },
-              "waitingOn": "c204b7f2-6d3e-4f81-a0c9-2e4d6b8f1a37"
+              "waitingOn": "c204b7f2-6d3e-4f81-a0c9-2e4d6b8f1a37",
+              "class": "needsYou",
+              "classSince": "2026-10-28T04:00:58.775Z"
             },
             "subagents": {
               "set": [
@@ -2695,7 +2758,9 @@
                 "shells": 0
               }
             ],
-            "waitingOn": "c204b7f2-6d3e-4f81-a0c9-2e4d6b8f1a37"
+            "waitingOn": "c204b7f2-6d3e-4f81-a0c9-2e4d6b8f1a37",
+            "class": "needsYou",
+            "classSince": "2026-10-28T04:00:58.775Z"
           }
         },
         {
@@ -2710,6 +2775,8 @@
               "activity": {
                 "turnCount": 1
               },
+              "class": "done",
+              "classSince": "2026-10-28T05:00:00.000Z",
               "question": null,
               "waitingOn": null
             },
@@ -2804,7 +2871,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -2900,7 +2969,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3015,7 +3086,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3108,7 +3181,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3209,7 +3284,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3304,7 +3381,9 @@
                 "line": "No regressions: the flag now follows the latest reply.",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         }
       ]
@@ -3323,7 +3402,9 @@
             "statusSince": "2026-10-28T05:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:00.000Z",
             "processId": 900,
-            "activity": {}
+            "activity": {},
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3360,7 +3441,9 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3394,7 +3477,9 @@
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3458,7 +3543,9 @@
                 "startedAt": "2026-10-28T04:00:04.089Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3520,7 +3607,9 @@
                 "startedAt": "2026-10-28T04:00:04.089Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3612,7 +3701,9 @@
                 "startedAt": "2026-10-28T04:00:04.089Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3709,7 +3800,9 @@
                 "startedAt": "2026-10-28T04:00:04.089Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3780,7 +3873,9 @@
                 "startedAt": "2026-10-28T04:00:04.089Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3850,7 +3945,9 @@
                 "startedAt": "2026-10-28T04:00:04.089Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3862,7 +3959,8 @@
             "set": {
               "activity": {
                 "response": "Started both delegates and the background command; I will summarise when they finish."
-              }
+              },
+              "class": "done"
             }
           },
           "session": {
@@ -3919,7 +4017,9 @@
                 "startedAt": "2026-10-28T04:00:04.089Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -3935,7 +4035,8 @@
                   "agents": 2
                 },
                 "reasoning": null
-              }
+              },
+              "class": "fyi"
             },
             "subagents": {
               "set": [
@@ -4003,7 +4104,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -4019,7 +4122,8 @@
                 "background": {
                   "agents": 1
                 }
-              }
+              },
+              "class": "done"
             },
             "subagents": {
               "set": [
@@ -4095,7 +4199,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -4168,7 +4274,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -4184,7 +4292,8 @@
                   "agents": 0
                 },
                 "reasoning": null
-              }
+              },
+              "class": "fyi"
             },
             "subagents": {
               "set": [
@@ -4256,7 +4365,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -4269,7 +4380,8 @@
               "status": "idle",
               "activity": {
                 "reasoning": "The nested one finished."
-              }
+              },
+              "class": "done"
             }
           },
           "session": {
@@ -4332,7 +4444,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -4407,7 +4521,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -4421,7 +4537,8 @@
               "activity": {
                 "reasoning": null,
                 "background": null
-              }
+              },
+              "class": "fyi"
             }
           },
           "session": {
@@ -4479,7 +4596,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -4492,7 +4611,8 @@
               "status": "idle",
               "activity": {
                 "response": "Both delegates finished: two files, and one commit.\nThe background command finished too."
-              }
+              },
+              "class": "done"
             }
           },
           "session": {
@@ -4550,7 +4670,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -4563,7 +4685,8 @@
               "status": "working",
               "activity": {
                 "userMessage": "Ask me to pick one of alpha, beta or gamma."
-              }
+              },
+              "class": "fyi"
             }
           },
           "session": {
@@ -4621,7 +4744,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -4657,7 +4782,9 @@
                   }
                 ],
                 "askedAt": "2026-10-28T04:01:20.938Z"
-              }
+              },
+              "class": "needsYou",
+              "classSince": "2026-10-28T04:01:20.938Z"
             }
           },
           "session": {
@@ -4741,7 +4868,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "needsYou",
+            "classSince": "2026-10-28T04:01:20.938Z"
           }
         },
         {
@@ -4752,6 +4881,8 @@
             "revision": 21,
             "set": {
               "status": "working",
+              "class": "fyi",
+              "classSince": "2026-10-28T05:00:00.000Z",
               "question": null
             }
           },
@@ -4810,7 +4941,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         },
         {
@@ -4824,7 +4957,8 @@
               "activity": {
                 "response": "You picked beta.",
                 "turnCount": 2
-              }
+              },
+              "class": "done"
             }
           },
           "session": {
@@ -4882,7 +5016,9 @@
                 "endedAt": "2026-10-28T04:00:08.690Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T05:00:00.000Z"
           }
         }
       ]
@@ -4902,7 +5038,9 @@
             "statusSince": "2026-10-28T04:00:00.000Z",
             "updatedAt": "2026-10-28T04:00:00.000Z",
             "processId": 950,
-            "activity": {}
+            "activity": {},
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -4936,7 +5074,9 @@
             "activity": {
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -4964,7 +5104,9 @@
             "activity": {
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -4997,7 +5139,9 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -5044,7 +5188,9 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -5077,7 +5223,9 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -5107,7 +5255,9 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -5141,7 +5291,9 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -5188,7 +5340,9 @@
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "turnCount": 0,
               "compactions": 0
-            }
+            },
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -5254,7 +5408,9 @@
                 "startedAt": "2026-10-28T04:00:13.823Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -5317,7 +5473,9 @@
                 "startedAt": "2026-10-28T04:00:13.823Z",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -5378,7 +5536,9 @@
                 "line": "0a1b2c3 First commit",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -5427,7 +5587,9 @@
                 "line": "0a1b2c3 First commit",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T04:00:00.000Z"
           }
         },
         {
@@ -5442,7 +5604,9 @@
               "updatedAt": "2026-10-28T04:00:24.484Z",
               "activity": {
                 "turnCount": 1
-              }
+              },
+              "class": "done",
+              "classSince": "2026-10-28T04:00:24.484Z"
             }
           },
           "session": {
@@ -5478,7 +5642,9 @@
                 "line": "0a1b2c3 First commit",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T04:00:24.484Z"
           }
         },
         {
@@ -5493,7 +5659,9 @@
               "updatedAt": "2026-10-28T04:01:13.337Z",
               "activity": {
                 "reasoning": null
-              }
+              },
+              "class": "fyi",
+              "classSince": "2026-10-28T04:01:13.337Z"
             }
           },
           "session": {
@@ -5528,7 +5696,9 @@
                 "line": "0a1b2c3 First commit",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T04:01:13.337Z"
           }
         },
         {
@@ -5576,7 +5746,9 @@
                 "line": "0a1b2c3 First commit",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T04:01:13.337Z"
           }
         },
         {
@@ -5624,7 +5796,9 @@
                 "line": "0a1b2c3 First commit",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "fyi",
+            "classSince": "2026-10-28T04:01:13.337Z"
           }
         },
         {
@@ -5639,7 +5813,9 @@
               "updatedAt": "2026-10-28T04:01:15.837Z",
               "activity": {
                 "turnCount": 2
-              }
+              },
+              "class": "done",
+              "classSince": "2026-10-28T04:01:15.837Z"
             }
           },
           "session": {
@@ -5674,7 +5850,9 @@
                 "line": "0a1b2c3 First commit",
                 "shells": 0
               }
-            ]
+            ],
+            "class": "done",
+            "classSince": "2026-10-28T04:01:15.837Z"
           }
         }
       ]

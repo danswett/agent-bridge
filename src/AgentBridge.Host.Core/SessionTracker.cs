@@ -26,6 +26,14 @@ internal sealed class SessionTracker
     DateTimeOffset _firstSeen;
     // The last session built, and the nested agents' records it was built with.
     Session? _built;
+    // The restore boundary the last build was made with (QuestionsFrom).
+    DateTimeOffset? _builtFrom;
+    // The boundary the hook status was last looked at with, and the interrupted run's hook status
+    // time it found, if any.
+    DateTimeOffset? _hookFrom;
+    (DateTimeOffset At, string? Tool)? _staleHook;
+    // The restore boundary the session last built set the interrupted run's questions aside by.
+    public DateTimeOffset? BuiltFrom => _builtFrom;
     IReadOnlyList<ClaudeSubagents.Record> _nested = [];
     // What the last build asked Stalled, while the session could be called Not responding: null
     // when it could not (not working, or already showing another attention).
@@ -39,7 +47,7 @@ internal sealed class SessionTracker
         _firstSeen = time.GetUtcNow();
         _parser = discovered.Agent switch
         {
-            AgentKind.Copilot => new CopilotParser(_state, time, options.CopilotRemoteApproval),
+            AgentKind.Copilot => new CopilotParser(_state, time, options.CopilotRemoteApproval, options.EscapedApproval),
             AgentKind.Claude => new ClaudeParser(_state, time),
             _ => new CodexParser(_state, time),
         };
@@ -101,8 +109,32 @@ internal sealed class SessionTracker
         {
             changed = true;
         }
+        // A restore's boundary (QuestionsFrom) set or moved since the last build changes what it
+        // shows as asked (#780), though nothing it reads did.
+        // The hook status a restored Claude session's registration carries when the boundary is
+        // first read with, from before it, is the interrupted run's: SessionStart keeps the last
+        // status recorded (as agent-ha-bridge's hook does), so its old "waiting" read as the new
+        // run asking (Copilot on #837). Told by being that same record, not by its time; a hook
+        // event since is the new run's.
+        if (_hookFrom != _state.AskedFrom)
+        {
+            _hookFrom = _state.AskedFrom;
+            // After a host restart, by identity: the stale one is the one an earlier run set aside, by
+            // its tool and its time, so a different approval a clock set back gave the same time is
+            // not taken for it (Engineering, cr2-837h). A record from before kept the time alone.
+            var tool = _state.Tools.Current()?.Id;
+            _staleHook = _state.AskedFrom is { } from && discovered.Registration?.HookStatusAt is { } hook
+                && (_state.Known is { } known
+                    ? (tool is not null && known.Contains(HookKey(hook, tool))) || known.Contains(HookKey(hook, null))
+                    : hook < from)
+                ? (hook, tool) : null;
+            changed = true;
+        }
+        changed |= _builtFrom != _state.AskedFrom;
+        _state.EndBacklog();
         if (!changed) { return _built!; }
         Builds++;
+        _builtFrom = _state.AskedFrom;
         return _built = Settle(Build());
     }
 
@@ -150,9 +182,12 @@ internal sealed class SessionTracker
         var reg = d.Registration;
         var now = _time.GetUtcNow();
         var status = _state.Status;
+        // Without what an interrupted run left asking (a restored session's boundary, #780): it went
+        // with that run, and must neither hide what is asked now nor hold the status at waiting.
+        var pending = _state.Asking;
         // Status precedence (docs/design/subagents.md §4): the session's own question wins over
         // a sub-agent's (rule 1, "question wins"), and a sub-agent's makes it waiting too (rule 2).
-        var question = _state.Pending.LastOrDefault(q => q.Agent is null) ?? (_state.Pending.Count > 0 ? _state.Pending[^1] : null);
+        var question = pending.LastOrDefault(q => q.Agent is null) ?? (pending.Count > 0 ? pending[^1] : null);
         // Delivery types only into the main agent's ask_user (AnswerService refuses a stamped
         // call), so nothing proves where keys for a sub-agent's would land: it is answered at
         // the machine. Nor for a Copilot form while a permission prompt or a sub-agent's
@@ -160,7 +195,7 @@ internal sealed class SessionTracker
         // dialog can be the one on screen while the session's own question is the one listed.
         // A permission prompt carries its own proof (CopilotPermission).
         if (question is { Kind: QuestionKind.Form } && (question.Agent is not null
-            || (d.Agent == AgentKind.Copilot && _state.Pending.Any(q => q != question && (q.Kind == QuestionKind.Approval || q.Agent is not null)))))
+            || (d.Agent == AgentKind.Copilot && pending.Any(q => q != question && (q.Kind == QuestionKind.Approval || q.Agent is not null)))))
         {
             question = question with { AnswerAtMachine = true };
         }
@@ -174,7 +209,7 @@ internal sealed class SessionTracker
             {
                 case "idle": status = SessionStatus.Idle; hintAt = hookAt; break;
                 case "working": status = SessionStatus.Working; hintAt = hookAt; break;
-                case "waiting" when question is null && _state.Tools.Current() is { } tool:
+                case "waiting" when question is null && _state.Tools.Current() is { } tool && !(_staleHook is { } stale && stale.At == hookAt && (stale.Tool is null || stale.Tool == tool.Id)):
                     // A permission prompt, which agent-ha-bridge's Notification hook reports
                     // and only mirrors: it offers the reply box at best, never a proven
                     // answer, so it is answered at the machine.
@@ -191,7 +226,7 @@ internal sealed class SessionTracker
             // already typed into is never typed into again, so it is answered at the machine.
             if (reg.Approval is { } marker && (question is null || question.Kind == QuestionKind.Approval))
             {
-                question = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted);
+                question = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted, approve: _options.EscapedApproval);
                 hintAt = question.AskedAt;
             }
             // Codex's hooks report status directly, at UserPromptSubmit and Stop.
@@ -206,6 +241,7 @@ internal sealed class SessionTracker
         }
 
         var effective = question is not null ? SessionStatus.Waiting : status;
+        TurnStatus = status;
         DateTimeOffset since;
         if (_lastStatus == effective)
         {
@@ -385,9 +421,48 @@ internal sealed class SessionTracker
     // How many prompts the transcript has had, so the driver can tell when more than one came in one
     // read, and so cannot know which of them a reply's arm was for.
     public int Prompts => _state.Prompts;
+    // The turn's own status, before a pending question makes it Waiting: what a restored session
+    // shows once a question the interrupted run left is set aside (SessionSource.Commit, #780).
+    public SessionStatus TurnStatus { get; private set; }
+    public DateTimeOffset? LastPromptAt => _state.LastPromptAt;
 
     // The sub-agents with a question pending.
-    HashSet<string> Waiting() => [.. _state.Pending.Where(q => q.Agent is not null).Select(q => q.Agent!)];
+    HashSet<string> Waiting() => [.. _state.Asking.Where(q => q.Agent is not null).Select(q => q.Agent!)];
+
+    // The restored session's boundary (SessionState.AskedFrom), set before each read.
+    public DateTimeOffset? QuestionsFrom
+    {
+        get => _state.AskedFrom;
+        set => _state.AskedFrom = value;
+    }
+
+    // The boundary with the interrupted run's questions as an earlier host run found them
+    // (SessionState.Known), the ids set first so the boundary is set with them.
+    public void SetQuestionsFrom(DateTimeOffset? from, IReadOnlySet<string>? known)
+    {
+        if (from != _state.AskedFrom) { _state.Known = known; }
+        _state.AskedFrom = from;
+    }
+
+    // The interrupted run's questions set aside and still unanswered, by id, oldest first, and a stale
+    // hook approval by its tool and time: the newest RestoreFiles.MaxInterrupted of them. Answered ones
+    // are not kept: with them, a long session went past the bound, and the record then fell back to
+    // telling them by time, which hid a new question a clock set back (Engineering, cr2-837h). Past the
+    // bound, the oldest are let go and so read as new after a restart: shown at the machine, never a
+    // new question hidden.
+    public IReadOnlyList<string> InterruptedQuestions
+    {
+        get
+        {
+            var ids = _state.Pending.Select(q => q.Id).Where(_state.Interrupted.Contains).Distinct(StringComparer.Ordinal).ToList();
+            if (_staleHook is { } h) { ids.Add(HookKey(h.At, h.Tool)); }
+            var max = AgentBridge.Host.Core.Restore.RestoreFiles.MaxInterrupted;
+            return ids.Count > max ? [.. ids.Skip(ids.Count - max)] : ids;
+        }
+    }
+
+    static string HookKey(DateTimeOffset at, string? tool) =>
+        "hook:" + (tool is null ? "" : tool + "@") + at.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture);
 
     // session.get { id, agent }: one sub-agent with its own words and tools, or null when the
     // session has none by that id.

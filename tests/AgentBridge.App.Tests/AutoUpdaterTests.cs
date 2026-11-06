@@ -22,7 +22,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     // The host manager's start and stop timeouts, on a clock that never moves: they wait for the
     // fake host however slow the runner, as HostManagerTests' held stop does (#425). On the wall
     // clock a stall like #909's 7.4 s ran a 2 s stop or 5 s start out with the host on its way.
-    // No test here needs one to run out; a host that never comes ends at --blame-hang.
+    // A host that never comes ends at --blame-hang; a test that needs a wait to run out (a usage
+    // probe's, #238) advances this clock itself.
     readonly FakeTimeProvider held = new(Make.T0);
     readonly List<string> log = [];
     readonly string app = Path.Combine(Path.GetTempPath(), "abu-" + Guid.NewGuid().ToString("N")[..8]);
@@ -107,6 +108,10 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             StartTimeout = TimeSpan.FromSeconds(5),
             StopTimeout = TimeSpan.FromSeconds(2),
             Poll = TimeSpan.FromMilliseconds(50),
+            // No machine's real processes: the package is what a test says it is.
+            PackageHosts = () => [],
+            ProbeWait = TimeSpan.FromSeconds(3),
+            ProbePoll = TimeSpan.FromMilliseconds(50),
             Elevated = () => false,
             Time = held,
         };
@@ -157,6 +162,333 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal("0.1.0", prefs.UpdatedFrom);
         Assert.Equal("What 0.2.0 changes", prefs.UpdateNotes);
     }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_update_due_while_a_Codex_probe_finishes_on_the_host_waits_until_the_host_says_it_is_done()
+    {
+        await StartAsync();
+        var finishing = true;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(finishing, finishing ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null));
+
+        await TwoIdleTicksAsync();
+        // Six hours on, it still waits: never cut short.
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.True(host.Sent(HostOps.ProbeHold).Count >= 2);
+        Assert.Single(log, l => l.Contains("waiting to install 0.2.0: Codex's app-server", StringComparison.Ordinal));
+        // And said to the devices, not an idle timer or "installs at the next look".
+        Assert.Equal("Codex's app-server, started to read its allowance, is still answering or finishing; it installs once that is done", auto.State.Waiting);
+
+        finishing = false;
+        await auto.TickAsync();
+
+        Assert.True(updater.Applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Stopping_the_host_waits_until_it_says_no_usage_probe_is_finishing_before_asking_it_to_stop()
+    {
+        await StartAsync();
+        var holds = 0;
+        var holdsAtStop = -1;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref holds) < 3, "finishing"));
+        host.On(HostOps.Stop, data =>
+        {
+            holdsAtStop = Volatile.Read(ref holds);
+            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+
+        await manager.StopAsync();
+
+        Assert.Equal(3, holdsAtStop);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_stop_still_waiting_on_a_usage_probe_when_its_wait_is_up_refuses_rather_than_ends_the_host()
+    {
+        await StartAsync();
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+
+        // The manager's clock never moves (held), so its wait is run out by hand: the deadline is
+        // set before the first hold is asked, and is past once the clock goes beyond ProbeWait.
+        var stopping = manager.StopAsync();
+        await Wait.UntilAsync(() => host.Sent(HostOps.ProbeHold).Count >= 1, "the first hold");
+        held.Advance(manager.ProbeWait + TimeSpan.FromSeconds(1));
+        var busy = await Assert.ThrowsAsync<HostBusyException>(() => stopping);
+
+        Assert.Contains("Codex's app-server is still finishing", busy.Message, StringComparison.Ordinal);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(processes.Killed);
+        Assert.True(await manager.IsRunningAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_hold_that_times_out_or_is_refused_never_reaches_the_stop_or_the_kill()
+    {
+        await StartAsync();
+        // Only the hold is quick to give up: reaching a running host may take a loaded runner longer,
+        // and a host not reached is taken for one already stopped.
+        var quick = Manager(callTimeout: TimeSpan.FromMilliseconds(300), connectTimeout: TimeSpan.FromSeconds(5));
+
+        // No answer at all, so the hold's call timeout runs out however slow the runner: a 2 s sleep
+        // in the handler raced it.
+        var never = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.ProbeHold, _ => never.Task);
+        var timedOut = await Assert.ThrowsAsync<HostBusyException>(() => quick.StopAsync());
+        Assert.Contains("could not say whether a usage probe", timedOut.Message, StringComparison.Ordinal);
+        never.SetResult(new ProbeHoldResult(false));
+
+        // An answer that is an error.
+        host.On(HostOps.ProbeHold, _ => throw new InvalidOperationException("the probes could not be looked at"));
+        await Assert.ThrowsAsync<HostRefusedException>(() => quick.StopAsync());
+
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(processes.Killed);
+        Assert.True(await quick.IsRunningAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_older_host_that_does_not_know_the_hold_is_stopped_as_before()
+    {
+        await StartAsync();
+
+        await manager.StopAsync();
+
+        Assert.Single(host.Sent(HostOps.ProbeHold));
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.False(await manager.IsRunningAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_update_holds_and_waits_for_the_other_profiles_hosts_in_the_package_before_stopping_this_one()
+    {
+        await StartAsync();
+        await using var other = new FakeHost();
+        await using var elsewhere = new FakeHost();
+        other.Start();
+        elsewhere.Start();
+        var otherHolds = 0;
+        var otherHoldsAtStop = -1;
+        other.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref otherHolds) < 3, "finishing"));
+        elsewhere.Status = FakeHost.StatusOf() with { ProcessId = 5151 };
+        host.On(HostOps.Stop, data =>
+        {
+            otherHoldsAtStop = Volatile.Read(ref otherHolds);
+            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+        other.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        var updating = Manager(others: [other.Folder, elsewhere.Folder, Path.Combine(app, "no-host-here")], package: [4242, 6161]);
+        var applied = false;
+
+        // Settings' Update and restart, and the automatic update, both come this way.
+        await updating.StopAndApplyAsync(() => { }, () => applied = true);
+
+        Assert.True(applied);
+        Assert.Equal(3, otherHoldsAtStop);
+        // Held again after this host stopped, just before the hand-over.
+        Assert.True(Volatile.Read(ref otherHolds) > otherHoldsAtStop);
+        // Left running for the update to end, not stopped; and one not from the package is not asked.
+        Assert.Empty(other.Sent(HostOps.Stop));
+        Assert.Empty(elsewhere.Sent(HostOps.ProbeHold));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Every_other_profiles_hold_is_renewed_while_another_is_waited_for()
+    {
+        await StartAsync();
+        await using var slow = new FakeHost();
+        await using var idle = new FakeHost();
+        slow.Start();
+        idle.Start();
+        slow.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        idle.Status = FakeHost.StatusOf() with { ProcessId = 7171 };
+        var slowHolds = 0;
+        slow.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref slowHolds) < 6, "finishing"));
+        idle.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
+        var updating = Manager(others: [slow.Folder, idle.Folder], package: [4242, 6161, 7171]);
+
+        await updating.StopAndApplyAsync(() => { }, () => { });
+
+        // Asked as often as the slow one in the first wait: a hold of 15 minutes never lapses
+        // while another host's probe takes its 11.
+        Assert.True(idle.Sent(HostOps.ProbeHold).Count >= 6, $"held {idle.Sent(HostOps.ProbeHold).Count} times");
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_profiles_host_started_while_the_last_hold_waits_is_held_before_the_update_goes_ahead()
+    {
+        await StartAsync();
+        await using var busy = new FakeHost();
+        await using var late = new FakeHost();
+        busy.Start();
+        busy.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        late.Status = FakeHost.StatusOf() with { ProcessId = 7171 };
+        var started = false;
+        var afterStop = 0;
+        busy.On(HostOps.ProbeHold, _ =>
+        {
+            if (host.Sent(HostOps.Stop).Count == 0) { return new ProbeHoldResult(false); }
+            // Busy a few rounds after this host stopped; another profile's host starts meanwhile.
+            var n = Interlocked.Increment(ref afterStop);
+            if (n == 2) { late.Start(); Volatile.Write(ref started, true); }
+            return new ProbeHoldResult(n < 4, "finishing");
+        });
+        late.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
+        host.On(HostOps.Stop, data =>
+        {
+            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+        var updating = Manager(others: [busy.Folder, late.Folder], packageNow: () => Volatile.Read(ref started) ? [4242, 6161, 7171] : [4242, 6161]);
+        var applied = false;
+
+        await updating.StopAndApplyAsync(() => { }, () => applied = true);
+
+        Assert.True(applied);
+        Assert.NotEmpty(late.Sent(HostOps.ProbeHold));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Quitting_while_an_update_waits_for_another_profiles_probe_after_stopping_this_host_starts_it_again_at_once()
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        await using var other = new FakeHost();
+        other.Start();
+        other.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        other.On(HostOps.ProbeHold, _ =>
+        {
+            if (host.Sent(HostOps.Stop).Count == 0) { return new ProbeHoldResult(false); }
+            waiting.TrySetResult();
+            return new ProbeHoldResult(true, "finishing");
+        });
+        host.On(HostOps.Stop, data =>
+        {
+            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+        // Waits as long as a real update would for that probe.
+        var updating = Manager(others: [other.Folder], package: [4242, 6161], probeWait: TimeSpan.FromMinutes(11));
+        var applied = false;
+        var update = Task.Run(() => updating.StopAndApplyAsync(() => { }, () => applied = true));
+        await waiting.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var quitLog = new List<string>();
+        await Task.Run(() => updating.Quit(TimeSpan.FromSeconds(10), quitLog.Add));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => update.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.False(applied);
+        Assert.Empty(quitLog);
+        Assert.Single(processes.Started);
+        // The other profile's probe is left to finish.
+        Assert.Empty(other.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_update_stops_nothing_when_a_host_of_the_package_cannot_be_reached()
+    {
+        await StartAsync();
+        var updating = Manager(others: [Path.Combine(app, "refuses-this-app")], package: [4242, 8181]);
+        var applied = false;
+
+        var busy = await Assert.ThrowsAsync<HostBusyException>(() => updating.StopAndApplyAsync(() => { }, () => applied = true));
+
+        Assert.Contains("pid 8181", busy.Message, StringComparison.Ordinal);
+        Assert.False(applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(processes.Killed);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_update_stops_nothing_when_another_profiles_host_cannot_confirm_its_usage_probe_is_done()
+    {
+        await StartAsync();
+        await using var other = new FakeHost();
+        other.Start();
+        other.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        other.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        var updating = Manager(others: [other.Folder], package: [4242, 6161]);
+        var applied = false;
+
+        // Its wait is run out on the held clock once the other host is first held, the deadline
+        // being set before that.
+        var update = updating.StopAndApplyAsync(() => { }, () => applied = true);
+        await Wait.UntilAsync(() => other.Sent(HostOps.ProbeHold).Count >= 1, "the other profile's first hold");
+        held.Advance(updating.ProbeWait + TimeSpan.FromSeconds(1));
+        var busy = await Assert.ThrowsAsync<HostBusyException>(() => update);
+
+        Assert.Contains("still finishing", busy.Message, StringComparison.Ordinal);
+        Assert.False(applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(host.Sent(HostOps.ProbeHold));
+        Assert.Empty(processes.Killed);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Velopacks_hooks_begin_no_stop_they_would_abandon()
+    {
+        await StartAsync();
+        var hook = Manager();
+
+        // Busy past what the hook has: left running, unasked, for Velopack to end. Its wait is run
+        // out on the held clock once the first hold is asked, the deadline being set before it.
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        var busy = hook.StopWithinAsync(TimeSpan.FromMilliseconds(300));
+        await Wait.UntilAsync(() => host.Sent(HostOps.ProbeHold).Count >= 1, "the hook's first hold");
+        held.Advance(TimeSpan.FromMilliseconds(300) + TimeSpan.FromSeconds(1));
+        Assert.Contains("still finishing", await busy, StringComparison.Ordinal);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(processes.Killed);
+
+        // Done: stopped as any stop is.
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
+        Assert.Null(await hook.StopWithinAsync(TimeSpan.FromMilliseconds(300)));
+        Assert.Single(host.Sent(HostOps.Stop));
+
+        // Already stopped, as the app leaves it before every update it starts: nothing is asked.
+        var holds = host.Sent(HostOps.ProbeHold).Count;
+        Assert.Null(await hook.StopWithinAsync(TimeSpan.FromMilliseconds(300)));
+        Assert.Equal(holds, host.Sent(HostOps.ProbeHold).Count);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null) =>
+        new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
+            ct => LocalClient.ConnectAsync(host.Endpoint, connectTimeout ?? TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(2),
+            Poll = TimeSpan.FromMilliseconds(50),
+            ProbeWait = probeWait ?? TimeSpan.FromSeconds(3),
+            ProbePoll = TimeSpan.FromMilliseconds(50),
+            ProbeCallTimeout = callTimeout ?? TimeSpan.FromSeconds(5),
+            OtherProfiles = () => others ?? [],
+            ConnectTo = (folder, ct) => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromMilliseconds(300), ct),
+            PackageHosts = packageNow ?? (() => package ?? []),
+            Elevated = () => false,
+            // As the fixture's manager: no wait runs out under a test on a slow runner, and one a
+            // test needs to run out is advanced by hand.
+            Time = held,
+        };
 
     [Fact]
     [Trait("Category", "Network")]
@@ -938,6 +1270,21 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         await TwoIdleTicksAsync();
 
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Turning_it_off_while_the_host_is_asked_about_its_usage_probes_stops_the_install()
+    {
+        await StartAsync();
+        // The switch goes off while the host answers whether a probe is finishing: none is.
+        host.On(HostOps.ProbeHold, _ => { prefs = prefs with { AutoUpdate = false }; return new ProbeHoldResult(false); });
+
+        await TwoIdleTicksAsync();
+
+        Assert.NotEmpty(host.Sent(HostOps.ProbeHold));
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
     }

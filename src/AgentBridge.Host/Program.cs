@@ -110,7 +110,10 @@ var options = new SessionSourceOptions
     CodexHome = Option("--codex-home") ?? intakeState?.Homes?.Codex ?? defaults.CodexHome,
     ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
     CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
+    UsageProbeRoots = [.. new[] { Identity.DefaultRoot, serveFolder is null ? null : Path.GetDirectoryName(Path.GetFullPath(serveFolder)) }
+        .OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase)],
     CopilotRemoteApproval = settings.RemoteApproval,
+    EscapedApproval = settings.EscapedApproval,
     Log = command == "serve" ? Log : null,
     // Only serve keeps what it listed for its next start (#147); no other command reads or writes it.
     StateFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "sessions-listed.json") : null,
@@ -351,6 +354,9 @@ async Task<int> ServeAsync(HostHandover handover)
     // the agent records what it typed rather than at its next poll.
     var writes = new TranscriptWrites();
     source.TranscriptWritten += writes.Written;
+    // The boundaries of sessions restored by an earlier run, before the first pass publishes them
+    // (#780): what an interrupted run left is never shown again as asked after a host restart.
+    RestoreRecorder.HoldBoundaries(Path.Combine(identity.Folder, RestoreFiles.FileName), source);
     await source.StartAsync(stop.Token);
     // Files over 256 KiB come from the relay's blob store, through whichever connection is up.
     using var relayBlobs = new RelayBlobs();
@@ -380,9 +386,10 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     push?.Start();
     // What a reboot or a crash took (#780, docs/host-launch.md): the sessions live now, written down
-    // as they change, and those an earlier run saw that died with it, offered to resume from Launch.
-    // It starts nothing. After the first discovery pass, so what runs now is known; disposed before
-    // the source, so a clean stop is written while the sessions are still live.
+    // as they change, and those an earlier run saw that died with it, restored idle through the
+    // launcher's resume path (or offered to resume from Launch). Started once the launcher exists,
+    // after the first discovery pass, so what runs now is known; disposed before the source, so a
+    // clean stop is written while the sessions are still live.
     await using var restore = new RestoreRecorder(source, new RestoreOptions
     {
         Path = Path.Combine(identity.Folder, RestoreFiles.FileName),
@@ -393,11 +400,12 @@ async Task<int> ServeAsync(HostHandover handover)
         // it has taken in what the hooks spooled while the host was down, and never while it cannot run.
         EndsSettled = HookIntake.EndingsSettled(migrated: intakeState is not null, intakeProblem, () => runningIntake),
         RestoreOnStart = settings.RestoreOnStart,
+        RestoreKept = settings.RestoreKept,
+        Marks = source,
         ReadOnly = () => ReadOnlyReason() ?? (settings.Launch.Enabled ? null : "launching is turned off (launch.enabled)") ?? g5.Recent(),
         Log = Log,
     });
-    if (push is not null) { restore.NoticeReady += push.NotifyRestore; }
-    restore.Start();
+    if (push is { } notifier) { restore.NoticeReady += n => notifier.NotifyRestore(n, restore.RestoredLosses()); }
     // Each agent's allowance, asked at the pace its sessions set, and never more often than
     // the idle pace while agent-ha-bridge is asking the same vendors for this user; further Copilot
     // accounts at the idle pace. None at all when usage.publish is off: no vendor is asked, and
@@ -405,11 +413,10 @@ async Task<int> ServeAsync(HostHandover handover)
     using var usageHttp = new UsageHttp(TimeSpan.FromSeconds(15));
     foreach (var problem in settings.UsageProblems) { Log($"config.json: {problem}"); }
     await using var usageMonitor = settings.Usage.Publish
-        ? NewUsageMonitor(source, usageHttp, Log, () => OperatingSystem.IsWindows() ? haProbe!.Active() : null)
+        ? NewUsageMonitor(source, usageHttp, Log, () => OperatingSystem.IsWindows() ? haProbe!.Active() : null, NewUsageProbes(identity.Folder))
         : null;
     Log(usageMonitor is null ? "agent usage is off (usage.publish)"
         : $"agent usage is on{(settings.Usage.CopilotAccounts.Count == 0 ? "" : $", with {settings.Usage.CopilotAccounts.Count} further Copilot account(s) (usage.copilotAccounts)")}");
-    usageMonitor?.Start();
     // Other machines' readings, asked of the account's other hosts and kept in the profile's own
     // private folder, so an account's allowance is still shown once the machine that read it is
     // offline (#172). Only where this machine reports usage itself.
@@ -439,16 +446,32 @@ async Task<int> ServeAsync(HostHandover handover)
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore);
     launcher.SessionStarted += restore.Launched;
+    launcher.SeenReadyLate += restore.SeenReadyLate;
+    restore.Restore(launcher);
+    restore.Start();
     transfers.Launcher = launcher;
+    // No reply into a session whose launch here has not seen its window ready (a restore at folder
+    // trust above all): Enter would answer the question (#780).
+    if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; }
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
+    // Approve on an approval with escaped characters, confirmed from a person's device approved here
+    // (#803): permissions.escapedApprovalDevices, or while that is absent the folder-trust devices,
+    // as the app's Settings changes them.
+    foreach (var problem in settings.PermissionProblems) { Log($"config.json: {problem}"); }
+    var escapedApprovals = new EscapedApprovals(identity.Key, settings.EscapedApproval,
+        EscapedApprovals.Devices(settings.EscapedApprovalDevices, () => launcher.RemoteFolderTrust, () => launcher.TrustDevices), Log) { Trust = trustedPeers };
+    Log(settings.EscapedApproval == EscapedApproval.Confirm
+        ? $"an approval with escaped characters is approved from a device by a two-step confirmation, from {(settings.EscapedApprovalDevices is null ? "the folder-trust devices while folder trust is on (launch.remoteFolderTrustDevices)" : $"{settings.EscapedApprovalDevices.Count} device(s) (permissions.escapedApprovalDevices)")}"
+        : "an approval with escaped characters is approved only at the machine (permissions.escapedApproval)");
     // Before the connector, which launches from the card through it.
     // The host's own updates, from the machine's update entity: through the app's package, which
     // carries the host (Windows only: elsewhere nothing packages it yet). Installing ends this
     // serve as Ctrl+C would, once the release is handed to the updater. None on a read-only host
     // (delivery.readOnly), which acts on nothing from another device: the buttons are withdrawn.
     var hostUpdates = VelopackHostUpdates.For(ReadOnlyReason(), OperatingSystem.IsWindows(),
-        () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log));
+        () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log,
+            ready: ct => HostUpdateGate.ReadyAsync(HostUpdateGate.OtherHosts, usageMonitor is null ? null : usageMonitor.SettleProbesAsync, ct)));
     // Home Assistant's refusals of this machine, counted with every other process of this user so a
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
@@ -472,6 +495,7 @@ async Task<int> ServeAsync(HostHandover handover)
         ReadOnly = OfferedReadOnly,
         G5 = g5,
         TrustAnswers = trustAnswers,
+        EscapedApprovals = escapedApprovals,
         Updates = updates,
         Restore = () => restore.Notice,
     };
@@ -588,11 +612,16 @@ async Task<int> ServeAsync(HostHandover handover)
             wake.Release();
         },
         Stop = () => stop.Cancel(),
-        Restart = () =>
+        // Done with any usage probe tied to this host before it stops, so a standalone Codex probe
+        // is not cut mid-refresh (#238); the replacement starts once it has (HostHandover).
+        Restart = () => _ = Task.Run(async () =>
         {
+            if (usageMonitor is not null) { await usageMonitor.SettleProbesAsync(TimeSpan.FromSeconds(90)); }
             handover.Request();
             stop.Cancel();
-        },
+        }),
+        HoldProbes = () => usageMonitor?.HoldProbes(TimeSpan.FromMinutes(15)) == true
+            ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null,
     }, Log);
     agentReadiness.Start();
     // A pass, or keep-awake turned on or off, changes what the app's Settings shows.
@@ -619,6 +648,9 @@ async Task<int> ServeAsync(HostHandover handover)
         Log($"stopped from the {Product.App} while starting; not serving");
         return 0;
     }
+    // Only now: a host stopped while starting, whose pipe the app could not reach, must start no
+    // usage probe it would cut short on its way out, past the app's probe hold (#238 review).
+    usageMonitor?.Start();
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = new ReconnectBackoff();
@@ -663,6 +695,7 @@ async Task<int> ServeAsync(HostHandover handover)
             transfers.Attach(relay, hub);
             usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
+            escapedApprovals.Attach(relay);
             updates.Attach(relay);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
@@ -711,6 +744,7 @@ async Task<int> ServeAsync(HostHandover handover)
             transfers.Attach(null, null);
             usagePeers?.Attach(null, null);
             trustAnswers.Attach(null);
+            escapedApprovals.Attach(null);
             updates.Attach(null);
         }
         reconnects++;
@@ -773,11 +807,29 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
 
 // Each agent's allowance as config.json's usage section says to read it: at its pace, with its
 // further Copilot accounts.
-UsageMonitor NewUsageMonitor(ISessionSource source, IUsageHttp http, Action<string> log, Func<string?>? agentHaBridge = null)
+UsageMonitor NewUsageMonitor(ISessionSource source, IUsageHttp http, Action<string> log, Func<string?>? agentHaBridge = null, UsageProbes? probes = null)
 {
     var usageOptions = UsageOptions.For(options, settings.Usage);
-    return new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: log, accounts: settings.Usage.CopilotAccounts), source, usageOptions,
+    return new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: log, accounts: settings.Usage.CopilotAccounts, probes: probes), source, usageOptions,
         agentHaBridge: agentHaBridge, log: log);
+}
+
+// What lets Claude Code and Codex read their own allowance (#200): only for serve, which is there
+// to see a probe through. Each agent is found as a launch finds it, with the config's path for it.
+UsageProbes NewUsageProbes(string folder)
+{
+    var locator = new AgentLocator();
+    return new UsageProbes
+    {
+        Launcher = new ProbeLauncher(),
+        Processes = new SystemProcessInspector(),
+        Find = agent => Launchers.Find(agent.ToString().ToLowerInvariant()) is { } l ? locator.Find(l, settings.Launch.Agent(l.Id)) : null,
+        WorkingDirectory = Path.Combine(folder, UsageProbes.FolderName),
+        ClaudeAccountSeen = Path.Combine(folder, "usage-claude-account.json"),
+        ClientVersion = HostVersion(),
+        // Beside every profile, so hosts serving different bridge profiles share it (#238).
+        Lease = key => new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "usage-probes", key + ".lock")).TryTake(),
+    };
 }
 
 // The Dev Box keep-awake as config.json's devBox section says to run it (docs/host-config.md): az

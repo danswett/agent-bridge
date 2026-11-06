@@ -59,15 +59,49 @@ public sealed class RestoreWorktreeUsage(IRestorePending pending, IWorktreeUsage
         if (pending.Folders() is not { } waiting) { return WorktreeUsage.Unknown("the sessions waiting to be restored cannot be read"); }
         var usage = inner?.Read() ?? WorktreeUsage.Unknown("this host has no way to read it");
         if (!usage.Known || waiting.Count == 0) { return usage; }
-        // As a live session's: a folder that cannot be resolved (a link that is missing or cannot
-        // be read, or the folder gone) may still be under any worktree, so nothing is known.
         var physical = new List<string>();
         foreach (var w in waiting)
         {
-            if (Folders.Physical(w) is not { } p) { return WorktreeUsage.Unknown("the folder of a session waiting to be restored cannot be resolved"); }
+            if (Place(w) is not { } p) { return WorktreeUsage.Unknown("the folder of a session waiting to be restored cannot be resolved"); }
             physical.Add(p);
         }
         return usage with { Directories = [.. usage.Directories, .. physical] };
+    }
+
+    // Where a waiting session's folder is, or was. One that is gone (a subfolder deleted since) is
+    // placed under its nearest ancestor that still exists, resolved: the missing rest cannot be
+    // links. Reading every gone folder as unknown kept every worktree for the whole week its
+    // session was offered. Null only when that ancestor cannot be resolved (a link that is missing
+    // or cannot be read, or a file where a folder was): it may lead under any worktree.
+    static string? Place(string folder)
+    {
+        if (Folders.Physical(folder) is { } physical) { return physical; }
+        try
+        {
+            if (!Path.IsPathFullyQualified(folder)) { return null; }
+            var current = Path.GetFullPath(folder);
+            var missing = new Stack<string>();
+            while (!Present(current))
+            {
+                if (Path.GetDirectoryName(current) is not { } parent) { return null; }
+                missing.Push(Path.GetFileName(current));
+                current = parent;
+            }
+            return Folders.Physical(current) is { } root ? Path.Combine([root, .. missing]) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return null; }
+    }
+
+    // Whether anything is there, a dangling link included (its attributes are its own). Anything
+    // but plain absence (an unreadable entry) throws, and leaves the folder's place unknown.
+    static bool Present(string path)
+    {
+        try
+        {
+            File.GetAttributes(path);
+            return true;
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return false; }
     }
 }
 
@@ -248,8 +282,13 @@ public sealed partial class AgentWorktreeUsage : IWorktreeUsage
         // Codex's app-server daemon is no session and works in no folder, and it outlives the
         // session that started it: required to have a registration, it kept every finished worktree
         // from a machine's first Codex session on (#154). Discovery accounts it the same way. A
-        // registration that does name one still counts its folder above.
-        if (live.Any(p => !accounted.Contains(p.Key) && !(kind == AgentKind.Codex && CommandLine.IsCodexAppServer(p.Value.CommandLine))))
+        // registration that does name one still counts its folder above. The host's own usage
+        // probes (#200) run in its own empty folder and are no session either: Codex's is an
+        // app-server, and Claude's is recognised by its options, as is the `claude auth status`
+        // asked before one when this host started it (a person's own still counts).
+        if (live.Any(p => !accounted.Contains(p.Key) && !(kind == AgentKind.Codex && CommandLine.IsCodexAppServer(p.Value.CommandLine))
+            && !(kind == AgentKind.Claude && (CommandLine.IsClaudeUsageProbe(p.Value.CommandLine)
+                || (CommandLine.IsClaudeAuthStatus(p.Value.CommandLine) && processes.IsOwnChild(p.Value))))))
         {
             throw new UsageUnknown($"a live {name} process has no registration");
         }

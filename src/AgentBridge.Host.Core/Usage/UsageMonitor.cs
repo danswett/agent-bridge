@@ -23,6 +23,13 @@ namespace AgentBridge.Host.Core.Usage;
 // A reading is announced (Changed) when anything but its time changed, or when the last
 // announcement of it is Republish old, so a client can tell a host still confirming an
 // unchanged figure from one that stopped.
+//
+// Claude's and Codex's collectors can ask the agent itself for a fresh reading (#200), in the
+// background and at a pace of their own (ProbePace). The monitor tells them each pass whether a
+// session is open and whether it is asking at the busy pace, and asks them early (WakeAt) when a
+// probe has finished, so a probe's reading is shown within a tick or two rather than at the next
+// turn. Disposing the monitor never ends a probe, one ended mid-refresh can sign the agent out,
+// and it waits for a standalone Codex probe's answers, whose input goes with this process.
 public sealed class UsageMonitor : IAsyncDisposable
 {
     readonly IReadOnlyList<IUsageCollector> collectors;
@@ -40,6 +47,8 @@ public sealed class UsageMonitor : IAsyncDisposable
     Task? loop;
     bool? deferring;
     DateTimeOffset deferCheckedAt;
+    // The sessions open at the last pass, by agent and id (passes run one at a time).
+    HashSet<(AgentKind Agent, string Id)> seen = [];
 
     public UsageMonitor(IEnumerable<IUsageCollector> collectors, ISessionSource sessions, UsageOptions options, TimeProvider? time = null,
         Func<string?>? agentHaBridge = null, Action<string>? log = null)
@@ -63,12 +72,14 @@ public sealed class UsageMonitor : IAsyncDisposable
         get { lock (sync) { return (report, version); } }
     }
 
+    // probes: what lets Claude Code and Codex be asked to read their own allowance (serve only);
+    // without it each is read from what it last saved.
     public static IReadOnlyList<IUsageCollector> Collectors(UsageOptions options, IUsageHttp http, ICommandRunner commands, TimeProvider? time = null, Action<string>? log = null,
-        IReadOnlyList<CopilotAccount>? accounts = null)
+        IReadOnlyList<CopilotAccount>? accounts = null, UsageProbes? probes = null)
     {
         var store = OperatingSystem.IsWindows() ? new WindowsCredentialStore() : null;
         var credentials = new CopilotCredentials(options, commands, store, time: time, log: log);
-        return [new CopilotUsageCollector(options, http, credentials, time), new ClaudeUsageCollector(options, http, time), new CodexUsageCollector(options),
+        return [new CopilotUsageCollector(options, http, credentials, time), new ClaudeUsageCollector(options, time, probes, log), new CodexUsageCollector(options, time, probes, log),
             .. (accounts ?? []).OrderBy(a => a.Slot).Select(a => new CopilotAccountCollector(options, http, credentials, a, time))];
     }
 
@@ -99,7 +110,13 @@ public sealed class UsageMonitor : IAsyncDisposable
     async Task<bool> PassLockedAsync(CancellationToken cancellationToken)
     {
         var now = time.GetUtcNow();
-        var open = sessions.Snapshot().Select(s => s.Agent).ToHashSet();
+        var snapshot = sessions.Snapshot();
+        var open = snapshot.Select(s => s.Agent).ToHashSet();
+        // The sessions the last pass did not see, by agent: a new one beside another still open is
+        // an arrival too, which open alone never shows (#238 review).
+        var ids = snapshot.Select(s => (s.Agent, s.Id)).ToHashSet();
+        var arrived = ids.Where(s => !seen.Contains(s)).Select(s => s.Agent).ToHashSet();
+        seen = ids;
         bool? defer = null;
         var due = new List<(IUsageCollector Collector, State State)>();
         var further = new List<(IUsageCollector Collector, State State)>();
@@ -116,7 +133,18 @@ public sealed class UsageMonitor : IAsyncDisposable
             // named objects and scheduled tasks, which is not free.
             if (sessionOpen) { defer ??= Deferring(now); }
             var busy = sessionOpen && defer != true;
-            if (!Due(state, busy, now)) { continue; }
+            // A collector that cannot take its pace still gets its turn, and the other agents
+            // theirs: like a failed read, it ends nothing but itself.
+            try
+            {
+                collector.Pace(sessionOpen, busy);
+                if (arrived.Contains(collector.Agent)) { collector.SessionArrived(); }
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                log($"usage: pacing {collector.Agent.ToString().ToLowerInvariant()} failed: {e.GetType().Name}");
+            }
+            if (!Due(state, busy, now) && !Woken(collector, state, now)) { continue; }
             // Stamped before asking, so an ask that fails still waits its turn rather than
             // being repeated every tick until one works.
             state.CheckedAt = now;
@@ -153,12 +181,34 @@ public sealed class UsageMonitor : IAsyncDisposable
                 read = UsageRead.Failure(collector.Agent, $"Usage for {collector.Agent.ToString().ToLowerInvariant()} could not be collected: {UsageFetch.Describe(e)}", now) with { Slot = collector.Slot };
                 plain = read.Error;
             }
-            // Nothing to say: whatever was read before stands and ages.
-            if (read is null) { continue; }
+            // Nothing to say: whatever was read before stands and ages, unless the collector has
+            // withdrawn it.
+            if (read is null)
+            {
+                if (collector.TakeWithdrawal() && state.Latest is not null)
+                {
+                    lock (sync) { state.Latest = null; }
+                    state.Signature = "";
+                    state.PublishedAt = now;
+                    state.Said = null;
+                    announce = true;
+                }
+                continue;
+            }
             read = UsageProtocol.FitAgent(read);
+            string signature;
+            try { signature = Signature(read); }
+            // A reading JSON cannot carry (a NaN or an infinity a collector let through) is never
+            // kept: kept, it made every later report throw, and no agent's usage went out until the
+            // host restarted (#238 review). Said as this agent's failure; the others go on.
+            catch (Exception e) when (e is ArgumentException or JsonException or NotSupportedException)
+            {
+                read = UsageProtocol.FitAgent(UsageRead.Failure(collector.Agent, $"Usage for {collector.Agent.ToString().ToLowerInvariant()} could not be read: it gave a figure that is not a number", now) with { Slot = collector.Slot });
+                plain = read.Error;
+                signature = Signature(read);
+            }
             Say(collector, state, read, plain);
             lock (sync) { state.Latest = read; }
-            var signature = Signature(read);
             if (signature == state.Signature && now - state.PublishedAt < options.Republish) { continue; }
             state.Signature = signature;
             state.PublishedAt = now;
@@ -186,6 +236,13 @@ public sealed class UsageMonitor : IAsyncDisposable
     }
 
     static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
+
+    // A collector that has something new to read (a probe it started has finished, or its reading
+    // has grown old enough to probe for) is asked before its turn, never within MinimumGap of the
+    // last ask: otherwise a reading probed for every quarter hour, and asked every quarter hour,
+    // would be found a moment short of stale at each ask and probed for only every half hour.
+    bool Woken(IUsageCollector collector, State state, DateTimeOffset now) =>
+        collector.WakeAt is { } wake && now >= wake && now - state.CheckedAt >= options.MinimumGap;
 
     // At most once a minute: whether agent-ha-bridge started or stopped matters to the pace,
     // which is minutes, and the probe should not run on every tick.
@@ -233,7 +290,47 @@ public sealed class UsageMonitor : IAsyncDisposable
             try { await loop; }
             catch (OperationCanceledException) { }
         }
+        // A probe whose input goes with this process is let finish its answers and the grace after
+        // them: its input is the only thing that would end it, and that mid-refresh can sign the
+        // agent out (E13). Bounded: one that has not answered by then is taken for hung.
+        HoldProbes(TimeSpan.FromHours(1));
+        var probes = Task.WhenAll(collectors.Select(c => c.StoppingAsync()));
+        if (!probes.IsCompleted)
+        {
+            var most = options.CodexReportTimeout + options.CodexGrace;
+            log($"usage: waiting up to {most.TotalSeconds:0} s for Codex's app-server to answer and finish before stopping, so a refresh it may be making is not cut off");
+            using var limit = new CancellationTokenSource();
+            await Task.WhenAny(probes, Task.Delay(most, time, limit.Token));
+            await limit.CancelAsync();
+        }
         stop.Dispose();
+    }
+
+    // The host is about to stop or be updated (#238): no probe whose process goes with the host
+    // starts for the next while, and the answer says whether one is still running or within its
+    // grace. Asked again, the hold is extended; once it lapses, probing goes on as before, so an
+    // update that never comes holds nothing for good.
+    public bool HoldProbes(TimeSpan @for)
+    {
+        var until = time.GetUtcNow() + @for;
+        var holding = false;
+        foreach (var c in collectors) { holding |= c.Hold(until); }
+        return holding;
+    }
+
+    // Holds the probes and waits, at most max, for any still running to be done with this process.
+    // Returns whether none is any more.
+    // Cancelling gives up the wait (OperationCanceledException), never the probe, which goes on.
+    public async Task<bool> SettleProbesAsync(TimeSpan max, CancellationToken cancellationToken = default)
+    {
+        if (!HoldProbes(max + options.CodexGrace)) { return true; }
+        log($"usage: waiting up to {max.TotalSeconds:0} s for Codex's app-server to answer and finish first");
+        var done = Task.WhenAll(collectors.Select(c => c.StoppingAsync()));
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        await Task.WhenAny(done, Task.Delay(max, time, limit.Token));
+        await limit.CancelAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+        return done.IsCompleted;
     }
 
     sealed class State

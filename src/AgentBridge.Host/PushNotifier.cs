@@ -632,9 +632,13 @@ public sealed class PushNotifier : IAsyncDisposable
     {
         var times = new List<DateTimeOffset>();
         times.AddRange(sessions.Values.Where(t => t.Due is not null).Select(t => t.Due!.At));
-        // Not one already past (no device to tell; SignIns made nothing), which woke the loop at
-        // once, again and again.
-        times.AddRange(signInSent.Values.Select(sent => sent + options.SignInRepeat).Where(due => due > now));
+        // Not one already past with no device to tell (SignIns made nothing), which woke the loop at
+        // once, again and again. But one that came due while a push was in flight (#945) is only
+        // made by the next pump: dropped, that push left nothing else to wake it, so the machine
+        // went quiet until something unrelated did. With a device to tell, SignIns makes it or
+        // forgets it, so waking for it cannot spin.
+        var anyDevice = store.All.Any(MayNotify);
+        times.AddRange(signInSent.Values.Select(sent => sent + options.SignInRepeat).Where(due => due > now || anyDevice));
         if (sender is { Connected: true } s && s != broken)
         {
             // A notice held back by the rate limit is ready only once the window has room:
@@ -757,7 +761,7 @@ public sealed class PushNotifier : IAsyncDisposable
                     Body = count == 1 ? "1 session affected" : $"{count} sessions affected",
                     Navigate = PushNotice.SignInNavigate(sub.App, machine.Id, agent),
                     Tag = PushNotice.Tag(machine.Id, key),
-                    Data = new PushNoticeData { Kind = NoticeKind.SignIn, Machine = machine.Id, Agent = agent, Sessions = count, At = now },
+                    Data = new PushNoticeData { Kind = NoticeKind.SignIn, Machine = machine.Id, Agent = agent, Sessions = count, Class = NotificationClass.NeedsYou, At = now },
                 },
             });
             outbox.RemoveAll(o => o.Device == sub.Device && o.Session == key);
@@ -835,7 +839,9 @@ public sealed class PushNotifier : IAsyncDisposable
     // as soon as the host knows (RestoreRecorder.NoticeReady). It names no question and opens the
     // app at the machine, so an older app, which shows a kind it does not know as a question, shows
     // only these words and opens nothing that could be answered.
-    public void NotifyRestore(RestoreNotice notice)
+    // Restored: the sessions restored, idle, that went mid-turn or with a question waiting
+    // (RestoreRecorder.RestoredLosses), named with those offered.
+    public void NotifyRestore(RestoreNotice notice, IReadOnlyList<RestoreSession>? restored = null)
     {
         lock (gate)
         {
@@ -849,7 +855,7 @@ public sealed class PushNotifier : IAsyncDisposable
                     Device = sub.Device,
                     Session = RestoreKey,
                     Kind = NoticeKind.Restored,
-                    Plain = PushNotice.Serialize(RestoreMessage(notice, sub.App, now)),
+                    Plain = PushNotice.Serialize(RestoreMessage(notice, sub.App, now, restored)),
                     Ttl = (int)RestoreProtocol.ShownFor.TotalSeconds,
                     Urgency = "normal",
                     Topic = PushNotice.Topic(machine.Id, RestoreKey),
@@ -865,19 +871,25 @@ public sealed class PushNotifier : IAsyncDisposable
     // The outbox's key for the restore notice: no session id has this shape.
     const string RestoreKey = "~restore";
 
-    internal PushMessage RestoreMessage(RestoreNotice n, string app, DateTimeOffset now)
+    internal PushMessage RestoreMessage(RestoreNotice n, string app, DateTimeOffset now, IReadOnlyList<RestoreSession>? restored = null)
     {
         var count = n.Offered.Count + (n.OfferedMore ?? 0);
         var title = n.Cause == RestoreCause.Reboot ? $"{machine.Name} restarted" : $"{machine.Name} · the host stopped";
-        var lines = new List<string>
+        var lines = new List<string>();
+        if (n.Restored > 0) { lines.Add(n.Restored == 1 ? "1 session was restored, idle." : $"{n.Restored} sessions were restored, idle."); }
+        if (count > 0)
         {
-            count == 1 ? "1 session went with it." : $"{count} sessions went with it.",
-        };
-        var midTurn = n.Offered.Where(o => o.MidTurn == true).Select(Named).ToList();
+            lines.Add(n.Restored > 0 ? (count == 1 ? "1 more went with it." : $"{count} more went with it.")
+                : count == 1 ? "1 session went with it." : $"{count} sessions went with it.");
+            if (n.Loops > 0) { lines.Add(n.Loops == 1 ? "1 died again soon after a restore, so it wasn't restored again." : $"{n.Loops} died again soon after a restore, so they weren't restored again."); }
+        }
+        // What went with them, restored or not: a turn cut short, a question nobody answered.
+        var all = n.Offered.Concat(restored ?? []).ToList();
+        var midTurn = all.Where(o => o.MidTurn == true).Select(Named).ToList();
         if (midTurn.Count > 0) { lines.Add($"Mid-turn: {string.Join(", ", midTurn)}."); }
-        var lost = n.Offered.Where(o => o.QuestionLost == true).Select(Named).ToList();
+        var lost = all.Where(o => o.QuestionLost == true).Select(Named).ToList();
         if (lost.Count > 0) { lines.Add($"A question went unanswered in {string.Join(", ", lost)}."); }
-        lines.Add(n.Why == RestoreWhy.ReadOnly ? "They can be resumed once the machine takes launches." : "Resume them from Launch.");
+        if (count > 0) { lines.Add(n.Why == RestoreWhy.ReadOnly ? "They can be resumed once the machine takes launches." : "Resume them from Launch."); }
         var url = PushNotice.NavigateMachine(app, machine.Id);
         return PushNotice.Fit(new PushMessage
         {
@@ -887,7 +899,8 @@ public sealed class PushNotifier : IAsyncDisposable
                 Body = string.Join("\n", lines),
                 Navigate = url,
                 Tag = PushNotice.Tag(machine.Id, RestoreKey),
-                Data = new PushNoticeData { Kind = NoticeKind.Restored, Machine = machine.Id, Session = "", At = now },
+                // #913: sessions a crash took need the person; a reboot or a restart of the host keeps today's rules.
+                Data = new PushNoticeData { Kind = NoticeKind.Restored, Machine = machine.Id, Session = "", Class = n.Cause == RestoreCause.Crash ? NotificationClass.NeedsYou : null, At = now },
             },
         });
 
@@ -919,8 +932,15 @@ public sealed class PushNotifier : IAsyncDisposable
                 Body = body,
                 Navigate = PushNotice.Navigate(app, machine.Id, s.Id, kind == NoticeKind.Finished ? null : question),
                 Tag = PushNotice.Tag(machine.Id, s.Id),
-                Silent = kind == NoticeKind.Resolved ? true : null,
-                Data = new PushNoticeData { Kind = kind, Machine = machine.Id, Session = s.Id, Question = kind == NoticeKind.Finished ? null : question, At = now },
+                // Done is silent on every device (#913, the owner's B): the host says so itself, so
+                // a client that predates data.class or ignores it still plays nothing.
+                Silent = kind is NoticeKind.Resolved or NoticeKind.Finished ? true : null,
+                Data = new PushNoticeData
+                {
+                    Kind = kind, Machine = machine.Id, Session = s.Id, Question = kind == NoticeKind.Finished ? null : question,
+                    Class = kind switch { NoticeKind.Question => NotificationClass.NeedsYou, NoticeKind.Finished => NotificationClass.Done, _ => null },
+                    At = now,
+                },
             },
         });
     }

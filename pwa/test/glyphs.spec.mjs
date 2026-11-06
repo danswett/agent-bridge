@@ -3,6 +3,7 @@
 // reduced motion, and at the head of every card's status line at a phone's, a tablet's and a
 // desktop's width.
 import { test, expect } from '@playwright/test';
+import { appendFileSync } from 'node:fs';
 import { open, view } from './nav.mjs';
 
 const GLYPHS = ['idle', 'working', 'delegating', 'needs', 'done', 'failed', 'ended'];
@@ -167,6 +168,32 @@ test('working turns once per 1.2 s and delegating\'s satellites once per 8 s, an
   expect(by('working', 'glyph-spin')).toEqual([[1200, Infinity], [1200, Infinity]]);
   expect(by('delegating', 'glyph-orbit')).toEqual([[8000, Infinity], [8000, Infinity]]);
   expect(motion.filter((m) => m.row === 'needs' || m.row === 'idle')).toEqual([]);
+});
+
+// The compositor turns them (#610, #505): with nothing changing but glyphs turning, the page
+// recalculates no style and lays nothing out from one frame to the next. Turning an SVG child
+// instead cost both on every frame, about 120 of each in these 2 s.
+test('turning glyphs cost the page no style or layout work from frame to frame', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'only Chromium counts style and layout passes (DevTools Performance)');
+  await openDemo(page);
+  await gallery(page, ['working', 'delegating'], { sizes: SIZES, driven: true });
+  expect(await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length)).toBeGreaterThan(10);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Performance.enable');
+  // Past the gallery's own drawing.
+  await page.waitForTimeout(500);
+  const count = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map((m) => [m.name, m.value]));
+  const before = await count();
+  await page.waitForTimeout(2000);
+  const after = await count();
+  const styles = after.RecalcStyleCount - before.RecalcStyleCount;
+  const layouts = after.LayoutCount - before.LayoutCount;
+  const line = `Turning glyphs (#610), over 2 s: ${styles} style recalculations, ${layouts} layouts`;
+  console.log(line);
+  test.info().annotations.push({ type: 'glyph frames', description: line });
+  if (process.env.GITHUB_STEP_SUMMARY) { appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${line}\n\n`); }
+  expect(styles).toBeLessThanOrEqual(6);
+  expect(layouts).toBeLessThanOrEqual(6);
 });
 
 test('reduced motion stops every glyph\'s animation', async ({ page }) => {

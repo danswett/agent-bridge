@@ -40,10 +40,13 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
     public const string FailSafe = "unclaimed path (fail-safe: the full ring)";
     public const string AskedFor = "asked for by name";
 
-    readonly List<Glob> globalTriggers = catalog.GlobalTriggers.Select(g => new Glob(g)).ToList();
+    // Paths match as the Windows build reads them, whatever their case (ProjectGraph.PathComparer):
+    // only the rules that add suites fold case. no_test_paths take suites away, so they stay exact
+    // and an alias of one is selected for by the other rules instead.
+    readonly List<Glob> globalTriggers = catalog.GlobalTriggers.Select(g => new Glob(g, ignoreCase: true)).ToList();
     readonly List<Glob> noTestPaths = catalog.NoTestPaths.Select(g => new Glob(g)).ToList();
     readonly List<(Suite Suite, List<Glob> Triggers)> triggers =
-        catalog.Suites.Select(s => (s, s.Triggers.Select(t => new Glob(t)).ToList())).ToList();
+        catalog.Suites.Select(s => (s, s.Triggers.Select(t => new Glob(t, ignoreCase: true)).ToList())).ToList();
     // In catalog order, so reasons come out in the same order on every run.
     readonly List<Suite> projectSuites = catalog.Suites.Where(s => s.Project is not null).ToList();
     readonly List<Suite> buildSuites = catalog.Suites.Where(s => s.Builds is not null).ToList();
@@ -152,7 +155,7 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
             {
                 claimed = true;
                 if (suite.Ring <= ring)
-                    add(suite, suite.Project == owner.Folder ? $"project {owner.Folder}" : $"project {suite.Project} reaches {owner.Folder}", file);
+                    add(suite, ProjectGraph.PathComparer.Equals(suite.Project, owner.Folder) ? $"project {owner.Folder}" : $"project {suite.Project} reaches {owner.Folder}", file);
             }
             // A suite that ships a project is reached the same way: an embedded resource linked in
             // from docs/protocol/examples once changed the app without selecting its package (#487).
@@ -160,7 +163,7 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
             {
                 claimed = true;
                 if (suite.Ring <= ring)
-                    add(suite, suite.Builds == owner.Folder ? $"builds {owner.Folder}" : $"builds {suite.Builds}, which reaches {owner.Folder}", file);
+                    add(suite, ProjectGraph.PathComparer.Equals(suite.Builds, owner.Folder) ? $"builds {owner.Folder}" : $"builds {suite.Builds}, which reaches {owner.Folder}", file);
             }
         }
         return claimed;

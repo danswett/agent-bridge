@@ -106,6 +106,10 @@ public sealed record CommandTarget
 {
     public required string Machine { get; init; }
     public string? Session { get; init; }
+    // An escaped approval's confirmation (EscapedApproval): the question it approves, and the
+    // escaped message the person read (EscapedText.Shown).
+    public string? Question { get; init; }
+    public string? Shown { get; init; }
 }
 
 // session.transfer's request: the command, nothing else. Everything the source acts on is in it.

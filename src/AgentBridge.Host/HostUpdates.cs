@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host.Core.Updates;
+using AgentBridge.Protocol;
 using Velopack;
 using Velopack.Locators;
 using Velopack.Sources;
@@ -18,7 +19,8 @@ namespace AgentBridge.Host;
 // the package (the app, whose update hook stops the host it manages), replaces the version, and
 // starts the app again in the background for this host's profile, which starts this host. So
 // handing the release over is followed by this host stopping, as serve does on Ctrl+C.
-sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, Action<string> log, IVelopackLocator? locator = null, ReleaseDiscovery? discovery = null) : IHostUpdates
+sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, Action<string> log, IVelopackLocator? locator = null, ReleaseDiscovery? discovery = null,
+    Func<CancellationToken, Task<string?>>? ready = null) : IHostUpdates
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
     readonly object gate = new();
@@ -150,6 +152,12 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
     // (the app starts the host of the profile it opens, and defaults to "default").
     internal static string[] RestartArguments(string profile) => ["--background", "--profile", profile];
 
+    // Whatever the update would end is safe to end, or why not (HostUpdateGate).
+    public async Task ReadyAsync(CancellationToken cancellationToken)
+    {
+        if (ready is not null && await ready(cancellationToken) is { } why) { throw new InvalidOperationException(why); }
+    }
+
     public void ApplyAndRestart(UpdateRelease release)
     {
         var found = Of(release);
@@ -175,5 +183,58 @@ sealed class DiscoveredGithubSource(string repository, bool prereleases, Release
             json => JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None);
         // As GithubSource orders and filters its own.
         return [.. releases.OfType<GithubRelease>().OrderByDescending(r => r.PublishedAt).Where(r => includePrereleases || !r.Prerelease)];
+    }
+}
+
+// Before the host hands an update to Velopack from Home Assistant's Install (#238). Velopack ends
+// every process in the package, and a standalone Codex app-server whose input goes with a host must
+// not be cut mid-refresh. This host's own probes are held and waited for. Another profile's host
+// cannot be asked from here: its pipe takes management only from the app, never from this
+// program, so one running from the package is a refusal, not a guess: update from the app there,
+// which holds them all.
+static class HostUpdateGate
+{
+    public static readonly TimeSpan Wait = TimeSpan.FromMinutes(11);
+
+    // Cancelling (the host stopping) gives up the wait, never the probe.
+    public static async Task<string?> ReadyAsync(Func<string?> otherHosts, Func<TimeSpan, CancellationToken, Task<bool>>? settle, CancellationToken cancellationToken)
+    {
+        if (Others(otherHosts) is { } before) { return before; }
+        if (settle is not null && !await settle(Wait, cancellationToken))
+        {
+            return $"Codex's app-server, started to read its allowance, was still finishing after {Wait.TotalMinutes:0} minutes; try again later";
+        }
+        // Again just before the hand-over: one may have started while this host's probe finished.
+        return Others(otherHosts);
+    }
+
+    static string? Others(Func<string?> otherHosts) => otherHosts() is { } others
+        ? $"{others}, whose usage probes cannot be held from here; install from the {Product.App} on this machine, which waits for them"
+        : null;
+
+    // Another profile's host running from this installation, or one that cannot be looked at
+    // (not knowing is not permission), as the app's PackageProcesses sees them.
+    public static string? OtherHosts()
+    {
+        var root = Path.GetFullPath(AppContext.BaseDirectory);
+        foreach (var p in System.Diagnostics.Process.GetProcessesByName("agent-bridge-host"))
+        {
+            using (p)
+            {
+                if (p.Id == Environment.ProcessId) { continue; }
+                string? path;
+                try { path = p.MainModule?.FileName; }
+                catch (InvalidOperationException) { continue; }
+                catch (Exception e) when (e is System.ComponentModel.Win32Exception or NotSupportedException)
+                {
+                    return $"agent-bridge-host (pid {p.Id}) runs and cannot be looked at";
+                }
+                if (path is not null && path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"another profile's host (pid {p.Id}) runs from this installation";
+                }
+            }
+        }
+        return null;
     }
 }

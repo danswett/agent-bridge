@@ -6,6 +6,7 @@ import { row, view } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CLAUDE = '6f1c2b7e-claude-example';
+const DELEGATING = 'demo-delegates';
 
 async function openDemo(page, query = '') {
   await page.addInitScript(() => {
@@ -314,7 +315,7 @@ test.describe('on a desktop', () => {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
-  test('a session opens from its row with Enter, Shift+Tab reaches Back, and Space returns to the list with focus on the row', async ({ page }) => {
+  test('a session opens from its row with Enter, Shift+Tab reaches Back, and Space returns to the list with focus on the row, as Escape does', async ({ page }) => {
     await openDemo(page);
     const open = row(page, CLAUDE).locator('.row-main');
     await tabTo(page, open);
@@ -325,6 +326,116 @@ test.describe('on a phone', () => {
     await expect(v.locator('.session-title')).toBeFocused();
     await tabTo(page, v.getByRole('button', { name: 'Sessions' }), { key: 'Shift+Tab', max: 3 });
     await page.keyboard.press('Space');
+    await expect(v).toBeHidden();
+    await expect(open).toBeFocused();
+    // Escape is Back too (ui.md §5.3, §9.1 A5), and it pops the session's entry as Back does,
+    // back to the list's own.
+    const listed = await page.evaluate(() => location.hash);
+    await page.keyboard.press('Enter');
+    await expect(v.locator('.session-title')).toBeFocused();
+    const entries = await page.evaluate(() => history.length);
+    await page.keyboard.press('Escape');
+    await expect(v).toBeHidden();
+    await expect(open).toBeFocused();
+    await expect.poll(() => page.evaluate(() => location.hash)).toBe(listed);
+    expect(await page.evaluate(() => history.length)).toBe(entries);
+    // On the list, with nothing pushed, Escape goes nowhere.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    await expect(page.locator('#list-pane')).toBeInViewport();
+    await expect(open).toBeFocused();
+  });
+
+  // A session pushed over the list from its row, by the keyboard: its view, and the row's control.
+  async function pushed(page, query = '', id = CLAUDE) {
+    await openDemo(page, query);
+    const open = row(page, id).locator('.row-main');
+    await tabTo(page, open);
+    await page.keyboard.press('Enter');
+    const v = view(page, id);
+    await expect(v.locator('.session-title')).toBeFocused();
+    return { v, open };
+  }
+
+  // Still pushed after a moment: a pop on its way has had time to land (the browser's back is a task away).
+  async function stillPushed(page, v) {
+    await page.waitForTimeout(250);
+    await expect(v).toBeInViewport();
+    expect(await page.evaluate(() => history.state?.overList ?? false)).toBe(true);
+  }
+
+  test('Escape closes the overflow menu first, leaving the session pushed, and the next Escape returns to the list', async ({ page }) => {
+    const { v, open } = await pushed(page);
+    const more = v.getByRole('button', { name: 'More' });
+    await tabTo(page, more, { max: 6 });
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('menu')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await stillPushed(page, v);
+    await expect(more).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(v).toBeHidden();
+    await expect(open).toBeFocused();
+  });
+
+  test('Escape in the reply box is the box\'s, and in search, which a pushed session goes back to the list for, it closes search and goes no further', async ({ page }) => {
+    const { v, open } = await pushed(page);
+    const list = await page.evaluate(() => history.length);
+    // The reply box keeps its words and its focus.
+    const reply = v.getByRole('textbox', { name: 'Reply' });
+    await tabTo(page, reply);
+    await page.keyboard.type('half a thought');
+    await page.keyboard.press('Escape');
+    await stillPushed(page, v);
+    await expect(reply).toBeFocused();
+    await expect(reply).toHaveValue('half a thought');
+    // Out of the box, Escape is Back.
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Escape');
+    await expect(v).toBeHidden();
+    await expect(open).toBeFocused();
+    // Search lives on the list: Ctrl+K from a pushed session goes back there first, and Escape in
+    // search closes it, with the list still shown and its entry still the one beneath.
+    await page.keyboard.press('Enter');
+    await expect(v.locator('.session-title')).toBeFocused();
+    await page.keyboard.press('Control+K');
+    const search = page.getByRole('searchbox', { name: 'Search sessions' });
+    await expect(search).toBeFocused();
+    await expect(v).toBeHidden();
+    await page.keyboard.type('claude');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('body')).not.toHaveClass(/\bsearching\b/);
+    await page.waitForTimeout(250);
+    await expect(page.locator('#list-pane')).toBeInViewport();
+    expect(await page.evaluate(() => [history.length, history.state?.overList ?? false])).toEqual([list, false]);
+  });
+
+  test('an Escape that ends a composition leaves the session pushed, and the next returns to the list', async ({ page }) => {
+    const { v, open } = await pushed(page);
+    // As an input method sends it: the key that cancels what is being composed.
+    await page.evaluate(() => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true, cancelable: true })));
+    await stillPushed(page, v);
+    await expect(v.locator('.session-title')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(v).toBeHidden();
+    await expect(open).toBeFocused();
+  });
+
+  test('Escape from a delegate goes back to its session with focus on its row, then to the list with focus on the session\'s', async ({ page }) => {
+    const { v, open } = await pushed(page, '&delegates=1', DELEGATING);
+    await v.getByRole('tab', { name: 'Delegates' }).click();
+    const summary = v.locator('.delegates .delegate[data-id="demo-agent-suite"] .delegate-summary');
+    await summary.click();
+    const pane = v.locator('.delegate-pane');
+    await expect(pane.locator('.delegate-title')).toHaveText('Run full test suite');
+    await expect.poll(() => page.evaluate(() => history.state?.delegate ?? null)).toBe('demo-agent-suite');
+    await page.keyboard.press('Escape');
+    await expect(pane).toHaveCount(0);
+    await expect(summary).toBeFocused();
+    await expect.poll(() => page.evaluate(() => history.state?.delegate ?? null)).toBeNull();
+    await stillPushed(page, v);
+    await page.keyboard.press('Escape');
     await expect(v).toBeHidden();
     await expect(open).toBeFocused();
   });

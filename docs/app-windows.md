@@ -42,7 +42,7 @@ A row the app can't act on has its own words and no verb, in the neutral seconda
 status colour, never Ready, Not set up or Needs repair, and nothing on it is a button that can't
 work (Creative's rulings on #784 and #705):
 - hooks the host holds back (`blocked`: a read-only host, or another profile's) say
-  "Read-only · *why*" ("an older bridge runs this machine", "another bridge profile owns its
+  "Read-only · *why*" ("this machine's host is older", "another bridge profile owns its
   hooks", or "set in this host's settings"), and Install CLI is hidden on them;
 - hooks the host reports `failed` with `hookSetup: unknown`, which its setup refuses, say "Hook
   ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or
@@ -50,6 +50,9 @@ work (Creative's rulings on #784 and #705):
 - `unknown` beside any other hooks comes only from a host older than the field, and says
   "Can't check · this machine's host is older". Its rows offer no Set up, Repair or Remove: the
   detail's words they once fell back on offered actions the host might refuse.
+
+Each reason is said once, on the status line: a Version or Hooks line beneath it that would give
+the same reason says only the fact ("Hooks: Not checked").
 
 No row shows an exception's, a command's or an installer's own text, which named paths: each
 says why from a known set (`AgentWords`), and the app's log keeps the host's words. That
@@ -257,7 +260,15 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   not stop; 1 from Task Manager; 0xC000013A for Ctrl+C or logging off. A Stop from the app
   also covers the launcher, which no pipe reaches between crash restarts or while the host it
   restarted is still starting: Stop writes a marker (`host.stopped` in the profile's folder)
-  that the launcher checks after every host exit and every wait before starting the host again;
+  that the launcher checks after every host exit and every wait before starting the host again.
+  It is written only once the host's usage probes are done, just before the host is asked to
+  stop (or when no host answers), so a host that crashes during that wait, or while the app
+  quits during it, is still started again; the Stop then says the host ended unexpectedly
+  rather than that nothing was stopped, but only when its process has gone and nothing answers
+  on its pipe (a host whose process is still there but no longer answers is reported as not
+  stopped). Stops run one at a
+  time (Settings' Stop and Restart, an update's), so a second waits for the first and finds the
+  host stopped, rather than clearing the first's marker (#238). The app then
   waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
   the run itself if it is still there after the 20 s start timeout. A host the launcher starts
   also looks for the marker once its pipe is open and, finding it, exits 0 without serving, so
@@ -287,8 +298,24 @@ into one folder with one version. An app update is a host update, so they never 
   `%LOCALAPPDATA%\AgentBridge`: that is the host's data root (device keys, accounts,
   config, logs), and Velopack deletes its install folder on uninstall.
 * `OnBeforeUpdateFastCallback` (the old version, before files are replaced) stops the host
-  over the pipe and waits for its process to exit, so nothing in `current\` is locked;
-  `OnAfterUpdateFastCallback` (the new version) starts it again through its logon task.
+  over the pipe and waits for its process to exit, so nothing in `current\` is locked. Every
+  update the app starts has stopped the host already, after waiting for its usage probes (below),
+  so the hook finds it stopped and begins nothing. One it finds running (an update the app did
+  not start) is stopped only if its usage probes are done within 6 s. Velopack gives this hook
+  15 s and kills it after that, carrying on with the update
+  ([Velopack: App Hooks](https://docs.velopack.io/integrating/hooks)), so the hook waits at most
+  10 s in all and leaves the rest to the app's own start and exit. If the probes are not done, the
+  host is not asked to stop at all, and Velopack ends it with the package, which can cut a Codex
+  app-server it started mid-refresh (#238). The app turns off Velopack's own apply of a downloaded
+  update when the app starts (`SetAutoApplyOnStartup(false)`), so an update is applied only by
+  the app's own install, which waits for the probes, or by a person: `Update.exe` run by hand,
+  a newer setup run over the app, or an uninstall. If one of those comes while a Codex usage probe
+  is running (up to about 10 minutes for one that is slow to answer, usually under a minute) and
+  Codex happens to be refreshing its sign-in, the person may have to sign in to Codex again.
+  Keeping the probe alive across those is #974. The same holds for uninstall, whose hook has
+  30 s, and which then goes on;
+  `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon
+  task, waiting at most 10 s.
   The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
   launch if it is not running.
 * `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
@@ -344,6 +371,21 @@ into one folder with one version. An app update is a host update, so they never 
   and every session change, and since its sessions were last read in full (a reconnect starts
   the wait again), or six hours after it first found one, whatever the sessions are
   doing (though still only once they are read in full, so not in the middle of a reconnect).
+  Before the host is stopped, for this or anything else (Settings' Stop, Restart and Update and
+  restart), the app asks it to hold its usage probes (`host.probes.hold`) and waits until no
+  Codex app-server it started to read Codex's allowance is still answering or in its grace
+  (#238): the app-server's input goes with the host, and cutting it mid-refresh can sign Codex
+  out. A host that cannot say, or is still busy after 11 minutes, is neither stopped nor ended;
+  the stop fails and says why. An install that is due waits a tick at a time for that, the
+  six-hour one too (and is checked again once the host has answered: the switch, the sessions and
+  the release as of then), and the host
+  starts no new probe meanwhile. Before an update (Settings' or automatic), every other profile's
+  host running from the package is held and waited for the same way, since Velopack ends them
+  too, each held again every round and once more just before the hand-over, with the package
+  looked at again once they are done (a host started meanwhile is held too); one that cannot
+  confirm, or a host of the package no pipe reaches, stops the update before anything is stopped.
+  Quitting gives up those waits, never a probe, so a host already stopped for the update is
+  started again within Quit's 25 s.
   The path is that of "Update and restart": the host stopped over the pipe, then
   `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
   host again. The new version's first start shows a toast: the version it came from, and the
@@ -455,8 +497,9 @@ into one folder with one version. An app update is a host update, so they never 
 
 ### Releases and updates: every merge to main is a pre-release
 
-CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` a GitHub
-pre-release, `v0.1.<n>`, of the whole package. Installed copies include pre-releases by
+CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` whose CI built the
+app a GitHub pre-release, `v0.1.<n>`, of the whole package. A change the app's jobs don't
+select (docs only, say) builds and publishes nothing. Installed copies include pre-releases by
 default and install them by themselves once their host is idle (Automatic updates, above);
 Settings, **Check for updates** and **Install**, does it at once, as does the Home Assistant
 connector's Install button on a machine the dashboard drives.
@@ -465,17 +508,28 @@ connector's Install button on a machine the dashboard drives.
   requests and pushes, so main's versions only rise, with gaps; a re-run keeps its number.
   Renaming or recreating `ci.yml` starts the count at 1 again, below every release, and no
   installed copy would ever take one: move the minor version up (`0.2.<n>`) in the same change.
-* **When:** after every check job in CI on that commit has passed: the `product` tests (Linux,
-  Windows x64 and Windows on Arm) and both `app` jobs (x64 and Arm64: build, pack, self-test,
-  install), and also the PWA, Home Assistant, spike and light jobs, none of which may have failed
-  or been cancelled. It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
+* **When:** after every check job CI selected on that commit has passed, the `app` jobs among
+  them: the `product` tests (Linux, Windows x64 and Windows on Arm), both `app` jobs (x64 and
+  Arm64: build, pack, self-test, install), and whichever PWA, Home Assistant, spike and light
+  jobs ran, none of which may have failed or been cancelled. Main's CI plans from its last passed
+  commit, so an app change whose own run was replaced while waiting is built by the next run.
+  It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
   request or a fork. It
-  is the only job with `contents: write`, and runs one at a time (concurrency group
-  `publish-prerelease`). Before it, `publish-gate` lets through only the commit `main` is at
-  now: GitHub keeps one waiting job per concurrency group and cancels the older waiting one, so
-  a slow build of an older merge must not reach the group and evict a newer one. A run whose
-  commit main has moved past publishes nothing, and the newer commit's run publishes instead
-  (re-run it if it failed).
+  is the only job with `contents: write` (CI's other writes are `attest`'s `attestations: write`
+  and `id-token: write`, and main's `relay-image-sarif` job's `security-events: write`, which
+  uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
+  `publish-prerelease`), and publishes each version once, never one older than any already
+  out and never from a commit that doesn't hold the latest release's commit, so release order
+  doesn't rest on the order main's CI runs go in (first attempts share
+  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
+  its own): a run publishes even after `main` has moved on, unless main's head has since
+  changed the app (main's own selector, under the lock, says so; main's later run publishes
+  both, where publishing this first could leave that one's lower version refused), and
+  one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
+  one already waiting), where by default the next to arrive would replace the one waiting, so a
+  re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
+  start in is not promised, which is why the checks above keep the order.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
@@ -518,8 +572,11 @@ connector's Install button on a machine the dashboard drives.
   package alone (with the warning) and x64's delta as usual.
 * **Once per version:** a version whose tag exists is skipped, so re-running a run publishes
   nothing twice. A version older than one already published is skipped (two merges close
-  together, the later one's build first). A draft left by a failed attempt is deleted and the
-  version uploaded again.
+  together, the later one's build first). So is a version whose commit doesn't hold the
+  latest release's commit (`compare` says it is behind): an ancestor's run created after its
+  descendant's has the higher number, and would otherwise take installed copies back to older
+  code; a commit off that line, or a tag or comparison that can't be read, stops the publish.
+  A draft left by a failed attempt is deleted and the version uploaded again.
 * **Pruning:** the newest 20 pre-releases stay; older ones are deleted with their assets, and
   their tags stay. A full (non-pre-release) release, a draft, or a release not tagged
   `v<major>.<minor>.<patch>` is never touched.
@@ -616,8 +673,14 @@ which always runs it unelevated.
 
 ### agent-ha-bridge on the same machine (G4, G5)
 
-The app never writes agent hook registrations (no Copilot, Claude or Codex hooks), and its
-names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
+The app writes no agent hook registrations itself. Its Settings agent rows ask the host
+(`host.agents.setup`) to set up, repair or remove this profile's own Copilot CLI, Claude Code or
+Codex hooks; the host writes them (`StandaloneHooks`) beside a record of what it owns
+(`agent-bridge-owner.json`), so a removal takes only that. Beside agent-ha-bridge those rows are
+read-only: the host is read-only and refuses setup (`AgentSetupService`, and
+`StandaloneHooks.Preflight` while agent-ha-bridge is active or its directory remains), reports
+the hooks as blocked, and the rows say "Read-only · this machine's host is older" with no verb.
+The app's names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
 sessions (their session folders) and Claude sessions (Claude Code's own
 `~/.claude/sessions/<pid>.json`), and Codex ones run with `--no-daemon`, as every launch
 from this host is (the terminal holds `~/.codex/thread-writer-locks/<id>.lock`). A Codex
@@ -758,7 +821,7 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   to show the dry run's report, confirm, and show the result, and it cannot be reached through
   the relay.
 * Code signing.
-* Arm64 builds, the first-run wizard's agent detection and winget installs.
+* The first-run wizard's agent detection and winget installs.
 
 ## Testing
 
@@ -814,7 +877,7 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   400 and back, and keeps every interval between the UI thread's frames (`CompositionTarget.Rendering`) by the window's width
   class, once with the demo's own sessions and once with a window as heavy as a real one (16 more sessions, a conversation of
   over 200 items, 50 tool rows and a strip of 20 delegates, the finished ones unfolded), and writes p50, p95, the longest and how many frames went over
-  16.7 and 33 ms into the result's `resize` and `result.resize.json`, the p95 in each width class in its log line, with a picture of where the drag ended. Before the heavy drag it scrolls a block in the middle of the response to the top of the conversation and pictures the conversation (`result.resize.before.png`); after it, it checks that block is where it was in the layout (its top against the viewport within 0.5 DIP, the proof) and pictures it again (`result.resize.after.png`), which must be drawn alike across the reading column: no more than 4 pixels more than 8 apart in a channel, and none more than 96 apart (`PictureDifference`). So a renderer's noise between two renders (a single speck of a card's fill by its rounded corner, or an anti-aliased edge) doesn't count, while a block moved by a pixel, which differs along every edge of its text, does; the log gives the count and the largest difference either way. It then presses Page Down and Down for real on a link in the conversation (`SendInput` with the window in the foreground, else posted to the window with keyboard focus, as the keyboard sends them; the result's `keysPressedBy` says which) and checks the text scrolled with focus where it was and nothing selected; that Tab from the last link or Copy button drawn goes to the first in the next block with one, which it realises (the move made with `FocusManager.TryMoveFocus`, as Tab makes it, not an injected key), that Tab pressed for real onto the Copy button of a code block laid out across the conversation's bottom edge brings the block's start to the leading edge, and onto one wholly in view moves nothing (the result's `tabInViewProblem`), that Shift+Tab pressed for real onto the Copy button of a code block wholly in view, its top 3 DIP below the view's, where the focus manager's 20 DIP padding round a control would scroll it, move nothing (within 0.5 DIP; the result's `tabNearEdgeProblem`), that Tab pressed for real onto the first link of a block taller than the view (a quoted log of 44 lines just before the run of linked paragraphs) brings its start to the leading edge (within 1.5 DIP), and Shift+Tab onto its last link brings that link wholly into view (within 1.5 DIP) at the nearest edge, no further than WinUI's 20 DIP margin past it, the block's start above the view (the result's `tallTabProblem`), and that Tab, pressed for real (`SendInput`, else posted; the result's `linkTabPressedBy` says which) on the last link of the last block the list has realised, goes to the first link of the next block, which it hadn't, and brings that block in at the leading edge numbered in its set, each block found from its link (a link is a text element in its block's text, not a control; the heavy response ends with a run of 110 short linked paragraphs, more than twice the most the list was seen to realise from a view's top, so with the run's first block at the top of the view the last block realised and the next both fall in it wherever the list stops; the check fails with "setup: ..." rather than skips if they don't); that no block's container is a tab stop, selected, filled or drawn with chrome or a focus visual; that the last block, off screen and named as no other block is, is found by its name and brought into view through the peer the search found; and that a screen reader is given every block as a list item numbered 1 to N in a set of N, with the header and footer outside it. WinUI numbers an item only once it is realised, so the check walks the items as a screen reader does: the list's ItemContainer pattern finds each next item (`FindItemByProperty` with no property), and one not yet realised is realised through its VirtualizedItem pattern (`Realize`) before its numbers are read, none of them -1 (the result's `listRealisedByPeer` counts the realised ones, `listWalkSeconds` the walk). A capture of your message and its three-block reply is also taken in high contrast at 1440, 1200 and 400 (`result.yours.<width>.highcontrast.png`), beside the light and dark ones. The frame times are a report, not a
+  16.7 and 33 ms into the result's `resize` and `result.resize.json`, the p95 in each width class in its log line, with a picture of where the drag ended. Through the heavy drag it checks that no piece of a flowing line is measured again (`FlowPanel`; the result's `flowLinesAtNewWidth` and `flowPiecesMeasuredAgain`): the conversation's delegate lines are in the list's footer, laid out at every new width even off screen, and a piece that fits its line is measured once, unconstrained, so only one wider than its line is measured at each width. Before the heavy drag it scrolls a block in the middle of the response to the top of the conversation and pictures the conversation (`result.resize.before.png`); after it, it checks that block is where it was in the layout (its top against the viewport within 0.5 DIP, the proof) and pictures it again (`result.resize.after.png`), which must be drawn alike across the reading column: no more than 4 pixels more than 8 apart in a channel, and none more than 96 apart (`PictureDifference`). So a renderer's noise between two renders (a single speck of a card's fill by its rounded corner, or an anti-aliased edge) doesn't count, while a block moved by a pixel, which differs along every edge of its text, does; the log gives the count and the largest difference either way. It then presses Page Down and Down for real on a link in the conversation (`SendInput` with the window in the foreground, else posted to the window with keyboard focus, as the keyboard sends them; the result's `keysPressedBy` says which) and checks the text scrolled with focus where it was and nothing selected; that Tab from the last link or Copy button drawn goes to the first in the next block with one, which it realises (the move made with `FocusManager.TryMoveFocus`, as Tab makes it, not an injected key), that Tab pressed for real onto the Copy button of a code block laid out across the conversation's bottom edge brings the block's start to the leading edge, and onto one wholly in view moves nothing (the result's `tabInViewProblem`), that Shift+Tab pressed for real onto the Copy button of a code block wholly in view, its top 3 DIP below the view's, where the focus manager's 20 DIP padding round a control would scroll it, move nothing (within 0.5 DIP; the result's `tabNearEdgeProblem`), that Tab pressed for real onto the first link of a block taller than the view (a quoted log of 44 lines just before the run of linked paragraphs) brings its start to the leading edge (within 1.5 DIP), and Shift+Tab onto its last link brings that link wholly into view (within 1.5 DIP) at the nearest edge, no further than WinUI's 20 DIP margin past it, the block's start above the view (the result's `tallTabProblem`), and that Tab, pressed for real (`SendInput`, else posted; the result's `linkTabPressedBy` says which) on the last link of the last block the list has realised, goes to the first link of the next block, which it hadn't, and brings that block in at the leading edge numbered in its set, each block found from its link (a link is a text element in its block's text, not a control; the heavy response ends with a run of 110 short linked paragraphs, more than twice the most the list was seen to realise from a view's top, so with the run's first block at the top of the view the last block realised and the next both fall in it wherever the list stops; the check fails with "setup: ..." rather than skips if they don't); that no block's container is a tab stop, selected, filled or drawn with chrome or a focus visual; that the last block, off screen and named as no other block is, is found by its name and brought into view through the peer the search found; and that a screen reader is given every block as a list item numbered 1 to N in a set of N, with the header and footer outside it. WinUI numbers an item only once it is realised, so the check walks the items as a screen reader does: the list's ItemContainer pattern finds each next item (`FindItemByProperty` with no property), and one not yet realised is realised through its VirtualizedItem pattern (`Realize`) before its numbers are read, none of them -1 (the result's `listRealisedByPeer` counts the realised ones, `listWalkSeconds` the walk). A capture of your message and its three-block reply is also taken in high contrast at 1440, 1200 and 400 (`result.yours.<width>.highcontrast.png`), beside the light and dark ones. The frame times are a report, not a
   bar: the runners draw in software, so they fail it only when it could not measure: when a sweep never reached all three width classes. The two sweeps share 30 s, a hang guard that keeps the self-test well inside its 360 s (180 s until #800's sign-in captures: the banner, the sheet and a Needs sign-in row in every state they can be in, in Light, Dark and high contrast; then 300 s until #600's progress gallery); a sweep cut short by it is reported (`lightFinished`, `heavyFinished` and the log), not failed. `build/app-self-test.ps1` runs it; when the app ends with anything but 0, or leaves a check unfinished (the result's `unfinished`, even with 0), it fails and prints the exit code as an NTSTATUS, the check it was in, the end of the app's log and the crash Windows recorded, faulting module and offset (#240). On CI it also has Windows Error Reporting keep a minidump of a crash beside the logs, and prints the crashing thread's stack from it with the runner's `cdb` (#242): for a fail fast the event names no module. Then it runs the `Setup.exe` it packed, silently, on the throwaway runner,
   checks the installed copy's channel and that its executables and `Update.exe` are for that
   machine, and runs the same self-test from the installed copy. Last, it dry-runs publishing

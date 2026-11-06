@@ -7,6 +7,7 @@
 // values read as the C# reader's [UnknownAs] value.
 
 import { readAttention, readMachineSignIn } from './auth-state.js';
+import { marksExact } from './escaped.js';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -32,9 +33,10 @@ export const Events = Object.freeze({
   sessionRemove: 'session.remove',
   sessionsSynced: 'sessions.synced',
   discoveryChanged: 'discovery.changed',
+  helloChanged: 'hello.changed',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', push: 'push' });
+export const Capabilities = Object.freeze({ helloChanged: 'hello.changed', sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
@@ -124,7 +126,28 @@ export function readQuestion(raw) {
     answerAtMachine: q.answerAtMachine === true,
     // The sub-agent that asked, when it is not the session's own question.
     agent: str(q.agent),
+    // What the host escaped in an approval (#803): null when it escaped nothing. Marks that do not
+    // each cover exactly one escape in this message are not read as the host's (marksExact).
+    escaped: exactMarks(readEscaped(q.escaped), str(q.message) ?? ''),
   };
+}
+
+const HELD = Object.freeze({ shown: null, marks: [], approve: 'machine' });
+const exactMarks = (e, message) => (e && e.shown && !marksExact(message, e.marks) ? { ...HELD, marks: [] } : e);
+
+// An approval's escaped text: { shown, marks: [[start, length], ...], approve: 'confirm' | 'machine' | 'tooMany' }.
+// One that cannot be read is held at the machine for Approve, never read as nothing escaped, which
+// would offer the one-tap Approve it replaces; Deny goes as for any approval.
+export function readEscaped(raw) {
+  if (raw === undefined || raw === null) { return null; }
+  const e = obj(raw);
+  const marks = Array.isArray(e?.marks) ? e.marks : null;
+  const whole = (n) => Number.isInteger(n) && n >= 0;
+  const readable = e && typeof e.shown === 'string' && /^[0-9a-f]{64}$/.test(e.shown) && marks
+    && marks.every((m) => Array.isArray(m) && m.length === 2 && whole(m[0]) && whole(m[1]) && m[1] > 0)
+    && (e.approve === 'confirm' || e.approve === 'machine' || e.approve === 'tooMany');
+  if (!readable) { return { shown: null, marks: [], approve: 'machine' }; }
+  return { shown: e.shown, marks: marks.map(([start, length]) => [start, length]), approve: e.approve };
 }
 
 // One sub-agent the session started: who it is, where it sits, whether it runs, and its latest
