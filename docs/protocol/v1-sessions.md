@@ -1293,8 +1293,11 @@ them, and the `restored` notice is its own.
   question in the same episode brings no second. Rule 4 (only the device in use alerts) narrows
   it later.
 * **A restart of the host** loses a reminder still to come and an open window. The host notifies
-  a question already pending when it starts, as always, which counts a new 15 minutes; a group
-  out before the restart is not withdrawn by the next host, and is replaced by the next burst.
+  a question already pending when it starts, as always, which counts a new 15 minutes. Each goes
+  as itself, never grouped, under its session's tag, so its answer withdraws it as any question's
+  does, and none opens a window: they are not a burst, and the next live question goes as itself
+  too. A group out before the restart is not withdrawn by the next host, and is replaced by the
+  next burst.
 * **An older client** reads `group` as `question`, an unknown kind. It names no session or
   question and opens the machine, so it shows the words and nothing to answer. It ignores
   `reminder` and shows the reminder as the question's notice again, replacing it in place.

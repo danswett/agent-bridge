@@ -1748,6 +1748,30 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(5, sender.Sent.Count);
     }
 
+    // sr-1020: what a restart found pending was on devices as itself, so it goes again as itself, each
+    // under its own tag, never grouped, and an answer elsewhere withdraws it there. Nor do they open a
+    // window that groups the next live question.
+    [Fact]
+    public async Task Questions_pending_when_the_host_starts_each_go_as_themselves_and_are_resolved_on_their_own_tags()
+    {
+        Start(null, S("s1", SessionStatus.Waiting, question: Q("q1")), S("s2", SessionStatus.Waiting, question: Q("q2")), S("s3", SessionStatus.Waiting, question: Q("q3")));
+        Subscribe(Phone);
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s4", SessionStatus.Waiting, question: Q("q4")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["q1", "q2", "q3", "q4"], Received().Select(r => QuestionOf(r.Notification)));
+        Assert.Equal([$"{Machine}:s1", $"{Machine}:s2", $"{Machine}:s3", $"{Machine}:s4"], Received().Select(r => r.Notification.GetProperty("tag").GetString()));
+
+        source.Upsert(S("s2", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+
+        var received = Received();
+        Assert.DoesNotContain(received, r => Kind(r.Notification) == "group");
+        var resolved = received[^1].Notification;
+        Assert.Equal(("resolved", $"{Machine}:s2", "q2"), (Kind(resolved), resolved.GetProperty("tag").GetString(), QuestionOf(resolved)));
+        Assert.Equal(5, received.Count);
+    }
+
     // The group's alert counts once it reaches a device, not once it is made: a session joining while
     // the relay is down replaces the alerting notice still waiting, and its replacement alerts in its
     // place. Once delivered, what changes it is silent.

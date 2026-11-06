@@ -176,7 +176,8 @@ public sealed class PushNotifier : IAsyncDisposable
         public string? RemindedQuestion;
     }
 
-    sealed record Due(NoticeKind Kind, DateTimeOffset At, string? Question);
+    // FromStart: a question already pending when the host started, notified again as itself (sr-1020).
+    sealed record Due(NoticeKind Kind, DateTimeOffset At, string? Question, bool FromStart = false);
 
     sealed class Outgoing
     {
@@ -224,7 +225,7 @@ public sealed class PushNotifier : IAsyncDisposable
             {
                 if (sessions.ContainsKey(s.Id)) { continue; }
                 var t = sessions[s.Id] = new Tracked { Last = s, MainKey = MainKey(s), MainRunning = s.WaitingOn is null && s.Status is SessionStatus.Working or SessionStatus.Waiting };
-                if (s.Question is { } q) { t.Due = new Due(NoticeKind.Question, now + this.options.QuestionDelay, q.Id); }
+                if (s.Question is { } q) { t.Due = new Due(NoticeKind.Question, now + this.options.QuestionDelay, q.Id, FromStart: true); }
             }
         }
     }
@@ -726,13 +727,18 @@ public sealed class PushNotifier : IAsyncDisposable
             {
                 case NoticeKind.Question when !t.Removed && s?.Question?.Id == due.Question:
                     Remember(t, due.Question!);
-                    if (!Group(id, t, due.Question!, now))
+                    // What the host found pending when it started is no burst (#913 rule 3): each was
+                    // on devices as itself before the restart, under its own tag, and only its own notice
+                    // gets the resolved that withdraws it there (shownOn). Grouped, an answer elsewhere
+                    // left the old notice on the phone. Nor does it open a window that would group the
+                    // next live question with what the person may already have seen.
+                    if (due.FromStart || !Group(id, t, due.Question!, now))
                     {
                         t.Shown = due.Question;
                         // One of a burst's still counts in its group while pending, now with this question.
                         if (grouped.ContainsKey(id)) { grouped[id] = due.Question!; }
                         Enqueue(s!, NoticeKind.Question, due.Question, store.All);
-                        if (!InBurst(now)) { (burstUntil, burstLead, burstAlerted) = (now + options.BurstWindow, id, false); }
+                        if (!due.FromStart && !InBurst(now)) { (burstUntil, burstLead, burstAlerted) = (now + options.BurstWindow, id, false); }
                     }
                     Arm(t, s!, due.Question!, now);
                     break;
