@@ -42,13 +42,13 @@ A row the app can't act on has its own words and no verb, in the neutral seconda
 status colour, never Ready, Not set up or Needs repair, and nothing on it is a button that can't
 work (Creative's rulings on #784 and #705):
 - hooks the host holds back (`blocked`: a read-only host, or another profile's) say
-  "Read-only · *why*" ("this machine's host is older", "another bridge profile owns its
+  "Read-only · *why*" ("this machine's bridge is older", "another bridge profile owns its
   hooks", or "set in this host's settings"), and Install CLI is hidden on them;
 - hooks the host reports `failed` with `hookSetup: unknown`, which its setup refuses, say "Hook
   ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or
   "Hook intake couldn't be checked · *why*" for this profile's intake record;
 - `unknown` beside any other hooks comes only from a host older than the field, and says
-  "Can't check · this machine's host is older". Its rows offer no Set up, Repair or Remove: the
+  "Can't check · this machine's bridge is older". Its rows offer no Set up, Repair or Remove: the
   detail's words they once fell back on offered actions the host might refuse.
 
 Each reason is said once, on the status line: a Version or Hooks line beneath it that would give
@@ -795,7 +795,7 @@ Codex hooks; the host writes them (`StandaloneHooks`) beside a record of what it
 (`agent-bridge-owner.json`), so a removal takes only that. Beside agent-ha-bridge those rows are
 read-only: the host is read-only and refuses setup (`AgentSetupService`, and
 `StandaloneHooks.Preflight` while agent-ha-bridge is active or its directory remains), reports
-the hooks as blocked, and the rows say "Read-only · this machine's host is older" with no verb.
+the hooks as blocked, and the rows say "Read-only · this machine's bridge is older" with no verb.
 The app's names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
 sessions (their session folders) and Claude sessions (Claude Code's own
 `~/.claude/sessions/<pid>.json`), and Codex ones run with `--no-daemon`, as every launch

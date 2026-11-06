@@ -13,7 +13,7 @@ public static class AgentWords
     public const string Installing = "Installing…";
     // `hookSetup` unknown with hooks a current host would have said it of: only a host from before
     // the field (#807) sends that.
-    public const string OlderHost = "Can't check · this machine's host is older";
+    public const string OlderHost = "Can't check · this machine's bridge is older";
     public const string CantCheck = "Can't check";
     public const string TookTooLong = "It took too long, and some hooks may have changed. Check again before trying again.";
 
@@ -27,9 +27,9 @@ public static class AgentWords
         : Has(raw, "used by another process") ? "file in use"
         : "couldn't read";
 
-    // The older bridge that runs a machine, in the one word every row uses for it: "host" (Creative,
+    // The older bridge that runs a machine. A person never sees "host" (Creative, 6692247358, over
     // 6675472997).
-    const string OlderBridge = "this machine's host is older";
+    const string OlderBridge = "this machine's bridge is older";
 
     // Hooks the host holds back from this app: "Read-only · why".
     public static string ReadOnly(string detail) => "Read-only · " + (

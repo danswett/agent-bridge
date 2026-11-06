@@ -520,7 +520,7 @@ public sealed class SettingsTests : IAsyncLifetime
 
     [Theory]
     [InlineData("Hook setup incomplete: C:\\Users\\dana\\.codex\\agent-ha-bridge-owner.json is a legacy registration; use Migrate", "Setup failed · an older bridge's hooks are there; migrate them first")]
-    [InlineData("agent-ha-bridge is active or cannot be checked (running); use Migrate instead", "Setup failed · this machine's host is older")]
+    [InlineData("agent-ha-bridge is active or cannot be checked (running); use Migrate instead", "Setup failed · this machine's bridge is older")]
     [InlineData("Hook setup incomplete: C:\\Users\\dana\\.codex\\agent-bridge-owner.json belongs to another installation; it was left alone", "Setup failed · another bridge profile owns its hooks")]
     [InlineData("Hook setup incomplete: Access to the path 'C:\\Users\\dana\\.codex\\config.toml' is denied.", "Setup failed · access denied")]
     [InlineData("Hook setup incomplete: this profile belongs to a migration; use migration status or rollback", "Setup failed · this profile is being migrated")]
@@ -565,7 +565,7 @@ public sealed class SettingsTests : IAsyncLifetime
     const string Unreadable = "Hook ownership could not be checked: Access to the path is denied.";
     const string InUse = "Hook ownership could not be checked: The process cannot access the file because it is being used by another process.";
     // `hookSetup` unknown beside hooks a current host would have said it of (#784's words).
-    const string OlderHost = "Can't check · this machine's host is older";
+    const string OlderHost = "Can't check · this machine's bridge is older";
 
     [Theory]
     [InlineData(ReadinessState.Missing, "Fixture hooks.", "Set up")]
@@ -683,7 +683,7 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine", "Read-only · this machine's host is older")]
+    [InlineData("Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine", "Read-only · this machine's bridge is older")]
     [InlineData("Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "Read-only · another bridge profile owns its hooks")]
     [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "Read-only · set in this host's settings")]
     [InlineData("Hook setup is unavailable while this host is read-only: this host's config.json has a problem, so it takes nothing from other devices; answer at the machine", "Read-only · set in this host's settings")]
@@ -710,9 +710,9 @@ public sealed class SettingsTests : IAsyncLifetime
             with { VersionCheck = new(ReadinessState.Blocked, $"Version command not run while the host is read-only: {why}") });
         var olderHost = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.NeedsAction, hooksDetail: "Explicit hook setup is needed.", setup: HookSetupState.Unknown));
 
-        Assert.Equal("Read-only · this machine's host is older", readOnly.Status);
+        Assert.Equal("Read-only · this machine's bridge is older", readOnly.Status);
         Assert.StartsWith("Version: Not checked\nHooks: Not checked\n", readOnly.Checks, StringComparison.Ordinal);
-        Assert.Equal("Can't check · this machine's host is older", olderHost.Status);
+        Assert.Equal("Can't check · this machine's bridge is older", olderHost.Status);
         Assert.Contains("Hooks: Explicit hook setup is needed.", olderHost.Checks);
     }
 
