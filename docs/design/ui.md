@@ -1048,10 +1048,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       Delivered), never says Up next, since a question holds the session, and never says
       "answered" before the host confirms. Confirmed, Send answer shows the check for about 1 s
       and the card resolves to "You answered · *value*" (§6.5), with no badge; a Needs you
-      entry, where a client still draws one, says the same. Not confirmed says, as today, "Sent,
-      but not confirmed. Check at the machine.": the answer is final and is never resent, and
-      nothing offers a second one. "Check at the machine" is the known no-RDP gap #467, which
-      replaces it with a remote check. Decided, not yet built (#600; builds in #616, #625). Today both clients show Sending…, Sending again… and "Delivered. The session has your answer." If focus is on Send answer when it changes: when Try again takes its place,
+      entry, where a client still draws one, says the same. Not confirmed says "Sent, but not
+      confirmed. Check the conversation.": the answer is final and is never resent, and
+      nothing offers a second one. It points at the conversation, never at the machine (#696
+      rule 5: no remote desktop); #467's remote check later confirms it in place. Decided, not yet built (#600; builds in #616, #625). Today both clients show Sending…, Sending again… and "Delivered. The session has your answer." If focus is on Send answer when it changes: when Try again takes its place,
       focus moves to Try again, and when it goes with nothing in its place (not confirmed,
       stale), focus moves to the card's heading, whose description is the outcome line. If
       focus is anywhere else, it stays there, so an outcome arriving later never takes it.
@@ -1120,7 +1120,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     (or "Delegate *name* asked") over the question as it was shown. Below that:
     - with this device's answer record for the question, the record's progress and outcome as
       the card shows them: "You answered · *value*" once confirmed; "Sent, but not confirmed.
-      Check at the machine" for `unconfirmed`; refused, failed and stale as they are;
+            Check the conversation." for `unconfirmed`; refused, failed and stale as they are;
     - with no record (answered elsewhere, or the call ended without an answer), "No longer
       waiting", since the protocol doesn't say what was answered elsewhere.
   - **History:** a resolved question stays as a read-only item where it was asked, across later
@@ -1319,7 +1319,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     in place. It is words only, with no ring or badge: Send's ring already says the request
     is open.
   - **Its room is reserved.** From Send the line keeps the room the longest outcome needs
-    ("Sent, but not confirmed. Check at *machine* before sending it again."), two lines at
+    ("Sent, but not confirmed. Check the conversation before sending it again."), two lines at
     phone width (a narrow pane included) and one on a wide window, empty unless it has
     something to say, so neither an exception nor the outcome moves the box or the card's
     controls. The room stays until the box is next typed in or the session is left, so the
@@ -1330,10 +1330,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     outcome is spoken at once, skipping any stage not yet spoken.
   - **The states,** for a reply. An answer has the same rows, but never Up next (a question
     holds the session), ends in "You answered" (below), and has "Answer" for "Reply" in what
-    is spoken. An answer that is not confirmed says, as today, "Sent, but not confirmed. Check
-    at the machine.": it is final and never resent, so nothing invites a second answer.
-    "Check at *machine*", for a reply or an answer, is the known no-RDP gap #467, which
-    replaces it with a remote check:
+    is spoken.     An answer that is not confirmed says "Sent, but not confirmed. Check the
+        conversation.": it is final and never resent, so nothing invites a second answer. For a
+        reply or an answer, the sentence points at the conversation, never at the machine (#696
+        rule 5: no remote desktop); #467's remote check later confirms it in place:
 
     | State | When | Seen | Colour | Spoken (polite, at most one a second; a failure assertive, §9.1 A6) |
     |---|---|---|---|---|
@@ -1349,7 +1349,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     | Passed, stalled | `typed` on an idle session, then nothing for 10 s | *line*: Passed to the agent · not picked up yet | text2 | "Reply passed to the agent, not picked up yet" |
     | Still being delivered | a resend met the first copy in flight | *line*: the stage reached · still being delivered | text2 | "Reply still being delivered" |
     | Waiting for the machine | held on this device while the machine isn't connected | *line*: Waiting for *machine* · it goes when *machine* is back; Send's ring stands still | text2 | "Reply waiting for *machine*" |
-    | Not confirmed | result `unconfirmed` (host: a reply 60 s, an answer 15 s), or the client's 9 min | *line*: Sent, but not confirmed. Check at *machine* before sending it again. (an answer: Sent, but not confirmed. Check at the machine.) | Needs you's text colour | the sentence |
+    | Not confirmed | result `unconfirmed` (host: a reply 60 s, an answer 15 s), or the client's 9 min | *line*: Sent, but not confirmed. Check the conversation before sending it again. (an answer: Sent, but not confirmed. Check the conversation.) | Needs you's text colour | the sentence |
     | Busy, stale | result `busy` or `stale` | *line*: today's ("Not sent: …") | Needs you's text colour | the words |
     | Refused, failed | result `refused`; the request failed | *line*: today's ("The machine refused this reply: …", "Couldn't send it: …") | Danger | the words |
 
@@ -2153,8 +2153,9 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **Receipt words** (§6.5, #600; Decided, not yet built (#600; builds in #616, #625): today both clients show Sending…, Sending again… and "Delivered. The session has your reply." for a reply, and "Delivered. The session has your answer." for a question card's answer). On screen, only for an exception: Still sending… · Sent ·
   still waiting on *machine* · Passed to the agent · not picked up yet · still being
   delivered · Waiting for *machine* · it goes when *machine* is back; outcomes other than
-  Delivered keep today's words, and an answer not confirmed says "Sent, but not confirmed.
-  Check at the machine." and never invites a second answer. On a resolved card: You answered · *value* (the option's
+  Delivered keep today's words, except that not confirmed points at the conversation, never
+  the machine: "Sent, but not confirmed. Check the conversation before sending it again." (an
+  answer: "… Check the conversation.", never inviting a second answer). On a resolved card: You answered · *value* (the option's
   label, free text's first line cut to about 40 characters, nothing for a form). Spoken
   only, never shown on the normal path: Reply sent · Reply passed to the
   agent · Reply up next, after the agent's current step · Reply delivered (and "Answer" for
