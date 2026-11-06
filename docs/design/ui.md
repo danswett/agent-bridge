@@ -1556,9 +1556,11 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
 **Pushes, toasts and Home Assistant notices**
 
 One pattern everywhere: *Agent* on *machine*, then the state. *Agent* is the host's own name
-for it, as the host sends it: Copilot, Claude or Codex.
+for it, as the host sends it: Copilot, Claude or Codex. Pushes and toasts always use the plain
+title, with the count in the body; only Home Assistant notices add the grouped
+" · *n* sessions: *A*, *B*" to the title.
 
-| State | Title | Grouped (2 or more sessions waiting) | Body |
+| State | Title (pushes, toasts, HA) | Grouped title (HA notices only, 2 or more sessions waiting) | Body |
 |---|---|---|---|
 | Needs sign-in | "*Agent* on *machine* needs sign-in" | "*Agent* on *machine* needs sign-in · 2 sessions: *A*, *B*" | "*n* sessions affected" ("1 session affected") |
 | Not responding | "*Agent* on *machine* isn't responding" | The same, with " · *n* sessions: *A*, *B*" | `attention.message` |
@@ -1601,7 +1603,7 @@ for it, as the host sends it: Copilot, Claude or Codex.
 | Banner | "*Agent* on *machine* needs sign-in"; "*n* sessions affected"; "Checking for a sign-in that still works…"; "Waiting for sign-in"; "Waiting for sign-in · code expires *time*"; "Code expired"; "Signed in · waiting for *n* sessions to confirm"; "Signed in · *n* sessions recovered"; "Recovered by itself"; "Sign-in refused · *reason*"; "Sign-in failed"; "Sign in at the machine · *reason*"; "Couldn't start sign-in. Try again."; "*machine* can't be reached now" |
 | Sheet | "Starting *Agent*'s sign-in on *machine*…"; "Open this page and enter the code."; "Expires *time*"; "Code expired"; "This sign-in code couldn't be shown." |
 | Buttons | "Sign in"; "Show code"; "Open"; "Copy"; "Cancel"; "Try again" |
-| Push and HA notice titles | "*Agent* on *machine* needs sign-in"; "… isn't responding"; "… wasn't authorised"; "… hit a rate limit"; "… stopped with an error"; grouped, " · *n* sessions: *A*, *B*". Body: "*n* sessions affected" for sign-in; `attention.message` for the others |
+| Push, toast and HA notice titles | "*Agent* on *machine* needs sign-in"; "… isn't responding"; "… wasn't authorised"; "… hit a rate limit"; "… stopped with an error". HA notices only, grouped: " · *n* sessions: *A*, *B*". Body: "*n* sessions affected" for sign-in; `attention.message` for the others |
 
 **Platforms**
 
@@ -1610,8 +1612,9 @@ for it, as the host sends it: Copilot, Claude or Codex.
 - **Apple (#260, owner welshofer):** note only. The same fields; the native form is that
   track's decision.
 - **Home Assistant:** read-only. The session's status says what the row says ("Needs sign-in",
-  "Not responding", "Not authorised", "Rate limited", "Agent error"). Its sign-in notice reads
-  as the pushes above. Never the code or URL, and no Sign in.
+  "Not responding", "Not authorised", "Rate limited", "Agent error"). Its sign-in notice follows
+  the pattern above, with the grouped title when 2 or more sessions wait. Never the code or URL,
+  and no Sign in.
 
 ## 7. Platform shells
 
