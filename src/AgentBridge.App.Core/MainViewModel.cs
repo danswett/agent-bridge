@@ -166,6 +166,15 @@ public sealed partial class MainViewModel : Observable
     Action? checkLocal;
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
+    // This machine's own update once downloaded: the banner over every page, with Restart to
+    // update (#516). Set by the app for an installed copy; none for the demo or a build folder.
+    public AppUpdateViewModel AppUpdate
+    {
+        get => appUpdate;
+        set { appUpdate = value; Raise(); }
+    }
+    AppUpdateViewModel appUpdate = new();
+
     // Check all: every machine listed, and this one.
     public void CheckAll()
     {

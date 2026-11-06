@@ -968,6 +968,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         var prompted = false;
         var turn = SessionStatus.Idle;
         var setAside = false;
+        var crashed = false;
         lock (_gate)
         {
             endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null;
@@ -986,8 +987,12 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 {
                     state.Mark = state.Mark with { MidTurn = null, Continue = null };
                 }
+                // A crash restore needs the person (session.class, #913) until they act on it: a
+                // prompt since the restore, or a turn started after it. Once, for that restore.
+                if (prompted || (full.Status == SessionStatus.Working && full.StatusSince > state.Mark.At)) { state.Acted = true; }
                 boundary = state.Mark.At;
                 restored = state.Shown ? state.Mark : null;
+                crashed = restored is { Cause: RestoreCause.Crash } && !state.Acted;
                 turn = entry.Tracker.TurnStatus;
                 // Built with this boundary, the session already has the interrupted run's questions
                 // set aside, by transcript position: a question it shows is a new one, though a clock
@@ -1073,8 +1078,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         entry.CommittedWith = inputs;
         // Last, from the session as clients are shown it, the ending override included (#913).
         // classSince carries over from what was last sent while the tier is unchanged (an episode).
-        var tier = NotificationClasses.Of(shown);
-        shown = shown with { Class = tier, ClassSince = NotificationClasses.Since(shown, tier, entry.Unbudgeted) };
+        var tier = NotificationClasses.Of(shown, crashed);
+        shown = shown with { Class = tier, ClassSince = NotificationClasses.Since(shown, tier, entry.Unbudgeted, crashed) };
         var getForm = SessionBudget.Fit(shown);
         var listForm = SessionBudget.Fit(shown.WithoutHistory());
         var json = JsonSerializer.Serialize(getForm, ProtocolJson.Options);
@@ -1270,6 +1275,9 @@ sealed class RestoreMarkState(SessionRestored mark)
     // The badge (Session.restored): false once the recorder has taken it away. The boundary stays.
     public bool Shown { get; set; } = true;
     public int? Prompts { get; set; }
+    // A person has acted on this restore (a prompt since it, or a turn started after it): a crash
+    // restore no longer makes the session needsYou.
+    public bool Acted { get; set; }
     // The interrupted run's questions as an earlier host run found them, given with a boundary it
     // kept; and as this run found them, once read with the boundary (SessionState.Known, Interrupted).
     public IReadOnlySet<string>? Known { get; set; }

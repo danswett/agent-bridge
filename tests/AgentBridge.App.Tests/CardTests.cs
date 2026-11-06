@@ -840,6 +840,25 @@ public sealed class CardTests : IAsyncLifetime
         r.Detach();
     }
 
+    // #967, Creative 6676422473: a reply not confirmed points at the conversation, never at the
+    // machine (#696), keeps the host's reason, and still says it may be sent again; the room the
+    // line keeps is those words, whatever the machine is called.
+    [Fact]
+    public async Task An_unconfirmed_reply_says_check_the_conversation_before_sending_it_again()
+    {
+        host.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Unconfirmed, "the session did not record the reply within 60 seconds"));
+        var r = new ReplyViewModel(Make.Session(), attach: false, deliveries, connection, machineName: "Test PC");
+
+        r.Text = "did this land?";
+        r.Send();
+        await Wait.UntilAsync(() => !r.Pending && r.StatusText.Length > 0, "the outcome");
+
+        Assert.Equal("Sent, but not confirmed. Check the conversation before sending it again. (the session did not record the reply within 60 seconds)", r.StatusText);
+        Assert.Equal("Sent, but not confirmed. Check the conversation before sending it again.", r.StatusRoom);
+        Assert.Equal("did this land?", r.Text);
+        r.Detach();
+    }
+
     [Fact]
     public void A_reply_the_host_would_refuse_is_refused_here_first()
     {

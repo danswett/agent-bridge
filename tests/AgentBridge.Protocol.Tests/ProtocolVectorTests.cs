@@ -8,7 +8,7 @@ using Xunit;
 // moved in one implementation fails in the other.
 public class ProtocolVectorTests
 {
-    static readonly string[] Names = ["sessions.json", "attachments.json", "push.json", "launch.json", "transfer.json", "update.json", "usage.json"];
+    static readonly string[] Names = ["sessions.json", "attachments.json", "push.json", "launch.json", "transfer.json", "update.json", "manage.json", "usage.json"];
 
     static IEnumerable<(string File, string Record, JsonObject Entry, JsonObject Vector)> All(string kind) =>
         from file in Names

@@ -21,8 +21,13 @@ public interface IUpdater
     // The release downloaded and ready to apply: the one the last check found, once downloaded.
     // Null when a later check (or a change of feed) has found another since, or none.
     string? Ready { get; }
-    // Exits the app, replaces it, and starts the new version.
-    void ApplyAndRestart();
+    // Exits the app, replaces it, and starts the new version: only the release named, the one the
+    // person or the updater chose, and only while it is the one ready. Anything else throws before
+    // anything is replaced (a check or download meanwhile may have replaced it; r4487830884).
+    void ApplyAndRestart(string version);
+    // Where releases come from now (the feed, and Include pre-releases): what a check found, or a
+    // download fetched, belongs to it.
+    string Source => "";
 }
 
 // Whether the app itself starts at sign-in (into the notification area), so toasts keep coming
@@ -52,6 +57,13 @@ public sealed class SettingsViewModel : Observable
     int busyActions;
     string updateStatus = "";
     string? updateVersion;
+    // The release Settings itself saw downloaded and ready (its check, or its Restart to update),
+    // whatever its status line says since (a Not now or a refusal clears that).
+    string? readyHere;
+    // Changes of source (Include pre-releases), and the one updateVersion was found on: a release
+    // found on another source is not offered, however busy Settings was when the source changed.
+    int sourceAt;
+    int foundAt;
     string log = "";
     string agentInstallStatus = "";
     bool agentInstallInProgress;
@@ -84,6 +96,17 @@ public sealed class SettingsViewModel : Observable
     }
 
     public string AppVersion { get; }
+
+    // The same page over another updater: the self-test's stand-in release, for its pictures of
+    // the update row (Creative's acceptance on #719). The app itself never uses it.
+    public SettingsViewModel WithUpdater(IUpdater other) => new(host, manager, other, appAtSignIn, prefs, savePrefs, AppVersion, relayUrl);
+
+    // Done with such a page: it stops following the host.
+    public void Detach()
+    {
+        trust.Changed -= Refresh;
+        host.Changed -= Refresh;
+    }
     public string InstalledText => updater.InstalledVersion is { } v ? $"Installed version {v}" : "Not installed (a development copy): updates are off";
     HostStatus? Status => host.Status;
 
@@ -144,7 +167,7 @@ public sealed class SettingsViewModel : Observable
     public string AgentInstallStatus { get => agentInstallStatus; private set => Set(ref agentInstallStatus, value); }
     public bool AgentInstallInProgress => agentInstallInProgress || Status?.AgentInstallation?.InProgress == true;
     public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
-    public string AgentsState => !HostRunning ? "Connect to this machine's host to check its agents."
+    public string AgentsState => !HostRunning ? "Connect to this machine's bridge to check its agents."
         : !host.Can(HostOps.AgentReadinessCapability) ? "This host does not report agent readiness. Update the app and restart the host."
         : Status?.Agents is not { } report ? "Checking installed agents..."
         : $"Checked at {report.CheckedAt.ToLocalTime():g}. Detection alone does not verify sign-in, hook trust or a new session."
@@ -441,25 +464,199 @@ public sealed class SettingsViewModel : Observable
     public bool ShowDetail { get => prefs().ShowDetail; set { if (value != ShowDetail) { Save(prefs() with { ShowDetail = value }); } } }
     public bool Toasts { get => prefs().Toasts; set { if (value != Toasts) { Save(prefs() with { Toasts = value }); } } }
     public bool FinishedToasts { get => prefs().FinishedToasts; set { if (value != FinishedToasts) { Save(prefs() with { FinishedToasts = value }); } } }
-    public bool Prereleases { get => prefs().Prereleases; set { if (value != Prereleases) { Save(prefs() with { Prereleases = value }); } } }
+    public bool Prereleases
+    {
+        get => prefs().Prereleases;
+        set
+        {
+            if (value == Prereleases) { return; }
+            // Another source: the updater drops what it found and downloaded as soon as it is next
+            // read, and says nothing (VelopackUpdater.Manager), so what a check here found or saw
+            // ready on the old one, and its Restart to update, go: now, or once Settings is idle.
+            sourceAt++;
+            Reconcile();
+            // The shared updater told of the new source before anything hears of the change: the
+            // app's tick on PreferencesChanged would otherwise check and download under the old
+            // source's mark, which the next tick then threw away (Copilot, r4488279975). Said to
+            // the devices and the banner too, rather than at the next check.
+            Save(prefs() with { Prereleases = value }, () => (updater as ObservedUpdater)?.SourceChanged());
+        }
+    }
     public bool AutoUpdate { get => prefs().AutoUpdate; set { if (value != AutoUpdate) { Save(prefs() with { AutoUpdate = value }); } } }
+    // When an update is ready (#689, 6674007815; Product's names, 6674016765): the options in the
+    // order Settings lists them, Restart to update first. Kept for this machine and profile; the
+    // AutoUpdater reads it at its next look (the app asks for one at once).
+    public int WhenReadyIndex
+    {
+        get => prefs().WhenReady == UpdateWhenReady.InstallBetweenTurns ? 1 : 0;
+        set
+        {
+            var chosen = value == 1 ? UpdateWhenReady.InstallBetweenTurns : UpdateWhenReady.RestartToUpdate;
+            if (value is 0 or 1 && chosen != prefs().WhenReady) { Save(prefs() with { WhenUpdateReady = chosen }); }
+        }
+    }
+    // What the option chosen does, in one sentence (ui.md §8).
+    public string WhenReadyNote => prefs().WhenReady == UpdateWhenReady.InstallBetweenTurns
+        ? WhenReadyBetweenTurns
+        : WhenReadyRestart;
+    public const string WhenReadyRestart = "Nothing restarts until you choose Restart to update, here or on the banner at the top of the app.";
+    public const string WhenReadyBetweenTurns = "Installs when no session here has a turn running or a question waiting; after 6 hours, even mid-turn, but never while a question waits.";
 
     public string? Error { get => error; private set { if (Set(ref error, value)) { Raise(nameof(HasError)); } } }
     public bool HasError => error is not null;
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); Raise(nameof(UpdateStatus)); } }
     }
-    public string UpdateStatus { get => updateStatus; private set => Set(ref updateStatus, value); }
-    public bool UpdateAvailable => updateVersion is not null;
+    public string UpdateStatus
+    {
+        // A release the app downloaded in the background is said here whenever Settings itself is
+        // doing nothing about updates (#516): what an earlier check here said ("Up to date", say)
+        // is older than that download, so it gives way. The banner above every pane owns the offer
+        // and a failed restart of it while it shows them: nothing is said twice on one screen
+        // (Creative, 6677102646, correcting 6676653935). Without the banner, a restart refused
+        // here is said here, once, in its words. A check GitHub refused or limited since stays
+        // here, after the offer when Settings says it (6676653935).
+        get
+        {
+            if (Busy) { return updateStatus; }
+            var banner = shared is { Shown: true } open ? open : null;
+            // Dropped only when the banner says it, or a release downloaded since makes it old news.
+            var failed = banner is { Failed: true } || refusedHere is not { } refused
+                || (Downloaded is { } now && now != refused.Version) ? null : refused.Sentence;
+            // With nothing ready, the failure, then what Settings learned since (a release gone
+            // stale, say).
+            if (Downloaded is not { } ready) { return Said(failed, updateStatus); }
+            var offer = failed ?? (banner?.Version == ready || banner is { Failed: true } ? null : Ready(ready));
+            return Said(offer, discoveryNote);
+        }
+        private set => Set(ref updateStatus, value);
+    }
+    static string Said(params string?[] lines) => string.Join(" ", lines.Where(s => s is { Length: > 0 }));
+    // A restart pressed here that did not install, and the release it was for: said here unless
+    // the banner says it, until the next press, check or change of source.
+    (string Sentence, string Version)? refusedHere;
+    // What the release discovery said when a check here could not ask GitHub (#709), until the
+    // next check here or a change of source.
+    string? discoveryNote;
+    // The banner's restart, which Settings' Restart to update is too (ShareRestart).
+    AppUpdateViewModel? shared;
+    // Settings' own Restart to update under way: its button shows its ring and says so (Creative,
+    // 6676653935), as the banner's does.
+    public bool RestartingHere { get => restartingHere; private set { if (Set(ref restartingHere, value)) { Raise(nameof(RestartStatus)); } } }
+    bool restartingHere;
+    public string RestartStatus => restartingHere ? "Restarting\u2026" : "";
+
+    // Settings' Restart to update is the banner's (App): one restart, with one state, whichever
+    // control starts it. The banner shows it restarting and how it ended; Settings' status line
+    // says the same words.
+    public void ShareRestart(AppUpdateViewModel banner)
+    {
+        shared = banner;
+        banner.PropertyChanged += (_, _) => Raise(nameof(UpdateStatus));
+        RestartDownloaded = banner.RestartAsync;
+    }
+    // A release found by a check here, or downloaded in the background: Restart to update shows.
+    public bool UpdateAvailable => updater.InstalledVersion is not null && (updateVersion ?? Downloaded) is not null;
+    // The release downloaded, in the background or by Settings: still offered after an install of
+    // it fails, for the person to try again, as the banner's is (AutoUpdater.InstallAsync).
+    string? Downloaded => updater.InstalledVersion is not null ? updater.Ready : null;
+    static string Ready(string version) => AppUpdateViewModel.Ready(version);
+    string UpToDate => $"Up to date ({updater.InstalledVersion}).";
+    // The app's Restart to update for the release downloaded (AutoUpdater.RestartToUpdateAsync),
+    // given the confirmation to ask; unset, Settings stops the host and applies it itself. Null
+    // from it: handed to Velopack; AutoUpdater.NotNow: the person chose not to; else why not.
+    public Func<Func<string, Task<bool>>?, Task<string?>>? RestartDownloaded { get; set; }
+
+    // The shared updater changed (a download in the background finished, say).
+    public void UpdatesChanged()
+    {
+        Reconcile();
+        Raise(nameof(UpdateStatus));
+        Raise(nameof(UpdateAvailable));
+        // Changed on its own (a release downloaded in the background, or gone): said to a screen
+        // reader once (ui.md §9.1 A6). Settings' own progress and results are its own actions'.
+        // While Settings is busy with something else, it is said once Settings is idle (RunAsync):
+        // recorded as seen then without being said, a release downloaded meanwhile was never
+        // announced (Copilot, 9039771d). Never while Settings' own check or Restart to update runs.
+        if (Busy) { if (ownUpdateActions == 0) { announceWhenIdle = true; } }
+        else { Announce(); }
+    }
+
+    void Announce()
+    {
+        if (UpdateStatus is var now && now != lastStatus)
+        {
+            lastStatus = now;
+            if (now.Length > 0) { UpdateStatusAnnounced?.Invoke(); }
+        }
+    }
+
+    // A change on its own came while Settings was busy, to be said once it is idle; and Settings'
+    // own update actions under way, whose progress and results are never announced as such.
+    bool announceWhenIdle;
+    int ownUpdateActions;
+    Task RunUpdateAsync(Func<Task> act) => RunAsync(async () =>
+    {
+        ownUpdateActions++;
+        announceWhenIdle = false;
+        try { await act(); }
+        finally { ownUpdateActions--; }
+    });
+
+    // The update line changed without the person doing anything here: SettingsView raises its
+    // polite live region's LiveRegionChanged.
+    public event Action? UpdateStatusAnnounced;
+    string lastStatus = "";
+
+    // A release Settings saw ready, which the shared updater no longer has downloaded (a check in
+    // the background replaced it, its download not done): neither it nor its Restart to update is
+    // offered any more. Done once Settings is idle, so its own progress is never overwritten. A
+    // release a check here found and that was never downloaded stays available while it is still
+    // what the last check found; a later one (in the background) finding another, or nothing
+    // newer, makes it old news too, whether or not that one's download then failed.
+    void Reconcile()
+    {
+        if (Busy) { return; }
+        if (foundAt != sourceAt)
+        {
+            foundAt = sourceAt;
+            // Everything a check here said is the old source's, "Up to date" included: kept, it
+            // claimed the new source current without ever asking it (Copilot, ac778916).
+            (updateVersion, readyHere, updateStatus, discoveryNote, refusedHere) = (null, null, "", null, null);
+            return;
+        }
+        if (readyHere is null)
+        {
+            if (updateVersion is { } found && updater is ObservedUpdater { Found: var newest } && newest != found && updater.Ready != found)
+            {
+                updateVersion = null;
+                updateStatus = $"Version {found} is no longer the newest; check for updates again.";
+            }
+            // "Up to date" from a check here, under a background download since gone: a newer
+            // release found since is said, never hidden behind it (Copilot, ac778916).
+            else if (updateVersion is null && Downloaded is null && updater is ObservedUpdater { Found: { } since } && updateStatus == UpToDate)
+            {
+                updateStatus = $"Version {since} has been found since; check for updates again.";
+            }
+            return;
+        }
+        if (readyHere is not { } said || updater.Ready == said) { return; }
+        readyHere = null;
+        if (updateVersion != said) { return; }
+        updateVersion = null;
+        updateStatus = $"Version {said} is no longer the newest; check for updates again.";
+    }
     public string Log { get => log; private set => Set(ref log, value); }
 
     public event Action? PreferencesChanged;
 
-    void Save(AppPreferences next)
+    // before: what must follow the saving and come before anyone is told.
+    void Save(AppPreferences next, Action? before = null)
     {
         savePrefs(next);
+        before?.Invoke();
         RaiseAll();
         PreferencesChanged?.Invoke();
     }
@@ -637,32 +834,60 @@ public sealed class SettingsViewModel : Observable
         Raise(nameof(Agents));
     }
 
-    public Task CheckForUpdatesAsync() => RunAsync(async () =>
+    public Task CheckForUpdatesAsync() => RunUpdateAsync(async () =>
     {
         if (updater.InstalledVersion is null) { UpdateStatus = "Updates are off in a development copy."; return; }
         UpdateStatus = "Checking…";
+        (discoveryNote, refusedHere) = (null, null);
+        // Its answer is for the source as it began: one changed meanwhile drops it (Reconcile).
+        var at = sourceAt;
         // GitHub limiting or unreachable is a wait, said as the status with when the next check
-        // is (#530), not an error to act on.
+        // is (#530), not an error to act on; after a release ready, it follows that offer.
         try { updateVersion = await updater.CheckAsync(); }
-        catch (ReleaseDiscoveryException e) { UpdateStatus = e.Message; return; }
-        UpdateStatus = updateVersion is { } v ? $"Version {v} is available." : $"Up to date ({updater.InstalledVersion}).";
+        catch (ReleaseDiscoveryException e) { UpdateStatus = e.Message; discoveryNote = e.Message; return; }
+        UpdateStatus = updateVersion is not { } v ? UpToDate
+            : updater.Ready == v ? Ready(v)
+            : $"Version {v} is available.";
+        readyHere = updateVersion is { } found && updater.Ready == found ? found : null;
+        foundAt = at;
         Raise(nameof(UpdateAvailable));
     });
 
-    // The host is stopped first so nothing in the app's folder is in use while it is replaced;
-    // the new version starts it again.
-    public Task InstallUpdateAsync() => RunAsync(async () =>
+    // Restart to update: the release downloaded in the background, or the one a check here found
+    // (downloaded first). confirm(warning) is asked last, after the download and just before the
+    // host stops, if a session here is waiting on the person or has a turn running then. The host
+    // is stopped first so nothing in the app's folder is in use while it is replaced; the new
+    // version starts it again.
+    public Task InstallUpdateAsync(Func<string, Task<bool>>? confirm = null) => RunUpdateAsync(async () =>
     {
+        refusedHere = null;
+        updateVersion = updater.Ready ?? updateVersion;
         if (updateVersion is null) { return; }
-        UpdateStatus = $"Downloading {updateVersion}…";
         // A download that fails is the update failing, for the account's devices too, unless the
         // automatic update is installing meanwhile: its outcome is the one to report.
-        try { await updater.DownloadAsync(p => UpdateStatus = $"Downloading {updateVersion}… {p}%"); }
-        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        if (updater.Ready != updateVersion)
         {
-            var why = e is DownloadHeldException ? e.Message : $"downloading {updateVersion} failed: {e.Message}";
-            if (!manager.UpdateUnderWay) { AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, why, recorded: false); }
-            throw;
+            UpdateStatus = $"Downloading {updateVersion}…";
+            // Said to a screen reader at most every quarter, not at every percent (ui.md §9.1 A6).
+            var quarter = 0;
+            try
+            {
+                await updater.DownloadAsync(p =>
+                {
+                    UpdateStatus = $"Downloading {updateVersion}… {p}%";
+                    if (p / 25 > quarter) { quarter = p / 25; UpdateStatusAnnounced?.Invoke(); }
+                });
+            }
+            catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+            {
+                var why = e is DownloadHeldException ? e.Message : $"downloading {updateVersion} failed: {e.Message}";
+                if (!manager.UpdateUnderWay) { AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, why, recorded: false); }
+                UpdateStatus = "";
+                // The next step, in one sentence: when the background tries again, or the person.
+                throw new InvalidOperationException(updater is ObservedUpdater { RetryAt: { } at } && prefs().AutoUpdate
+                    ? $"The update didn't download. {Product.Name} will try again at {at.ToLocalTime():t}."
+                    : "The update didn't download; choose Restart to update to try again.", e);
+            }
         }
         // Another check (the automatic one shares this updater) may have found a different release
         // since: the host is stopped only for the one downloaded.
@@ -671,13 +896,49 @@ public sealed class SettingsViewModel : Observable
             updateVersion = null;
             throw new InvalidOperationException("the update found has changed since; check for updates again");
         }
+        readyHere = updateVersion;
+        foundAt = sourceAt;
         UpdateStatus = "Stopping the host to update it…";
+        // Through the app's own updater when it has one (AutoUpdater.RestartToUpdateAsync): the
+        // banner's path, which refuses while another profile runs from this installation, asks
+        // confirm itself, and reports how it went to the account's devices.
+        if (RestartDownloaded is { } restart)
+        {
+            string? why;
+            RestartingHere = true;
+            try
+            {
+                why = await restart(confirm is null ? null : async warning =>
+                {
+                    UpdateStatus = "";
+                    RestartingHere = false;
+                    var go = await confirm(warning);
+                    if (go) { UpdateStatus = "Stopping the host to update it…"; }
+                    RestartingHere = go;
+                    return go;
+                });
+            }
+            finally { RestartingHere = false; }
+            if (why is null) { return; }
+            UpdateStatus = "";
+            if (why == AutoUpdater.NotNow) { return; }
+            // A status, never an error (Creative, 6676653935): the banner's failed state says it
+            // while the banner shows, and this line does when it doesn't (UpdateStatus).
+            refusedHere = (AppUpdateViewModel.DidNotInstall(why, updater.Ready is not null), updateVersion!);
+            return;
+        }
+        if (RestartWarning.For(host) is { } warning && confirm is not null)
+        {
+            UpdateStatus = "";
+            if (!await confirm(warning)) { return; }
+            UpdateStatus = "Stopping the host to update it…";
+        }
         try
         {
             await manager.StopAndApplyAsync(() => AutoUpdater.Record(prefs, savePrefs, updater), () =>
             {
                 UpdateStatus = "Restarting…";
-                updater.ApplyAndRestart();
+                updater.ApplyAndRestart(updateVersion!);
             });
         }
         // The automatic update got there first, and is installing (and recorded) it.
@@ -693,7 +954,7 @@ public sealed class SettingsViewModel : Observable
             AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, e.Message);
             updateVersion = null;
             UpdateStatus = "";
-            throw;
+            throw new InvalidOperationException(AppUpdateViewModel.DidNotInstall(e.Message, updater.Ready is not null), e);
         }
     });
 
@@ -713,7 +974,11 @@ public sealed class SettingsViewModel : Observable
         finally
         {
             Busy = --busyActions > 0;
+            // What changed in the updater while Settings was at work, once it no longer is.
+            Reconcile();
             RaiseAll();
+            if (!Busy && announceWhenIdle) { announceWhenIdle = false; Announce(); }
+            else if (!Busy) { lastStatus = UpdateStatus; }
         }
     }
 

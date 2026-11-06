@@ -71,8 +71,10 @@ command", or as the footer's "Shell" label or "esc exit shell mode" hint. The re
   An empty box must also show "/ commands" in the footer, which the CLI draws only while
   the box is empty. While a turn runs, the footer's place holds the turn's own row (spinner,
   "esc interrupt" or another Esc hint, "ctrl+q enqueue"; `LMe`'s activity layout) instead,
-  never with "/ commands": that row is taken for the footer when it carries Esc's or the
-  enqueue hint, the box's own rows decide whether it is empty, and its vim and shell labels
+  never with "/ commands". CLI 1.0.106 uses "ctrl+c interrupt" or "ctrl+c stop agents"
+  when the box is empty (captured live and checked against its rendering code); the Esc
+  hints remain supported. That row is taken for the footer when it carries one of those
+  interrupt hints or the enqueue hint, the box's own rows decide whether it is empty, and its vim and shell labels
   are read as in the idle footer, so a reply can still steer a working session. In a
   window under 80 columns (measured by the box's own bottom edge, which spans the frame) the
   turn's row leaves those labels out, and a box holding only spaces in shell mode draws as
@@ -101,7 +103,7 @@ with only those rows held, a real box holding a draft, or a permission dialog, d
 them afterwards passed. The box's rows alone cannot say so: '!' then a space enters
 shell mode with only a space in the box, which draws as an empty box, and Esc into vim's
 normal mode changes only the footer. In a window under 80 columns (the box's bottom edge)
-the footer must also not have become a running turn's row (Esc's hint, the enqueue hint):
+the footer must also not have become a running turn's row (Esc's or Ctrl+C's hint, the enqueue hint):
 there that row leaves out the mode labels, so a turn starting after the read would hide
 them, and it is refused as one running at the read is. Anything else in the footer (its
 spinner, its hints) may change. If a check fails, nothing is typed and the reply is `refused` ("input box
@@ -269,7 +271,7 @@ In order, for every reply:
    `permission.completed`, since the last abort or shutdown. One left open when a new CLI
    resumed the session (`session.resume`, with no end written for it) still counts, since the
    new CLI may show it again without writing it again: until it completes, an abort or shutdown,
-   a question asked since, or a prompt typed at the machine (`refused`, saying it was resumed). The whole transcript counts,
+   a question the session itself asks since (a subagent's is its own, #855), or a prompt typed at the machine (`refused`, saying it was resumed). The whole transcript counts,
    since a subagent's question stops only that subagent and other work can write any
    amount after it (and the session source does not report a subagent's question): it is
    read from the start once per session, in the background as soon as the session is found
@@ -305,6 +307,13 @@ transcript; the reply is added to them, and the prompt recorded differs, so the 
 `unconfirmed`. agent-ha-bridge has the same exposure. A question the agent opens in the
 moments between the transcript check and the keys landing would take the words; the window
 is the worker's start-up, about the same as for an answer.
+
+**What a reason says.** A reply's or an answer's `reason` states only what happened, as a
+lowercase clause with no full stop, naming the agent's session: never where to look, which the
+client's receipt already says ("Check the conversation…", #967), and never "check at the
+machine" (#995). Where the host itself failed (an exception reading the screen, typing, or
+checking the transcript, or the attempt ledger unreadable), the reason is "the machine
+couldn't deliver it", and the exception's text goes to the host's log only (#802).
 
 ## Progress and timings
 

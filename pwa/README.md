@@ -62,6 +62,7 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/launch.js` | Launching: the tolerant readers of `launch.options` and a launch's result (an unknown outcome is `unconfirmed`), and `checkLaunch`, which mirrors the C# `LaunchProtocol.Check` with its wording; folder-trust questions and their answers (`launch.trust`) |
 | `js/transfer.js` | Signed commands: bringing a session from another machine (the account's other machines' sessions, `sessions.transfer.serve`, and the command this device signs for the one a session is on, [v1-transfer.md](../docs/protocol/v1-transfer.md)), and answering a folder-trust question (`launch.trust:trust` or `:quit`, for the machine asking it), held to the host's by shared test vectors |
 | `js/launch-service.js` | Starting sessions: `answer-service.js` with `session.launch`, one launch on its way per machine, resent with the same request until it has an outcome |
+| `js/launch-follow.js` | A launch followed after its outcome, as the app's `LaunchViewModel` does (#891, #896): a busy machine listed again once its busy can have ended (its question's two minutes and a second, or 2 min 1 s with none named) or when a session registers on it, one listing at a time; and a launch the machine could not confirm said to have started when its session registers, by the host's rule (not a Copilot's, which registers before it is ready), or when its folder-trust question is trusted here. One whose outcome named no session (a Codex's) is not followed, as which session is its own can't be told here, until the host names it (#983) |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
 | `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`), usage and updates: each machine shown on its own channel (`usage.subscribe`, `update.subscribe`), every other online machine by a short channel (`hello`, `usage.get`, `update.get`) every five minutes while the app is in front (#610; it was every minute), every ten seconds while an update there is under way; a machine shown asked for its hello again on its channel when it says it changed (`hello.changed`), else every minute; `call` sends a press to a machine on whichever |
@@ -73,7 +74,7 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/hidden-text.js` | Text not on screen as it runs (#165, #220): the hidden and right-to-left characters the Needs you lane refuses, and the `\uXXXX` escapes code and approvals draw them as (the app's `HiddenText`) |
 | `js/auth-state.js` | An agent that needs sign-in, whose turn ended on an error, or that has stopped answering (#800): every protocol name for them in one place (`Session.attention`, `hello.machine.signIn`, `sessions.signin` and its `signin.*` ops and events, as Connection's contract on #800 has them), the github.com allowlist, the user code's shape, and agent text cut short and refused when token-shaped (the app's `AuthState`) |
-| `js/ui/sign-in-view.js` | The sign-in banners (#800): one per machine, agent and account, listing the sessions held up, with Sign in; and the sheet that press opens, with the code from this device's own `signin.code`, Copy and Open |
+| `js/ui/sign-in-view.js` | The sign-in banners (#800): one per machine, agent and account, naming the sessions held up as links in its line, with Sign in, and focused from a sign-in push's link (#969); and the sheet that press opens, with the code from this device's own `signin.code`, Copy and Open |
 | `js/ui/needs-you-view.js` | Needs you on screen, above the list and apart from it, its entries kept in place across redraws |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each session's answers, replies, files, End session and the launch panel to the machine it is for; which session is chosen (from the address, kept across a resize) and which panes show; the heading, count, empty state and a line per machine that can't be reached |
 | `js/ui/delegates-view.js` | A session's delegates (ui.md §6.3): the strip under the header at three panes and a phone's chip row (an item per delegate the main agent started, "N finished" folded); the Delegates tab's list (a row per delegate under its parent: glyph, name, how long or finished, its latest line); and the delegate opened from any of them, in the inspector or pushed in the tab: Status, Model, Kind and ID, its Task, Latest and Reasoning, its Tools, the delegates it started, and "Ask main agent to stop it", which fills the reply box and sends nothing. Its own words come from `session.get` with `agent`, while it is on screen. Nothing in it replies to or stops a delegate |
@@ -117,7 +118,11 @@ A machine that does not take launches now (read-only, agent-ha-bridge) still sho
 question, read-only. It is asked for one again when it reconnects, and on updates at most every
 30 seconds. With every machine shown it is offered only when no machine takes launches, and then
 its panel stays while it offers others. An answer that may have been typed is never offered again from here, and a
-resend the machine refuses (its command expired) reads as not confirmed.
+resend the machine refuses (its command expired) reads as not confirmed. A launch not confirmed whose
+session then registers (or whose question is trusted here) reads as started, its first message cleared
+if unchanged and its card opened only while Launch shows that machine. One whose outcome named no session
+is not followed (#983), and a start whose session isn't known says to open it from the list. A busy
+machine is listed again once its busy can have ended, or when a session registers there (#896).
 `test/e2e/fixture-host.mjs` is a working example in about 150 lines.
 
 The client resubscribes when `seq` skips, repeats or goes backwards, and replaces its
@@ -290,7 +295,7 @@ as unconfirmed rather than sent again. Outcomes:
 | Outcome | Shown | Then |
 |---|---|---|
 | `delivered` | The check on the control that sent it for about a second, then You answered · *value* | The host's upsert takes the question away; the card keeps the line |
-| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check at the machine. | Final; nothing offers to send it again |
+| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again |
 | `stale` | Already answered or gone | Final |
 | `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request |
 | `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request |
@@ -324,7 +329,7 @@ what was sent (anything typed meanwhile stays), and every other outcome keeps th
 | Outcome | Shown | Then |
 |---|---|---|
 | `delivered` | Send's check for about a second; no line | The session's upsert shows it as your last message |
-| `unconfirmed`, or unknown | Sent, but not confirmed. Check at the machine before sending it again. | The words stay; sending them again is a new reply |
+| `unconfirmed`, or unknown | Sent, but not confirmed. Check the conversation before sending it again. | The words stay; sending them again is a new reply |
 | `stale` | Not sent: the session has ended. | |
 | `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s |
 | `refused` | The machine refused this reply: *reason* (a question pending, an agent it can't reply to yet) | |
@@ -537,6 +542,15 @@ Every Playwright test serves the output of `tools/build-site.mjs` under
 running another checkout's tests at the same time. CI splits the run over several jobs
 (quality/README.md §4.7): Chromium, three WebKit shards (`--shard`), and `test/e2e` alone in
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
+
+**Renders for design review** (`test/renders/*.render.mjs`, `playwright.renders.config.mjs`):
+captures, not checks, of the demo in the states a change wants Design to sign off, each in dark,
+light and forced colours at 390 and 1440 px, saved as `renders/<state>-<theme>-<width>.png`
+(`test/renders/shoot.mjs`). CI's Chromium leg of pwa-ui draws them after its tests and keeps
+`renders/` as the `pwa-renders` artifact for 14 days, whatever the tests did; a render that
+fails never fails the job. They are drawn in CI rather than on anyone's machine, and Chromium
+alone emulates forced colours. `test/renders/demo.render.mjs` draws the sessions list, so the
+route is seen to work before a feature adds its own states.
 
 * `test/answer.spec.mjs`, in demo mode at a phone's size: answering every field type and
   kind, defaults, required fields, the byte limit, every outcome, Sent then Passed to the agent

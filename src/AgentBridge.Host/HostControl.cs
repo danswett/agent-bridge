@@ -22,6 +22,8 @@ public sealed class HostControlOptions
     // The account's token with the relay that issued it, for host.relay.account: one snapshot,
     // so a sign-in to another relay never pairs the new token with the old relay's address.
     public Func<RelayAccount?> Credential { get; init; } = () => null;
+    // The device id the app beside this host gives when it reads the relay account (#801).
+    public Action<string?>? LocalAppDevice { get; init; }
     public Func<Uri?> Relay { get; init; } = () => null;
     public Func<string?> AgentHaBridge { get; init; } = () => null;
     // What Home Assistant's refusals of this machine say now (HaAuthGuard.Problem), or null.
@@ -68,6 +70,9 @@ public sealed class HostControlOptions
 public sealed class HostControl
 {
     public LifecycleCoordinator? Lifecycle => options.Lifecycle;
+    // #805 N1: the committed-departure watchdog's state, for this host's status/health readers.
+    // Deliberately not in HostStatus: that is the app's local-pipe contract.
+    public DepartureStatus Departure => options.Lifecycle?.Departure ?? DepartureStatus.None;
     readonly HostControlOptions options;
     readonly Action<string> log;
     readonly object gate = new();
@@ -201,6 +206,7 @@ public sealed class HostControl
             case HostOps.Settings:
                 return Settings(Read<SettingsRequest>(data) ?? new SettingsRequest());
             case HostOps.RelayAccount:
+                options.LocalAppDevice?.Invoke(Read<RelayAccountRequest>(data)?.Device);
                 return RelayAccount();
             case HostOps.Stop:
                 log("stopping: asked by the app");

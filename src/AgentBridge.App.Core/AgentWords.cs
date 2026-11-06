@@ -13,7 +13,7 @@ public static class AgentWords
     public const string Installing = "Installing…";
     // `hookSetup` unknown with hooks a current host would have said it of: only a host from before
     // the field (#807) sends that.
-    public const string OlderHost = "Can't check · this machine's host is older";
+    public const string OlderHost = "Can't check · this machine's bridge is older";
     public const string CantCheck = "Can't check";
     public const string TookTooLong = "It took too long, and some hooks may have changed. Check again before trying again.";
 
@@ -27,9 +27,9 @@ public static class AgentWords
         : Has(raw, "used by another process") ? "file in use"
         : "couldn't read";
 
-    // The older bridge that runs a machine, in the one word every row uses for it: "host" (Creative,
+    // The older bridge that runs a machine. A person never sees "host" (Creative, 6692247358, over
     // 6675472997).
-    const string OlderBridge = "this machine's host is older";
+    const string OlderBridge = "this machine's bridge is older";
 
     // Hooks the host holds back from this app: "Read-only · why".
     public static string ReadOnly(string detail) => "Read-only · " + (
@@ -38,7 +38,7 @@ public static class AgentWords
         // Whether set read-only or read-only for a problem in its config, it's the host's settings
         // (HostSettings.ReadOnlyReason, ProblemReason), and "Read-only · this host is read-only" said
         // it twice (Creative, 6675018272).
-        : "set in this host's settings");
+        : "set in this bridge's settings");
 
     // Hooks the host found broken in a way it can't repair: an ownership record it couldn't read or
     // doesn't recognise, or this profile's intake record it couldn't use (AgentReadinessService.Hooks).
@@ -80,13 +80,13 @@ public static class AgentWords
         : Has(detail, "cleanup could not be confirmed") ? "the installer's processes may still be running"
         : Has(detail, "launch settings") ? "this profile's launch settings have a problem"
         : Has(detail, "Another CLI installation") ? "another installation was running"
-        : Has(detail, "read-only") || Has(detail, "agent-ha-bridge") ? "this host is read-only"
-        : "the host couldn't install it";
+        : Has(detail, "read-only") || Has(detail, "agent-ha-bridge") ? "this bridge is read-only"
+        : "the machine couldn't install it";
 
     // What a setup, repair or removal left, said on its row.
     public static string SetupResult(bool remove, string? verb, AgentSetupResult result) => result.Completed
         ? remove ? "Removed · sessions already running keep their hooks until they end"
-            : $"{(verb == "Repair" ? "Repaired" : "Set up")} · {(result.RestartRequired ? "restart the host, then start a new session to check it" : "start a new session to check it")}"
+            : $"{(verb == "Repair" ? "Repaired" : "Set up")} · {(result.RestartRequired ? "restart the bridge, then start a new session to check it" : "start a new session to check it")}"
         : SetupFailed(remove, verb, result.Detail);
 
     // A setup the host refused or that failed part-way, by why (StandaloneHooks.Preflight's refusals).
@@ -98,11 +98,11 @@ public static class AgentWords
             : Has(raw, "belongs to another installation") || Has(raw, "Another bridge profile") ? "another bridge profile owns its hooks"
             : Has(raw, "no hook registration owned by this profile") ? "this profile set up nothing to remove"
             : Has(raw, "migration") ? "this profile is being migrated"
-            : Has(raw, "read-only") ? "this host is read-only"
+            : Has(raw, "read-only") ? "this bridge is read-only"
             : Has(raw, "native hook is missing") ? "the app's hook is missing; reinstall the app"
             : Has(raw, "denied") ? "access denied"
             : Has(raw, "used by another process") ? "file in use"
-            : "the host couldn't finish it");
+            : "the machine couldn't finish it");
 
     static bool Has(string text, string part) => text.Contains(part, StringComparison.OrdinalIgnoreCase);
 }

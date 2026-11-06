@@ -142,7 +142,7 @@ words half-typed into a text field) is in no transcript, so the keys add to it: 
 `b` after `a` was ticked locally submits both. The caret position is normalized (above);
 ticks and typed text cannot be, short of reading the screen. Such an answer is never
 reported as delivered: the structured record differs, so the outcome is `unconfirmed`
-and the client says to check at the machine. agent-ha-bridge has the same exposure.
+and the client says to check the conversation. agent-ha-bridge has the same exposure.
 
 The keys are planned from the tool call's own arguments in the transcript, not from the
 `Question` the client saw, because they depend on things a `Question` does not carry
@@ -276,7 +276,7 @@ standing (its device taken off the list, its lifetime passed).
 Codex records nothing that says how an approval was answered: the hook removes the marker
 on the next event however it was answered, and the rollout does not name the approval. So
 a typed approval is always `unconfirmed`, as agent-ha-bridge logs it ("native approval is
-not confirmed"), and the client says to check at the machine.
+not confirmed"), and the client says to check the conversation.
 
 Codex sessions are known to this host through agent-ha-bridge's hook registrations, or,
 for a Codex run with `--no-daemon` (every launch from this host), from the terminal that
@@ -333,7 +333,9 @@ In order, for every answer:
    `User responded: …`. A form, even of one field, needs the structured record: its
    rendering trims, renders `a=x, b=y` (equally `a="x, b=y"`), and cannot tell options
    `x`, `x ` and `pick=x` apart. A different record, an error, a skip, the session
-   ending, or nothing is `unconfirmed` with the reason. Claude and Codex as above.
+   ending, or nothing is `unconfirmed` with the reason. Claude and Codex as above. Reasons
+   state only the fact, and an exception's text goes to the host's log only, as for replies
+   ([host-replies.md](host-replies.md), "What a reason says").
 
 Progress and timings work as for replies ([host-replies.md](host-replies.md#progress-and-timings)):
 `received` before step 1, `typed` (never `working`: a question holds the session) once step
