@@ -11,12 +11,13 @@ public sealed class RemoteAuthorization : IDisposable
     static readonly HashSet<string> HostOperations = [Ops.Hello, UsageProtocol.Get, TransferProtocol.Op];
     static readonly HashSet<string> PersonOperations =
     [
-        .. Reads, Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop,
+        .. Reads, Ops.SessionsFocus, Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop,
         Ops.AttachmentStart, Ops.AttachmentChunk, Ops.AttachmentDiscard,
         Ops.PushSubscribe, Ops.PushUnsubscribe, Ops.PushList,
         LaunchProtocol.Options, LaunchProtocol.Launch, TrustProtocol.Answer,
         UsageProtocol.Get, UsageProtocol.Subscribe,
         UpdateProtocol.Get, UpdateProtocol.Subscribe, UpdateProtocol.Check, UpdateProtocol.Install,
+        AgentSignIn.Start, AgentSignIn.Cancel,
     ];
     static readonly HashSet<string> HostCapabilities =
         [UsageProtocol.Capability, UsageProtocol.SharedCapability, TransferProtocol.ServeCapability];
@@ -84,18 +85,25 @@ public sealed class RemoteAuthorization : IDisposable
             _ => throw new InvalidOperationException("the peer role is not authorized"),
         };
         if (!operations.Contains(op)) { throw new InvalidOperationException("the peer role does not allow this operation"); }
-        var result = await sessions.HandleAsync(channel, op, data);
-        if (result is not HelloResult hello) { return result; }
+        return await sessions.HandleAsync(channel, op, data, hello => Shape(channel, hello));
+    };
+
+    // What the peer's role lets its hello say. Also what hello.changed compares at each later look
+    // (#651), so the role is read as it is then, and a pin that has gone since sees nothing.
+    HelloResult Shape(SecureChannel channel, HelloResult hello)
+    {
+        var role = Allows(channel) && leases.TryGetValue(channel, out var lease) ? lease.Role : null;
         return hello with
         {
-            Capabilities = [.. hello.Capabilities.Where(c => lease.Role switch
+            Capabilities = [.. hello.Capabilities.Where(c => role switch
             {
                 TrustedPeerStore.Service => c == Capabilities.SessionsRead,
                 TrustedPeerStore.Host => HostCapabilities.Contains(c),
-                _ => c != TransferProtocol.ServeCapability,
+                TrustedPeerStore.Person => c != TransferProtocol.ServeCapability,
+                _ => false,
             })],
         };
-    };
+    }
 
     public void Revalidate()
     {

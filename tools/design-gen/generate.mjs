@@ -6,15 +6,18 @@
 // Outputs: pwa/design/tokens.css and pwa/design/sprite.svg; the PWA's theme colours in
 // pwa/index.html and pwa/manifest.webmanifest; src/AgentBridge.App/Design/DesignResources.xaml
 // and DesignKeys.cs; and the layout sizes for the app's view models in
-// src/AgentBridge.App.Core/DesignLayout.cs. The bundled fonts for the Apple and Android apps:
+// src/AgentBridge.App.Core/DesignLayout.cs; the product's name and contact (lib/emit-brand.mjs)
+// as src/AgentBridge.Protocol/DesignBrand.cs, pwa/design/brand.js, design/apple/Brand.swift and
+// design/android/values/brand.xml. The bundled fonts for the Apple and Android apps:
 // design/apple/SlipgatesFonts.swift and .plist, design/android/font/ and
-// design/android/values/slipgates_type.xml (lib/emit-native.mjs).
-// With them, the app icon (lib/app-icon.mjs):
-// design/app-icon/*.svg, pwa/icon.svg, pwa/icons/*.png, and the app's Assets/AgentBridge.ico
-// and AgentBridge.png, whose rasters are compared by their pixels. design/preview.png is drawn
+// design/android/values/slipgates_type.xml (lib/emit-native.mjs). With them, the app icon
+// (lib/app-icon.mjs): design/app-icon/*.svg, pwa/icon.svg, pwa/icons/*.png, the app's
+// Assets/AgentBridge.ico and AgentBridge.png, the Apple asset catalog in
+// design/apple/Assets.xcassets (app icon and menu-bar template) and the Android drawables in
+// design/android, whose rasters are compared by their pixels. design/preview.png is drawn
 // by preview.mjs, which needs a browser.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadTokens, surfaceTokens, bundledFonts, checkNoSynthesis, motion, MOTION_PLATFORMS } from './lib/tokens.mjs';
@@ -24,6 +27,7 @@ import { designXaml, designKeysCs, designLayoutCs } from './lib/emit-xaml.mjs';
 import { appleFontsSwift, appleFontsPlist, androidFonts } from './lib/emit-native.mjs';
 import { toCssColor } from './lib/color.mjs';
 import { staleAppIcons, writeAppIcons } from './lib/app-icon.mjs';
+import { brandFiles } from './lib/emit-brand.mjs';
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -99,8 +103,13 @@ export function generate(root = repoRoot) {
     'design/apple/SlipgatesFonts.swift': appleFontsSwift(tokens, manifests),
     'design/apple/SlipgatesFonts.plist': appleFontsPlist(tokens, manifests),
     ...androidFonts(root, tokens),
+    ...brandFiles(tokens),
   };
 }
+
+// Files design-gen used to write and no longer does. A leftover copy would still compile, in its old
+// namespace, and keep the old name after a rename, so --check reports it and generating deletes it.
+export const RETIRED = ['src/AgentBridge.Host.Core/DesignBrand.cs'];
 
 // Line endings aside: a Windows checkout may hold any file with CRLF. A font file is compared
 // byte for byte.
@@ -111,11 +120,16 @@ const same = (file, content) => (Buffer.isBuffer(content)
 export function staleFiles(root = repoRoot) {
   return Object.entries(generate(root))
     .filter(([rel, content]) => { const f = path.join(root, rel); return !existsSync(f) || !same(f, content); })
-    .map(([rel]) => rel);
+    .map(([rel]) => rel)
+    .concat(RETIRED.filter((rel) => existsSync(path.join(root, rel))));
 }
 
 export function write(root = repoRoot) {
   const written = [];
+  for (const rel of RETIRED) {
+    const f = path.join(root, rel);
+    if (existsSync(f)) { rmSync(f); written.push(`${rel} (deleted)`); }
+  }
   for (const [rel, content] of Object.entries(generate(root))) {
     const f = path.join(root, rel);
     if (existsSync(f) && same(f, content)) { continue; }

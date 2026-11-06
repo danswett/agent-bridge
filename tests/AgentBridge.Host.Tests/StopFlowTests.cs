@@ -135,17 +135,17 @@ public sealed class StopFlowTests : IAsyncLifetime
     public async Task Hello_offers_ending_sessions_only_while_agent_ha_bridge_is_not_running_and_only_where_a_stopper_can_act()
     {
         var ch = await OpenAsync();
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsStop], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, Capabilities.SessionsStop], await CapabilitiesAsync(ch));
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
         probe.Reason = null;
 
         Serve(new UnsupportedPlatformStopper());
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
         Assert.Equal(("refused", "ending sessions is not supported on this platform yet; end it at the machine"), Pair(await StopAsync(ch)));
         Serve(Stopper(platform: false));
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
         Assert.Equal("refused", (await StopAsync(ch)).Outcome_);
         Serve(null);
         Assert.Equal("this host does not end sessions; end it at the machine", (await StopAsync(ch)).Reason);
@@ -504,6 +504,11 @@ public sealed class StopFlowTests : IAsyncLifetime
             OnInject?.Invoke(processId, plan);
             return new InjectionResult(InjectionStatus.Typed, "ok");
         }
+
+        // Copilot CLI 1.0.105 ready for a prompt, as captured live: a reply to Copilot is typed
+        // only into its empty input box, read from the screen (#825).
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ConsoleScreen(["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580", " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab"], null));
     }
 
     // The agent processes the tests pretend run, and nothing else: Open finds only these.

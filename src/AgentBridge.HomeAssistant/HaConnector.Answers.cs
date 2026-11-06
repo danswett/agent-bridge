@@ -68,6 +68,10 @@ public sealed partial class HaConnector
         // the card is read once with the baselines it was armed with before new ones are taken, so
         // an answer given on it in the meantime is not taken for the baseline and lost.
         public bool ReadFirst;
+        // The question came to be shown or answered otherwise under the same id (#220): nothing on
+        // the card or a phone is taken for it from then until the card is armed for what it says now,
+        // however long that takes.
+        public bool Superseded;
     }
 
     // Get-CopilotDecisionChannelObservation: present (with a value), absent (determinately
@@ -161,8 +165,23 @@ public sealed partial class HaConnector
         var question = full.Question;
         if (question is not null && p.Armed?.Question.Id == question.Id)
         {
-            if (p.Armed.Rearm && !p.Armed.ReadFirst) { await RearmAsync(full, p, name, ct); }
-            return;
+            // The same question can come to be shown otherwise, or answered otherwise: a delegate's
+            // name arriving that holds its approval to the terminal (#220), or a host updated to
+            // refuse what it used to offer. The card is then armed again for what it says now; a tap
+            // made before stays one made looking at something else.
+            if (!p.Armed.Superseded && SamePlan(HaDecision.Plan(question, full), p.Armed.Plan))
+            {
+                if (p.Armed.Rearm && !p.Armed.ReadFirst) { await RearmAsync(full, p, name, ct); }
+                return;
+            }
+            // An answer that reached the terminal, or may have: nothing on the card is taken for it
+            // again, and the card keeps saying to check the terminal rather than offering it afresh.
+            if (p.Armed.Settled) { return; }
+            if (!p.Armed.Superseded) { log($"Home Assistant connector re-arming {p.Node}: its question now reads or is answered differently"); }
+            // Taken for nothing from now: the card may not be armed again on this pass (a channel
+            // Home Assistant cannot read now), and a tap on what it said before is not an answer to
+            // what it says now.
+            p.Armed.Superseded = true;
         }
         if (question is null)
         {
@@ -198,9 +217,12 @@ public sealed partial class HaConnector
             lock (gate) { dirty.Add(full.Id); }
             return;
         }
-        // The last question's buttons, still on the phones: gone with it.
-        if (p.Notify.Shown is { } shown && shown != question.Id) { await ClearButtonsAsync(full.Id, p.Notify, forget: true, ct); }
+        // The question as it was before, armed again for what it says now: what it has been through
+        // stays with it (Again).
+        var was = p.Armed is { Superseded: true } superseded && superseded.Question.Id == question.Id ? superseded : null;
         var plan = HaDecision.Plan(question, full);
+        // The last question's buttons, still on the phones, or this one's as it read before: gone with it.
+        if (p.Notify.Shown is { } shown && shown != NotifyId(question.Id, plan)) { await ClearButtonsAsync(full.Id, p.Notify, forget: true, ct); }
         var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
         var unset = await RunAsync(HaDecision.Arm(plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
         // Everything the card is told about this question is out; nothing reported before now was
@@ -233,11 +255,46 @@ public sealed partial class HaConnector
             AwaitTap = plan.AnswerOnTap && !await ShowsWaitingAsync(p.Node, question.Id, ct),
             StaleSlots = await StaleSlotsAsync(plan, p.Node, unset, ct),
         };
+        if (was is not null) { Again(was, p.Armed); }
         log($"Home Assistant connector armed {p.Node} for its question{(plan.TerminalOnly ? " (answered at the machine)" : "")}");
+    }
+
+    // The same question armed for what it says now keeps what it has been through, as a re-arm does
+    // (RearmAsync): its attempts, so each request is still one of its own, and every press, publish
+    // and tap already used, so none is delivered twice. Fresh baselines are its own.
+    static void Again(Armed was, Armed now)
+    {
+        now.Settled = was.Settled;
+        now.Attempts = was.Attempts;
+        now.UsedPress = was.UsedPress;
+        now.UsedStamp = was.UsedStamp;
+        now.SpentPress = was.SpentPress;
+        now.PhoneTaps.UnionWith(was.PhoneTaps);
+        // A tap that reached nothing (Busy, Refused), with the selector seen waiting under the new
+        // arming: the same option may be tapped again, as after RearmAsync. Kept, it ignored the
+        // next Approve as one already used.
+        if (!now.AwaitTap && now.UsedPress?.StartsWith("tap:", StringComparison.Ordinal) == true) { now.UsedPress = null; }
     }
 
     // What a card's answer channels held just before it was read ahead of a re-arm.
     sealed record CardSeen(Observation Payload, Observation Submit, Observation Reply, string? Decision);
+
+    // Whether a plan shows and takes what the armed one does: its words, how it is answered, and
+    // what it offers (lists compared by what they hold, not by reference).
+    static bool SamePlan(DecisionPlan a, DecisionPlan b) =>
+        a.Question == b.Question && a.AnswerOnTap == b.AnswerOnTap && a.TerminalOnly == b.TerminalOnly && a.TakesTypedAnswer == b.TakesTypedAnswer
+        && a.AgentName == b.AgentName && a.Choices.SequenceEqual(b.Choices)
+        && a.Fields.Count == b.Fields.Count && a.Fields.Zip(b.Fields).All(p => p.First.Label == p.Second.Label && p.First.IsText == p.Second.IsText
+            && p.First.MultiSelect == p.Second.MultiSelect && p.First.AllowsEmpty == p.Second.AllowsEmpty
+            && p.First.Options.SequenceEqual(p.Second.Options) && p.First.DefaultIndexes.SequenceEqual(p.Second.DefaultIndexes)
+            && SameSource(p.First.Source, p.Second.Source));
+
+    // And what each field's answer is made of (ReadAnswerAsync): its name, its type and the value each
+    // label stands for. Two forms can show the same labels over swapped values.
+    static bool SameSource(Field? a, Field? b) =>
+        a is null || b is null ? a is null && b is null
+        : a.Name == b.Name && a.Type == b.Type && a.AllowOther == b.AllowOther && a.Required == b.Required
+            && a.Default?.GetRawText() == b.Default?.GetRawText() && (a.Options ?? []).SequenceEqual(b.Options ?? []);
 
     static bool Same(CardSeen a, CardSeen b) =>
         Same(a.Payload, b.Payload) && Same(a.Submit, b.Submit) && Same(a.Reply, b.Reply) && a.Decision == b.Decision;
@@ -538,7 +595,7 @@ public sealed partial class HaConnector
                 var unread = Interlocked.Read(ref indeterminate);
                 var held = e.P.Armed is { ReadFirst: true } ? await SeeCardAsync(e.P.Node, ct) : null;
                 await CardAsync(e.Id, e.P, seen, now, ct);
-                if (e.P.Armed is { ReadFirst: true } first)
+                if (e.P.Armed is { ReadFirst: true, Superseded: false } first)
                 {
                     if (settled == false && first.Settled)
                     {
@@ -594,6 +651,9 @@ public sealed partial class HaConnector
             if (seen.Count > 0) { await UnservedAsync(p, seen[^1].Hit, ct); }
             return;
         }
+        // Armed again for what it says now on a later pass: what was given looking at what it said
+        // before answers nothing (QuestionAsync).
+        if (armed.Superseded) { return; }
         var since = seen.Where(h => h.Seq > armed.Boundary).Select(h => h.Hit).ToList();
         var outcome = await ReadAnswerAsync(sessionId, p, armed, since, ct);
         if (outcome is null) { return; }

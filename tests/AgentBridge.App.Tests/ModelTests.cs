@@ -40,6 +40,16 @@ public sealed class MarkdownTests
     }
 
     [Fact]
+    public void An_entity_for_a_character_not_drawn_where_it_runs_is_shown_as_written_and_any_other_is_decoded()
+    {
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse("Run it &#x202E;sdrawkcab &amp; &#8203;now &copy; &#x5D0;")));
+
+        var text = string.Concat(p.Inlines.OfType<MdText>().Select(t => t.Text));
+        Assert.Equal("Run it &#x202E;sdrawkcab & &#8203;now © \u05D0", text);
+        Assert.False(ShownText.HasHidden(text));
+    }
+
+    [Fact]
     public void Tables_become_rows_of_cells()
     {
         var table = Assert.IsType<MdTable>(Assert.Single(MarkdownModel.Parse("| a | b |\n|---|---|\n| 1 | 2 |")));
@@ -300,14 +310,15 @@ public sealed class MarkdownTests
     {
         var inside = "x" + new string('\n', 50000) + "y";
         var trailing = "echo\n" + string.Concat(Enumerable.Repeat(" \n", 50000));
-        var clock = System.Diagnostics.Stopwatch.StartNew();
 
         var kept = new CodeCopy(new MdCode(inside, null), _ => true).Text;
         var trimmed = new CodeCopy(new MdCode(trailing, null), _ => true).Text;
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"took {clock.Elapsed}");
         Assert.Equal(inside, kept);
         Assert.Equal("echo", trimmed);
+        // Judged by growth, not a wall-clock second, which a loaded runner can run out by itself (#929).
+        Speed.IsLinear(n => "x" + new string('\n', n) + "y", 50000, t => _ = new CodeCopy(new MdCode(t, null), _ => true).Text);
+        Speed.IsLinear(n => "echo\n" + string.Concat(Enumerable.Repeat(" \n", n)), 50000, t => _ = new CodeCopy(new MdCode(t, null), _ => true).Text);
     }
 
     [Fact]
@@ -427,7 +438,7 @@ public sealed class MarkdownTests
     [InlineData("(www.a")]
     [InlineData("*a\n")]
     [InlineData("|a|b|\n")]
-    public void Runs_of_markup_the_parser_is_quadratic_on_are_read_in_well_under_a_second(string unit)
+    public void Runs_of_markup_the_parser_is_quadratic_on_are_read_in_linear_time(string unit)
     {
         var text = Repeat(unit, 20000);
 
@@ -527,6 +538,38 @@ public sealed class MarkdownTests
         Assert.Equal((2, null), MarkdownModel.Outline(text));
         var line = NeedsYouEntry.LineOf(Make.Form() with { Message = text });
         Assert.StartsWith("*a *a", line, StringComparison.Ordinal);
+    }
+
+    // The shared vectors (tests/fixtures/approvals/literal-intentions.json): a permission prompt whose
+    // intention tries to open a fence or draw Markdown (#212), as a host builds it, drawn as Markdown
+    // draws it (Home Assistant's card; the app's card draws an approval exactly as written, #323).
+    public static TheoryData<string> LiteralIntentions => [.. LiteralCases().Select(c => (string)c["name"]!)];
+
+    static IEnumerable<System.Text.Json.Nodes.JsonObject> LiteralCases() =>
+        System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "literal-intentions.json")))!["cases"]!
+            .AsArray().Select(c => c!.AsObject());
+
+    [Theory]
+    [MemberData(nameof(LiteralIntentions))]
+    public void A_permission_prompt_draws_the_agents_intention_as_its_words_and_what_is_approved_as_code(string name)
+    {
+        var c = LiteralCases().Single(c => (string)c["name"]! == name);
+        var prompt = new System.Text.Json.Nodes.JsonObject { ["kind"] = (string)c["kind"]!, ["intention"] = (string)c["intention"]! };
+        if ((string)c["kind"]! == "commands") { prompt["fullCommandText"] = (string)c["command"]!; }
+        else { prompt["fileName"] = (string)c["file"]!; prompt["diff"] = (string)c["diff"]!; }
+        using var data = System.Text.Json.JsonDocument.Parse(new System.Text.Json.Nodes.JsonObject { ["requestId"] = "r1", ["promptRequest"] = prompt }.ToJsonString());
+        var blocks = MarkdownModel.Parse(AgentBridge.Host.Core.Parsing.CopilotPermission.Describe(data.RootElement)!.Message);
+        string[] code = (string)c["kind"]! == "commands" ? [(string)c["command"]!] : [(string)c["file"]!, (string)c["diff"]!];
+        static string Words(string s) => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        // "Allow **shell**?", then the intention as paragraphs of plain text, then the code, whole.
+        Assert.Equal([new MdText("Allow "), new MdText((string)c["kind"]! == "commands" ? "shell" : "edit", MdStyle.Bold), new MdText("?")], Assert.IsType<MdParagraph>(blocks[0]).Inlines);
+        Assert.Equal(code, blocks.TakeLast(code.Length).Select(b => Assert.IsType<MdCode>(b).Text));
+        var prose = blocks.Skip(1).SkipLast(code.Length).ToList();
+        Assert.All(prose, b => Assert.IsType<MdParagraph>(b));
+        var inlines = prose.SelectMany(b => ((MdParagraph)b).Inlines).ToList();
+        Assert.All(inlines, i => Assert.True(i is MdBreak || (i is MdText { Style: MdStyle.None }) || (i is MdLink l && l.Text == l.Url), $"{i} in {name}"));
+        Assert.Equal(Words((string)c["intention"]!), Words(string.Concat(inlines.Select(i => i switch { MdText x => x.Text, MdLink l => l.Text, _ => " " }))));
     }
 }
 

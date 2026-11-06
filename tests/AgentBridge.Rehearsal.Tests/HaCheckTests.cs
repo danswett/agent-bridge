@@ -64,15 +64,39 @@ public class HaCheckTests
     [Fact]
     public async Task Home_Assistant_that_cannot_be_reached_yet_is_asked_again_until_the_deadline()
     {
+        var time = new ManualClock(DateTimeOffset.UnixEpoch);
+        var until = time.GetUtcNow().AddSeconds(10);
         var calls = 0;
-        var recovered = await Poll.UntilAsync("Home Assistant", _ => ++calls < 3 ? throw new HttpRequestException("connection refused") : Task.FromResult(Outcome.Pass("ok")),
-            DateTimeOffset.UtcNow.AddSeconds(10), TimeSpan.FromMilliseconds(10), CancellationToken.None);
+        var recovered = await Poll.UntilAsync("Home Assistant", _ =>
+        {
+            if (++calls < 3)
+            {
+                if (calls == 2) { time.Now = until.AddTicks(-1); }
+                throw new HttpRequestException("connection refused");
+            }
+            return Task.FromResult(Outcome.Pass("ok"));
+        }, until, TimeSpan.Zero, CancellationToken.None, time);
         Assert.Equal(Verdict.Pass, recovered.Verdict);
         Assert.Equal(3, calls);
+        Assert.Equal(until.AddTicks(-1), time.GetUtcNow());
+    }
 
-        var never = await Poll.UntilAsync("Home Assistant", _ => throw new HttpRequestException("connection refused"),
-            DateTimeOffset.UtcNow.AddMilliseconds(100), TimeSpan.FromMilliseconds(10), CancellationToken.None);
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task Home_Assistant_still_unreachable_when_the_deadline_has_arrived_is_an_error(int ticksPastDeadline)
+    {
+        var time = new ManualClock(DateTimeOffset.UnixEpoch);
+        var until = time.GetUtcNow().AddMilliseconds(100);
+        var calls = 0;
+        var never = await Poll.UntilAsync("Home Assistant", _ =>
+        {
+            Assert.True(++calls <= 2, "the deadline should stop further attempts");
+            if (calls == 2) { time.Now = until.AddTicks(ticksPastDeadline); }
+            throw new HttpRequestException("connection refused");
+        }, until, TimeSpan.Zero, CancellationToken.None, time);
         Assert.Equal(Verdict.Error, never.Verdict);
+        Assert.Equal(2, calls);
         Assert.Contains("connection refused", never.Detail, StringComparison.Ordinal);
     }
 
@@ -80,5 +104,11 @@ public class HaCheckTests
     public void Checking_a_machine_without_its_slug_is_a_usage_error()
     {
         Assert.Throws<UsageException>(() => HaCheck.Evaluate(Json(Array.Empty<object>()), default, Expect(slug: null, online: true)));
+    }
+
+    sealed class ManualClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 }

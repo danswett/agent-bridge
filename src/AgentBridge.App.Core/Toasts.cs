@@ -39,8 +39,16 @@ public sealed class ToastPlanner
     {
         public Session? Last;
         public string? Shown;
+        // What the toast up says, to replace it if its question comes back otherwise.
+        public Question? ShownQuestion;
         public HashSet<string> Notified = new(StringComparer.Ordinal);
         public string? FinishedKey;
+        // The main agent ran (working) after its finished toast went up: a failure now ends a later
+        // turn, not the one that toast is for (#878).
+        public bool RanSinceFinished;
+        // The prompt whose turn the finished toast up is for (PromptOf): a failure can replace the
+        // response in the same turn (the parser's "Turn error" notice), so its text is no way to know it.
+        public int? FinishedTurn;
         public (ToastKind Kind, DateTimeOffset At, string? Question)? Due;
         // While a delegate's question is pending (NoteWait).
         public bool WaitFromTurn;
@@ -89,19 +97,47 @@ public sealed class ToastPlanner
                 continue;
             }
             NoteWait(t, t.Last, s);
+            var was = t.Last;
             t.Last = s;
+            Recovered(was, s);
             if (t.Shown is { } shown && s.Question?.Id != shown)
             {
                 sink.Withdraw(TagOf(s.Id));
                 t.Shown = null;
             }
+            else { Reword(t, s); }
             if (s.Question is { } q && !t.Notified.Contains(q.Id))
             {
                 if (t.Due is not { Kind: ToastKind.Question } d || d.Question != q.Id) { t.Due = (ToastKind.Question, now + QuestionDelay, q.Id); }
             }
             else if (t.Due is { Kind: ToastKind.Question } pending && s.Question?.Id != pending.Question) { t.Due = null; }
             else if (t.Due is { Kind: ToastKind.Finished } && s.Status != SessionStatus.Idle) { t.Due = null; }
+            Unfinish(t, s);
         }
+    }
+
+    // The agent stopped on an error, or needs sign-in (#800, ui.md §6.13): its turn didn't finish, so
+    // there is no "finished" toast quoting the answer from before it. Errors get no notice of their
+    // own; a sign-in's is the toast per agent and account below (SignIns), as the host's push.
+    static bool Stopped(Session s) => AuthState.Of(s)?.Kind is AuthState.Error or AuthState.SignInNeeded;
+
+    // Which prompt's turn the session is on: turnCount is the prompts sent, less one while a turn is
+    // in progress (working or waiting; v1-sessions.md), so this is the prompts sent. A later prompt's
+    // turn waiting on a delegate's question has the same count as the finished turn before it, but
+    // not the same prompt; the finished turn's own failure, a delegate's question pending, has both.
+    static int? PromptOf(Session s) => s.Activity.TurnCount is { } n ? n + (s.Status is SessionStatus.Working or SessionStatus.Waiting ? 1 : 0) : null;
+
+    // One due is dropped, and one up is withdrawn, when the attention comes after the turn ended.
+    // Only the toast for this same turn: one for an earlier turn that really finished (the main
+    // agent ran since, or a later prompt's turn is the one that stopped) stays (#878).
+    void Unfinish(Tracked t, Session s)
+    {
+        // Working, not just any status but idle: a delegate's question makes the session waiting while
+        // the main agent's turn stays the one the toast is for.
+        if (s.Status == SessionStatus.Working) { t.RanSinceFinished = true; }
+        if (!Stopped(s)) { return; }
+        if (t.Due is { Kind: ToastKind.Finished }) { t.Due = null; }
+        if (t.Shown is null && !t.RanSinceFinished && !(PromptOf(s) > t.FinishedTurn) && finished.Remove(s.Id)) { sink.Withdraw(TagOf(s.Id)); }
     }
 
     public void Upsert(Session s)
@@ -113,24 +149,46 @@ public sealed class ToastPlanner
         }
         var before = t.Last;
         t.Last = s;
+        Recovered(before, s);
         NoteWait(t, before, s);
         if (t.Shown is { } shown && s.Question?.Id != shown)
         {
             sink.Withdraw(TagOf(s.Id));
             t.Shown = null;
         }
+        else { Reword(t, s); }
         if (s.Question is { } q && !t.Notified.Contains(q.Id))
         {
             // Counted from when it was first seen: a question whose card keeps changing is not
             // pushed back by each change.
             if (t.Due is not { Kind: ToastKind.Question } d0 || d0.Question != q.Id) { t.Due = (ToastKind.Question, now + QuestionDelay, q.Id); }
         }
-        else if (before is not null && EndsTurn(t, before, s) && s.Status == SessionStatus.Idle && !string.IsNullOrEmpty(MainResponse(s)))
+        else if (before is not null && EndsTurn(t, before, s) && s.Status == SessionStatus.Idle && !string.IsNullOrEmpty(MainResponse(s)) && !Stopped(s))
         {
             t.Due = (ToastKind.Finished, now + FinishedDelay, null);
         }
         else if (t.Due is { Kind: ToastKind.Finished } && s.Status != SessionStatus.Idle) { t.Due = null; }
         else if (t.Due is { Kind: ToastKind.Question } d && s.Question?.Id != d.Question) { t.Due = null; }
+        Unfinish(t, s);
+    }
+
+    // The toast up for a question that came back under its id saying something else, or answerable
+    // otherwise (a host updated to refuse what it used to offer, #220): replaced, quietly, so its
+    // buttons are never what the question no longer allows.
+    void Reword(Tracked t, Session s)
+    {
+        if (t.Shown is not { } shown || s.Question is not { } q || q.Id != shown || t.ShownQuestion is not { } was || was.Id != q.Id || QuestionViewModel.SaysTheSame(q, was)) { return; }
+        // Not put up again where no toast would be put up now (notifications turned off, the window in
+        // front): withdrawn, so its old buttons go with it.
+        if (!Enabled() || WindowActive())
+        {
+            sink.Withdraw(TagOf(s.Id));
+            t.Shown = null;
+            t.ShownQuestion = null;
+            return;
+        }
+        t.ShownQuestion = q;
+        sink.Show(new ToastNotice(TagOf(s.Id), ToastXml.Question(s, Capabilities(), MachineName(), MachineKey), true));
     }
 
     // A wait on a delegate's question (waitingOn) as it begins: whether the main agent's turn was
@@ -155,6 +213,7 @@ public sealed class ToastPlanner
     public void Remove(string id)
     {
         if (!sessions.Remove(id, out var t)) { return; }
+        Recovered(t.Last, null);
         if (t.Shown is not null) { sink.Withdraw(TagOf(id)); }
     }
 
@@ -165,6 +224,8 @@ public sealed class ToastPlanner
         foreach (var (id, t) in sessions) { if (t.Shown is not null) { finished.Add(id); } }
         foreach (var id in finished) { sink.Withdraw(TagOf(id)); }
         finished.Clear();
+        foreach (var key in signIns.Keys) { sink.Withdraw(Tag(key, MachineKey)); }
+        signIns.Clear();
         sessions.Clear();
     }
 
@@ -201,6 +262,7 @@ public sealed class ToastPlanner
                 t.Again = null;
                 if (!Enabled() || WindowActive()) { continue; }
                 t.Shown = q.Id;
+                t.ShownQuestion = q;
                 sink.Show(new ToastNotice(TagOf(id), ToastXml.Question(s, Capabilities(), MachineName(), MachineKey), Quiet() || again));
             }
             else
@@ -208,12 +270,71 @@ public sealed class ToastPlanner
                 var key = $"{s.Activity.TurnCount}|{MainResponse(s)}";
                 // The main agent's words may have gone in the wait (a delegate wrote last, or the
                 // budget left them out): an empty toast says nothing.
-                if (s.Status != SessionStatus.Idle || t.FinishedKey == key || string.IsNullOrEmpty(MainResponse(s))) { continue; }
+                if (s.Status != SessionStatus.Idle || t.FinishedKey == key || string.IsNullOrEmpty(MainResponse(s)) || Stopped(s)) { continue; }
                 t.FinishedKey = key;
                 if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
                 finished.Add(id);
+                t.RanSinceFinished = false;
+                t.FinishedTurn = PromptOf(s);
                 sink.Show(new ToastNotice(TagOf(id), ToastXml.Finished(s, MachineName(), MachineKey), Quiet()));
             }
+        }
+        SignIns(now);
+    }
+
+    public static readonly TimeSpan SignInRepeat = TimeSpan.FromHours(1);
+
+    // The sign-in toast a session counts toward, by its own agent and account (SignIns), or null.
+    static string? SignInKeyOf(Session? s) =>
+        s is not null && AuthState.Of(s) is { } a && AuthState.NeedsSignIn(a) ? PushNotice.SignInKey(s.Agent, a.Account) : null;
+
+    // The last session of a sign-in toast no longer needs it, seen as it changes rather than at the
+    // next tick: a new failure before that tick was otherwise the same incident, its toast held back
+    // for the rest of the hour. Withdrawn and forgotten, so the next failure toasts at once.
+    void Recovered(Session? was, Session? now)
+    {
+        if (SignInKeyOf(was) is not { } key || key == SignInKeyOf(now) || !signIns.ContainsKey(key)) { return; }
+        if (sessions.Values.Any(t => SignInKeyOf(t.Last) == key)) { return; }
+        signIns.Remove(key);
+        sink.Withdraw(Tag(key, MachineKey));
+    }
+
+    // Sign-in toasts up or made (#800, ui.md §6.13), by agent and account: when last raised, and for
+    // how many sessions.
+    readonly Dictionary<string, (DateTimeOffset At, int Count)> signIns = new(StringComparer.Ordinal);
+
+    // One toast per agent and account of the machine while any of its sessions needs sign-in, as the
+    // host's signIn push: at once, then again at most hourly; a change in how many sessions it stops
+    // replaces it quietly; withdrawn once none does. A turn that ended on a 401 is idle with the
+    // previous answer beside it, and nothing on the desktop said every session had stopped (#800 P0).
+    void SignIns(DateTimeOffset now)
+    {
+        // By the session's own agent, as SignInBanners does: attention.agent is optional, and one that
+        // left it out read as Unknown, merging two agents' sign-ins into one toast.
+        var groups = sessions.Values.Select(t => t.Last).OfType<Session>()
+            .Select(s => (Session: s, Attention: AuthState.Of(s)))
+            .Where(x => AuthState.NeedsSignIn(x.Attention))
+            .GroupBy(x => PushNotice.SignInKey(x.Session.Agent, x.Attention!.Account), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => (Agent: g.First().Session.Agent, Count: g.Count()), StringComparer.Ordinal);
+        foreach (var key in signIns.Keys.Where(k => !groups.ContainsKey(k)).ToList())
+        {
+            signIns.Remove(key);
+            sink.Withdraw(Tag(key, MachineKey));
+        }
+        foreach (var (key, (agent, count)) in groups)
+        {
+            var known = signIns.TryGetValue(key, out var was);
+            var due = !known || now >= was.At + SignInRepeat;
+            if (!due && was.Count == count) { continue; }
+            // Not shown now (the window in front, or toasts off): the count stays the one on the
+            // toast, so the new one replaces it quietly as soon as it can be.
+            if (!Enabled() || WindowActive())
+            {
+                signIns[key] = (due ? now : was.At, known ? was.Count : 0);
+                continue;
+            }
+            signIns[key] = (due ? now : was.At, count);
+            sink.Show(new ToastNotice(Tag(key, MachineKey), ToastXml.SignIn(agent, count, MachineName(), MachineKey), Quiet() || !due));
         }
     }
 
@@ -254,7 +375,7 @@ public static partial class ToastXml
         var q = s.Question!;
         var (answerable, _) = QuestionViewModel.Answerability(q, capabilities, s.Agent);
         var what = q.AnswerAtMachine == true ? "waiting at the machine" : q.Kind == QuestionKind.Approval ? "waiting for your approval" : "waiting on you";
-        var body = Plain(q.Message, 300);
+        var body = q.Kind == QuestionKind.Approval ? Words(ShownText.Reveal(q.Message, rightToLeft: true), 300) : Plain(q.Message, 300);
         var open = Args(machineKey, ("action", "open"), ("session", s.Id));
         var b = Start(open, Title(s), $"{Machine(machine)}{what}", body.Length > 0 ? body : "This session is waiting for an answer.");
         b.Append("<actions>");
@@ -303,29 +424,38 @@ public static partial class ToastXml
             // Forms, multi-select and anything answered at the machine: the card has it.
             b.Append(Action("Open", open));
         }
-        b.Append("</actions></toast>");
-        return b.ToString();
+        b.Append("</actions>");
+        return End(b);
     }
 
     public static string Finished(Session s, string? machine, string? machineKey = null)
     {
         var preview = Plain(ToastPlanner.MainResponse(s), 300);
-        var b = Start(Args(machineKey, ("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}finished", preview);
-        b.Append("</toast>");
-        return b.ToString();
+        return End(Start(Args(machineKey, ("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}finished", preview));
     }
+
+    // Sessions on a machine need sign-in (ui.md §6.13): its words, and nothing of the account, code,
+    // URL or the agent's own text. A click opens the app.
+    public static string SignIn(AgentKind agent, int sessions, string? machine, string? machineKey = null) =>
+        End(Start(Args(machineKey, ("action", "open")), $"{AuthState.AgentName(agent)} on {(string.IsNullOrEmpty(machine) ? "this machine" : machine)} needs sign-in",
+            sessions == 1 ? "1 session affected" : $"{sessions} sessions affected", null));
 
     // The first start after an update (AutoUpdater.Announce): what changed, from the release's
     // notes. A click opens the app.
     public static string Updated(string version, string from, string? notes)
     {
         var body = Plain(notes, 300);
-        return Start(Args(("action", "open")), $"{Product.Name} updated to {version}", $"from {from}", body.Length > 0 ? body : null).Append("</toast>").ToString();
+        return End(Start(Args(("action", "open")), $"{Product.Name} updated to {version}", $"from {from}", body.Length > 0 ? body : null));
     }
 
     // What became of an answer given on a toast, replacing that toast.
     public static string Outcome(string sessionId, string title, string text, string? machineKey = null) =>
-        Start(Args(machineKey, ("action", "open"), ("session", sessionId)), title, text, null).Append("<audio silent=\"true\"/></toast>").ToString();
+        End(Start(Args(machineKey, ("action", "open"), ("session", sessionId)), title, text, null));
+
+    // Every toast closes here, silent (#754): a toast with no <audio> plays Windows' default
+    // sound, and with only Outcome's silenced, question toasts dinged all day. Any sound comes
+    // back only as an owner-approved spec in docs/design/ui.md.
+    static string End(StringBuilder b) => b.Append("<audio silent=\"true\"/></toast>").ToString();
 
     static StringBuilder Start(string launch, string title, string line, string? body)
     {
@@ -368,7 +498,43 @@ public static partial class ToastXml
         if (string.IsNullOrEmpty(markdown)) { return ""; }
         var text = Marks().Replace(markdown, "");
         text = Spaces().Replace(text, " ").Trim();
-        return text.Length <= max ? text : text[..(char.IsHighSurrogate(text[max - 1]) ? max - 1 : max)].TrimEnd() + "…";
+        return Cut(text, max);
+    }
+
+    static string Cut(string text, int max) => text.Length <= max ? text : text[..(char.IsHighSurrogate(text[max - 1]) ? max - 1 : max)].TrimEnd() + "…";
+
+    // An approval read as the card reads it, as words: the prose as it is drawn (the agent's own
+    // words, which a host escapes, without their backslashes, #212) and code exactly as written,
+    // never with its * and _ taken for marks. Whitespace runs collapsed.
+    public static string Words(string? markdown, int max)
+    {
+        if (string.IsNullOrEmpty(markdown)) { return ""; }
+        var b = new StringBuilder();
+        void Inlines(IEnumerable<MdInline> inlines)
+        {
+            foreach (var i in inlines) { b.Append(i switch { MdText t => t.Text, MdLink l => l.Text == l.Url ? l.Text : $"{l.Text} ({l.Url})", _ => " " }); }
+            b.Append(' ');
+        }
+        void Blocks(IEnumerable<MdBlock> blocks)
+        {
+            foreach (var block in blocks)
+            {
+                switch (block)
+                {
+                    case MdParagraph p: Inlines(p.Inlines); break;
+                    case MdHeading h: Inlines(h.Inlines); break;
+                    case MdCode c: b.Append(c.Text).Append(' '); break;
+                    case MdQuote q: Blocks(q.Blocks); break;
+                    case MdList l: foreach (var item in l.Items) { Blocks(item); } break;
+                    case MdTable t: foreach (var cell in t.Rows.SelectMany(r => r)) { Inlines(cell); } break;
+                }
+            }
+        }
+        Blocks(MarkdownModel.Parse(markdown));
+        // Revealed again once parsed: parsing decodes a reference an older host left in an approval
+        // (&#x5D0;, &nbsp;) into the character it stands for, which would reorder the preview or be
+        // collapsed with the spaces around it.
+        return Cut(Spaces().Replace(ShownText.Reveal(b.ToString(), rightToLeft: true), " ").Trim(), max);
     }
 
     [GeneratedRegex(@"[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]")]

@@ -11,6 +11,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="AgentBridge.Host.Core.Tests" />
+    <!-- Feed regressions enqueue exact session changes independently of transcript parsing. -->
+    <InternalsVisibleTo Include="AgentBridge.Host.Tests" />
     <InternalsVisibleTo Include="AgentBridge.Host.Delivery.Tests" />
     <!-- The HA connector's contract tests build questions the way the host parses them. -->
     <InternalsVisibleTo Include="AgentBridge.HomeAssistant.Tests" />

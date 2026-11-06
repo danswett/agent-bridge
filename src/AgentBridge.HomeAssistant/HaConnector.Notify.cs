@@ -124,13 +124,24 @@ public sealed partial class HaConnector
 
     // Whether a session's question belongs on the phones: armed, still waiting, and not an approval
     // (the daemon has no marker for one, so never sends it, however the card shows it).
-    static bool Wanted(Published p) => p.Armed is { Settled: false } a && a.Question.Kind != QuestionKind.Approval;
+    static bool Wanted(Published p) => p.Armed is { Settled: false, Superseded: false } a && a.Question.Kind != QuestionKind.Approval;
+
+    // What a question's notification is known by: its id and a digest of what its card shows and takes
+    // (the plan), a fixed 16 characters after a '~'. A tap echoes it back, and its actions are named
+    // from it, so a tap on the notification of what the question said before, under the same id, matches
+    // nothing it offers now (#220). Bound to the plan's contents, not to how often it was armed, it is
+    // the same after a restart, which armed it afresh, and no other question's id can spell it: the
+    // suffix's fixed length says where the id ends.
+    static string NotifyId(Armed armed) => NotifyId(armed.Question.Id, armed.Plan);
+
+    internal static string NotifyId(string questionId, DecisionPlan plan) =>
+        $"{questionId}~{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(plan))).AsSpan(0, 8))}";
 
     // The buttons' notification for the question a session's card is armed with.
     (JsonArray Actions, JsonObject Payload) Buttons(string sessionId, Published p, Armed armed)
     {
-        var marker = HaNotify.Marker(armed.Plan);
-        var actions = HaNotify.Actions(marker, armed.Question.Id, HaNotify.Options(marker), Notify.MaxButtons, textAction: TakesWords(armed.Plan));
+        var marker = HaNotify.Marker(armed.Plan) with { DecisionId = NotifyId(armed) };
+        var actions = HaNotify.Actions(marker, marker.DecisionId, HaNotify.Options(marker), Notify.MaxButtons, textAction: TakesWords(armed.Plan));
         // A sub-agent's question is titled with who asks, under the session's tag as ever.
         var title = armed.Plan.Asker is { } asker ? HaNotify.AskerTitle(asker, p.Name) : p.Name;
         return (actions, HaNotify.Payload(sessionId, title, marker, actions, options.DashboardUrlPath, options.MachineName,
@@ -148,7 +159,7 @@ public sealed partial class HaConnector
             lock (gate)
             {
                 stale = [.. onPhones.Select(x => (x.Key, Phones: x.Value.Where(phone =>
-                        !published.TryGetValue(x.Key, out var p) || !Wanted(p) || phone.Value != p.Armed!.Question.Id).Select(phone => phone.Key).ToList()))
+                        !published.TryGetValue(x.Key, out var p) || !Wanted(p) || phone.Value != NotifyId(p.Armed!)).Select(phone => phone.Key).ToList()))
                     .Where(x => x.Phones.Count > 0)];
             }
             var left = false;
@@ -162,7 +173,7 @@ public sealed partial class HaConnector
         List<(string Id, Published P)> due;
         lock (gate)
         {
-            due = [.. published.Where(x => Wanted(x.Value) && !buttonsSent.Contains(SentKey(x.Key, x.Value.Armed!.Question.Id)) && x.Value.Notify.RetryAt <= now)
+            due = [.. published.Where(x => Wanted(x.Value) && !buttonsSent.Contains(SentKey(x.Key, NotifyId(x.Value.Armed!))) && x.Value.Notify.RetryAt <= now)
                 .Select(x => (x.Key, x.Value))];
         }
         foreach (var (id, p) in due)
@@ -177,14 +188,14 @@ public sealed partial class HaConnector
                 {
                     if (!onPhones.TryGetValue(id, out var phones)) { onPhones[id] = phones = new(StringComparer.Ordinal); }
                     // The same tag: what the phone showed before is replaced.
-                    phones[phone] = armed.Question.Id;
+                    phones[phone] = NotifyId(armed);
                 }
                 SaveLedger();
             }, ct);
             if (sent.Count > 0)
             {
-                lock (gate) { buttonsSent.Add(SentKey(id, armed.Question.Id)); }
-                p.Notify.Shown = armed.Question.Id;
+                lock (gate) { buttonsSent.Add(SentKey(id, NotifyId(armed))); }
+                p.Notify.Shown = NotifyId(armed);
                 log($"Home Assistant connector sent answer buttons for {id[..Math.Min(8, id.Length)]} ({actions.Count} action(s))");
             }
             else { p.Notify.RetryAt = now + options.ButtonsRetry; }
@@ -289,9 +300,10 @@ public sealed partial class HaConnector
         var who = choice.SessionId[..Math.Min(8, choice.SessionId.Length)];
         if (p is null) { log("Home Assistant connector: an answer button for a session that is no longer live; ignored"); return; }
         var armed = p.Armed;
-        if (armed is null || armed.Question.Id != choice.DecisionId)
+        if (armed is null || NotifyId(armed) != choice.DecisionId)
         {
-            // The notification outlives its question: a tap on an old one never answers what is asked now.
+            // The notification outlives its question, or what it said: a tap on an old one never
+            // answers what is asked now.
             log($"Home Assistant connector: an answer button for {who} is for an earlier question; ignored");
             return;
         }
@@ -433,8 +445,16 @@ public sealed partial class HaConnector
         // has a new turn, now at rest with a reply that turn has not been pushed for. Sent once it
         // has stayed at rest a moment, as the host's own notifier waits: a question answered at the
         // machine passes through idle on its way back to work. A background agent's message while
-        // the session rests is not a finished turn.
-        if (status == SessionStatus.Idle && question is null && key is not null && key != state.FinishedKey)
+        // the session rests is not a finished turn. Nor is a turn that ended on an error or a
+        // failed sign-in (#800, #845): the reply beside it is the turn before's, and pushing it was
+        // the owner's "replies with the last turn as if alive". It is taken as told, so it is not
+        // pushed later either.
+        if (HaPayloads.Failed(full))
+        {
+            if (key is not null) { state.FinishedKey = key; }
+            state.FinishedDue = null;
+        }
+        else if (status == SessionStatus.Idle && question is null && key is not null && key != state.FinishedKey)
         {
             // A reply that changes while it waits is the turn's latest: the wait starts again with
             // it. Anything else that changes meanwhile (reasoning, history) leaves the wait as it is.
@@ -460,6 +480,12 @@ public sealed partial class HaConnector
         {
             p.Notify.FinishedDue = null;
             if (CardSession(id) is not { Status: SessionStatus.Idle, Question: null } s) { continue; }
+            // The attention came after the wait began: the turn failed, and its reply is the one before.
+            if (HaPayloads.Failed(s))
+            {
+                if (FinishedKey(s) is { } failed) { p.Notify.FinishedKey = failed; }
+                continue;
+            }
             // A reply newer than the one the wait began with, still at rest: wait again for it,
             // rather than drop the turn because the session moved on between the two reads.
             if (FinishedKey(s) is var current && current != key)
@@ -475,16 +501,27 @@ public sealed partial class HaConnector
         }
     }
 
-    async Task PushAsync(string title, string message, CancellationToken ct)
+    async Task PushAsync(string title, string message, CancellationToken ct) => await TryPushAsync(title, message, ct);
+
+    // Whether the push was taken. A push tried again until it is (the sign-in notice) names its
+    // problem, so a service that keeps failing is said once until it works again, not on each try.
+    async Task<bool> TryPushAsync(string title, string message, CancellationToken ct, string? problem = null)
     {
-        if (HaNotify.Split(Notify.Service) is not { } target) { return; }
+        if (HaNotify.Split(Notify.Service) is not { } target) { return false; }
         var data = HaNotify.Notification(Notify.Service, title, message, Notify.TickerCategory, options.DashboardUrlPath);
-        try { await ha.CallServiceAsync(target.Domain, target.Service, data, ct); }
+        try
+        {
+            await ha.CallServiceAsync(target.Domain, target.Service, data, ct);
+            if (problem is not null) { Resolved(problem); }
+            return true;
+        }
         catch (Exception e) when (OnePhone(e, ct))
         {
             // As the hooks do: the session is on the dashboard already, and a lost push must not
             // hold anything else up.
-            log($"Home Assistant connector notification via {Notify.Service} failed: {Describe(e)}");
+            var said = $"Home Assistant connector notification via {Notify.Service} failed: {Describe(e)}";
+            if (problem is not null) { Problem(problem, said); } else { log(said); }
+            return false;
         }
     }
 
@@ -493,7 +530,15 @@ public sealed partial class HaConnector
     (string Title, string Message)? QuestionPush(Session full, string name, Question question)
     {
         var plan = HaDecision.Plan(question, full);
-        var message = question.Agent is null ? question.Message : $"{HaDecision.Asker(question, full)} asks:\n\n{question.Message}";
+        // An approval that may be drawn other than as it runs (#220) is not carried at all: a phone
+        // may draw a push as HTML, which decodes a reference such as "&#x202E;" into the character,
+        // or as plain text, which shows "&amp;" as written, and nothing here knows which. It is
+        // answered at the machine, so the push says that instead. Any other approval's text is
+        // revealed as on the card.
+        var text = question.Kind != QuestionKind.Approval ? question.Message
+            : HaDecision.Misleads(question, full) ? HaDecision.MisleadingPush
+            : ShownText.Reveal(question.Message);
+        var message = question.Agent is null ? text : $"{HaDecision.Asker(question, full)} asks:\n\n{text}";
         (string Title, string Message)? push = (full.Agent, question.Kind) switch
         {
             (AgentKind.Copilot, QuestionKind.Approval) => HaNotify.CopilotPermission(message),

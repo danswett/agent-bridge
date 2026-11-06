@@ -90,6 +90,11 @@ public sealed class SessionService
     // update.*, through the relay only, and never on a read-only machine (UpdateService).
     public UpdateService? Updates { get; init; }
 
+    // Framework only: no production auth factory/entrypoint is registered. Both gates
+    // remain off until Engineering approves the agent-owned private login path.
+    internal SignIn.AgentSignInService? SignIn { get; init; }
+    internal bool SignInEntrypointApproved { get; init; } = AgentSignIn.EnabledByDefault;
+
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
         UsageService? usage = null, ISessionLauncher? launcher = null, SessionTransfers? transfers = null)
@@ -105,7 +110,13 @@ public sealed class SessionService
         this.usage = usage;
         this.launcher = launcher;
         this.transfers = transfers;
+        if (push is not null) { push.Watching = Watching; }
     }
+
+    // How often live changes to the sessions a client does not show go to it, once it has said
+    // which it shows (sessions.focus): each change woke a phone's radio, every 250 ms to 4 s while
+    // a session worked, ~50–100 mAh an hour with the app open (#610).
+    public TimeSpan QuietInterval { get; init; } = TimeSpan.FromSeconds(12);
 
     // Channels with a subscription running; tests and the host's log read it.
     public int Subscribers => subscribers.Values.Count(s => s.Feed is not null);
@@ -113,7 +124,12 @@ public sealed class SessionService
     // Each feed as it is made, so tests can check a replaced one is let go.
     internal event Action<object>? FeedCreated;
 
-    public async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data)
+    public Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data) => HandleAsync(channel, op, data, null);
+
+    // shape: what the caller's role (RemoteAuthorization) or kind (LocalApi) lets this channel's
+    // hello say. hello.changed compares what was shaped, so a channel hears only of a change it
+    // can see; compared unshaped, a Service peer heard of update coming and going (#651).
+    public async Task<object?> HandleAsync(IProtocolChannel channel, string op, JsonElement data, Func<HelloResult, HelloResult>? shape)
     {
         switch (op)
         {
@@ -123,9 +139,10 @@ public sealed class SessionService
                     // starting for this user takes sessions.answer and sessions.reply away until
                     // it stops.
                     var hello = HelloFor(channel);
+                    if (shape is not null) { hello = shape(hello); }
                     if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("changes", out var changes) && changes.ValueKind == JsonValueKind.True)
                     {
-                        WatchHello(channel, hello);
+                        WatchHello(channel, hello, shape);
                     }
                     return hello;
                 }
@@ -137,6 +154,12 @@ public sealed class SessionService
                 return Attach(channel, op, data);
             case Ops.SessionStop:
                 return await StopAsync(data);
+            case AgentSignIn.Start:
+                return SignInEntrypointApproved && SignIn is not null ? SignIn.Start(channel, data)
+                    : new { outcome = "refused", reason = "agent sign-in is not enabled" };
+            case AgentSignIn.Cancel:
+                return SignInEntrypointApproved && SignIn is not null ? await SignIn.CancelAsync(channel, data)
+                    : new { outcome = "refused", reason = "agent sign-in is not enabled" };
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
             // Notifications turned off on this machine (push.enabled), or never set up: a device
@@ -177,6 +200,8 @@ public sealed class SessionService
                 }
             case Ops.SessionsSubscribe:
                 return await SubscribeAsync(channel, data);
+            case Ops.SessionsFocus:
+                return Focus(channel, data);
             default:
                 return null;
         }
@@ -193,17 +218,7 @@ public sealed class SessionService
         // Revisions start again from 0 in each run of the host, so one from another run says nothing
         // about what the client holds.
         var since = request.Since is { } s && machine.Instance is { } instance && s.Instance == instance ? s.Revision : (long?)null;
-        var state = subscribers.GetOrAdd(channel, _ => new Subscriber());
-        // Cleanup is registered once per channel and finds whatever feed is current then.
-        // One registration per subscribe would keep every replaced feed (and anything still
-        // queued in it) reachable from the channel until it closes, so a client that keeps
-        // recovering on one long-lived channel would grow the host without bound. Tied to the
-        // channel rather than to the feed's run: when the response cannot be sent, ChannelHub
-        // never starts the run, and the subscription would stay with the source forever.
-        if (Interlocked.Exchange(ref state.Registered, 1) == 0)
-        {
-            _ = channel.Closed.ContinueWith(_ => EndAsync(channel, state), TaskScheduler.Default);
-        }
+        var state = StateOf(channel);
         // ChannelHub serves each request as it arrives, so two subscribes on one channel can
         // run at once; the lock keeps the old feed's stop and the new feed's start in order.
         await state.Gate.WaitAsync();
@@ -215,7 +230,7 @@ public sealed class SessionService
                 await old.StopAsync();
             }
             if (!channel.IsOpen) { throw new IOException("the channel is closed"); }
-            var feed = new Feed(source.Subscribe(since), patch: request.Patch == true);
+            var feed = new Feed(source.Subscribe(since), request.Patch == true, state, Time, QuietInterval);
             state.Feed = feed;
             FeedCreated?.Invoke(feed);
             // The snapshot waits until the response has gone (ChannelReply), so the client
@@ -223,6 +238,62 @@ public sealed class SessionService
             return new ChannelReply(feed.Subscription.Result, ch => feed.RunAsync(ch, log));
         }
         finally { state.Gate.Release(); }
+    }
+
+    Subscriber StateOf(IProtocolChannel channel)
+    {
+        var state = subscribers.GetOrAdd(channel, _ => new Subscriber());
+        // Cleanup is registered once per channel and finds whatever feed is current then.
+        // One registration per subscribe would keep every replaced feed (and anything still
+        // queued in it) reachable from the channel until it closes, so a client that keeps
+        // recovering on one long-lived channel would grow the host without bound. Tied to the
+        // channel rather than to the feed's run: when the response cannot be sent, ChannelHub
+        // never starts the run, and the subscription would stay with the source forever.
+        if (Interlocked.Exchange(ref state.Registered, 1) == 0)
+        {
+            _ = channel.Closed.ContinueWith(_ => EndAsync(channel, state), TaskScheduler.Default);
+        }
+        return state;
+    }
+
+    const int FocusesPerWindow = 20;
+    static readonly TimeSpan FocusWindow = TimeSpan.FromSeconds(10);
+
+    // sessions.focus: kept for the channel, across subscribes on it, until it says again or closes.
+    // A session it now shows whose change is being held goes at once.
+    object Focus(IProtocolChannel channel, JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("sessions.focus needs visible"); }
+        FocusRequest focus;
+        try { focus = data.Deserialize<FocusRequest>(ProtocolJson.Options) ?? throw new ArgumentException("sessions.focus needs visible"); }
+        catch (JsonException) { throw new ArgumentException("sessions.focus needs visible, and open only as a session id"); }
+        var state = StateOf(channel);
+        // Each one puts a marker in the feed's queue; a client says it on a page or session change,
+        // so more than this in a window is a client gone wrong (#697).
+        lock (state)
+        {
+            var now = Time.GetUtcNow();
+            if (now - state.FocusWindow >= FocusWindow)
+            {
+                state.FocusWindow = now;
+                state.FocusCount = 0;
+            }
+            if (++state.FocusCount > FocusesPerWindow) { throw new InvalidOperationException($"sessions.focus is said at most {FocusesPerWindow} times in {FocusWindow.TotalSeconds:0} s"); }
+        }
+        Volatile.Write(ref state.Focus, focus);
+        state.Feed?.Refocus();
+        return new { };
+    }
+
+    // A device of the account that has a subscription open on a channel that says it is on screen
+    // now: it sees a turn finish, and needs no notification of it (PushNotifier).
+    public bool Watching(string device)
+    {
+        foreach (var (channel, state) in subscribers)
+        {
+            if (channel.PeerId == device && channel.IsOpen && state.Feed is not null && Volatile.Read(ref state.Focus) is { Visible: true }) { return true; }
+        }
+        return false;
     }
 
     async Task EndAsync(IProtocolChannel channel, Subscriber state)
@@ -244,11 +315,16 @@ public sealed class SessionService
         finally { state.Gate.Release(); }
     }
 
-    sealed class Subscriber
+    internal sealed class Subscriber
     {
         public readonly SemaphoreSlim Gate = new(1, 1);
         public Feed? Feed;
         public int Registered;
+        // Null until the channel says (sessions.focus): every live change then goes at once, as before.
+        public FocusRequest? Focus;
+        // sessions.focus said in the window that started at FocusWindow, under lock (this).
+        public DateTimeOffset FocusWindow = DateTimeOffset.MinValue;
+        public int FocusCount;
     }
 
     async Task<AnswerResult> AnswerAsync(IProtocolChannel channel, JsonElement data)
@@ -305,7 +381,7 @@ public sealed class SessionService
     // change is heard as soon as it was, and a look costs no more than one of their hellos did.
     public TimeSpan HelloCheck { get; init; } = TimeSpan.FromSeconds(10);
 
-    // What each channel that asked was last told: its readOnly and capabilities.
+    // What each channel that asked was last told: its readOnly and capabilities, as shaped for it.
     readonly ConcurrentDictionary<IProtocolChannel, HelloWatch> helloWatches = new();
     readonly Lock helloGate = new();
     ITimer? helloTimer;
@@ -314,19 +390,24 @@ public sealed class SessionService
     sealed class HelloWatch
     {
         public string Said = "";
+        public Func<HelloResult, HelloResult>? Shape;
     }
 
     // Only what a client acts on; machine.sessions changes all the time and is not a change here.
     static string Said(string? readOnly, IEnumerable<string> offered) => (readOnly ?? "") + "\n" + string.Join("\n", offered);
 
-    void WatchHello(IProtocolChannel channel, HelloResult hello)
+    void WatchHello(IProtocolChannel channel, HelloResult hello, Func<HelloResult, HelloResult>? shape)
     {
         var watch = helloWatches.GetOrAdd(channel, c =>
         {
             _ = c.Closed.ContinueWith(closed => helloWatches.TryRemove(c, out _), TaskScheduler.Default);
             return new HelloWatch();
         });
-        lock (watch) { watch.Said = Said(hello.Machine.ReadOnly, hello.Capabilities); }
+        lock (watch)
+        {
+            watch.Said = Said(hello.Machine.ReadOnly, hello.Capabilities);
+            watch.Shape = shape;
+        }
         lock (helloGate) { helloTimer ??= Time.CreateTimer(_ => CheckHellos(), null, HelloCheck, HelloCheck); }
     }
 
@@ -350,7 +431,18 @@ public sealed class SessionService
                 // now that could not be sent.
                 if (!channel.IsOpen) { continue; }
                 // Not HelloFor: a look needs no copy of the session list, only what Said compares.
-                var said = Said(ReadOnly?.Invoke(), Offered(channel));
+                // Shaped afresh at each look, so a peer whose role changed is compared as it is now.
+                Func<HelloResult, HelloResult>? shape;
+                lock (watch) { shape = watch.Shape; }
+                var readOnly = ReadOnly?.Invoke();
+                var offered = Offered(channel);
+                string said;
+                if (shape is null) { said = Said(readOnly, offered); }
+                else
+                {
+                    var shaped = shape(new HelloResult(1, machine with { ReadOnly = readOnly }, offered));
+                    said = Said(shaped.Machine.ReadOnly, shaped.Capabilities);
+                }
                 lock (watch)
                 {
                     if (said == watch.Said) { continue; }
@@ -372,9 +464,8 @@ public sealed class SessionService
         finally { Volatile.Write(ref checkingHellos, 0); }
     }
 
-    // Only that it changed: the client asks hello again. What a channel's hello says is shaped
-    // after this service, by the caller's role (RemoteAuthorization) and kind (LocalApi), so the
-    // result built here is not what that channel may be told.
+    // Only that it changed: the client asks hello again. The shaped result is not sent either:
+    // hello itself is checked afresh by the caller's role or kind, and says it.
     async Task TellAsync(IProtocolChannel channel)
     {
         try { await channel.SendEventAsync(Events.HelloChanged, new { }); }
@@ -384,7 +475,8 @@ public sealed class SessionService
 
     List<string> Offered(IProtocolChannel channel)
     {
-        List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged];
+        List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus];
+        if (SignInEntrypointApproved && SignIn?.Offered(channel) == true) { offered.Add(AgentSignIn.Capability); }
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
@@ -421,7 +513,11 @@ public sealed class SessionService
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
         var result = await replies.ReplyAsync(request, channel.PeerId, watch: watch);
-        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { TakeBack(takeBack, answer: false); }
+        if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
+        {
+            push?.Replied(channel.PeerId, request.Id);
+            TakeBack(takeBack, answer: false);
+        }
         return progress ? result with { Timings = watch.Timings } : result;
     }
 
@@ -495,19 +591,40 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
     static string? String(JsonElement data, string name) =>
         data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    sealed class Feed(SessionSubscription subscription, bool patch)
+    internal sealed class Feed(SessionSubscription subscription, bool patch, Subscriber state, TimeProvider time, TimeSpan quiet)
     {
+        // Put in the subscription's own queue, so what was held goes in order with everything else:
+        // Tick when the quiet interval is up, Refocused when the client shows another session.
+        static readonly object Tick = new(), Refocused = new();
         readonly CancellationTokenSource stop = new();
         readonly TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
         // With patch: each session as this channel last sent it, and the seq it went with. Only what
         // got through: an event that could not be sent leaves the client on the one before, which
         // the next patch then goes on from.
         readonly Dictionary<string, (long Seq, JsonObject Json)> sent = new(StringComparer.Ordinal);
+        // With focus: the latest change of each session the client does not show, until the quiet
+        // interval is up, and the latest revision read before its first held change (Floor). That
+        // change was made after Floor, so nothing sent meanwhile says a later revision: a client
+        // that resumed from one would never be sent the change held here.
+        readonly Dictionary<string, (SessionEvent Event, long Floor)> held = new(StringComparer.Ordinal);
+        // Each session as this channel was last sent it, patch or not: what Urgent compares with.
+        readonly Dictionary<string, Session> shown = new(StringComparer.Ordinal);
+        readonly Lock timerGate = new();
+        ITimer? timer;
+        DateTimeOffset quietUntil = DateTimeOffset.MinValue;
+        // The latest revision read from the subscription: everything up to it is sent or held.
+        long read;
+        int heldCount;
         // Past this subscription's sessions.synced: upserts from here on are live changes.
         bool live;
         int started;
 
         public SessionSubscription Subscription => subscription;
+
+        // Sessions whose change waits for the quiet interval; tests read it.
+        internal int Held => Volatile.Read(ref heldCount);
+
+        public void Refocus() => subscription.Channel.Writer.TryWrite(new SessionEvent("", Refocused));
 
         // Sends the subscription's events, in order, until the channel ends or it is
         // replaced. The channel numbers them: seq continues across subscriptions.
@@ -518,20 +635,36 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
             {
                 await foreach (var ev in subscription.Events.ReadAllAsync(stop.Token))
                 {
-                    var (name, data, id, json) = Shape(ev);
-                    if (name is null) { continue; }
-                    try
+                    if (ReferenceEquals(ev.Data, Tick) || ReferenceEquals(ev.Data, Refocused))
                     {
-                        var seq = await channel.SendEventAsync(name, data, stop.Token);
-                        if (id is not null && json is not null) { sent[id] = (seq, json); }
+                        await ReleaseAsync(channel, log, all: ReferenceEquals(ev.Data, Tick));
+                        continue;
                     }
-                    catch (MessageTooLargeException e)
+                    var floor = read;
+                    if (ev.Revision is { } revision && revision > read) { read = revision; }
+                    if (ev.Data is SessionsSynced synced)
                     {
-                        // Every session has been through SessionBudget.Fit, so this is a bug.
-                        // The size is checked before encrypting, so the channel is intact and
-                        // the session's next change can still get through.
-                        log($"skipped a {name} too large to send ({e.Size} bytes)");
+                        live = true;
+                        if (synced.Revision > read) { read = synced.Revision; }
                     }
+                    if (live && ev.Data is Session session && Quiet(session.Id) && !Urgent(session))
+                    {
+                        var now = time.GetUtcNow();
+                        // The first change after a quiet spell goes at once; the next ones wait for the
+                        // interval's end and go together, each session's latest only.
+                        if (held.Count > 0 || now < quietUntil)
+                        {
+                            Hold(session.Id, ev, floor, now);
+                            continue;
+                        }
+                        quietUntil = now + quiet;
+                    }
+                    // What this sends of a session supersedes what was held of it: a session opened
+                    // since it was held, its newer change read before the Refocused marker. Released
+                    // after, the older state would have gone back over the newer one.
+                    if (ev.Data is SessionRemoved removed && held.Remove(removed.Id)) { Volatile.Write(ref heldCount, held.Count); }
+                    if (live && ev.Data is Session superseding && held.Remove(superseding.Id)) { Volatile.Write(ref heldCount, held.Count); }
+                    await SendAsync(channel, held.Count == 0 ? ev : ev with { Revision = Cap(ev.Revision) }, log);
                 }
             }
             catch (OperationCanceledException) { }
@@ -539,11 +672,95 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
             catch (IOException) { }
             finally
             {
+                lock (timerGate)
+                {
+                    timer?.Dispose();
+                    timer = null;
+                }
                 subscription.Dispose();
                 done.TrySetResult();
             }
         }
 
+        // Held only once the channel has said what it shows; the open session, while on screen, never.
+        bool Quiet(string id) => Volatile.Read(ref state.Focus) is { } focus && !(focus.Visible && focus.Open == id);
+
+        // What a person must see at once, on screen or not: a question asked, answered or changed
+        // (its id, what it asks, its decision's choices, answerAtMachine), a session starting to
+        // wait or ask, or ending. Held with the rest, a phone on another session showed a new
+        // approval up to 12 s late (#697). Sent, it replaces what was held of the session.
+        bool Urgent(Session now)
+        {
+            // Not sent on this subscription: new, or left out of a resumed snapshot, where the client
+            // may still hold a question this change answers. Nothing to compare with, so at once,
+            // once per session per subscription.
+            if (!shown.TryGetValue(now.Id, out var before)) { return true; }
+            if (now.Status != before.Status && now.Status is SessionStatus.Waiting or SessionStatus.Ending) { return true; }
+            if (now.WaitingOn is not null && now.WaitingOn != before.WaitingOn) { return true; }
+            if (ReferenceEquals(now.Question, before.Question)) { return false; }
+            if (now.Question is null || before.Question is null) { return true; }
+            // Rebuilt on each read, so compared as sent: Fields is a list, which a record compares
+            // by reference. Only while a question is up, which is rare.
+            return JsonSerializer.Serialize(now.Question, ProtocolJson.Options) != JsonSerializer.Serialize(before.Question, ProtocolJson.Options);
+        }
+
+        long? Cap(long? revision) => revision is { } r ? Math.Min(r, held.Values.Min(h => h.Floor)) : null;
+
+        void Hold(string id, SessionEvent ev, long floor, DateTimeOffset now)
+        {
+            held[id] = (ev, held.TryGetValue(id, out var before) ? before.Floor : floor);
+            Volatile.Write(ref heldCount, held.Count);
+            lock (timerGate)
+            {
+                var due = quietUntil - now;
+                timer ??= time.CreateTimer(_ => subscription.Channel.Writer.TryWrite(new SessionEvent("", Tick)), null,
+                    due > TimeSpan.Zero ? due : TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+            }
+        }
+
+        // At the interval's end everything held goes; on a refocus, only what is no longer quiet.
+        async Task ReleaseAsync(IProtocolChannel channel, Action<string> log, bool all)
+        {
+            if (all)
+            {
+                lock (timerGate)
+                {
+                    timer?.Dispose();
+                    timer = null;
+                }
+            }
+            var going = held.Where(h => all || !Quiet(h.Key)).OrderBy(h => h.Value.Floor).Select(h => h.Key).ToList();
+            foreach (var id in going)
+            {
+                var ev = held[id].Event;
+                held.Remove(id);
+                Volatile.Write(ref heldCount, held.Count);
+                // The last to go leaves nothing read unsent, so it can say so.
+                var revision = ev.Revision is { } r ? held.Count == 0 ? Math.Max(r, read) : Cap(r) : null;
+                await SendAsync(channel, ev with { Revision = revision }, log);
+            }
+            if (all && going.Count > 0) { quietUntil = time.GetUtcNow() + quiet; }
+        }
+
+        async Task SendAsync(IProtocolChannel channel, SessionEvent ev, Action<string> log)
+        {
+            var (name, data, id, json) = Shape(ev);
+            if (name is null) { return; }
+            try
+            {
+                var seq = await channel.SendEventAsync(name, data, stop.Token);
+                if (id is not null && json is not null) { sent[id] = (seq, json); }
+                if (ev.Data is Session session) { shown[session.Id] = session; }
+                else if (ev.Data is SessionRemoved removed) { shown.Remove(removed.Id); }
+            }
+            catch (MessageTooLargeException e)
+            {
+                // Every session has been through SessionBudget.Fit, so this is a bug.
+                // The size is checked before encrypting, so the channel is intact and
+                // the session's next change can still get through.
+                log($"skipped a {name} too large to send ({e.Size} bytes)");
+            }
+        }
         // The event as this client asked for it: to one that asked for patches, a live upsert is a
         // session.patch on what it last sent (null name: nothing it reads changed), and a removal
         // carries the revision. Json: the session as the client will hold it once sent.

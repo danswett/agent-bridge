@@ -130,14 +130,22 @@ public sealed class SecureChannel : IProtocolChannel
     // Sends {ev, seq, data} and returns its seq. Safe to call from any number of threads:
     // seq is taken under the send lock, so events arrive in seq order, interleaved with
     // responses exactly as they were sent.
-    public async Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default)
+    public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) =>
+        SendEventCoreAsync(name, data, null, ct);
+
+    // Private events need a fresh authority check at the actual encrypted write, not
+    // merely when they join the channel/relay queues.
+    public Task<long> SendPrivateEventAsync(string name, object? data, Func<bool> authorize, CancellationToken ct = default) =>
+        SendEventCoreAsync(name, data, authorize, ct);
+
+    async Task<long> SendEventCoreAsync(string name, object? data, Func<bool>? authorize, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         await sendLock.WaitAsync(ct);
         try
         {
             var seq = lastEventSeq + 1;
-            await SendLockedAsync(Serialize(new { ev = name, seq, data }), ct);
+            await SendLockedAsync(Serialize(new { ev = name, seq, data }), ct, authorize);
             lastEventSeq = seq;
             return seq;
         }
@@ -169,7 +177,7 @@ public sealed class SecureChannel : IProtocolChannel
         finally { sendLock.Release(); }
     }
 
-    async Task SendLockedAsync(byte[] plain, CancellationToken ct)
+    async Task SendLockedAsync(byte[] plain, CancellationToken ct, Func<bool>? authorize = null)
     {
         // Checked before encrypting, so a refused message does not spend a nonce.
         if (plain.Length > MaxMessageBytes) { throw new MessageTooLargeException(plain.Length); }
@@ -188,6 +196,7 @@ public sealed class SecureChannel : IProtocolChannel
             {
                 hub.RequirePeer(this);
                 ThrowIfClosed();
+                if (authorize is not null && !authorize()) { throw new OperationCanceledException("the private event is no longer authorized"); }
                 encrypted = true;
                 return send.EncryptWithAd([], body);
             }, ct);

@@ -70,7 +70,14 @@ public sealed partial class QuestionViewModel : Observable
     public string Id => Question.Id;
     public bool Approval => Question.Kind == QuestionKind.Approval;
     public string Heading => Approval ? "Permission requested" : "Waiting on you";
-    public string Message => Question.Message;
+    // An approval's text with anything not drawn where it runs, and its right-to-left letters, as
+    // visible escapes (#220): a host escapes them, and an older one's prompt is drawn so too. The card
+    // draws it exactly as written, as one block nothing in it is read as Markdown in (#323,
+    // MarkdownModel.Approval), so it is never wrapped in a fence of its own: one would be drawn too.
+    public string Message => !Approval ? Question.Message : Shown(Question);
+    // What the approval's escapes stand for, in words above it (ui.md §6.4): "Contains hidden
+    // characters", "Contains right-to-left text".
+    public IReadOnlyList<string> Notes => Approval ? ShownText.Notes(Question.Message) : [];
     public bool Answerable { get; }
     public string? Why { get; }
     public bool Tap { get; }
@@ -109,12 +116,26 @@ public sealed partial class QuestionViewModel : Observable
         }
     }
 
-    // Nothing of the person's is on its way, or what went was not taken.
-    static bool Unsent(Delivery? e) => e is null || (e.State == DeliveryState.Done && e.Outcome is "busy" or "refused");
+    // Nothing of the person's is on its way, or what went was not taken, or what failed to go was an
+    // answer to what the question said before (Reworded).
+    bool Unsent(Delivery? e) => e is null || (e.State == DeliveryState.Done && e.Outcome is "busy" or "refused") || (e.State == DeliveryState.Failed && e.Request == earlier);
+
+    // The request of an answer that failed to go, or was still going, while the question said
+    // something else.
+    string? earlier;
+
+    // The same question, come back saying something else or answerable otherwise (#220): an answer
+    // that failed to go was chosen for what it said then, and an option's value can mean something
+    // else now. It is not sent again; what became of it is still said, and a fresh answer is asked for.
+    internal void Reworded()
+    {
+        if (deliveries.Get(Key) is { State: not DeliveryState.Done } e) { earlier = e.Request; }
+        Refresh();
+    }
 
     // A tap question has no Send until Other is opened.
     public bool ShowSend => !Tap || OtherOpen;
-    public bool ShowResend => !detached && current() && deliveries.Get(Key)?.State == DeliveryState.Failed;
+    public bool ShowResend => !detached && current() && deliveries.Get(Key) is { State: DeliveryState.Failed } e && e.Request != earlier;
     // The answer is on its way (ui.md §5.3, Send and Answer): the button that sent it shows a
     // progress ring, which stops with the request.
     public bool InFlight => deliveries.Get(Key)?.State is DeliveryState.Sending or DeliveryState.Waiting;
@@ -149,6 +170,10 @@ public sealed partial class QuestionViewModel : Observable
             if (old.Fields.FirstOrDefault(o => o.Name == f.Name) is { } was) { f.TakeDraft(was); }
         }
         OtherOpen = Tap && Fields[0].OtherChosen;
+        // An answer that failed to go for what the question said before stays one not to send again
+        // (Reworded), whatever else the question is rebuilt for.
+        earlier = old.earlier;
+        Refresh();
     }
 
     // A click on one of a tap question's options is the whole answer.
@@ -232,7 +257,9 @@ public sealed partial class QuestionViewModel : Observable
     {
         var e = deliveries.Get(Key);
         (StatusText, StatusTone) = !current() && (Unsent(e) || e!.State == DeliveryState.Failed) ? ($"Waiting for the {Product.HostName}{at}. Answer once it is back.", Tone.Progress)
-            : e is null ? ("", Tone.None) : Describe(e, at);
+            : e is null ? ("", Tone.None)
+            : e.State == DeliveryState.Failed && e.Request == earlier ? ($"{Describe(e, at).Text} The question changed since, so answer it again.", Tone.Bad)
+            : Describe(e, at);
         if (e is { State: DeliveryState.Done, Outcome: "busy" } && !pausedAfterBusy)
         {
             pausedAfterBusy = true;
@@ -266,6 +293,19 @@ public sealed partial class QuestionViewModel : Observable
         return (text, outcome == "delivered" ? Tone.Ok : outcome == "refused" ? Tone.Bad : Tone.Warn);
     }
 
+    // Whether a question still says what it said, as controls were built for: its words, kind, flags
+    // and fields, each with everything that shapes what can be given (they arrive as new lists on
+    // every update, so compared by what they hold). The same id can come back otherwise: a host
+    // updated to refuse what it used to offer (#220), or a budget that had to cut it.
+    public static bool SaysTheSame(Question a, Question b) =>
+        a.Kind == b.Kind && a.Message == b.Message && a.Truncated == b.Truncated && a.AnswerAtMachine == b.AnswerAtMachine && a.Agent == b.Agent
+        && a.Fields.Count == b.Fields.Count && a.Fields.Zip(b.Fields).All(p => SameField(p.First, p.Second));
+
+    static bool SameField(Field a, Field b) =>
+        a.Name == b.Name && a.Type == b.Type && a.Title == b.Title && a.Description == b.Description
+        && a.AllowOther == b.AllowOther && a.Required == b.Required && a.Default?.GetRawText() == b.Default?.GetRawText()
+        && (a.Options ?? []).SequenceEqual(b.Options ?? []);
+
     // Whether this client may answer, and if not, why (pwa/js/answers.js, answerability).
     public static (bool Ok, string? Why) Answerability(Question q, IReadOnlyList<string> capabilities, AgentKind agent)
     {
@@ -276,9 +316,35 @@ public sealed partial class QuestionViewModel : Observable
             return (false, off ? "approvalOff" : "atMachine");
         }
         if (!capabilities.Contains(Capabilities.SessionsAnswer)) { return (false, "machine"); }
+        // Before the shape: a cut approval usually ends inside its command's fence, and the person is
+        // told that part of it is missing, not only that it is answered at the machine.
         if (q.Truncated == true) { return (false, "truncated"); }
+        // Approve once allows what runs, not what is drawn. An approval's hidden characters and
+        // right-to-left letters are drawn here as escapes, with notes saying so, so it is still
+        // offered (#253, decision 3); one Markdown would not draw as written is answered at the
+        // machine (DrawnAsWritten).
+        if (q.Kind == QuestionKind.Approval && !DrawnAsWritten(q)) { return (false, "atMachine"); }
+        if (NotWhole(q, agent)) { return (false, "atMachine"); }
         return (true, null);
     }
+
+    // A CRLF is the line ending it is, as MarkdownModel.Approval and the PWA take it (#423); its CR is
+    // still in what runs, so the notes, read from the message as it came, say so.
+    static string Shown(Question q) => ShownText.Reveal(q.Message.Replace("\r\n", "\n"), rightToLeft: true);
+
+    // Whether Markdown would draw an approval as written: a character reference (&#x202E;) would be
+    // decoded to the character it stands for, and the agent's own words, before a host escapes them
+    // (#212), can close the command's fence early or show a link's words where `curl ... | sh` runs
+    // (ApprovalShape). This card draws an approval exactly as written since #323; the hold is kept
+    // all the same, the rule Home Assistant's card, which draws Markdown, holds to as well.
+    static bool DrawnAsWritten(Question q) => !ShownText.HasMisleadingReference(q.Message) && ApprovalShape.DrawsAsWritten(Shown(q));
+
+    // A Codex approval is answered here only as a host sends it from #209: the whole command in one
+    // block nothing in it can close (ApprovalShape.IsFencedCommand). An older host sent
+    // "Needs approval: " and the hook's 300-character preview, cut to 297 and "..." with nothing
+    // marking it truncated, so Approve once would run more than the card shows (#209 security review).
+    static bool NotWhole(Question q, AgentKind agent) =>
+        agent == AgentKind.Codex && q.Kind == QuestionKind.Approval && !ApprovalShape.IsFencedCommand(q.Message);
 
     // A lone surrogate cannot be read by the host (System.Text.Json refuses it), so text goes
     // well-formed, with U+FFFD in its place.

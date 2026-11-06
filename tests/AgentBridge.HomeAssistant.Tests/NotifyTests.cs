@@ -95,9 +95,25 @@ public sealed class NotifyTests : IDisposable
 
     static string ActionOf(JsonObject buttons, int i) => buttons["data"]!["actions"]![i]!["action"]!.GetValue<string>();
 
-    // A tap, as Home Assistant fires it: each a new event unless one is given.
-    void Tap(HaConnector c, string action, string? reply = null, string decision = "q1", string session = A, string? user = "person", string? id = null)
+    // What the notification last sent for a session is known by (HaConnector.NotifyId: its question's
+    // id and a digest of its plan), which a tap on it echoes back.
+    static string DecisionIn(JsonObject buttons) => buttons["data"]!["action_data"]!["decision"]!.GetValue<string>();
+    string DecisionOf(string session = A) =>
+        Buttons().LastOrDefault(b => b["data"]!["action_data"]!["session"]!.GetValue<string>() == session) is { } last ? DecisionIn(last) : "q1";
+
+    // An action of the notification last sent for a session, by its index or "text", named as
+    // HaNotify.Actions names it from the notification's id.
+    string Act(string which, string session = A)
     {
+        var key = System.Text.RegularExpressions.Regex.Replace(DecisionOf(session), "[^a-zA-Z0-9]", "");
+        return $"BRIDGE_{(key.Length > 12 ? key[^12..] : key)}_{which}";
+    }
+
+    // A tap, as Home Assistant fires it: each a new event unless one is given. On the notification
+    // last sent for the session unless another's id is given.
+    void Tap(HaConnector c, string action, string? reply = null, string? decision = null, string session = A, string? user = "person", string? id = null)
+    {
+        decision ??= DecisionOf(session);
         var data = new JsonObject
         {
             ["action"] = action,
@@ -211,7 +227,11 @@ public sealed class NotifyTests : IDisposable
         Assert.Equal(Tag, sent["data"]!["tag"]!.GetValue<string>());
         Assert.Equal("/agent-decisions/decision", sent["data"]!["url"]!.GetValue<string>());
         Assert.Equal($"{Machine} - waiting on you", sent["data"]!["subtitle"]!.GetValue<string>());
-        Same(new JsonObject { ["bridge"] = "decision", ["session"] = A, ["decision"] = "q1" }, sent["data"]!["action_data"], "action_data");
+        // As the daemon's, but the question named with a digest of what it shows (#220), so a tap on a
+        // notification of what it said before under the same id answers nothing.
+        Assert.Matches("^q1~[0-9a-f]{16}$", DecisionIn(sent));
+        Assert.Equal(HaConnector.NotifyId("q1", HaDecision.Plan(sessions.Get(A)!.Question!, sessions.Get(A)!)), DecisionIn(sent));
+        Same(new JsonObject { ["bridge"] = "decision", ["session"] = A, ["decision"] = DecisionIn(sent) }, sent["data"]!["action_data"], "action_data");
         Assert.Equal(["Cut the release now", "Wait for the fix", "Type an answer"],
             sent["data"]!["actions"]!.AsArray().Select(a => a!["title"]!.GetValue<string>()));
 
@@ -266,6 +286,93 @@ public sealed class NotifyTests : IDisposable
         Assert.Single(answered);
     }
 
+    // The same form can come back under its id with its options in another order (#220): its
+    // notification is sent again, and a tap on the one before, read by its button's index, would be
+    // another option now. It answers nothing.
+    [Fact]
+    public async Task A_tap_on_the_notification_of_what_a_form_said_before_it_changed_under_its_id_answers_nothing()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        var before = Buttons()[0];
+
+        Ask(Form("q1", Release with { Options = [new Option("wait", "Wait for the fix"), new Option("cut_now", "Cut the release now")] }));
+        await Pass(c);
+        Tap(c, ActionOf(before, 1));
+        await Pass(c);
+        Assert.Empty(answered);
+
+        var now = Buttons()[^1];
+        Assert.NotSame(before, now);
+        Assert.Equal(["Wait for the fix", "Cut the release now"], now["data"]!["actions"]!.AsArray().Take(2).Select(a => a!["title"]!.GetValue<string>()));
+        Tap(c, ActionOf(now, 1), decision: now["data"]!["action_data"]!["decision"]!.GetValue<string>());
+        await Pass(c);
+        Assert.Equal("cut_now", Assert.Single(answered).Fields!["release"].GetString());
+    }
+
+    // A phone that could not be reached keeps the notification of what a form said before it changed
+    // under its id, and the connector restarts: the form is armed afresh, and a tap on that
+    // notification, read by index, would be another option now. It answers nothing.
+    [Fact]
+    public async Task A_tap_on_a_notification_kept_through_a_restart_from_before_its_form_changed_answers_nothing()
+    {
+        Ask(Form("q1", Release));
+        JsonObject before;
+        await using (var c = Connector())
+        {
+            await Pass(c);
+            before = Buttons()[0];
+            ha.NotifyFailsFor = s => s == Phone;
+            Ask(Form("q1", Release with { Options = [new Option("wait", "Wait for the fix"), new Option("cut_now", "Cut the release now")] }));
+            await Pass(c);
+        }
+        await using var again = Connector();
+        await Pass(again);
+        Tap(again, ActionOf(before, 1), decision: DecisionIn(before));
+        await Pass(again);
+
+        Assert.Empty(answered);
+    }
+
+    // A question can have any id, the name of another's notification among them: a tap on that
+    // notification is not one on this question's.
+    [Fact]
+    public async Task A_tap_on_a_notification_whose_name_another_question_has_for_its_id_answers_nothing()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        Ask(Form("q1", Release with { Options = [new Option("wait", "Wait for the fix"), new Option("cut_now", "Cut the release now")] }));
+        await Pass(c);
+        var changed = Buttons()[^1];
+
+        Ask(Form(DecisionIn(changed), Release));
+        await Pass(c);
+        Tap(c, ActionOf(changed, 0), decision: DecisionIn(changed));
+        await Pass(c);
+
+        Assert.Empty(answered);
+    }
+
+    // Two forms can show the same labels over other values: what a label sends is what the form
+    // says now.
+    [Fact]
+    public async Task A_form_whose_options_values_change_under_the_same_labels_answers_with_the_new_values()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+
+        Ask(Form("q1", Release with { Options = [new Option("wait", "Cut the release now"), new Option("cut_now", "Wait for the fix")] }));
+        await Pass(c);
+        var now = Buttons()[^1];
+        Tap(c, ActionOf(now, 0), decision: now["data"]!["action_data"]!["decision"]!.GetValue<string>());
+        await Pass(c);
+
+        Assert.Equal("wait", Assert.Single(answered).Fields!["release"].GetString());
+    }
+
     [Fact]
     public async Task A_tap_made_by_an_agent_is_the_agents_answer()
     {
@@ -297,16 +404,16 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q2", Count));
         await Pass(c);
         Assert.Equal(["Type an answer"], Buttons()[^1]["data"]!["actions"]!.AsArray().Select(a => a!["title"]!.GetValue<string>()));
-        Tap(c, "BRIDGE_q2_text", reply: "three", decision: "q2");
+        Tap(c, Act("text"), reply: "three");
         await Pass(c);
         Assert.Single(answered);
-        Tap(c, "BRIDGE_q2_text", reply: "3", decision: "q2");
+        Tap(c, Act("text"), reply: "3");
         await Pass(c);
         Assert.Equal(3, answered[^1].Fields!["count"].GetInt32());
 
         Ask(new Question { Id = "q3", Kind = QuestionKind.Form, Message = "What should the notes say?", AskedAt = FakeSessions.T0, Fields = [] });
         await Pass(c);
-        Tap(c, "BRIDGE_q3_text", reply: "Fixes the relay", decision: "q3");
+        Tap(c, Act("text"), reply: "Fixes the relay");
         await Pass(c);
         Assert.Equal("Fixes the relay", answered[^1].Text);
         Assert.Equal(3, answered.Count);
@@ -319,13 +426,13 @@ public sealed class NotifyTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         Assert.DoesNotContain(Buttons()[0]["data"]!["actions"]!.AsArray(), a => a!["title"]!.GetValue<string>() == "Type an answer");
-        Tap(c, "BRIDGE_q1_text", reply: "something else");
+        Tap(c, Act("text"), reply: "something else");
         await Pass(c);
         Assert.Empty(answered);
 
         Ask(Form("q2", Pick));
         await Pass(c);
-        Tap(c, ActionOf(Buttons()[^1], 1), decision: "q2");
+        Tap(c, ActionOf(Buttons()[^1], 1));
         await Pass(c);
         Assert.Equal(["b"], Assert.Single(answered).Fields!["pick"].EnumerateArray().Select(e => e.GetString()));
     }
@@ -339,10 +446,10 @@ public sealed class NotifyTests : IDisposable
         var first = Buttons()[0];
         Ask(Form("q2", Release));
         await Pass(c);
-        Tap(c, ActionOf(first, 0), decision: "q1");
-        Tap(c, "BRIDGE_q2_0", decision: "q2", session: B);
-        Tap(c, "BRIDGE_q2_9", decision: "q2");
-        Tap(c, "SOMETHING", decision: "q2");
+        Tap(c, ActionOf(first, 0), decision: DecisionIn(first));
+        Tap(c, Act("0"), session: B);
+        Tap(c, Act("9"));
+        Tap(c, "SOMETHING");
         await Pass(c);
         Assert.Empty(answered);
         Assert.Contains(log, l => l.Contains("is for an earlier question", StringComparison.Ordinal));
@@ -499,6 +606,60 @@ public sealed class NotifyTests : IDisposable
         var done = Pushes()[^1];
         Assert.Equal("Copilot response: Copilot: Fix the relay", done["title"]!.GetValue<string>());
         Assert.Equal("Done: the release is cut.", done["message"]!.GetValue<string>());
+    }
+
+    // A phone may draw a push as HTML, decoding "&#x202E;" into the control it names, or as plain
+    // text; neither spelling is safe for both. Such an approval is answered at the machine, so its
+    // push says so and carries none of the prompt (#220).
+    [Theory]
+    [InlineData("Allow **shell**?\n\nTidy up &#x202E;sdrawkcab\n\n```\nls\n```")]
+    [InlineData("Allow **shell**?\n\n```\necho done #\u202E ;hs | p/x//:sptth lruc\n```")]
+    public async Task An_approval_drawn_other_than_as_it_runs_is_pushed_as_waiting_at_the_machine_without_its_text(string message)
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Status = SessionStatus.Waiting,
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = message, AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")] }],
+            },
+        });
+        await Pass(c);
+
+        var pushed = Assert.Single(Pushes());
+        Assert.Equal(HaDecision.MisleadingPush, pushed["message"]!.GetValue<string>());
+    }
+
+    // A delegate's name is in its push's title and text; one holding a reference a phone drawing
+    // HTML would decode is not used there at all, and its approval is pushed as waiting at the machine.
+    [Fact]
+    public async Task A_delegate_named_with_a_reference_to_a_bidi_control_is_pushed_as_a_delegate()
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Status = SessionStatus.Waiting,
+            WaitingOn = "agent-3a91",
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "&#x202E;etius tset", Status = SubagentStatus.Waiting }],
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")] }],
+            },
+        });
+        await Pass(c);
+
+        var pushed = Assert.Single(Pushes());
+        Assert.Equal("A delegate asks · Copilot permission needed", pushed["title"]!.GetValue<string>());
+        Assert.Equal($"A delegate asks:\n\n{HaDecision.MisleadingPush}", pushed["message"]!.GetValue<string>());
     }
 
     // A delegate's question on the phones' answer buttons: titled with its name, and under the
@@ -793,13 +954,13 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q1", Release));
         await using var c = Connector(Phones with { MaxButtons = 1 });
         await Pass(c);
-        Assert.Equal(["BRIDGE_q1_0", "BRIDGE_q1_text"], Buttons()[0]["data"]!["actions"]!.AsArray().Select(a => a!["action"]!.GetValue<string>()));
+        Assert.Equal([Act("0"), Act("text")], Buttons()[0]["data"]!["actions"]!.AsArray().Select(a => a!["action"]!.GetValue<string>()));
         Tap(c, "SOMETHING_ELSE_0");
-        Tap(c, "BRIDGE_q1_1");
+        Tap(c, Act("1"));
         Tap(c, "SOMETHING_ELSE", reply: "typed elsewhere");
         await Pass(c);
         Assert.Empty(answered);
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Equal("cut_now", Assert.Single(answered).Fields!["release"].GetString());
     }
@@ -846,7 +1007,7 @@ public sealed class NotifyTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         ha.PublishFailsFor = (topic, payload) => topic == HaContract.Topics(Node).ActivityState && payload == "Answer NOT sent";
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Single(answered);
         ha.PublishFailsFor = null;
@@ -939,7 +1100,7 @@ public sealed class NotifyTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         Assert.Empty(Buttons()[0]["data"]!["actions"]!.AsArray());
-        Tap(c, "BRIDGE_q1_text", reply: "a, b");
+        Tap(c, Act("text"), reply: "a, b");
         await Pass(c);
         Assert.Empty(answered);
     }
@@ -957,8 +1118,8 @@ public sealed class NotifyTests : IDisposable
             if (failOnce && topic == HaContract.Topics(Node).ActivityState && payload == "Answer NOT sent") { failOnce = false; return true; }
             return false;
         };
-        Tap(c, "BRIDGE_q1_0");
-        Tap(c, "BRIDGE_q1_1");
+        Tap(c, Act("0"));
+        Tap(c, Act("1"));
         await Pass(c);
         await Pass(c);
         await Pass(c);
@@ -977,7 +1138,7 @@ public sealed class NotifyTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         Assert.Equal(["Same", "Same", "Other one"], Buttons()[0]["data"]!["actions"]!.AsArray().Select(a => a!["title"]!.GetValue<string>()).Take(3));
-        Tap(c, "BRIDGE_q1_1");
+        Tap(c, Act("1"));
         await Pass(c);
         Assert.Equal(["b"], Assert.Single(answered).Fields!["pick"].EnumerateArray().Select(e => e.GetString()));
     }
@@ -994,7 +1155,7 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q1", Release));
         await using var c = Connector();
         await Pass(c);
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Equal("Answer NOT sent", ha.Retained[HaContract.Topics(Node).ActivityState]);
 
@@ -1004,7 +1165,7 @@ public sealed class NotifyTests : IDisposable
         refuse = false;
         await Pass(c);
         Assert.Equal(2, Buttons().Count);
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Equal(2, answered.Count);
         Assert.NotEqual(answered[0].Request, answered[1].Request);
@@ -1017,8 +1178,8 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q1", Release));
         await using var c = Connector();
         await Pass(c);
-        Tap(c, "BRIDGE_q1_0", id: "event-1");
-        Tap(c, "BRIDGE_q1_0", id: "event-1");
+        Tap(c, Act("0"), id: "event-1");
+        Tap(c, Act("0"), id: "event-1");
         await Pass(c);
         Assert.Single(answered);
 
@@ -1026,11 +1187,11 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q2", Release));
         await Pass(c);
         outcome = _ => new AnswerResult(AnswerOutcome.Refused, "busy");
-        Tap(c, "BRIDGE_q2_0", decision: "q2", id: "event-2");
+        Tap(c, Act("0"), id: "event-2");
         await Pass(c);
-        Tap(c, "BRIDGE_q2_1", decision: "q2", id: "event-3");
+        Tap(c, Act("1"), id: "event-3");
         await Pass(c);
-        Tap(c, "BRIDGE_q2_0", decision: "q2", id: "event-2");
+        Tap(c, Act("0"), id: "event-2");
         await Pass(c);
         Assert.Equal(3, answered.Count);
     }
@@ -1043,11 +1204,11 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q1", Release));
         await using var c = Connector();
         await Pass(c);
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Single(answered);
         Assert.Equal(0, Clears());
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Equal(2, answered.Count);
         Assert.Equal(1, Clears());
@@ -1068,7 +1229,7 @@ public sealed class NotifyTests : IDisposable
         ha.Fire(HaNotify.ActionEvent, new JsonObject
         {
             ["action"] = ActionOf(Buttons()[0], 0),
-            ["action_data"] = new JsonObject { ["bridge"] = "decision", ["session"] = A, ["decision"] = "q1" },
+            ["action_data"] = new JsonObject { ["bridge"] = "decision", ["session"] = A, ["decision"] = DecisionIn(Buttons()[0]) },
         });
         await Until(() => { lock (answered) { return answered.Count == 1; } });
         Assert.Equal("cut_now", answered[0].Fields!["release"].GetString());
@@ -1110,5 +1271,279 @@ public sealed class NotifyTests : IDisposable
             Assert.True(DateTime.UtcNow < deadline, "timed out");
             await Task.Delay(20);
         }
+    }
+
+    // #800: what Home Assistant tells the owner when an agent needs signing in again.
+    static Attention SignInNeeded(string? account = "octocat", RecoveryState? recovery = null) => new()
+    {
+        Kind = AttentionKind.SignInNeeded, Since = FakeSessions.T0.AddMinutes(1), Agent = AgentKind.Copilot, Provider = "github", Account = account,
+        Message = "Copilot needs you to sign in again (401).", SignIn = SignInWhere.Phone, Recovery = recovery,
+    };
+
+    static readonly Attention Failure = new()
+    {
+        Kind = AttentionKind.Error, Since = FakeSessions.T0.AddMinutes(1), Agent = AgentKind.Copilot, ErrorClass = ErrorClass.Other, Message = "Copilot stopped with an error.",
+    };
+
+    void Fail(Attention? attention, string id = A, string title = "Fix the relay", string response = "The previous turn's answer", int turn = 2) =>
+        sessions.Set(FakeSessions.Copilot(id, title: title, status: SessionStatus.Idle) with
+        {
+            Activity = new Activity { Response = response, TurnCount = turn, UserMessage = "go" },
+            Attention = attention,
+        });
+
+    string SignInTagFor(string? account = "octocat") => HaNotify.SignInTag(HaContract.MachineSlug(Machine), "copilot", account);
+    List<JsonObject> Notices(string service = Phone, string? account = "octocat") =>
+        [.. Sent(service).Select(n => n.Data).Where(d => d["data"]?["tag"]?.GetValue<string>() == SignInTagFor(account) && d["message"]?.GetValue<string>() != HaNotify.ClearMessage)];
+    int NoticeClears(string service = Phone, string? account = "octocat") =>
+        Sent(service).Count(n => n.Data["message"]?.GetValue<string>() == HaNotify.ClearMessage && n.Data["data"]?["tag"]?.GetValue<string>() == SignInTagFor(account));
+
+    [Fact]
+    public async Task A_turn_that_ends_on_a_401_is_not_pushed_as_finished_with_the_previous_answer_but_as_needing_sign_in()
+    {
+        await using var c = Connector(Phones with { Enabled = true });
+        Ask(null, response: "The previous turn's answer", turn: 1);
+        await Pass(c);
+        // The prompt that hit the 401: a new turn, idle again with the turn before's answer beside it.
+        Ask(null, response: "The previous turn's answer", status: SessionStatus.Working, turn: 2);
+        await Pass(c);
+        Fail(SignInNeeded());
+        await Pass(c);
+
+        // Told within the pass, well inside the owner's 60 s, on the phones and the push service.
+        var notice = Assert.Single(Notices());
+        Assert.Single(Notices(Tablet));
+        Assert.Equal($"{Machine} · Copilot needs sign-in", notice["title"]!.GetValue<string>());
+        Assert.Equal("1 session: Copilot: Fix the relay", notice["message"]!.GetValue<string>());
+        Assert.Equal($"{Machine} - needs sign-in", notice["data"]!["subtitle"]!.GetValue<string>());
+        Assert.False(notice["data"]!.AsObject().ContainsKey("actions"));
+        var push = Assert.Single(Pushes());
+        Assert.Equal($"{Machine} · Copilot needs sign-in", push["title"]!.GetValue<string>());
+        // No account, code or URL, and not the agent's answer from before.
+        foreach (var sent in Sent().Select(n => HaContract.Serialize(n.Data)))
+        {
+            Assert.DoesNotContain("octocat", sent, StringComparison.Ordinal);
+            Assert.DoesNotContain("github.com", sent, StringComparison.Ordinal);
+            Assert.DoesNotContain("previous turn", sent, StringComparison.Ordinal);
+        }
+
+        // Its card says so, never idle.
+        Assert.Equal("Needs sign-in", ha.Retained[HaContract.Topics(Node).StatusState]);
+        Assert.Contains("\"sign_in_needed\"", ha.Retained[HaContract.Topics(Node).StatusAttributes], StringComparison.Ordinal);
+        await Pass(c, 5);
+        await Pass(c, 20);
+        Assert.Single(Pushes());
+    }
+
+    [Fact]
+    public async Task A_turn_that_ends_on_an_error_pushes_nothing_and_a_later_answer_is_pushed_as_ever()
+    {
+        await using var c = Connector(Phones with { Enabled = true });
+        Ask(null, response: "The previous turn's answer", turn: 1);
+        await Pass(c);
+        Ask(null, response: "The previous turn's answer", status: SessionStatus.Working, turn: 2);
+        await Pass(c);
+        Fail(Failure);
+        await Pass(c);
+        await Pass(c, 5);
+        await Pass(c, 20);
+        Assert.Empty(Pushes());
+        Assert.Empty(Notices());
+        Assert.Equal("Agent error", ha.Retained[HaContract.Topics(Node).StatusState]);
+
+        // The attention came only after the finished wait began: still not pushed.
+        Ask(null, response: "The previous turn's answer", status: SessionStatus.Working, turn: 3);
+        await Pass(c);
+        Ask(null, response: "The previous turn's answer", status: SessionStatus.Idle, turn: 3);
+        await Pass(c);
+        Fail(Failure, turn: 3);
+        await Pass(c, 5);
+        Assert.Empty(Pushes());
+
+        // The next turn that does finish is pushed in its own words.
+        Ask(null, response: "Fixed it.", status: SessionStatus.Working, turn: 4);
+        await Pass(c);
+        Ask(null, response: "Fixed it.", status: SessionStatus.Idle, turn: 4);
+        await Pass(c);
+        await Pass(c, 5);
+        Assert.Equal("Fixed it.", Assert.Single(Pushes())["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Sign_in_is_one_notice_per_agent_and_account_at_most_hourly_and_withdrawn_once_signed_in()
+    {
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(null);
+        await Pass(c);
+        Fail(SignInNeeded());
+        Fail(SignInNeeded(), id: B, title: "Cut the release");
+        await Pass(c);
+        var notice = Assert.Single(Notices());
+        Assert.StartsWith("2 sessions: ", notice["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("Copilot: Cut the release", notice["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Single(Pushes());
+
+        // Another account is its own notice; more sessions within the hour are not.
+        Fail(SignInNeeded("hubot"), id: "8b000000-0000-4000-8000-0000000000cc");
+        await Pass(c);
+        Assert.Single(Notices(account: "hubot"));
+        Fail(SignInNeeded(), id: "9c000000-0000-4000-8000-0000000000dd");
+        await Pass(c, 30 * 60);
+        Assert.Single(Notices());
+        Assert.Equal(2, Pushes().Count);
+
+        // Still signed out an hour on: told again, under the same tag.
+        await Pass(c, 31 * 60);
+        Assert.Equal(2, Notices().Count);
+        Assert.StartsWith("3 sessions: ", Notices()[^1]["message"]!.GetValue<string>(), StringComparison.Ordinal);
+
+        // Signed in and waiting for the sessions to confirm: nobody is needed, and the phones are cleared.
+        foreach (var id in new[] { A, B, "9c000000-0000-4000-8000-0000000000dd" }) { Fail(SignInNeeded(recovery: RecoveryState.Pending), id: id); }
+        await Pass(c);
+        Assert.Equal(1, NoticeClears());
+        Assert.Equal(1, NoticeClears(Tablet));
+        Assert.Equal(0, NoticeClears(account: "hubot"));
+        Assert.Equal("Signed in · waiting for the session to confirm", ha.Retained[HaContract.Topics(Node).StatusState]);
+        await Pass(c, 20);
+        Assert.Equal(1, NoticeClears());
+
+        // Without a phone or the push service named, nothing is sent.
+        await using var off = Connector(HaNotifySettings.Default);
+        var before = Sent().Count;
+        Fail(SignInNeeded("someone-else"), id: "aa000000-0000-4000-8000-0000000000ee");
+        await Pass(off);
+        Assert.Equal(before, Sent().Count);
+    }
+
+    [Fact]
+    public async Task A_restart_within_the_hour_does_not_send_the_sign_in_notice_again_and_still_withdraws_it()
+    {
+        await using (var c = Connector(Phones))
+        {
+            Fail(SignInNeeded());
+            await Pass(c);
+            Assert.Single(Notices());
+        }
+        await using (var again = Connector(Phones))
+        {
+            await Pass(again, 60);
+            Assert.Single(Notices());
+            Fail(null);
+            await Pass(again);
+            Assert.Equal(1, NoticeClears());
+        }
+    }
+
+    [Fact]
+    public async Task Each_destination_is_told_again_an_hour_after_its_own_delivery_not_another_ones()
+    {
+        ha.NotifyFailsFor = s => s == "notify.notify";
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(SignInNeeded());
+        await Pass(c);
+        Assert.Single(Notices());
+        Assert.Empty(Pushes());
+
+        // The push service comes back at minute 59: told then, and not again a minute later when
+        // the phones' hour is up.
+        await Pass(c, 59 * 60);
+        Assert.Empty(Pushes());
+        ha.NotifyFailsFor = null;
+        await Pass(c, 20);
+        Assert.Single(Pushes());
+        await Pass(c, 2 * 60);
+        Assert.Equal(2, Notices().Count);
+        Assert.Single(Pushes());
+        await Pass(c, 60 * 60);
+        Assert.Equal(2, Pushes().Count);
+    }
+
+    [Fact]
+    public async Task A_need_that_comes_back_while_a_withdrawal_is_still_retried_is_told_again()
+    {
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(SignInNeeded());
+        await Pass(c);
+        Assert.Single(Notices());
+        Assert.Single(Pushes());
+
+        // Signed in: the phone is cleared, the tablet can't be reached.
+        ha.NotifyFailsFor = s => s == Tablet;
+        Fail(null);
+        await Pass(c);
+        Assert.Equal(1, NoticeClears());
+
+        // Signed out again within the hour: news again, everywhere it can go.
+        Fail(SignInNeeded() with { Since = FakeSessions.T0.AddMinutes(5) });
+        await Pass(c, 20);
+        Assert.Equal(2, Notices().Count);
+        Assert.Equal(2, Pushes().Count);
+    }
+
+    [Fact]
+    public async Task A_restart_under_a_discovery_hold_neither_withdraws_the_sign_in_notice_nor_sends_it_again_within_the_hour()
+    {
+        await using (var c = Connector(Phones))
+        {
+            Fail(SignInNeeded());
+            await Pass(c);
+            Assert.Single(Notices());
+        }
+        // Restarted while discovery is held: the session isn't found yet, which is not signing in.
+        sessions.End(A);
+        sessions.Held = new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
+        await using var again = Connector(Phones);
+        await Pass(again, 60);
+        Assert.Equal(0, NoticeClears());
+        sessions.Held = null;
+        Fail(SignInNeeded());
+        await Pass(again);
+        Assert.Single(Notices());
+        Assert.Equal(0, NoticeClears());
+    }
+
+    [Fact]
+    public async Task A_destination_that_missed_the_sign_in_notice_is_tried_again_and_one_that_took_it_is_not_told_twice()
+    {
+        ha.NotifyFailsFor = s => s is Tablet or "notify.notify";
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(SignInNeeded());
+        await Pass(c);
+        Assert.Single(Notices());
+        Assert.Empty(Notices(Tablet));
+        Assert.Empty(Pushes());
+
+        ha.NotifyFailsFor = null;
+        await Pass(c, 20);
+        Assert.Single(Notices());
+        Assert.Single(Notices(Tablet));
+        Assert.Single(Pushes());
+        await Pass(c, 20);
+        Assert.Single(Notices(Tablet));
+        Assert.Single(Pushes());
+    }
+
+    [Fact]
+    public async Task A_pass_stopped_between_phones_does_not_send_the_sign_in_notice_again_to_the_phone_that_took_it()
+    {
+        // agent-ha-bridge starts just after the first phone took it: the pass stops there.
+        ha.NotifyFailsFor = s =>
+        {
+            if (s == Phone) { daemon = "agent-ha-bridge"; }
+            return false;
+        };
+        await using (var c = Connector(Phones))
+        {
+            Fail(SignInNeeded());
+            await Pass(c);
+            Assert.Single(Notices());
+            Assert.Empty(Notices(Tablet));
+        }
+        ha.NotifyFailsFor = null;
+        daemon = null;
+        await using var again = Connector(Phones);
+        await Pass(again, 60);
+        Assert.Single(Notices());
+        Assert.Single(Notices(Tablet));
     }
 }

@@ -12,6 +12,9 @@ public static class HostOps
     public const string AgentsRefresh = "host.agents.refresh";
     public const string AgentSetupCapability = "host.agents.setup";
     public const string AgentsSetup = "host.agents.setup";
+    public const string AgentInstallCapability = "host.agents.install";
+    public const string AgentsInstall = "host.agents.install";
+    public const string AgentsInstallCancel = "host.agents.install.cancel";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
@@ -126,6 +129,7 @@ public sealed record HostStatus
     public DevBoxStatus? DevBox { get; init; }
     // Read-only setup evidence; absent on older hosts and until the first scan completes.
     public AgentReadinessReport? Agents { get; init; }
+    public AgentInstallProgress? AgentInstallation { get; init; }
 }
 
 // host.signIn: start GitHub's device flow through this relay (or the one the profile used).
@@ -147,3 +151,7 @@ public sealed record AgentSetupRequest(string Agent, string Action);
 // A failure can leave owned, repairable partial work. Neither completion nor a restart is
 // evidence of authentication, hook trust or a successful fresh session.
 public sealed record AgentSetupResult(bool Completed, string Detail, bool RestartRequired);
+
+public sealed record AgentInstallRequest(string Agent, bool AcceptAgreements = false);
+public sealed record AgentInstallResult(bool Completed, string Detail, string? Executable = null);
+public sealed record AgentInstallProgress(string Agent, bool InProgress, string Detail, bool Blocked = false);

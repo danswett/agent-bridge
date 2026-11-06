@@ -156,8 +156,13 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').repl
 function partMarkup(node, indent) {
   // A group's own paint is substituted too: its class reaches the parts that inherit it.
   const token = (node.allClasses ?? node.classes).find((c) => c in TOKEN_CLASSES);
+  const track = node.tag !== 'g' && node.classes.includes('track');
   const attrs = Object.entries(node.attrs).map(([k, v]) => {
     if (token && (k === 'fill' || k === 'stroke') && v !== 'none' && v !== 'currentColor') { return ` ${k}="var(--ab-glyph-${TOKEN_CLASSES[token]})"`; }
+    // A track keeps its role colour at its faint opacity unless the page sets --ab-glyph-track
+    // and --ab-glyph-track-opacity: a session row draws it solid in trackRow (brand.md, rule D).
+    if (track && (k === 'fill' || k === 'stroke') && v === 'currentColor') { return ` ${k}="var(--ab-glyph-track, currentColor)"`; }
+    if (track && /^(fill-|stroke-)?opacity$/.test(k)) { return ` ${k}="var(--ab-glyph-track-opacity, ${esc(v)})"`; }
     return ` ${k}="${esc(v)}"`;
   }).join('');
   if (node.tag === 'g') {

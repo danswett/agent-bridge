@@ -7,13 +7,16 @@ using Microsoft.Win32.SafeHandles;
 
 namespace AgentBridge.Host.Delivery.Launch;
 
+public sealed class CommandCleanupException(Exception inner)
+    : IOException("The command's process cleanup could not be confirmed.", inner);
+
 // The job is assigned atomically at creation: even an immediately exiting wrapper cannot
 // leave descendants behind. Ordinary launch/session processes must not use this runner.
 public sealed class VersionCommandRunner : ICommandRunner
 {
     public async Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
-        if (!OperatingSystem.IsWindows()) { throw new PlatformNotSupportedException("Bounded CLI version checks are currently supported on Windows only."); }
+        if (!OperatingSystem.IsWindows()) { throw new PlatformNotSupportedException("Contained commands are currently supported on Windows only."); }
         cancellationToken.ThrowIfCancellationRequested();
         var line = WindowsCommandLine.For(program, arguments, out var problem) ?? throw new ArgumentException(problem, nameof(program));
         using var launch = ProcessLaunch.HoldInheritableHandles();
@@ -114,9 +117,9 @@ public sealed class VersionCommandRunner : ICommandRunner
                     await Task.Delay(10, cleanup.Token);
                 }
             }
-            catch (OperationCanceledException e) when (cleanup.IsCancellationRequested)
+            catch (Exception e) when (e is OperationCanceledException or Win32Exception or IOException)
             {
-                throw new IOException("The version probe did not finish cleanup after its process job was terminated.", e);
+                throw new CommandCleanupException(e);
             }
             finally { registration.Unregister(null); }
         }

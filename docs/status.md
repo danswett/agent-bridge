@@ -6,11 +6,12 @@ next, and how the work is done. Keep it current: update it in the same PR as any
 that moves the project along (a merge that closes a stage, a machine migrated, a
 decision made).
 
-*Last updated: 2026-11-03, Pacific (coordination and source-of-truth rules). Older
+*Last updated: 2026-11-04, Pacific (product priorities in #696, Head of Product role). Older
 implementation and machine snapshots below retain their stated dates.*
 
 | Read next | For |
 |---|---|
+| [#696](https://github.com/danswett/agent-bridge/issues/696) | The order of work: epics, Now/Next/Later and intake rules. The Project's **Epic** and **Horizon** fields index it |
 | [design.md](design.md) | The master plan and architecture: goals, protocol, security, relay, host, apps, roadmap (§10), risks |
 | [parity.md](parity.md) | Every agent-ha-bridge feature mapped to this product, with evidence or an issue |
 | [parity-checklist.md](parity-checklist.md) | The scripted migrate-and-rollback rehearsal |
@@ -46,6 +47,15 @@ retirement, not the current G7 migration refusal. Copilot CLI session
 `d5ac689c-a9f6-4618-8e8f-9220793487f4` owns this implementation; coordination is on #170.
 
 ## 2. Where things are (2026-11-02)
+
+### Playwright system packages (#831, 2026-11-04)
+
+[#831](https://github.com/danswett/agent-bridge/pull/831) extends the bounded, signed
+APT download and guarded Canonical fallback to every CI Playwright dependency install.
+PWA UI, end-to-end and both Linux spike installs have 35-minute job budgets; browser
+lists, shards and test assertions are unchanged. CI covers eight mocked download and
+failure paths. Real mirror-fallback proof remains separate in
+[#817](https://github.com/danswett/agent-bridge/pull/817).
 
 ### Host trusted-peer floor (#402)
 
@@ -115,6 +125,11 @@ remain routing references until every active destination is verified.
 - **Creative director** (session c187cf6c; formerly titled VP of Design) is additive: audits, proposals and design review
   under [#477](https://github.com/danswett/agent-bridge/issues/477). Material design
   changes still require owner approval; design leadership is not merge authority.
+- **Head of Product** (session 3dad9c05) owns the order of work: the epics and each
+  item's Epic and Horizon, including those TPM/triage sets on new issues under
+  [#696](https://github.com/danswett/agent-bridge/issues/696)'s intake rule. Issue
+  triage itself stays with TPM. Changes to the order are decided on #696 with the owner.
+  The role has no merge or implementation authority.
 
 #### Operational sources of truth
 
@@ -151,6 +166,49 @@ snapshots with their cutoffs, keep their history and links, and explicitly super
 old authority instructions during a handoff. Do not remove the old tracker until all
 active rows have a verified destination; a Project-permission failure is not an empty
 queue or a completed migration.
+
+#### Running Shiproom
+
+The [public Shiproom hub](https://github.com/danswett/agent-bridge/issues/689)
+links coordinator check-ins and blocker acknowledgments to the existing
+[private Project](https://github.com/users/danswett/projects/1).
+Shiproom owns coordination, Project health, deadlines and escalation only.
+TPM retains issue triage, deduplication and the single collector; implementation,
+design and Quality retain their existing authorities. Authors may still arm
+their own exact-head auto-merge under AGENTS.md. Shiproom is not a merge grant,
+a second implementation coordinator or completion of the #170 index cutover.
+
+Active agent coordinators explicitly acknowledge the protocol and post a first
+check-in before adoption is recorded. A coordinator acknowledges a delivered blocker
+or ACK request within 5 minutes. Each check-in names lane and current session,
+its permalink, the reused recurring mechanism, canonical current work, actual
+blockers (or none), named needed responder, next deliverable and next due time in
+Pacific. Keep one standing roll-up per lane, linking canonical issues and PRs rather
+than copying the backlog. Missing owners remain pending until acceptance is proved.
+Keep contributor branches and delegates with their existing owners. A human
+contributor has no imposed cadence outside an explicitly accepted work window;
+public receipts work without private Project access.
+
+| Interval | Shiproom action |
+|---|---|
+| 5 minutes after a delivered blocker/ACK request | Obtain an explicit acknowledgment; escalate a missed deadline once |
+| 15 minutes after the last explicit check-in | Coordinator check-in due |
+| 20 minutes after the last explicit check-in | Mark the heartbeat stale |
+| 30 minutes after the last explicit check-in | Escalate to the named responsible coordinator/TPM |
+| Immediately | Escalate P0 or unsafe routing to the actual responsible authority |
+
+Preserve the actual blocked reason and needed responder. A sent message, generic
+issue `updatedAt`, mirror write or unchanged activity response is not a check-in or
+acceptance. Project `Heartbeat receipt`, `Next due PT`, `Needs from` and `Ack state`
+fields index this evidence; `Accepted owner` and `Owner receipt` require actual acceptance.
+An inactive optional HA or Apple lane does not block unrelated native delivery.
+
+The dedicated Shiproom session runs a narrow one-minute SLA tick with its own
+persisted control state, consuming only new retained collector events from its
+activation cursor. Reuse an appropriate coordinator timer instead of duplicating
+one. Inspect control/source health before lengthy research. Session-local timers
+do not survive a stopped CLI or reboot: report gaps and restore coverage explicitly.
+Source outages mean unknown visibility, not idle work or missed consent.
 
 The following handoff/resumption notes are **historical, 2026-11-02**; use canonical
 issues and PRs for current heads, owners and gates:
@@ -215,6 +273,11 @@ current gate reading. The record of that shadow follows.
 - #163: a skipped sample splits one disagreement into many episodes. Not fixed.
 
 ## 4. Next steps, in order
+
+The order of work across the product is
+[#696](https://github.com/danswett/agent-bridge/issues/696). Trust and daily-use
+reliability come first, and features are frozen until the P0s close. The steps below are
+the machine and migration steps within it.
 
 1. **Watch ULTRA.** Its HA entities (`*_dswett_ultra_*`) and the PWA should agree, and answers, replies and launches from the phone and the HA card should all work. Install from the PWA worked on 2026-11-01 (0.1.690 to 0.1.700); Install from the HA card's button is still untried live (#161).
 2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
@@ -464,3 +527,4 @@ agent-ha-bridge releases from this work:
 | 11-02 | Attention (#253), signed off with option A and every recommended answer:<br>• Needs you is a filter of the rows, in their own order, starting off at each launch.<br>• A row says only its status.<br>• The question is drawn and answered only in the conversation. Approve once escapes characters not drawn where they run, and stays offered.<br>• Approving on a phone takes two taps.<br>• An approval's notification only opens its question; other questions keep their buttons.<br>• The macOS menu bar extra names the waiting sessions.<br>Spec in #302; reasoning in docs/design/proposals/253-attention.md |
 | 11-03 | Type (#544, #557), every recommendation approved: **Slipgates Sans** (option B, a tuned Inter) is the text face on every platform, with hinted statics in one collection on Windows and the variable pair elsewhere; the monospace is **Slipgates Mono**, with Medium 500 and Vietnamese added; no client may synthesize a weight or style (ui.md §4.2); real italic on Windows; the reading measure about 8% wider (770 px). The interim Inter Tight wordmark (#558) moves to Slipgates Sans |
 | 11-03 | Type width (#544 §11): Slipgates Sans was asked whether it reads condensed, and is tuned rather than replaced: the text cut (opsz 14) at every size on every platform, +2% tracking on the Title role and the wordmark only (`type.tracking`; body text untracked), and the wordmark in Slipgates Sans SemiBold |
+| 11-04 | Product priorities (#696), signed off by the owner. A Head of Product owns the order of work. **Now:** Trust (input integrity and approval safety; #662 raised to P0) and Daily-use reliability. **Next:** Migration, Setup, Rebrand, Ops basics. **Later:** Performance, Conversation UI. **Parked:** Polish and motion (accessibility bugs exempt), Apple/macOS, Federation (#519). The P0 PRs land first, and no new slice starts in a Later or Parked epic until #209, #212, #220 and #662 close. New features start Parked |

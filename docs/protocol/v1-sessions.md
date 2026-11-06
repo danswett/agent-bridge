@@ -240,7 +240,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 {"ev": "hello.changed", "seq": 12, "data": {}}
 ```
 
-once whenever `machine.readOnly` or `capabilities` would differ from what it last told that channel, and the client asks hello again (with `changes` again, which is what it was last told from then on). The event carries nothing more on purpose: what a channel's hello says depends on who is asking (a pinned peer's role, an agent on the pipe), and only hello itself says it. The host looks every 10 s, as often as clients asked before; other `machine` fields (`sessions`, say) changing alone send nothing. A client that asked still asks hello again now and then (the Windows app: every 5 min of another machine's host; its own host, which it also asks `host.status`, every 10 s over the pipe as before), in case it missed a change; one that did not ask, or a host that does not offer `hello.changed` (which ignores `changes`), is asked as before. Like every event it is numbered in the channel's `seq`. Nothing is acted on from it: every op is checked afresh when it arrives.
+once whenever `machine.readOnly` or `capabilities` would differ from what it last told that channel, and the client asks hello again (with `changes` again, which is what it was last told from then on). The event carries nothing more on purpose: what a channel's hello says depends on who is asking (a pinned peer's role, an agent on the pipe), and only hello itself says it. For the same reason what is compared is what that channel's hello would say, after its role or caller kind has shaped it, so a channel hears only of a change it could see: a `service` peer, whose hello offers only `sessions.read`, hears nothing when `update` comes or goes (#651). The host looks every 10 s, as often as clients asked before; other `machine` fields (`sessions`, say) changing alone send nothing. A client that asked still asks hello again now and then (the Windows app: every 5 min of another machine's host; its own host, which it also asks `host.status`, every 10 s over the pipe as before), in case it missed a change; one that did not ask, or a host that does not offer `hello.changed` (which ignores `changes`), is asked as before. Like every event it is numbered in the channel's `seq`. Nothing is acted on from it: every op is checked afresh when it arrives.
 
 `capabilities` lists what this host supports, and a client hides anything missing:
 
@@ -249,6 +249,7 @@ once whenever `machine.readOnly` or `capabilities` would differ from what it las
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
 | `sessions.patch` | `sessions.subscribe` takes `patch` and `since`: live changes as `session.patch`, only what changed ([Patches](#patches-sessionpatch)), and a reconnect to the same run of the host sent only the sessions that changed meanwhile ([Resuming](#resuming-without-a-snapshot)). Without it, or without asking, a client gets whole upserts and whole snapshots as before |
 | `hello.changed` | `hello` takes `{ "changes": true }`, and the host then sends `hello.changed` on that channel when its `readOnly` or capabilities change ([Changes](#hello)). Without it, a client asks hello again to see a change |
+| `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). Without it, or until a client says, every change goes at once |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
 | `sessions.progress` | `session.reply` and `session.answer` take `"progress": true`, and then report `received` and `typed` before their result, which carries `timings` ([Progress](#progress)). Offered with `sessions.reply` or `sessions.answer` |
@@ -257,7 +258,7 @@ once whenever `machine.readOnly` or `capabilities` would differ from what it las
 | `sessions.attach.direct` | `attachment.chunk` takes files up to 100 MiB, not only 256 KiB. Offered with `sessions.attach` on the local pipe only ([local-pipe.md](local-pipe.md)), where the bytes cost the relay nothing |
 | `sessions.stop` | `session.stop`. Left out on the same terms as `sessions.answer`. A client then offers no End session |
 | `sessions.approve` | Copilot permission prompts are approved or denied with `session.answer` ([Copilot permission prompts](#copilot-permission-prompts)). Offered only with `sessions.answer`, by a host whose `permissions.remoteApproval` is on (the default). Without it, every Copilot permission prompt is `answerAtMachine`, and a client says approving from the phone is turned off on that machine |
-| `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions and finished turns ([Notifications](#notifications)). Left out by a host whose `push.enabled` is off ([host-config.md](../host-config.md)): it then fails `push.subscribe` saying it doesn't send notifications, removes nothing on `push.unsubscribe` and lists no devices |
+| `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions, finished turns and sessions that need sign-in ([Notifications](#notifications)). Left out by a host whose `push.enabled` is off ([host-config.md](../host-config.md)): it then fails `push.subscribe` saying it doesn't send notifications, removes nothing on `push.unsubscribe` and lists no devices |
 | `usage` | `usage.get`, `usage.subscribe`: how much of each agent's allowance is gone ([v1-usage.md](v1-usage.md)) |
 | `usage.shared` | `usage.get` and `usage.subscribe` take `{ "shared": true }` and add the readings this host keeps from the account's other machines, each with `readBy` ([v1-usage.md](v1-usage.md#shared-readings)). Without asking, a client gets the host's own report as before |
 | `sessions.launch` | `launch.options`, `session.launch`: starting or resuming a session in a workspace approved at the machine ([v1-launch.md](v1-launch.md)) |
@@ -441,6 +442,50 @@ list whole again; and only while it has `instance` and a `revision` from this ru
 patches that follow a resumed snapshot are on its upserts, or whole (no `base`): a host remembers
 nothing of what it sent on an earlier channel.
 
+### `sessions.focus`
+
+Each live change woke a phone's radio: while a session works, its upsert or patch goes every 250 ms
+to 4 s, and with the app open the radio barely rested (#610: the largest battery cost, estimated at
+50 to 100 mAh an hour). Most of those were of sessions nobody had open. Of a host that offers
+`sessions.focus`, a client says what it shows, and says it again whenever that changes:
+
+```json
+{ "visible": true, "open": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b" }
+```
+
+| Field | Notes |
+|---|---|
+| `visible` | Required. Whether the app is on screen now (the page is visible, the window not minimised) |
+| `open` | The session it shows, if any. Absent or `null` on the list, or another machine's session |
+
+Result: `{}`. A request without `visible`, or with a field of the wrong type, fails as a request, as does one past 20 on a channel in 10 s: a client says it when its page or session changes, not more.
+It is for a person's devices: a pinned `service` or `host` peer is neither offered nor allowed it.
+What it says holds for the channel, across `sessions.subscribe` on it, until it is said again or
+the channel closes; a new channel starts with nothing said, and a client says it again after
+subscribing (it may send both at once). Until a channel has said anything, nothing below applies
+and every live change goes at once, as without the capability.
+
+**The open session at once, the rest together.** A live `session.upsert` or `session.patch` of the
+`open` session, while `visible`, goes at once. Of every other session (all of them while not
+`visible`), the first live change after a quiet spell goes at once too; the ones that follow within
+12 s of it wait for the end of those 12 s and go together, only each session's latest state, and
+the next 12 s start then. A session that becomes `open` has its waiting change sent at once. A change a person must see is never held, open or not, visible or not: compared with what the channel was last sent of that session, a `question` that appeared, went or changed (its `id`, what it asks, its `decision` choices, `answerAtMachine`), a `status` entering `waiting` or `ending`, or a new `waitingOn`; and the first change of a session not yet sent on this subscription (a resumed snapshot leaves out what the client already holds, a pending question included). It goes at once and replaces anything held of the session (#697).
+`session.remove`, `discovery.changed` and the snapshot are never held; a removal drops the change
+held for that session. So a client is told of every session at most every 12 s, and of the one it
+shows as before.
+
+**Patches and resuming still hold.** A held change is only the latest state, sent as any other:
+a patch's `base` is the event that last gave the client that session, as always. While a change is
+held, no `session.patch` or `session.remove` says a `revision` past it, so a client that resumes
+from the revision it holds is still sent that session ([Resuming](#resuming-without-a-snapshot));
+the last held change to go says the revision of everything read since.
+
+**Notifications.** A device with a subscription on a channel that last said `"visible": true` is
+on screen and sees a turn finish: it is not sent `finished` for it ([Notifications](#notifications)).
+
+A client that hides should still close its subscription after a while, and rely on notifications
+(#610); `"visible": false` covers the time before that.
+
 ### Discovery held
 
 ```json
@@ -527,6 +572,11 @@ Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is
 Free text of nothing but what shows as nothing (white space, control and format characters,
 default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
 `refused` as such.
+A field's `constraints` (below) are checked too: a value outside them is `refused`, with why.
+An empty or blank value for a `required` `text` field is `refused` as needing an answer: `""`,
+or text that is empty once its control characters (Cc) are made spaces, as a host types them,
+and JavaScript's `trim()` is applied (so `"   "`, `"\u0085"` and `"\u001b "` alike). Typing
+nothing records no answer, and blank text might be recorded trimmed to nothing.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
@@ -564,7 +614,7 @@ permission prompts goes beyond it, at the user's request:
 | Copilot CLI | Any other permission request (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read, or any on a host with `permissions.remoteApproval` off | `approval` | No: `answerAtMachine` | |
 | Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
 | Claude Code | Permission prompt (from agent-ha-bridge's hook) | `approval` | No: `answerAtMachine` | |
-| Codex | Approval recorded by agent-ha-bridge's hook | `approval` | Yes | Never: Codex records nothing that says how an approval was answered, so a typed one is `unconfirmed` |
+| Codex | Approval recorded by its `PermissionRequest` hook (agent-ha-bridge's, or this host's intake) | `approval`: `Allow **<tool>**?` and the whole command in a fence longer than any run of backticks inside it. One whose marker holds only the hook's 300-character preview, or whose command is past 16,384 characters, is `truncated` (#209) | Yes, unless `truncated` | Never: Codex records nothing that says how an approval was answered, so a typed one is `unconfirmed` |
 | Codex | Approval seen only in the rollout, or one agent-ha-bridge already typed into | `approval` | No: `answerAtMachine` | |
 
 #### Copilot permission prompts
@@ -573,9 +623,59 @@ A Copilot permission prompt's `message` carries in full what it would allow: the
 the path or paths, the file and its diff (or, without one, its whole new contents; an edit
 showing neither is `answerAtMachine`), the URL, or the tool with its arguments, and the
 intention Copilot gave. One too large to send whole is `truncated`, and refused like any
-truncated question. Its `id` is `<requestId>#<digest>`: Copilot's request id and a hash of
-the message. An answer is bound to both, so the host refuses (`stale`) if that request is
+truncated question. The intention, and an MCP tool's title or a custom tool's description, are
+the agent's own words, sent as literal text (#212): every character that would start Markdown
+(code, emphasis, a link, an image or an address made a link, raw HTML, an entity, a table, a
+heading, quote, list or rule at a line's start) is backslash-escaped and a line's leading
+whitespace dropped, so they render as the words they are and can never open a fence that the
+command's own fence would then close. What is approved is always in fenced code after them, the
+fence longer than any run of backticks inside it; a custom tool with no arguments has its
+description, all it shows of what runs, in that block as written instead (shared vectors:
+`tests/fixtures/approvals/literal-intentions.json`). Its `id` is `<requestId>#<digest>`: Copilot's request id and a hash of
+the message as built from Copilot's own words, before anything in it is escaped for display.
+An answer is bound to both, so the host refuses (`stale`) if that request is
 no longer waiting or now reads differently from what the client was shown.
+
+What a person reads must be what runs (#220). In the `message`, every character that is not
+drawn where it runs is a visible escape (`\u202E`, or `\u{E0041}` past the first plane): format
+characters such as bidi controls and zero-width spaces and joiners, controls other than newline
+and tab, private-use and unassigned code points, unpaired surrogates, U+2028 and U+2029, and
+every default-ignorable code point; so is every right-to-left letter (`\u05D0`), which reorders
+what is drawn around it without any control. Approve once is still offered for such a prompt:
+the owner's "escape and allow" rule (#253, decision 3). The digest stays over the original text
+(and over a tool's name as written, where it held such a character or right-to-left letters, and
+over whether the prompt is answered at the machine at all), so a prompt holding a real U+202E and
+one holding the six characters `\u202E` never share an id. An ordinary prompt's digest is a hash of
+`<kind>\n<message>`; one with more to it, or with a NUL in its message, is hashed in a
+length-prefixed form starting with a NUL, so no message can spell another prompt's identity (a
+custom tool described as `run\n\0at-machine` is not one described as `run` run outside the
+sandbox). A message over the size limit is escaped only as far as it is sent, and is `truncated`.
+A tool's arguments, written as JSON, give a carriage return, a backspace and a form feed as
+`\u000D`, `\u0008` and `\u000C`, never JSON's `\r`, `\b` and `\f`, so a client reads them as the
+characters they are; and a client reads a pair of surrogate escapes (`\uD83D\uDE00`, as JSON writes
+a character past the first plane) as the one character it is, an emoji not hidden, a tag still
+hidden. These rules hold for every agent's
+`approval`, and a client escapes an older host's approval that still carries such a character.
+Every card draws an approval as its source: the PWA's and the Windows app's exactly as written
+(#429, #323), Home Assistant's in one code block nothing in it can close
+([ha-connector.md](../ha-connector.md)). Home Assistant's and the app's cards still answer in the
+terminal one with a character reference such as `&#x202E;` that a Markdown renderer would decode
+to such a character (with or without a semicolon, with any number of leading zeros, or an HTML5
+name such as `&ZeroWidthSpace;`, or `&nbsp;` and the other spaces' names since #546 hid them). The
+Needs you lane
+never offers one inline, its escapes included, and a card says what its escapes stand for
+("Contains hidden characters", "Contains right-to-left text") above it. Those two cards also hold
+at the machine an approval Markdown would not draw as written (the agent's own words closing the
+command's fence, a link, an image or HTML, text after a block, or a line in a block shaped as a
+fence; `ApprovalShape`), and both say a `truncated` approval is cut before they judge its shape,
+since one cut usually ends inside its block. These rules cover characters only, not Markdown:
+whether an approval's prose can be drawn as Markdown (a link or image hiding what runs) is #212
+for Copilot's intention, and #209 for a Codex approval's command, which a host now sends whole in a
+fence longer than any run of backticks inside it. An older host sent it as Markdown prose
+(`Needs approval: <command>`), the hook's 300-character preview cut to 297 characters and `...`
+with nothing marking it `truncated`, so every client answers a Codex approval not in the new form
+(`ApprovalShape.IsFencedCommand`) at the machine: the PWA draws it exactly as written, and the app
+and Home Assistant cards show it as its source.
 
 The answer is `{ "decision": "approve" }` or `{ "decision": "deny" }`, nothing else.
 Approve is the prompt's plain "Yes", once: no option that grants more ("don't ask again",
@@ -951,8 +1051,16 @@ agent-ha-bridge notifies a phone through Home Assistant.
 | `kind` | When | Once per |
 |---|---|---|
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
-| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified | Finished turn: the same `turnCount` and response seen ending again is not repeated |
+| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified. Nor is a turn that ended on an error or a failed sign-in (`attention` `error` or `signInNeeded`): it is idle with the previous turn's answer still beside it, which a `finished` would quote as the new one's; one already due or held for the session is withdrawn while that attention lasts. A `finished` that would have replaced an answered question and does not go (withdrawn so, or refused by a device) sends that question's `resolved` instead to the devices still showing it, unless it is asked again | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
+| `signIn` | **New (#800).** Sessions of the machine need sign-in: `attention` `signInNeeded`, except while its `recovery` is `pending` (signed in, waiting for the session to show it). Sent as soon as the first of them does, with no delay, to every subscribed device, on screen or not: a turn that ended on a 401 is `idle` with the previous turn's answer beside it, and nothing else tells the person every one of those sessions has stopped. Then again each hour while any still does, counted from when one reached a device, a restart of the host included (one that never went is made again by the next host). Once none does, one still waiting to be sent is withdrawn, and the next failure is notified at once. Never one per session, and never for an `error` or `notResponding` (ui.md §6.13): the row says those | Machine, agent and account, per hour |
+
+A device is sent at most one `finished` per session every 10 minutes. One that follows sooner
+waits until the 10 minutes are up, a newer one replacing it, and is sent only if the session is
+still idle with no question then and the device is not on screen; a `question` or `resolved`
+replaces it at once, as always. Answering or replying to the session from a device (with
+`session.answer` or `session.reply`) ends this wait for that device: the person is waiting for the
+turn they started. Agents that finish turn after turn on their own sent 88% of all pushes (#610).
 
 A question answered before its 2 s are up is never notified. A notice that cannot be sent
 because the host's relay connection is down is sent when it is back; a newer notice about
@@ -968,9 +1076,13 @@ Every notice about one session on one machine shares:
 
 * a **tag**, `<machine id>:<session id>`: the device replaces the session's notification
   in place. A `resolved` notice turns a stale question into "no longer waiting"; a
-  `finished` one replaces the question it followed.
+  `finished` one replaces the question it followed. A `signIn` notice's is
+  `<machine id>:signin:<agent>:<first 8 hex of SHA-256 of the account>` (of the empty string when
+  the host does not know the account), one per machine, agent and account, so its hourly repeat
+  replaces it.
 * a **topic** (RFC 8030 `Topic`), the first 24 bytes of SHA-256 of
-  `agent-bridge-push|<machine id>|<session id>`, base64url (32 characters; Apple refuses
+  `agent-bridge-push|<machine id>|<session id>` (for `signIn`, the tag's part after the machine id
+  in place of the session id), base64url (32 characters; Apple refuses
   other lengths, spike S5 finding 6): the push service replaces an undelivered push with
   the newer one, so a phone that was offline gets one notice per session, not a backlog.
 
@@ -978,6 +1090,7 @@ Every notice about one session on one machine shares:
 |---|---|---|
 | `question`, `resolved` | 24 h | `high`, `normal` |
 | `finished` | 6 h | `normal` |
+| `signIn` | 6 h | `high` |
 
 ### The payload
 
@@ -1001,12 +1114,13 @@ service worker shows from the same fields everywhere else:
 
 | Field | Notes |
 |---|---|
-| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. At most 120 bytes |
-| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
-| `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. A client opens that machine and session, and the question ready to answer |
-| `silent` | `true` for `resolved`, which replaces a question without alerting again |
-| `data.kind` | `question`, `finished` or `resolved`. A client reads a kind it doesn't know as `question` |
-| `data.machine`, `data.session`, `data.question` | The machine's device id, the session's `id`, the question's `id` (not for `finished`) |
+| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. `signIn`: "*Agent* on *machine* needs sign-in" (ui.md §6.13). At most 120 bytes |
+| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". `signIn`: "*n* sessions affected" ("1 session affected"); the title names the machine. Never the account, a code, a URL or any of the agent's words. Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
+| `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. `signIn`: `host` and `signin=<agent>` only, never `session` or `question` (#800 6646515428): an older client, which reads the kind as `question`, opens the machine and no question view or answer controls. A client opens that machine and session, and the question ready to answer |
+| `silent` | `true` for `resolved`, which replaces a question without alerting again. Absent for `signIn`, which has the question sound (owner, 2026-11-04, ui.md §6.13) |
+| `data.kind` | `question`, `finished`, `resolved` or `signIn`. A client reads a kind it doesn't know as `question` |
+| `data.machine`, `data.session`, `data.question` | The machine's device id, the session's `id`, the question's `id` (not for `finished`). Neither `session` nor `question` for `signIn`, which is about the machine |
+| `data.agent`, `data.sessions` | `signIn` only: whose sign-in it is (`copilot`, `claude`, `codex`), and how many of the machine's sessions need it |
 | `data.at` | When the host sent it |
 
 The JSON as encrypted is at most **3 KiB**: under RFC 8291's one 4096-byte record (3993
@@ -1064,6 +1178,7 @@ is for disposable evaluation, not production service enrollment.
 | `subagents` | [Subagent](#subagent)[]? | The sub-agents the session started, at any depth ([design/subagents.md](../design/subagents.md)): running ones (`working`, `waiting`) first, newest start first, then the most recently finished. At most 20, and fewer if the [session budget](#session-budget) trims them. Absent when there are none. Finished ones stay until the session ends. Only Copilot sends them so far |
 | `subagentsMore` | number? | Entries left out of `subagents`, by the host's limit or the budget. Absent when none are |
 | `waitingOn` | string? | Status precedence rule 2: the id of the sub-agent whose question is `question`, while the session has none of its own. Absent otherwise |
+| `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
 
 **Status precedence** with sub-agents (first match wins): the session's own question
 (`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn
@@ -1072,6 +1187,201 @@ running (`working`); the main agent idle with background agents or commands stil
 and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
 was.
 
+### Disabled phone sign-in framework (#800 slice 2)
+
+`sessions.signin` is **not advertised**. Neither production sign-in entrypoint nor
+credential-status adapter is registered. Direct `signin.start` and `signin.cancel`
+requests return `refused`. The internal, fake-tested framework is gated off by default;
+enabling a fake backend in a test does not enable deployed hosts.
+
+The eventual agent-owned entrypoint is subject to captured-output/privacy admission.
+Engineering approved unpatched `copilot login --device-code` conditionally: **the machine
+opens a browser and copies the code**. No production runner is included here, no live
+sign-in was attempted, and there is no replacement OAuth client or installed-CLI patch.
+An approved adapter must suppress CLI debug logging with a supported option, preserve
+the CLI's persistence/organization-policy checks, and keep both output streams private.
+The prepared, unexecuted launch contract uses
+`copilot login --device-code --host https://github.com --log-level none`,
+with host-resolved absolute executable/home, private redirected streams, no shell,
+and inherited token variables removed by name without examining their values.
+The installed CLI declares `none` as a supported level and forwards it into login.
+This launch specification is not a process factory; the output adapter still needs
+the routed, redacted capture. Upstream follow-up:
+[github/copilot-cli#5358](https://github.com/github/copilot-cli/issues/5358).
+
+The framework's request/event contract (not yet offered to clients) is:
+
+`account`, `signIn` and `recovery` are structured host metadata, never copied or inferred
+from CLI prose, messages or displayed account strings. An account with no structured
+identity remains absent. A requester can select a known identity but cannot supply one
+to publish. The private adapter accepts no account/sign-in/recovery fields; unexpected
+fields fail closed. Recovery values come only from the host's typed lifecycle.
+
+* `signin.start {request: UUID, agent: "copilot", account?: string}` returns
+  `{outcome: "started" | "busy" | "refused", flow?: UUID, reason?: string}`.
+  The host resolves the effective credential-store identity from its own state,
+  serializes that store, binds UUID receipts to target and authenticated device generation,
+  and starts only after returning the response. A matching explicit request can reattach
+  the same person key/generation and replay its unexpired code; a reconnect alone cannot.
+  Terminal receipts precede active-failure validation, so the original requester can
+  retrieve `signin.done` after real model proof clears attention.
+  A nonterminal retry that can no longer attach (for example after a newer auth error)
+  is refused immediately, not acknowledged as busy with no later event.
+* `signin.code {flow, agent, userCode, verificationUri, expiresAt}` is sent only to
+  explicit, still-authorized participants over their encrypted channels, never the
+  session feed, hello, push, HA, transcript, log or a prompt. The code is uppercase ASCII
+  `XXXX-XXXX` (letters/digits), and the URL must equal
+  `https://github.com/login/device` byte for byte. No browser link supplied by a peer
+  or near-match URL is accepted. A queued private event rechecks authorization at
+  encryption, before spending a nonce.
+* `signin.cancel {flow}` is accepted only from a participating person binding.
+  `signin.done {flow, outcome, resumed, continue}` has constant outcomes
+  `signedIn | expired | cancelled | failed | refused` and never carries private output.
+  Cancel, expiry, revocation/G5 and shutdown purge the retained code and abort the
+  contained helper. Slots/receipts, participants, output, waits and cleanup are bounded.
+  Launch authorization is checked after source-state waits and again by the factory
+  at the actual launch, including after any queue.
+  Terminal overlay updates are best-effort and bounded: a stalled source cannot hold
+  cancellation or cleanup hostage. A timed-out process cleanup stays quarantined until
+  disposal actually succeeds.
+  Send deadlines cancel the underlying encrypted send as well as its wait, including
+  terminal delivery and receipt replay. Lifetime expiry reports `expired` whether the
+  worker or sweep observes it first; explicit cancellation before expiry stays `cancelled`.
+* Current pinned **person**, session-read **and** write authority are all required.
+  A self-claimed `app`/`pwa` kind is insufficient even when the transitional trust
+  enforcement switch is off. Service/host roles, revoked/regranted generations,
+  read-only G5 machines and unapproved/default configurations get no capability.
+
+The private runner accepts **adapter frames, not guessed Copilot console fixtures**:
+one strict JSON line with exactly `kind: "code"`, `userCode`, `verificationUri`,
+`expiresAt`, then a `done` line with exactly `kind`, `outcome: "signedIn"`,
+`persisted: true`, `policyAllowed: true`, and successful process exit. Duplicate,
+unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. Native
+expiry metadata is required and capped by the host deadline. Stdout/stderr never enter
+the generic command runner or a logger; errors expose only constant outcomes. There
+is deliberately no concrete process factory until the entrypoint gate passes.
+
+`signin.done signedIn` sets **pending**, not recovered: `signInNeeded` remains until
+the existing parser sees real main-agent model output after the latest auth failure.
+Prompts, turn boundaries, CLI error notices and login/resume acknowledgements do not
+clear it. An old callback cannot overwrite a newer flow/failure. Host-owned silent
+recovery has the same checking → pending → model-proof contract and initiates no
+device flow or approval. Its injectable evidence source is unavailable by default
+and may accept **positive main-model evidence only**, for the same host-resolved
+credential scope. There is no status provider, credential-file inspection or auth
+probe. Even proof from another matching session only makes this session pending:
+its own real main-model reply is required to clear its attention.
+Dead-session resume/reload is an interface dependency on **#780 Host B**; the supplied
+stub starts/types nothing and claims no resumed session ids. No signed-in push is
+emitted by this framework.
+Advertising also waits for perf-A's follow-up to suppress ordinary "finished" pushes
+on auth failure (review 4476391166); that notification fix is not part of this slice.
+
+### Attention
+
+**New (#800).** What is wrong with a session that its `status` cannot say, shown over the
+status rather than instead of it.
+
+```json
+"attention": {
+  "kind": "signInNeeded",
+  "since": "2026-11-04T23:45:05.000Z",
+  "agent": "copilot",
+  "provider": "github",
+  "message": "Copilot needs you to sign in again (401)."
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `kind` | `"signInNeeded"` \| `"error"` \| `"notResponding"` | A client reads an unknown kind as `error` |
+| `since` | time | When it began: the error's time, or for `notResponding` the last event's |
+| `agent` | `"copilot"` \| `"claude"` \| `"codex"`? | The session's agent, repeated so the per-machine roll-up and the push read the same way |
+| `provider` | string? | `signInNeeded`: whose sign-in it is, `github`, `anthropic` or `openai` |
+| `account` | string? | `signInNeeded`: the account, when the host knows it from metadata (the login the CLI reports), never from a token. Absent when unknown |
+| `message` | string? | One plain-text sentence the **host composes** from `kind`, `errorClass`, `statusCode` and `provider` alone, at most 300 bytes: "Copilot needs you to sign in again (401).", "Copilot hit a rate limit (429).", "Copilot stopped with an error." **No part of the agent's own error text is ever in it** (#841): redacting arbitrary text never closed, and this field reaches every client and HA. A client may show it in Details, as text and never as a link; its row words come from `kind` and `errorClass` (ui.md §6.13) |
+| `errorClass` | `"auth"` \| `"rate"` \| `"quota"` \| `"model"` \| `"network"` \| `"other"`? | `error`: what sort, from the agent's structured fields, never its wording. Unknown reads as `other` |
+| `retryAt` | time? | `error`: when the agent said it can be tried again (a rate limit, a quota) |
+| `signIn` | `"phone"` \| `"machine"` \| `"unknown"`? | `signInNeeded`: `phone` when this host can relay the agent's own device-code sign-in to a person's device; `machine` only when the host knows it can be signed in nowhere else. Absent while not known; a host never sends `unknown`. A value a client does not know reads as `unknown`, which claims nothing: no sign-in from the phone is offered on it, and it is not said to be the machine's only |
+| `recovery` | `"checking"` \| `"signingIn"` \| `"pending"` \| `"failed"`? | `signInNeeded`: the host is checking for a still-valid stored credential, a person has started signing in, the agent is signed in again and the host is waiting for the session to show it (`pending`), or the check found none (`failed`). Absent otherwise. Unknown reads as `failed` |
+| `lastEventAt` | time? | `notResponding`: the transcript's last event |
+
+* **`status` stays truthful.** A turn that ended on an error or a sign-in failure has ended, so
+  the session is `idle` (or `waiting` if a question is pending), with `attention` beside it. A
+  prompt sent while it still needs sign-in shows `working`, still with `signInNeeded`, until the
+  agent answers or fails again. `notResponding` is a session still `working`. A client shows
+  "Needs sign-in", the error's words or "Not responding" over the status, ranks it with the
+  sessions that need the person, and never shows it as plain idle or with a stale age.
+* **It goes**, and `session.patch` carries `"attention": null`:
+  * `error`: when the next turn starts: a prompt or a turn start, not context the CLI adds within
+    a turn (memory, a skill) or its own notice of the error.
+  * `signInNeeded`: only when the model is seen answering, in a message of its own words or a
+    tool it asked for, dated after the latest sign-in failure. A prompt, a turn starting or
+    ending, a hook and anything the bridge typed are written whether the agent can reach its
+    model or not, so none of them clears it: on VM1 (#800) a session ended a turn between two
+    sign-in failures 51 ms apart. A sign-in alone never clears it: once one finishes
+    (`signin.done` `signedIn`, when `sessions.signin` comes) or a still-valid credential is found,
+    it stays `signInNeeded` with `recovery` `pending` until that same evidence, and no newer
+    failure, shows the session can reach its model. A host that did not read part of a long
+    transcript (past its skim budget) keeps a failure it read before that part: bytes never read
+    are no evidence. Only what it does read after them clears it, by the same evidence, and a
+    newer failure there moves `since`.
+* A change to it moves `updatedAt`. It is a few hundred bytes and never trimmed by the
+  [session budget](#session-budget).
+* **Older clients** ignore it and read the status, so a signed-out session reads as idle to them.
+  The [`signIn` push](#when-a-host-notifies) reaches them all the same: they read its kind as
+  `question`.
+
+**What a host sends today.** Copilot only, from the `session.error` record that ends a turn,
+read by its structured fields (VM1's sign-in failures, #800, carry all three):
+
+* `signInNeeded` (provider `github`) when `remediation` is `"sign_in"`, `errorType` is
+  `"authorization"` or `statusCode` is 401;
+* `error` for any other, with `errorClass` `auth` for status 403, `rate` for 429 and `other`
+  otherwise, except while the session needs sign-in, which another error does not replace;
+* nothing for an `errorType` of `"model_call"`, which the CLI retries within the turn, or
+  `"hook"`, which ends nothing. A delegate's error is its own, not the session's.
+
+`notResponding`, for any agent's session, from the host's own watchdog (#800 P0, part C): the
+session is `working` and its transcript has had no event of any kind (a model call, a hook or a
+delegate's tool counts) for **10 minutes**, or **30 minutes** while a tool, a delegate or a
+background shell is running. A Claude Code or Codex delegate that is still working writes its own
+transcript instead (Claude's beside the session's, Codex's a rollout of its own thread): its last
+event there, read by its timestamp and never the file's write time, counts too, and one the host
+cannot check (its transcript not found or unread, or more working than are listed) means the
+session is never called not responding. `since` and `lastEventAt` are the time of the session's own last event. Not over a
+question pending (the session is `waiting`) or another `attention`. It goes with the next event.
+Copilot's sign-in failure is written as `assistant.turn_end`, then `session.error` a few
+milliseconds later; read between the two, the session is briefly `idle` with no `attention`, which
+is why a `finished` push waits 3 s and is withdrawn once the `attention` comes.
+
+`message` comes from one table (`AgentErrors.Template`), with the agent's name and the status
+code when it is an HTTP status (100 to 599):
+
+| `kind` / `errorClass` | `message` |
+|---|---|
+| `signInNeeded` | "*Agent* needs you to sign in again (*status*)." |
+| `error` / `auth` | "*Agent* was not authorised (*status*)." |
+| `error` / `rate` | "*Agent* hit a rate limit (*status*)." |
+| `error` / `quota` | "*Agent* has used up its quota (*status*)." |
+| `error` / `model` | "*Agent*'s model returned an error (*status*)." |
+| `error` / `network` | "*Agent* couldn't reach its service (*status*)." |
+| `error` / `other` | "*Agent* stopped with an error (*status*)." |
+| `notResponding` | "*Agent* isn't responding." |
+
+Copilot CLI follows the error that ends a turn with a notice of its own, an `assistant.message`
+that starts "⚠️ Turn error:" and quotes the error's words. Those words can hold a credential, a
+path or an address, so the host never shows them (#846). In `activity.response` (or
+`own.response`) the notice reads "⚠️ Turn error: " followed by the same sentence as `message` for
+that turn's error, or "Copilot stopped with an error." when no error was read before it in the
+turn. Clients, HA and a `finished` push therefore never carry any of the agent's error text.
+
+Claude Code and Codex send none yet: their records are read only once a real, redacted sample of
+each has been captured. `account`, `signIn`, `recovery`, the per-machine
+roll-up in `hello`, the `signIn` and `signedIn` notices and the `sessions.signin` capability
+(relaying the agent's own device-code sign-in to a person's device) follow in later slices of
+#800; their shape is in [#800](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6646501884),
+and this section grows with each.
 ### Driver
 
 Whether a person or an agent is driving the session: agent-ha-bridge's purple edge, drawn in
@@ -1209,6 +1519,42 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `allowOther` | bool? | `choice` and `multi` also accept free text |
 | `default` | any? | |
 | `required` | bool? | |
+| `constraints` | FieldConstraints? | What the agent's schema allows of the value (#766). Absent when it says nothing a host checks |
+
+### FieldConstraints
+
+A Copilot `ask_user` field's JSON Schema constraints, for the input it draws: bounds for a
+`number`, length, pattern and format for `text`, how many may be ticked for a `multi`. Copilot
+CLI checks none of them on that form and records whatever is typed, so a host checks the answer
+against them (`Answers.Check`, and again on what it would type) and `refused`s one outside
+them before any key. A client may check them first; one that cannot read them sends the answer
+and lets the host refuse it. Not strict: a reader that cannot read them reads the field without.
+
+| Field | Type | Notes |
+|---|---|---|
+| `minimum`, `maximum` | number? | Inclusive bounds |
+| `exclusiveMinimum`, `exclusiveMaximum` | number? | Exclusive bounds |
+| `multipleOf` | number? | Greater than 0 |
+| `integer` | bool? | The value is a whole number (the schema's `"type": "integer"`) |
+| `minLength`, `maxLength` | int? | In UTF-16 code units, as JavaScript counts them |
+| `pattern` | string? | An ECMAScript pattern, as `new RegExp(pattern)` reads it: no flags, unanchored. At most 1,024 characters |
+| `format` | string? | `email`, `uri`, `date` or `date-time`, checked as Copilot CLI does (`^[^\s@]+@[^\s@]+\.[^\s@]+$`; `^https?://.+`; `YYYY-MM-DD`; `YYYY-MM-DDTHH:MM` with optional seconds, fraction and offset `Z`, `z`, `±HH:MM` or `±HHMM`), dates as real dates. Other formats are not carried |
+| `minItems`, `maxItems` | int? | How many options a `multi` takes |
+
+Numbers are compared exactly as written, never as doubles; a host carries only bounds a
+JavaScript client holds exactly. Text is checked unless it is empty (`""`, no answer); text of
+only white space is checked like any other. It is checked both as typed and as trimmed with
+JavaScript's `trim()`, and refused if either form breaks a length, `pattern` or `format` limit:
+Copilot CLI's form passes text on as typed, but a trim where it is recorded is not ruled out,
+and `"  ab"` is 4 characters typed and 2 trimmed. A host checks the text it would type, line
+breaks flattened. A field whose constraints a host cannot check exactly (a bound JavaScript would
+hold as another number, a length that is not a whole number, a pattern it cannot read as
+JavaScript does, or patterns past the 250 ms one question's patterns share), or whose pre-filled
+default breaks them (checked so too), makes its question `answerAtMachine`. So does a `required`
+`text` field whose pre-filled default is blank (non-empty, but blank as above): that default
+is the only answer it can be given from another device, and it is refused as blank. So does a
+`choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a
+`pattern` reads it as JavaScript does, without flags: `\d` and `\w` are ASCII.
 
 ### Option
 
@@ -1254,7 +1600,7 @@ session is at most 40 KiB.
 
 | Agent | Sessions | Activity and status | Question |
 |---|---|---|---|
-| Copilot CLI | `~/.copilot/session-state/<id>/` with a live `inuse.<pid>.lock`, plus `workspace.yaml` | From `events.jsonl`: `user.message`, `assistant.message` (`content`, `toolRequests`), `tool.execution_start` and `_complete`, `assistant.turn_start` and `_end`, `session.compaction_complete`, `session.model_change` | A `tool.execution_start` with `toolName: "ask_user"`, using its `arguments.message` and `arguments.requestedSchema`. Pending until a `human_response.recorded` or `tool.execution_complete` with the same `toolCallId`. A `permission.requested` (its `promptRequest`, else its `permissionRequest`) is an `approval`, pending until the `permission.completed` with the same `requestId` |
+| Copilot CLI | `~/.copilot/session-state/<id>/` with a live `inuse.<pid>.lock`, plus `workspace.yaml` | From `events.jsonl`: `user.message`, `assistant.message` (`content`, `toolRequests`), `tool.execution_start` and `_complete`, `assistant.turn_start` and `_end`, `session.compaction_complete`, `session.model_change`, and `session.error` for [`attention`](#attention) | A `tool.execution_start` with `toolName: "ask_user"`, using its `arguments.message` and `arguments.requestedSchema`. Pending until a `human_response.recorded` or `tool.execution_complete` with the same `toolCallId`. A `permission.requested` (its `promptRequest`, else its `permissionRequest`) is an `approval`, pending until the `permission.completed` with the same `requestId` |
 | Claude Code | The bridge's registration files, else Claude Code's own `~/.claude/sessions/<pid>.json` (an interactive CLI, its pid running, written no earlier than that process started); and `~/.claude/projects/<slug>/<id>.jsonl` | Transcript `assistant` entries (`text`, `thinking`, `tool_use`) and `user` entries | A `tool_use` named `AskUserQuestion`, pending until a `tool_result` with its id. Claude Code 2.1.312 writes that `tool_use` only once the question is answered, so without agent-ha-bridge's `PreToolUse` hook a waiting question is not seen. A permission prompt, which only agent-ha-bridge's hook reports (its status `waiting`, newer than the transcript, over a running tool), is an `approval` with that tool's id, `answerAtMachine` |
 | Codex | The bridge's registration files, else (Windows) `~/.codex/thread-writer-locks/<id>.lock`, as the Restart Manager reports who holds it open. The lock must be held by exactly one running `codex.exe`, and that one must be an interactive terminal: its command line read, with no subcommand (a prompt at most), `resume` or `fork`, and no `app-server` or `mcp-server` argument. That is a Codex run with `--no-daemon`, not `exec`, `review`, `migrate-rollouts` and the like. A lock shared with the daemon or with an unreadable Codex names nobody. Each decision is checked again after 30 s. A terminal holding several locks is the session of the one whose rollout `session_meta` is its own top-level thread (`id` and `session_id` equal, `thread_source` "user") with an event since it started, else of none. A lone lock whose rollout names another thread (a sub-agent's) is not a session either. A registration agent-ha-bridge marked ended keeps its thread from being found this way; and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | An approval agent-ha-bridge's hook recorded in `<id>.approval.json` beside the registration: an `approval` whose `id` is the marker's `DecisionId` (its generation), `answerAtMachine` once the marker records agent-ha-bridge's own attempt (`DeliveryAttempted`). An `exec_approval_request` or `apply_patch_approval_request` in the rollout with no marker is an `approval` keyed by its `call_id`, `answerAtMachine` |
 

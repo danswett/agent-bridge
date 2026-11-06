@@ -427,8 +427,12 @@ public sealed class LiveHomeAssistantTests : IDisposable
         await using var c = Connector("CI-NOTIFY", me);
         c.Start();
         await Until(SessionEntities.Status(node), s => s.State == "working");
-        Ask(id, Form("q1", Release));
+        var asked = Form("q1", Release);
+        Ask(id, asked);
         await Until(SessionEntities.Decision(node), s => s.State == HaDecision.Awaiting);
+        // What the notification is known by: the question's id and a digest of its plan (#220).
+        var decision = HaConnector.NotifyId("q1", HaDecision.Plan(asked, sessions.Get(id)!));
+        var key = System.Text.RegularExpressions.Regex.Replace(decision, "[^a-zA-Z0-9]", "")[^12..];
 
         // The buttons' notification, and the hook's push.
         var shown = await UntilNotified(n => n.Title == "Copilot: Fixture session" && n.Message == "Cut the release?", before);
@@ -437,8 +441,8 @@ public sealed class LiveHomeAssistantTests : IDisposable
         // A tap, as the companion app fires it.
         await PostEventAsync(HaNotify.ActionEvent, new JsonObject
         {
-            ["action"] = "BRIDGE_q1_1",
-            ["action_data"] = new JsonObject { ["bridge"] = "decision", ["session"] = id, ["decision"] = "q1" },
+            ["action"] = $"BRIDGE_{key}_1",
+            ["action_data"] = new JsonObject { ["bridge"] = "decision", ["session"] = id, ["decision"] = decision },
         });
         await Until(() => { lock (answered) { return answered.Count == 1; } }, "the tap never answered");
         Assert.Equal("wait", answered[0].Fields!["release"].GetString());

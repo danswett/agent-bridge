@@ -16,17 +16,52 @@ internal static class QuestionMapper
 
     static bool? IsCut(string message) => Cut(message).Length < message.Length ? true : null;
     // A permission prompt: a fixed approve-or-deny choice. atMachine marks one no host can
-    // answer from another device, so a client shows it without the buttons.
-    public static Question Approval(string id, string message, DateTimeOffset askedAt, bool atMachine = false) => new()
+    // answer from another device, so a client shows it without the buttons. Whatever agent
+    // asked, a character not drawn where it runs, and a right-to-left letter, is shown as a
+    // visible escape, and Approve once is still offered (#220; the owner's #253 decision 3): what
+    // a reader is shown is then what runs. A client that cannot draw it exactly as written holds
+    // it at the machine itself.
+    public static Question Approval(string id, string message, DateTimeOffset askedAt, bool atMachine = false)
     {
-        Id = id,
-        Kind = QuestionKind.Approval,
-        Message = Cut(message),
-        Truncated = IsCut(message),
-        Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = ApprovalOptions, Required = true }],
-        AskedAt = askedAt,
-        AnswerAtMachine = atMachine ? true : null,
-    };
+        // Escaped from no more than it can carry (RevealWithin): still cut, and said to be, if it is over.
+        var shown = ShownText.RevealWithin(message, Limits.QuestionMessage, rightToLeft: true);
+        return new()
+        {
+            Id = id,
+            Kind = QuestionKind.Approval,
+            Message = Cut(shown),
+            Truncated = IsCut(shown),
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = ApprovalOptions, Required = true }],
+            AskedAt = askedAt,
+            AnswerAtMachine = atMachine ? true : null,
+        };
+    }
+
+    // A Codex approval from its hook's marker (#209): the whole command, literal, in a fence longer
+    // than any run of backticks inside it, under the tool that asked. A marker that does not carry
+    // the whole command (agent-ha-bridge's hook and older hosts wrote only a 300-character preview,
+    // and a command past the hook's CommandMax is kept to its start) is truncated, so no client
+    // approves what it cannot show; one with no command at all (a tool that runs none) shows the
+    // tool and is answered at the machine.
+    public static Question CodexApproval(string id, string? tool, string? command, bool cut, string preview, DateTimeOffset askedAt, bool atMachine)
+    {
+        var who = $"Allow **{CopilotPermission.Plain(string.IsNullOrWhiteSpace(tool) ? "Codex" : tool)}**?";
+        if (command is not { Length: > 0 })
+        {
+            var legacy = preview.StartsWith("Needs approval: ", StringComparison.Ordinal) ? preview["Needs approval: ".Length..] : preview;
+            var held = Approval(id, legacy.Length > 0 ? $"{who}\n\n{CopilotPermission.Fence(legacy)}" : who, askedAt, atMachine);
+            return tool is null && command is null ? held with { Truncated = true } : held with { AnswerAtMachine = true };
+        }
+        var q = Approval(id, $"{who}\n\n{CopilotPermission.Fence(command)}", askedAt, atMachine);
+        if (cut) { q = q with { Truncated = true }; }
+        // Whatever the command, what is sent is that shape, which every client checks before it
+        // offers Approve; one that is not would be answered nowhere else, so it is held here. One
+        // already truncated is refused for that, and is left so: cut past the message's limit, it
+        // has lost its closing fence, and held here too, a client said only that it is answered at
+        // the machine, not that part of it is missing.
+        if (q.Truncated != true && !ApprovalShape.IsFencedCommand(q.Message)) { q = q with { AnswerAtMachine = true }; }
+        return q;
+    }
 
     // Copilot's ask_user. Current builds pass `message` and `requestedSchema` (a JSON
     // Schema form); older ones passed `question` and a `choices` list, sometimes as a
@@ -36,6 +71,7 @@ internal static class QuestionMapper
     {
         var message = Json.Str(arguments, "message") ?? Json.Str(arguments, "question") ?? "";
         IReadOnlyList<Field> fields = [];
+        var atMachine = false;
         var choices = ChoiceList(Json.Get(arguments, "choices"));
         if (choices.Count > 0)
         {
@@ -54,11 +90,15 @@ internal static class QuestionMapper
         }
         else if (Json.Get(arguments, "requestedSchema") is { } schema)
         {
-            fields = SchemaFields(schema);
+            (fields, var drivable) = SchemaForm(schema);
             // Every Copilot option list ends in "Other (type your answer)", but words reach
             // it only in a question that is that one list: the Down past its last option
             // opens Other there, and in a tabbed form or a checkbox list it does not.
             if (fields is [{ Type: FieldType.Choice } only]) { fields = [only with { AllowOther = true }]; }
+            // A field the CLI draws as something other than its schema says, or that cannot be
+            // told, is never typed into, so a client shows the question to be answered at the
+            // machine rather than offer what the host would then refuse (#662).
+            atMachine = !drivable;
         }
         return new Question
         {
@@ -68,6 +108,7 @@ internal static class QuestionMapper
             Truncated = IsCut(message),
             Fields = fields,
             AskedAt = askedAt,
+            AnswerAtMachine = atMachine ? true : null,
         };
     }
 
@@ -90,54 +131,68 @@ internal static class QuestionMapper
 
     // One Field per schema property, in order. A schema that arrived as text (the model
     // wrote it as a string) is parsed first.
-    public static IReadOnlyList<Field> SchemaFields(JsonElement schema)
+    public static IReadOnlyList<Field> SchemaFields(JsonElement schema) => SchemaForm(schema).Fields;
+
+    // The fields, and whether every one reads as one input Copilot CLI is known to draw for it
+    // with constraints the host can check. Each property is read once, and its patterns share one
+    // budget for the whole ask_user: read twice with 250 ms a match, 200 slow patterns stalled the
+    // refresh of every session for minutes (#844 review).
+    static (IReadOnlyList<Field> Fields, bool Drivable) SchemaForm(JsonElement schema)
     {
         if (schema.ValueKind == JsonValueKind.String)
         {
             try
             {
                 using var doc = JsonDocument.Parse(schema.GetString() ?? "");
-                return SchemaFields(doc.RootElement);
+                return SchemaForm(doc.RootElement);
             }
-            catch (JsonException) { return []; }
+            catch (JsonException) { return ([], true); }
         }
-        if (Json.Obj(schema, "properties") is not { } properties) { return []; }
+        var whole = CopilotFieldConstraints.FormUnchecked(schema) is null;
+        if (Json.Obj(schema, "properties") is not { } properties) { return ([], whole); }
         var required = Json.Arr(schema, "required") is { } r
             ? r.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet(StringComparer.Ordinal)
             : [];
+        var patterns = new PatternBudget();
         var fields = new List<Field>();
+        var drivable = whole;
         foreach (var property in properties.EnumerateObject())
         {
             if (property.Value.ValueKind != JsonValueKind.Object) { continue; }
-            fields.Add(SchemaField(property.Name, property.Value, required.Contains(property.Name)));
+            var read = CopilotFieldSchema.Read(property.Value);
+            var (limits, uncheckable) = CopilotFieldConstraints.Read(property.Value, patterns);
+            var field = SchemaField(property.Name, property.Value, required.Contains(property.Name), read, limits);
+            drivable &= read.Problem is null && uncheckable is null && !BlankRequiredDefault(field);
+            fields.Add(field);
         }
-        return fields;
+        return (fields, drivable);
     }
 
-    static Field SchemaField(string name, JsonElement p, bool required)
+    // A required text box that opens with only spaces in it has no answer from another device: its
+    // default is the one answer it can be given there (#662), and Answers.Check refuses that as
+    // blank (FieldConstraints.BlankOnceTyped, control characters included), since it might be
+    // recorded trimmed to nothing. Offered anyway, every answer to the form was refused (review of
+    // #844). An empty default opens nothing, so it stays answerable.
+    static bool BlankRequiredDefault(Field field) =>
+        field is { Required: true, Type: FieldType.Text, Default: { ValueKind: JsonValueKind.String } d }
+        && d.GetString()!.Length > 0 && FieldConstraints.BlankOnceTyped(d.GetString()!);
+    // Each field as the input Copilot CLI draws for it (CopilotFieldSchema), which is not
+    // always what its keywords suggest: a number with an `enum` is still a number box, and a
+    // string with only `anyOf` a text box.
+    static Field SchemaField(string name, JsonElement p, bool required, (CopilotFieldSchema.Input Input, IReadOnlyList<CopilotFieldSchema.Choice> Choices, string? Problem) read, FieldConstraints? limits)
     {
-        var type = Json.Str(p, "type");
-        FieldType kind;
-        IReadOnlyList<Option>? options = null;
-        if (type == "array")
+        var (input, choices, _) = read;
+        var kind = input switch
         {
-            kind = FieldType.Multi;
-            options = Json.Obj(p, "items") is { } items ? Options(items) : null;
-        }
-        else if (Options(p) is { Count: > 0 } choices)
-        {
-            kind = FieldType.Choice;
-            options = choices;
-        }
-        else
-        {
-            kind = type switch
-            {
-                "boolean" => FieldType.Boolean,
-                "number" or "integer" => FieldType.Number,
-                _ => FieldType.Text,
-            };
-        }
+            CopilotFieldSchema.Input.Multi => FieldType.Multi,
+            CopilotFieldSchema.Input.Choice => FieldType.Choice,
+            CopilotFieldSchema.Input.Boolean => FieldType.Boolean,
+            CopilotFieldSchema.Input.Number => FieldType.Number,
+            _ => FieldType.Text,
+        };
+        IReadOnlyList<Option>? options = kind is FieldType.Multi or FieldType.Choice && choices.Count > 0
+            ? [.. choices.Select(c => new Option(Scalar(c.Value), c.Label is { } label && label != Scalar(c.Value) ? label : null))]
+            : null;
         return new Field
         {
             Name = name,
@@ -147,39 +202,8 @@ internal static class QuestionMapper
             Options = options,
             Default = Json.Get(p, "default") is { } d ? Json.Detach(d) : null,
             Required = required ? true : null,
+            Constraints = limits,
         };
-    }
-
-    // Options from `enum` (labelled by `enumNames` when present), or from `oneOf` /
-    // `anyOf` entries of `{const, title}`. The value is what the agent records as the
-    // answer and the label what to show; they differ exactly when a form is written the
-    // richer way, which is when confusing them matters.
-    static List<Option>? Options(JsonElement p)
-    {
-        if (Json.Arr(p, "enum") is { } values)
-        {
-            var labels = Json.Arr(p, "enumNames") is { } n ? n.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() : null).ToList() : [];
-            var i = 0;
-            var list = new List<Option>();
-            foreach (var v in values.EnumerateArray())
-            {
-                var label = i < labels.Count ? labels[i] : null;
-                list.Add(new Option(Scalar(v), string.IsNullOrEmpty(label) ? null : label));
-                i++;
-            }
-            return list;
-        }
-        var entries = Json.Arr(p, "oneOf") ?? Json.Arr(p, "anyOf");
-        if (entries is not { } e) { return null; }
-        var options = new List<Option>();
-        foreach (var entry in e.EnumerateArray())
-        {
-            var title = Json.Str(entry, "title");
-            var value = Json.Get(entry, "const") is { } c ? Scalar(c) : title;
-            if (value is null) { continue; }
-            options.Add(new Option(value, title is not null && title != value ? title : null));
-        }
-        return options;
     }
 
     static string Scalar(JsonElement v) => v.ValueKind == JsonValueKind.String ? v.GetString()! : v.GetRawText();

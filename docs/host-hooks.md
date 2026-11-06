@@ -89,7 +89,16 @@ JSON formatting/comments can change. Codex gets a
 local plugin installed using its supported CLI, never a rewrite of hook trust settings.
 Each selected agent home gets `agent-bridge-owner.json`. Setup is repeatable; failures
 report incomplete setup and retain ownership so retry/removal is possible. Multiple agents
-are handled in order, not as one transaction.
+are handled in order, not as one transaction. Ownership is saved first without
+`setupCompleted`; only after the registrations (and Codex's plugin) and `intake.json` are all
+written does setup rewrite the record with `"setupCompleted": true`. Every setup or repair
+first rewrites the record without it, so a failed repair cannot leave an earlier completion
+behind. Removal likewise clears it before its first cleanup step and deletes the record only
+after every step succeeded, so a failed or cancelled removal stays owned and incomplete; a
+Copilot record kept for another tool's additions stays without it.
+Readiness reports an owned record without `setupCompleted: true`, including records from
+before this field existed, as incomplete setup needing repair. Completion is setup evidence,
+not evidence that hooks run in a new session.
 
 Setup also installs product guidance in Copilot's `instructions\agent-bridge.instructions.md`,
 Claude's `CLAUDE.md` and Codex's `AGENTS.md`. The block is delimited by
@@ -128,8 +137,20 @@ Removal touches only owned entries/plugin registrations; unrelated hooks, settin
 and backups remain. An empty dedicated Copilot file is deleted; one containing somebody
 else's additions retains its ownership marker so it can safely be reinstalled later.
 The private binary/runtime/intake remain for already-open sessions
-until those end. Removing an unowned agent is refused. Automatic uninstall cleanup
-and CLI bootstrapping remain follow-up work (#54, #231).
+until those end. Removing an unowned agent explicitly is refused.
+
+The Windows app's uninstall callback runs `agent-bridge-host hooks cleanup --profile default`
+after stopping its host. Cleanup reads the standalone intake's saved agent homes, selects
+only valid ownership records belonging to that profile and runs the same guarded removals.
+Unowned agents, migrated hooks and profiles with no recorded intake are not taken over;
+custom profiles can be cleaned explicitly with `--profile <name>`. Broken intake or ownership,
+legacy conflicts and partial removals return failure rather than guessing. Independent agents
+are still attempted after one ownership check or removal fails. Only genuinely missing
+ownership records are skipped; unreadable records and directories in their place report
+an explicit per-agent failure and are retained for repair. The callback has a bounded cleanup window and
+logs failures; it retains profile data, backups, ownership needed for repair and the private
+binary/runtime, so reinstalling can repair unfinished cleanup. Interrupted setup without a
+saved intake is not guessed at during uninstall. CLI bootstrapping remains follow-up (#231).
 
 ## Decision: the host ships its own native hook, speaking agent-ha-bridge's spool contract
 
@@ -338,7 +359,17 @@ The files and their shapes are agent-ha-bridge's:
   `WorkingDirectory`, `Updated`, `HookStatus`, `HookStatusAt`;
 * `agent-bridge-codex\<id>.json`: `SessionId`, `ProcessId`, `TranscriptPath`,
   `WorkingDirectory`, `Model`, `Status`, `Activity`, `Ended`, `Updated`;
-* `agent-bridge-codex\<id>.approval.json`: `SessionId`, `DecisionId`, `Question`, `Created`.
+* `agent-bridge-codex\<id>.approval.json`: `SessionId`, `DecisionId`, `Question`, `Created`,
+  and beside them `Tool` and `Command`: the whole command, kept to its first 16,384 characters with
+  `CommandCut` true past that (#209). `Command` is recorded only for the `Bash`, `shell` or
+  `apply_patch` tool whose `tool_input` holds `command` and nothing else but `description`: the hook
+  fires for MCP tools too, whose other arguments (a `host`) decide what runs, so such an approval
+  records no `Command` and is answered at the machine (#338). So is a network approval, which Codex
+  sends as `Bash` with its own `description` `network-access <target>` (any case or spacing): what
+  is approved is the target, which the command does not show. `Question` stays the 300-character activity line
+  agent-ha-bridge's reader expects; a client is shown `Command`, fenced. A marker without
+  `Command` (agent-ha-bridge's hook, or this host before #209) is shown as its preview and
+  marked `truncated`, so it is answered at the machine.
 
 Three rules carry over from agent-ha-bridge:
 

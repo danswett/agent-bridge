@@ -16,7 +16,9 @@ status_poster: agent-bridge-merge-rule
 
 # A review whose author is this bot, on the head commit, is the Copilot review. GraphQL names the
 # bot without REST's "[bot]" suffix, and the evaluator also requires the author to be a Bot, so a
-# user account with the same login can't stand in for it.
+# user account with the same login can't stand in for it. Its body must show the review completed
+# (MergeRule.CopilotReviewFailure): Copilot posts errors such as a billing failure, and reviews
+# that didn't run in full, as reviews by the same bot on the same commit (#706); those fail the rule.
 copilot_reviewer: copilot-pull-request-reviewer
 
 # Any of these labels holds a pull request, whatever else it has.

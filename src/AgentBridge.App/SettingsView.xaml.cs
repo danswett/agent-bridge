@@ -26,7 +26,8 @@ public sealed partial class SettingsView : UserControl
     public void Opened() => viewModel?.RefreshLog();
 
     public static string HaNote(string? why) => $"{why}. {Product.Name} only watches while it runs: answering, replying and ending sessions stay with agent-ha-bridge until you move over.";
-    public static string HostSection => $"{Product.HostName} on this machine";
+    // The section is already about the host, so it needs no product name (brand.md N1).
+    public static string HostSection => "Host on this machine";
     public static string HostLine(string version, string profile) => version.Length > 0 ? $"Version {version} · profile {profile}" : $"Profile {profile}";
     public static string AppLine(string version, string installed) => $"App {version} · {installed}";
 
@@ -40,6 +41,22 @@ public sealed partial class SettingsView : UserControl
     async void OnCheckAgents(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CheckAgentsAsync(); } }
     async void OnSetUpAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: false);
     async void OnRemoveAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: true);
+    async void OnCancelAgentInstall(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CancelAgentInstallAsync(); } }
+
+    async void OnInstallAgent(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanInstallAgents: true } v || sender is not Button { Tag: string id }) { return; }
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = $"Install {v.Agents.FirstOrDefault(a => a.Id == id)?.Label ?? id} and its required runtimes?",
+            Content = "Use the Windows Package Manager community source and accept its source and package agreements. Required runtimes may request Windows administrator approval; declining leaves setup incomplete. Existing CLIs are not upgraded. No hook setup, sign-in, folder trust or restart is requested. Agency is installed through your organization.",
+            PrimaryButtonText = "Install CLI and runtimes",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.InstallAgentAsync(id); }
+    }
 
     async Task ConfirmAgentAsync(object sender, bool remove)
     {

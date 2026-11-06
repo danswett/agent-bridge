@@ -171,14 +171,14 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsReply, await CapabilitiesAsync(ch));
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
         probe.Reason = null;
 
         Serve(null, new UnsupportedPlatformReplier());
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
         Assert.Equal(("refused", "replying is not supported on this platform yet; reply at the machine"), await ReplyAsync(ch, "hello"));
         Serve(null, Replier(platform: false));
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
         Assert.Equal("refused", (await ReplyAsync(ch, "hello")).Outcome);
         Serve(null, null);
         Assert.Equal(("refused", "this host does not take replies; reply at the machine"), await ReplyAsync(ch, "hello"));
@@ -330,7 +330,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal(("delivered", (string?)null), (outcome, reason));
         var (pid, plan) = Assert.Single(injector.Plans);
         Assert.Equal(100, pid);
-        Assert.Equal([("Looks good. Now open the PR – please 🚀", true)], plan.Sends.Select(s => (s.Text, s.Enter)));
+        // The line, then, after Copilot's pause, its Enter alone.
+        Assert.Equal([("Looks good. Now open the PR – please 🚀", false, 300), ("", true, 0)], plan.Sends.Select(s => (s.Text, s.Enter, s.Enter ? s.EnterDelayMs : s.PauseAfterMs)));
     }
 
     [Fact]
@@ -339,6 +340,8 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
         await source.RefreshAsync();
         Assert.Equal(SessionStatus.Working, source.Get(Id)!.Status);
+        // While the turn runs, the footer's place holds the turn's own row (#843 review).
+        injector.Screen = _ => CopilotWorking;
         // Copilot writes a steering prompt when its next round starts, after the running tool.
         injector.OnInject = plan => _ = Task.Delay(700).ContinueWith(_ => Fixture.Append(events,
             Copilot.ToolDone("t1", second++), Copilot.TurnStart(second++), Prompt(plan.Sends[0].Text, "steering")), TaskScheduler.Default);
@@ -402,6 +405,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
     {
         Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
         await source.RefreshAsync();
+        injector.Screen = _ => CopilotWorking;
         injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text, "steering"));
         var ch = await OpenAsync();
 
@@ -864,7 +868,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsAttach, offered);
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
         probe.Reason = null;
 
         // Without a store the ops are unknown, as on a host that predates them.
@@ -887,7 +891,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         var (outcome, reason) = await ReplyAsync(ch, "What do\nyou see?", attachments: Files(a, b));
 
         Assert.Equal(("delivered", (string?)null), (outcome, reason));
-        var typed = Assert.Single(injector.Plans).Plan.Sends.Single().Text;
+        var typed = Assert.Single(injector.Plans).Plan.Sends[0].Text;
         var root = Regex.Escape(Path.GetFullPath(Staging) + Path.DirectorySeparatorChar);
         Assert.Matches($"^@{root}[0-9a-f]{{32}}-Screen-Shot\\.png @{root}[0-9a-f]{{32}}-plan\\.md What do you see\\?$", typed);
         var paths = typed.Split(' ').Take(2).Select(w => w[1..]).ToArray();
@@ -909,7 +913,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
 
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("did not attach every file", reason);
-        Assert.StartsWith("@", Assert.Single(injector.Plans).Plan.Sends.Single().Text);
+        Assert.StartsWith("@", Assert.Single(injector.Plans).Plan.Sends[0].Text);
     }
 
     [Fact]
@@ -974,14 +978,449 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         public Action<KeyPlan>? OnInject;
         public Task Gate = Task.CompletedTask;
         public InjectionResult Result = new(InjectionStatus.Typed, "ok");
+        // Each session's screen by its process: Copilot's (pid 100) ready for a prompt, as captured
+        // live; null, a host that cannot read it, for anything else.
+        public Func<int, IReadOnlyList<string>?> Screen = pid => pid == 100 ? CopilotIdle : null;
+        // Runs once a plan has the typing slot, before the worker reads the screen.
+        public Action? Holding;
+        // Plans the worker refused before their first key: held to rows the screen no longer read.
+        public readonly List<KeyPlan> Refused = [];
+
+        // Runs after each send has gone, with its index.
+        public Action<int>? Sent;
 
         public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
             lock (Plans) { Plans.Add((processId, plan)); }
             await Gate;
+            Holding?.Invoke();
+            // As the worker does: the rows each send is held to, read in the same attach, just
+            // before its first key; nothing of it, or after it, typed if they read otherwise.
+            for (var i = 0; i < plan.Sends.Count; i++)
+            {
+                var send = plan.Sends[i];
+                if ((send.Expect is { Count: > 0 } || send.Checks is { Count: > 0 })
+                    && (Screen(processId) is not { } rows
+                        || (send.Expect ?? []).Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd(' ') != e.Text.TrimEnd(' '))
+                        || (send.Checks ?? []).Any(c => !c.Passes(rows))))
+                {
+                    if (i > 0) { return new InjectionResult(InjectionStatus.Interrupted, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChangedPartway); }
+                    lock (Plans) { Plans.RemoveAt(Plans.FindLastIndex(p => ReferenceEquals(p.Plan, plan))); Refused.Add(plan); }
+                    return new InjectionResult(InjectionStatus.NothingTyped, AgentBridge.Host.Delivery.Windows.WorkerInjector.ScreenChanged);
+                }
+                Sent?.Invoke(i);
+            }
             if (Result.Status == InjectionStatus.Typed) { OnInject?.Invoke(plan); }
             return Result;
         }
+
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
+        {
+            var rows = Screen(processId);
+            return Task.FromResult(new ConsoleScreen(rows?.Select(Worker.Read).ToList(), rows is null ? "this host cannot read the session's screen; answer at the machine" : null));
+        }
+    }
+
+    // Copilot CLI 1.0.105 ready for a prompt, as captured live (LaunchFlowTests.CopilotReady):
+    // its rail input box, empty, and the prompt's footer.
+    static readonly IReadOnlyList<string> CopilotIdle = ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580", " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab"];
+
+    // The same box while a turn runs: in the footer's place, the turn's own row (1.0.105's `LMe`
+    // activity layout: spinner, Esc's hint, the enqueue hint), with no commands hint.
+    // Drawn 80 columns wide: below that the turn's row leaves out the vim and mode labels.
+    static readonly IReadOnlyList<string> CopilotWorking = Working(80, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue");
+
+    static IReadOnlyList<string> Working(int width, string row, string line = "") =>
+        ["\u25CF Running the tests.", "", "\u257B" + new string('\u2584', width - 1), line.Length == 0 ? "\u2503" : $"\u2503 {line}", "\u2579" + new string('\u2580', width - 1), row];
+
+    [Fact]
+    public async Task A_reply_to_a_working_Copilot_in_a_window_under_80_columns_is_refused_and_nothing_is_typed()
+    {
+        // There the turn's row shows no shell or vim label, and a box holding only spaces in
+        // shell mode draws as empty: the reply could run as a shell command.
+        Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
+        await source.RefreshAsync();
+        injector.Screen = _ => Working(79, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "also run the e2e tests");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("reply once the turn ends", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Theory]
+    // In the turn's row: a draft, shell mode's label, or vim's normal mode, as in the idle footer.
+    [InlineData("draft")]
+    [InlineData("shell")]
+    [InlineData("vim")]
+    public async Task A_reply_to_a_working_Copilot_is_refused_for_a_draft_shell_mode_or_vim_normal_mode_as_when_idle(string state)
+    {
+        Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
+        await source.RefreshAsync();
+        injector.Screen = _ => state switch
+        {
+            "draft" => Working(80, CopilotWorking[5], "half a thought"),
+            "shell" => Working(80, " Shell \u00B7 Allow All \u00B7 \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", "Execute shell command"),
+            _ => Working(80, " -- NORMAL -- \u00B7 \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue"),
+        };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "also run the e2e tests");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains(state switch { "draft" => "already typed", "shell" => "shell mode", _ => "vim normal mode" }, reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    // The same screen with words in the box (a person's draft), or in shell mode.
+    // Its footer as Copilot draws it then (oDo): with text in the box, the mode label and, out
+    // of shell mode, the file and issue hints; empty in shell mode, the sidebar, commands and
+    // shell hints too.
+    static IReadOnlyList<string> CopilotBox(string line, bool shell = false) =>
+        [.. CopilotIdle.Take(3), $"\u2503 {line}", CopilotIdle[4],
+            shell ? line == "Execute shell command" ? " \u2190 open sidebar \u00B7 Shell \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 esc exit shell mode" : " Shell \u00B7 Allow All"
+            : " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues"];
+
+    // ---- Copilot's input box, read before a reply is typed (#825) ----
+
+    [Fact]
+    public async Task A_reply_to_Copilot_whose_input_box_holds_a_draft_is_refused_with_the_draft_shown_and_nothing_typed()
+    {
+        injector.Screen = _ => CopilotBox("half a thought \u202E");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Equal("something is already typed in Copilot's input box at the machine (16 characters: \"half a thought \\u202E\"); send or clear it there first", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_reply_to_Copilot_in_shell_mode_is_refused_and_nothing_is_typed()
+    {
+        // In shell mode Enter runs what the box holds as a shell command.
+        injector.Screen = _ => CopilotBox("Execute shell command", shell: true);
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "rm -rf ~");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("shell mode", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_reply_to_Copilot_whose_screen_cannot_be_read_is_refused_and_nothing_is_typed()
+    {
+        injector.Screen = _ => null;
+        var ch = await OpenAsync();
+
+        Assert.Equal(("refused", "this host cannot read the session's screen; answer at the machine"), await ReplyAsync(ch, "go on"));
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_reply_to_Copilot_with_its_input_box_empty_is_typed_held_to_that_box_and_delivered()
+    {
+        injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
+        var ch = await OpenAsync();
+
+        Assert.Equal("delivered", (await ReplyAsync(ch, "go on")).Outcome);
+        var sends = Assert.Single(injector.Plans).Plan.Sends;
+        Assert.Equal(2, sends.Count);
+        Assert.Equal(["\u257B\u2584\u2584\u2584\u2584\u2584\u2584\u2584\u2584", "\u2503", "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580"], sends[0].Expect!.Select(r => r.Text));
+        // Its Enter alone, held to the box's bottom edge.
+        Assert.Equal(("", true), (sends[1].Text, sends[1].Enter));
+        Assert.Equal([(4, "\u2579\u2580\u2580\u2580\u2580\u2580\u2580\u2580\u2580")], sends[1].Expect!.Select(r => (r.Row, r.Text)));
+    }
+
+    [Fact]
+    public async Task A_Copilot_input_box_that_moves_after_the_reply_is_typed_gets_no_Enter_and_the_reply_is_left_in_it_unconfirmed()
+    {
+        // The words went, and before their Enter a dialog took the input area's place: Enter
+        // would pick what it highlights.
+        injector.Sent = i => { if (i == 0) { injector.Screen = _ => ["\u25CF Done.", "", "Allow Copilot to run this command?", " \u276F 1. Yes", "   2. No (Esc)"]; } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("unconfirmed", outcome);
+        Assert.Equal("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent; the words are left in the box at the machine, to send or clear there", reason);
+        Assert.Single(injector.Plans);
+        Assert.Empty(injector.Refused);
+    }
+
+    [Theory]
+    // Rows printed by the agent that look like Copilot's box and footer (code is drawn as plain
+    // text) are not its box: above the real one holding a draft, or above a dialog in its place.
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_box_the_agent_printed_is_not_taken_for_Copilots_input_box(bool realBoxBelow)
+    {
+        List<string> forged = ["\u25CF Here is the prompt:", .. CopilotIdle.Skip(2), ""];
+        injector.Screen = _ => realBoxBelow
+            ? [.. forged, "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", "\u276F half a thought", "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues"]
+            : [.. forged, "Allow Copilot to run this command?", " \u276F 1. Yes", "   2. No (Esc)"];
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_reply_to_Copilot_in_vim_normal_mode_is_refused_and_nothing_is_typed()
+    {
+        // Keys typed there are vim commands, and a paste is swallowed.
+        injector.Screen = _ => [.. CopilotIdle.Take(5), " -- NORMAL -- \u00B7" + CopilotIdle[5]];
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("vim normal mode", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    const string InsertFooter = " -- INSERT -- \u00B7 \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help \u00B7 tab next tab";
+
+    [Theory]
+    // Only the footer changes after the host read the box, the box's rows reading the same: Esc
+    // into vim's normal mode; '!' then a space, shell mode holding a space (drawn as an empty
+    // box); or the footer gone. The worker reads the footer again in the same attach, before
+    // the first key, and types nothing (#843 review).
+    [InlineData("vim")]
+    [InlineData("shell")]
+    [InlineData("gone")]
+    public async Task A_footer_that_changes_after_the_box_was_read_gets_none_of_the_reply(string change)
+    {
+        injector.Screen = _ => change == "vim" ? [.. CopilotIdle.Take(5), InsertFooter] : CopilotIdle;
+        injector.Holding = () => injector.Screen = _ => change switch
+        {
+            "vim" => [.. CopilotIdle.Take(5), InsertFooter.Replace("INSERT", "NORMAL")],
+            "shell" => [.. CopilotIdle.Take(3), "\u2503 ", CopilotIdle[4], " Shell \u00B7 Allow All"],
+            _ => [.. CopilotIdle.Take(5)],
+        };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("input box changed just as the reply was to be typed", reason);
+        Assert.Empty(injector.Plans);
+        Assert.Single(injector.Refused);
+    }
+
+    [Theory]
+    // Read idle, then a turn starts on its own and the person types '!' then a space: shell mode
+    // holding a space, drawn as an empty box, under the turn's row. Under 80 columns that row
+    // leaves out the mode label (`LMe`), so nothing in it says shell mode, and the worker
+    // refuses a turn's row there outright, as the reader does one running at the read; at 80 it
+    // would show the label, and a row without one is safe (Trust's #843 re-review).
+    [InlineData(70, false)]
+    [InlineData(80, true)]
+    public async Task A_turn_that_starts_after_the_read_in_a_narrow_window_gets_none_of_the_reply(int width, bool typed)
+    {
+        const string Idle = " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help";
+        injector.Screen = _ => Working(width, Idle);
+        injector.Holding = () => injector.Screen = _ => Working(width, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", " ");
+        injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        if (typed)
+        {
+            Assert.Equal("delivered", outcome);
+            return;
+        }
+        Assert.Equal("refused", outcome);
+        Assert.Contains("input box changed just as the reply was to be typed", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    // A screen from the captured Copilot input box fixtures (tests/fixtures/screens).
+    static IReadOnlyList<string> Captured(string name)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "screens", "copilot-input-box.json")));
+        return [.. doc.RootElement.GetProperty("cases").EnumerateArray().Single(c => c.GetProperty("name").GetString() == name).GetProperty("rows").EnumerateArray().Select(r => r.GetString()!)];
+    }
+
+    [Theory]
+    // Read as the empty box at the bottom, then, its rows and footer unchanged, the screen grows
+    // rows under them: the agent printed rows that read like the box and its footer, and the
+    // real box (holding a draft) or a permission dialog is drawn below. The worker holds every
+    // row under the footer blank, as the reader did, up to each key: none of the reply goes, or
+    // no Enter (#843 review, Copilot 5780796076).
+    [InlineData("forged-rail-over-dialog", false)]
+    [InlineData("forged-rail-above-plain-draft", false)]
+    [InlineData("forged-rail-over-dialog", true)]
+    [InlineData("forged-rail-above-plain-draft", true)]
+    public async Task A_screen_that_grows_rows_under_the_footer_after_the_read_gets_none_of_the_reply_or_no_Enter(string grown, bool afterWords)
+    {
+        injector.Screen = _ => Captured("empty-interactive");
+        if (afterWords) { injector.Sent = i => { if (i == 0) { injector.Screen = _ => Captured(grown); } }; }
+        else { injector.Holding = () => injector.Screen = _ => Captured(grown); }
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        if (afterWords)
+        {
+            Assert.Equal("unconfirmed", outcome);
+            Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+            Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
+            return;
+        }
+        Assert.Equal("refused", outcome);
+        Assert.Contains("input box changed just as the reply was to be typed", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Theory]
+    // The same, a turn starting after the words went: Home then '!' puts the box in shell mode
+    // and takes the '!' away, so only the footer changes, and under 80 columns the turn's row
+    // says nothing of the mode. No Enter there; at 80 the row would show the label, and the
+    // Enter goes (#843 review, Copilot 4477100508).
+    [InlineData(70, false)]
+    [InlineData(80, true)]
+    public async Task A_turn_that_starts_before_the_Enter_in_a_narrow_window_gets_no_Enter(int width, bool entered)
+    {
+        const string Idle = " \u2190 open sidebar \u00B7 Interactive \u00B7 Allow All \u00B7 / commands \u00B7 ? help";
+        injector.Screen = _ => Working(width, Idle);
+        injector.Sent = i => { if (i == 0) { injector.Screen = _ => Working(width, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", "go on"); } };
+        injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        if (entered)
+        {
+            Assert.Equal("delivered", outcome);
+            return;
+        }
+        Assert.Equal("unconfirmed", outcome);
+        Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+        Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
+    }
+
+    [Theory]
+    // A box holding only Unicode spaces (no-break, figure, narrow no-break, ideographic) holds a
+    // draft. Trimmed with the box's padding it read as empty, and a working box needs no
+    // "/ commands" to be taken for empty, so the reply was added to the draft. Idle, the footer
+    // drops "/ commands" for any text at all (`gR`: text.length === 0), so it was refused there
+    // already, though not as a draft (#843 review, Copilot 4477100469).
+    [InlineData("\u00A0", true)]
+    [InlineData("\u2007", true)]
+    [InlineData("\u202F", true)]
+    [InlineData("\u3000", true)]
+    [InlineData("\u00A0", false)]
+    [InlineData("\u3000", false)]
+    public async Task A_box_holding_only_Unicode_spaces_is_a_draft_and_gets_none_of_the_reply(string space, bool working)
+    {
+        injector.Screen = _ => working
+            ? Working(80, " \u25D0 Working esc interrupt \u00B7 ctrl+q enqueue", space)
+            : [.. CopilotIdle.Take(3), $"\u2503 {space}", CopilotIdle[4], " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues"];
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.StartsWith("something is already typed in Copilot's input box at the machine", reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Theory]
+    // The words went, and before their Enter: Esc into vim's normal mode; Home then '!', shell
+    // mode, its label in the footer; the frame-off box's glyph turning to '!'; or the footer
+    // gone. No Enter, and the words are left in the box (#843 review).
+    [InlineData("vim")]
+    [InlineData("shell")]
+    [InlineData("bang")]
+    [InlineData("gone")]
+    public async Task A_footer_or_box_that_changes_before_the_Enter_gets_no_Enter(string change)
+    {
+        IReadOnlyList<string> plain = ["\u25CF Done.", "", "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", "\u276F", "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500", CopilotIdle[5]];
+        const string Typed = " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues";
+        injector.Screen = _ => change == "bang" ? plain : CopilotIdle;
+        injector.Sent = i =>
+        {
+            if (i != 0) { return; }
+            injector.Screen = _ => change switch
+            {
+                "vim" => [.. CopilotIdle.Take(3), "\u2503 go on", CopilotIdle[4], " -- NORMAL -- \u00B7" + Typed],
+                "shell" => [.. CopilotIdle.Take(3), "\u2503 go on", CopilotIdle[4], " Shell \u00B7 Allow All"],
+                "bang" => [.. plain.Take(3), "! go on", plain[4], Typed],
+                _ => [.. CopilotIdle.Take(3), "\u2503 go on", CopilotIdle[4]],
+            };
+        };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("unconfirmed", outcome);
+        Assert.StartsWith("the reply was typed into Copilot's input box, but the box changed before its Enter", reason);
+        Assert.False(Assert.Single(injector.Plans).Plan.Sends[0].Enter);
+    }
+
+    [Fact]
+    public async Task The_words_and_Enter_go_when_only_the_footers_other_parts_change()
+    {
+        // The words change the footer to its with-text hints, and the turn's spinner moves: no
+        // mode in it, so both go.
+        injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text));
+        injector.Sent = i => { if (i == 0) { injector.Screen = _ => [.. CopilotIdle.Take(3), "\u2503 go on", CopilotIdle[4], " Interactive \u00B7 Allow All \u00B7 @ files \u00B7 # issues"]; } };
+        var ch = await OpenAsync();
+
+        Assert.Equal("delivered", (await ReplyAsync(ch, "go on")).Outcome);
+    }
+
+    [Fact]
+    public async Task A_draft_shown_to_the_person_in_the_refusal_never_reaches_the_hosts_log()
+    {
+        const string Secret = "ghp_SENTINEL0123456789";
+        var logged = new List<string>();
+        Serve(Answerer(), new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+        }, m => { lock (logged) { logged.Add(m); } }, gate));
+        injector.Screen = _ => CopilotBox($"token {Secret}");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        // The person's own client is shown it; the host's log says its length only.
+        Assert.Equal("refused", outcome);
+        Assert.Equal($"something is already typed in Copilot's input box at the machine (28 characters: \"token {Secret}\"); send or clear it there first", reason);
+        await Wait.UntilAsync(() => { lock (logged) { return logged.Any(m => m.StartsWith("reply ", StringComparison.Ordinal) && m.Contains("refused", StringComparison.Ordinal)); } }, "the outcome line", Patience);
+        lock (logged)
+        {
+            Assert.DoesNotContain(logged, m => m.Contains(Secret, StringComparison.Ordinal));
+            Assert.Contains(logged, m => m.Contains("(28 characters, not shown here)", StringComparison.Ordinal));
+        }
+    }
+
+    [Theory]
+    // Words typed at the machine, or shell mode entered, after the host read the box and before
+    // the first key: the worker reads the box again in the same attach, and types nothing.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_Copilot_input_box_that_changes_after_it_was_read_gets_none_of_the_reply(bool shell)
+    {
+        injector.Holding = () => injector.Screen = _ => shell ? CopilotBox("Execute shell command", shell: true) : CopilotBox("typed at the machine");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await ReplyAsync(ch, "go on");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("input box changed just as the reply was to be typed", reason);
+        Assert.Empty(injector.Plans);
+        Assert.Single(injector.Refused);
     }
 
     // ---- large files, through the relay's blob store ----

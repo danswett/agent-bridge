@@ -54,6 +54,9 @@ public sealed class HostControlOptions
     public Func<string?>? ReadOnlyNow { get; init; }
     public AgentReadinessService? Agents { get; init; }
     public AgentSetupService? AgentSetup { get; init; }
+    public AgentInstallService? AgentInstall { get; init; }
+    // Host-only seam for graceful departures; it is not exposed as a pipe/relay operation.
+    public LifecycleCoordinator? Lifecycle { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -61,6 +64,7 @@ public sealed class HostControlOptions
 // and stopping or restarting it. The relay's channels never reach this.
 public sealed class HostControl
 {
+    public LifecycleCoordinator? Lifecycle => options.Lifecycle;
     readonly HostControlOptions options;
     readonly Action<string> log;
     readonly object gate = new();
@@ -82,6 +86,7 @@ public sealed class HostControl
         if (options.Updates is { } updates) { updates.AsksChanged += Changed; }
         if (options.Agents is { } agents) { agents.Changed += Changed; }
         if (options.AgentSetup is { } setup) { setup.Changed += Changed; }
+        if (options.AgentInstall is { } install) { install.Changed += Changed; }
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -114,6 +119,7 @@ public sealed class HostControl
 
     public bool HasAgentReadiness => options.Agents is not null;
     public bool HasAgentSetup => options.AgentSetup is not null;
+    public bool HasAgentInstall => options.AgentInstall is not null;
 
     HostStatus StatusLocked(bool fresh = false)
     {
@@ -141,6 +147,7 @@ public sealed class HostControl
             ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
             DevBox = options.DevBox(),
             Agents = options.Agents?.Snapshot,
+            AgentInstallation = options.AgentInstall?.Snapshot,
         };
     }
 
@@ -177,6 +184,11 @@ public sealed class HostControl
             case HostOps.AgentsSetup when options.AgentSetup is not null:
                 return await options.AgentSetup.ApplyAsync(Read<AgentSetupRequest>(data)
                     ?? throw new ArgumentException("Agent setup needs an agent and an action."));
+            case HostOps.AgentsInstall when options.AgentInstall is not null:
+                return await options.AgentInstall.InstallAsync(Read<AgentInstallRequest>(data)
+                    ?? throw new ArgumentException("CLI installation needs an agent and explicit consent."));
+            case HostOps.AgentsInstallCancel when options.AgentInstall is not null:
+                return new { cancellationRequested = options.AgentInstall.Cancel() };
             case HostOps.SignIn:
                 return await SignInAsync(Read<SignInRequest>(data) ?? new SignInRequest());
             case HostOps.SignInCancel:

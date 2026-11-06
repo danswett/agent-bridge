@@ -1,0 +1,33 @@
+name: Playwright's system packages
+description: >
+  Downloads the system packages `npx playwright install --with-deps` will install for the given
+  browsers, leaving a slow apt mirror for Canonical's HTTPS archive after five minutes (download.sh
+  says why). Every job that runs `playwright install --with-deps` uses it just before that install,
+  which still runs as before and finds the packages downloaded. Linux runners only.
+
+inputs:
+  browsers:
+    description: The browsers, space-separated, as given to `playwright install --with-deps`.
+    required: true
+  working-directory:
+    description: The folder whose node_modules holds that Playwright.
+    required: true
+  force-apt-fallback:
+    description: >
+      'true' only in ci.yml's pwa-ui legs on a run by hand that asks for it (quality/README.md
+      §4.7): leave the Azure mirror before downloading anything, to prove the fallback once.
+      Anything else downloads as before.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BROWSERS: ${{ inputs.browsers }}
+        PLAYWRIGHT_APT_FORCE_FALLBACK: ${{ inputs.force-apt-fallback }}
+      run: |
+        read -ra browsers <<< "$BROWSERS"
+        bash "$GITHUB_ACTION_PATH/download.sh" "${browsers[@]}"

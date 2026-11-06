@@ -134,7 +134,7 @@ internal sealed class SessionTracker
                     // A permission prompt, which agent-ha-bridge's Notification hook reports
                     // and only mirrors: it offers the reply box at best, never a proven
                     // answer, so it is answered at the machine.
-                    question = QuestionMapper.Approval(tool.Id, tool.Summary is null ? $"Allow **{tool.Name}**?" : $"Allow **{tool.Name}**?\n\n`{tool.Summary}`", hookAt, atMachine: true);
+                    question = QuestionMapper.Approval(tool.Id, tool.Summary is null ? $"Allow **{CopilotPermission.Plain(tool.Name)}**?" : $"Allow **{CopilotPermission.Plain(tool.Name)}**?\n\n{CopilotPermission.Fence(tool.Summary)}", hookAt, atMachine: true);
                     hintAt = hookAt;
                     break;
             }
@@ -147,7 +147,7 @@ internal sealed class SessionTracker
             // already typed into is never typed into again, so it is answered at the machine.
             if (reg.Approval is { } marker && (question is null || question.Kind == QuestionKind.Approval))
             {
-                question = QuestionMapper.Approval(marker.DecisionId, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted);
+                question = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted);
                 hintAt = question.AskedAt;
             }
             // Codex's hooks report status directly, at UserPromptSubmit and Stop.
@@ -224,6 +224,7 @@ internal sealed class SessionTracker
             WaitingOn = question?.Agent,
             Subagents = subagents,
             SubagentsMore = more,
+            Attention = _state.Attention ?? Stalled(effective, Later(_state.LastEventAt, hintAt), agents + shells > 0, subagents, more, now),
             Activity = new Activity
             {
                 Response = response,
@@ -241,6 +242,93 @@ internal sealed class SessionTracker
                 Own = own,
             },
         };
+    }
+
+    // Not responding (#800): still working, and nothing at all written for longer than a turn ever
+    // goes quiet. A 401 that the CLI never writes, or a CLI hung on its own network call, left a
+    // session reading working for an hour with nothing to say it had stopped. Never over a
+    // question (it is waiting on the person) or another attention; any event clears it.
+    Attention? Stalled(SessionStatus effective, DateTimeOffset? lastEvent, bool background, IReadOnlyList<Subagent>? subagents, int? more, DateTimeOffset now)
+    {
+        if (effective != SessionStatus.Working || lastEvent is not { } last) { return null; }
+        var busy = background || _state.Tools.Current() is not null;
+        var after = busy ? _options.NotRespondingBusyAfter : _options.NotRespondingAfter;
+        if (now - last < after) { return null; }
+        // A delegate that writes only its own transcript (Claude's beside the session's, Codex's a
+        // rollout of its own) leaves the session's quiet while it works. Its last event, read from
+        // that transcript, counts as the session's; one that cannot be checked never lets it read
+        // stalled: a false Not responding is worse than a late one.
+        if (DelegatesAlive(subagents, more, now, after)) { return null; }
+        var agent = Discovered.Agent;
+        return new Attention
+        {
+            Kind = AttentionKind.NotResponding,
+            Since = last,
+            Agent = agent,
+            Message = AgentErrors.Template(AttentionKind.NotResponding, null, null, agent),
+            LastEventAt = last,
+        };
+    }
+
+    static DateTimeOffset? Later(DateTimeOffset? a, DateTimeOffset? b) => a is null ? b : b is null ? a : a > b ? a : b;
+
+    // Whether the session's working delegates keep it alive (Claude's and Codex's: Copilot's write
+    // into the session's own events, already counted): one wrote an event within `after`, or not
+    // every one could be checked (more working than listed, a transcript not found or unread).
+    // Read only once the session already looks stalled.
+    bool DelegatesAlive(IReadOnlyList<Subagent>? subagents, int? more, DateTimeOffset now, TimeSpan after)
+    {
+        if (Discovered.Agent is not (AgentKind.Claude or AgentKind.Codex) || subagents is null) { return false; }
+        var working = subagents.Where(a => a.Status == SubagentStatus.Working).ToList();
+        if (working.Count == 0) { return false; }
+        // Working delegates are listed first: with every listed one working and more left out, the
+        // one still writing may be one that was not listed.
+        if (more > 0 && working.Count == subagents.Count) { return true; }
+        foreach (var a in working)
+        {
+            if (DelegateLastEvent(a) is not { } at || now - at < after) { return true; }
+        }
+        return false;
+    }
+
+    // What each delegate transcript's last event was, by the length it was read at: a stalled
+    // session is checked every pass, and a long transcript is not read again unchanged.
+    readonly Dictionary<string, (long Length, DateTimeOffset? At)> _delegateEvents = new(StringComparer.Ordinal);
+
+    // The last event a delegate wrote: the timestamp of the last complete record of its own
+    // transcript, never the file's write time, which Windows leaves stale while the writer holds
+    // the file open (CodexRollout.IsOwnThread). Null when it cannot be found or read.
+    DateTimeOffset? DelegateLastEvent(Subagent a)
+    {
+        if (Discovered.TranscriptPath is not { } transcript || Path.GetDirectoryName(transcript) is not { } here) { return null; }
+        if (a.Id.Length == 0 || !a.Id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_')) { return null; }
+        try
+        {
+            string? path;
+            if (Discovered.Agent == AgentKind.Claude)
+            {
+                path = Path.Combine(here, Path.GetFileNameWithoutExtension(transcript), "subagents", $"agent-{a.Id}.jsonl");
+                if (!File.Exists(path)) { return null; }
+            }
+            else
+            {
+                // A Codex sub-agent's rollout-<time>-<thread id>.jsonl, in the day folder it started
+                // in: the session's, or its own.
+                var days = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(here)));
+                var day = a.StartedAt is { } started && days is not null
+                    ? Path.Combine(days, started.UtcDateTime.ToString("yyyy/MM/dd", System.Globalization.CultureInfo.InvariantCulture)) : null;
+                path = new[] { here, day }.OfType<string>().Distinct().Where(Directory.Exists)
+                    .SelectMany(d => Directory.EnumerateFiles(d, $"rollout-*-{a.Id}.jsonl")).FirstOrDefault();
+                if (path is null) { return null; }
+            }
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (_delegateEvents.TryGetValue(path, out var known) && known.Length == stream.Length) { return known.At; }
+            var at = CodexRollout.LastTimestamp(stream);
+            if (_delegateEvents.Count > ClaudeSubagents.MaxRecords) { _delegateEvents.Clear(); }
+            _delegateEvents[path] = (stream.Length, at);
+            return at;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
     // Which prompt the session's userMessage is, for the driver (#489): its record where the parser

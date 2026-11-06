@@ -157,6 +157,8 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `host.subscribe` | none | `HostStatus`, then a `host.status` event with the whole status whenever it changes |
 | `host.agents.refresh` | none | `AgentReadinessReport` (below). Advertised as `host.agents` in the app's local hello only. Requests a fresh, read-only scan; overlapping requests share a scan. App-only despite not saving settings: version checks can start CLI processes |
 | `host.agents.setup` | `{ "agent": "copilot" \| "agency" \| "claude" \| "codex", "action": "install" \| "remove" }` | `{ "completed": bool, "detail": string, "restartRequired": bool }`. Advertised as `host.agents.setup` only to the local App on Windows when available. `install` also repairs; Agency shares Copilot hooks. Uses the owned standalone backend, refuses read-only/legacy/migrated/foreign configuration, and serializes operations with a three-minute deadline and host-shutdown cancellation. Unknown agents/actions are rejected without writes. Expected setup failures return `completed: false` with explicit incomplete-work details, not readiness. Cancellation and unexpected failures are protocol errors. Never restarts, accepts trust, installs a CLI, or signs in |
+| `host.agents.install` | `{ "agent": "copilot" \| "claude" \| "codex", "acceptAgreements": true }` | `AgentInstallResult`: `{ "completed": bool, "detail": string, "executable"?: string }`. Windows local App only, advertised as `host.agents.install`; fresh caller classification is required. Uses fixed WinGet package IDs/sources, explicit source/package/runtime consent, a ten-minute deadline and host-shutdown cancellation. Reuses existing executables without upgrades; missing configured paths and read-only/ownership/legacy conflicts are refused. Checks fresh executable discovery before success, never implies sign-in or readiness, never returns installer output. Settings allows eleven minutes for the operation plus a separate one-minute readiness refresh |
+| `host.agents.install.cancel` | none | `{ "cancellationRequested": bool }`. Same App-only authorization; requests cancellation without ending serialization until the installer has stopped. Cancellation/deadline returns `completed: false`; external installers may already have changed the machine, so no rollback or automatic uninstall is promised. Shutdown cancellation is a protocol error |
 | `host.signIn` | `{ "relay"?: "https://…" }` | `SignInStatus`: GitHub's device flow started through that relay (or the profile's), with `userCode` and `verificationUri` once GitHub gives them. The host finishes on its own and starts using the relay; progress arrives as `host.status` events |
 | `host.signIn.cancel` | none | `SignInStatus` as it is; the flow then ends, reported by a `host.status` event |
 | `host.settings` | `{ "remoteApproval"?: bool, "remoteFolderTrust"?: bool, "remoteFolderTrustDevices"?: [device id], "remoteFolderTrustDevicesWas"?: [device id], "devBoxKeepAwake"?: bool, "name"?: string }` (`remoteFolderTrust`, `remoteFolderTrustDevices`, which replaces the whole list, and `devBoxKeepAwake` (`devBox.keepAwake`, on a Dev Box) apply at once; the rest at the next start). A `devBoxKeepAwake` change is refused, leaving the file as it was, when the saved `config.json` would not read back with it (another setting the host rejects reads as keep-awake off). `remoteFolderTrustDevicesWas` is the list the new one was made from. If the saved list differs (as a set), because another app or a person's terminal changed it in the meantime, nothing in the request is changed and `conflict` is true. A device revoked elsewhere is therefore never approved again from a list read before. On a conflict, read the list again and make the change from that | `{ "settings": HostSettingsView, "restartRequired": bool, "conflict"?: bool }`. Written to the profile's `config.json`; read when the host starts. `name: ""` removes the name |
@@ -185,6 +187,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `updateAsks` | Presses of Check and Install from the account's other devices waiting for the app (#51): `[{ request, kind: check \| install, by, at }]`, `by` naming the device (`"pwa 1a2b3c4d"`). Absent when none. At most 8, each dropped once the app reports it taken or after ten minutes. The pipe itself asks for no update: `update.*` is refused here, for the app included, which updates its own machine from Settings |
 | `devBox` | The Dev Box keep-awake ([host-config.md](../host-config.md#dev-box-keep-awake)), present only when this machine is a Microsoft Dev Box (the Dev Box agent is installed, its settings usable or not): `{ keepAwake, intervalMinutes, last?: { at, outcome, detail, alarming }, nextAt?, problem? }`. `keepAwake` is whether passes run now; `outcome` is `skipped`, `delayed`, `safe`, `no-action`, `blocked`, `failed`, `stood-back`, `busy` or `not-a-devbox`; `alarming` (`failed`, `blocked`, or `stood-back` with the scheduler unreadable) says the Dev Box may hibernate. `nextAt` while on. `problem`: why the agent's settings could not be used, so it cannot be kept awake |
 | `agents` | Optional `AgentReadinessReport`: separate evidence for each launcher's installation, version, hooks, CLI sign-in and activation. Absent on older hosts and until the first scan finishes |
+| `agentInstallation` | Optional `{ agent, inProgress, detail, blocked }`: host-authoritative current or last installation state, recovered on reconnect or by another Settings window. No installer output. A lost request reply does not cancel the operation. WinGet's job cleanup is awaited before admission of another installer and during shutdown/replacement; unconfirmed cleanup sets `blocked` and refuses further installs in this host. Windows deployment services outside the job may already have made partial changes; check installation activity before restarting and retrying |
 
 Unknown fields are ignored, and unknown enum values read as the first value listed, as in
 the rest of the protocol.
@@ -193,10 +196,20 @@ the rest of the protocol.
 
 The shared first-run/Settings contract is `{ checkedAt, agents: [...], readOnlyReason? }`.
 Each agent has `id`, `label`, `home`, optional `executable` and `version`, checks named
-`installation`, `versionCheck`, `hooks`, `authentication` and `activation`, and optional
-`lastHookHandledAt`. Each check is `{ state, detail }`; states are `unknown`, `missing`,
+`installation`, `versionCheck`, `hooks`, `authentication` and `activation`, optional
+`lastHookHandledAt`, and `hookSetup`. Each check is `{ state, detail }`; states are `unknown`, `missing`,
 `needsAction`, `working`, `blocked` and `failed`. Unknown future states read as `unknown`.
 There is deliberately no aggregate "ready" bit.
+
+`hookSetup` is this profile's own setup record for the agent home: `notSetUp` (no ownership
+record), `incomplete` (an owned record without completed setup: an interrupted or failed
+setup, repair or removal, or a record from before completion was recorded; offer Repair),
+`completed` (the last setup wrote every registration, Codex's plugin and intake) or
+`unknown` (not determined: older hosts omit the field, a read-only host, unreadable intake
+or ownership records, or another profile's record). Unknown future values read as `unknown`.
+With intake enabled, `incomplete` has `hooks.state` `failed`, and `completed` keeps
+`hooks.state` `unknown`: setup completion is not evidence that hooks run in a new session.
+With intake off, both report `needsAction`. Clients use `hookSetup`, not `detail` text.
 
 The running host scans at startup, every ten minutes and when the app asks. It uses
 Launch's executable locator and running launch configuration, not an app-side PATH probe.

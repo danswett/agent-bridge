@@ -88,9 +88,11 @@
   --ab-needs-text: #7A4600;
   --ab-active: #0B63E5;
   --ab-active-track: #CFE0FA;
+  --ab-active-track-row: #CFE0FA;
   --ab-agent: #6D4AE0;
   --ab-agent-text: #5B3CC4;
   --ab-agent-track: #E3DBFB;
+  --ab-agent-track-row: #E3DBFB;
   --ab-danger: #C9302C;
   --ab-danger-text: #C9302C;
   --ab-neutral: #6E7781;
@@ -222,9 +224,11 @@
     --ab-needs-text: #FFD27A;
     --ab-active: #4C9AFF;
     --ab-active-track: #1E3556;
+    --ab-active-track-row: #4071AF;
     --ab-agent: #A78BFA;
     --ab-agent-text: #C4B5FD;
     --ab-agent-track: #33285A;
+    --ab-agent-track-row: #7768AC;
     --ab-danger: #FF6B6B;
     --ab-danger-text: #FF9494;
     --ab-neutral: #8B949E;
@@ -263,9 +267,11 @@
     --ab-needs-text: Highlight;
     --ab-active: Highlight;
     --ab-active-track: GrayText;
+    --ab-active-track-row: GrayText;
     --ab-agent: Highlight;
     --ab-agent-text: Highlight;
     --ab-agent-track: GrayText;
+    --ab-agent-track-row: GrayText;
     --ab-danger: CanvasText;
     --ab-danger-text: CanvasText;
     --ab-neutral: GrayText;

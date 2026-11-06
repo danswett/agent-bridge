@@ -45,16 +45,16 @@ public static class LocalApi
         {
             throw Refuse(op, agent, "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
         }
-        var result = await sessions.HandleAsync(channel, op, data);
-        if (result is not HelloResult hello) { return result; }
-        return callers.Classify(channel).Kind switch
+        // Shaped inside the service, so hello.changed compares what this caller is told (#651).
+        return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
-                .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : []] },
+                .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
+                .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
-        };
+        });
     };
 
     static InvalidOperationException Refuse(string op, Caller caller, string why, Action<string>? log)

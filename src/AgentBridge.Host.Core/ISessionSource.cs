@@ -79,6 +79,10 @@ public interface ISessionSource : IAsyncDisposable
     // show it does nothing.
     Task SetEndingAsync(string id, bool ending) => Task.CompletedTask;
 
+    // Host-owned recovery state, conditional on the same auth failure. A new generation
+    // takes ownership; callbacks from an older flow cannot overwrite it or clear attention.
+    Task SetSignInRecoveryAsync(string id, DateTimeOffset errorAt, string generation, RecoveryState state, bool begin = false, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
     // Why the last discovery pass could not account for everything, and for which agents, or
     // null when it could. While an agent is held, its sessions are not removed for being
     // missing, and nothing may be decided from a session of it being absent: no resume of it is

@@ -109,7 +109,7 @@ public sealed class DelegatesTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Delegates_listed_on_the_session_being_read_shift_its_conversation_and_choosing_a_session_does_not()
+    public async Task Delegates_listed_or_no_longer_listed_on_the_session_being_read_shift_its_conversation_and_choosing_a_session_does_not()
     {
         Resize(1440);
         var shifts = 0;
@@ -124,6 +124,11 @@ public sealed class DelegatesTests : IAsyncLifetime
         await host.SendAsync(Events.SessionUpsert, Delegating("counts"));
         await Wait.UntilAsync(() => Read(l => l.ShowStrip), "the strip");
         Assert.Equal(1, TestUi.Read(() => shifts));
+
+        // And it stops: the strip goes, and the conversation moves back up.
+        await host.SendAsync(Events.SessionUpsert, Make.Session("counts", background: Background.Of(2, 0), updated: Now) with { Agent = AgentKind.Claude });
+        await Wait.UntilAsync(() => !Read(l => l.ShowStrip), "the strip gone");
+        Assert.Equal(2, TestUi.Read(() => shifts));
     }
 
     [Fact]
@@ -222,7 +227,9 @@ public sealed class DelegatesTests : IAsyncLifetime
         Assert.False(TestUi.Read(() => card.Delegates.DetailOpen));
         clock.Advance(TimeSpan.FromSeconds(30));
         ui.Post(card.RefreshTimes);
-        await Task.Delay(200);
+        // A fetch would have been written as the tick made it: once the host has everything sent
+        // before this, none was.
+        await connection.CallAsync(FakeHost.Barrier);
         Assert.Equal(2, Gets().Count);
     }
 
@@ -544,7 +551,9 @@ public sealed class DelegatesTests : IAsyncLifetime
 
         Assert.Equal("Thanks. Please stop your delegate witness.", TestUi.Read(() => card.Reply!.Text));
         Assert.Equal(1, focused);
-        await Task.Delay(300);
+        // A reply sent would have been written as it was submitted: once the host has everything
+        // sent before this, none was.
+        await connection.CallAsync(FakeHost.Barrier);
         Assert.Empty(host.Sent(Ops.SessionReply));
 
         ui.Post(card.Reply!.Send);

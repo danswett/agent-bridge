@@ -122,6 +122,145 @@ public sealed class StandaloneHooksTests : IDisposable
         _ => Path.Combine(Homes.Codex, "AGENTS.md"),
     };
 
+    [Fact]
+    public async Task Cleanup_uses_saved_homes_and_leaves_unowned_agents_and_user_guidance_alone()
+    {
+        Write(Instructions("claude"), "User instructions\n");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Write(Owner("codex"), new JsonObject { ["version"] = 1, ["profile"] = Path.Combine(root, "other-profile") }.ToJsonString());
+        var foreign = File.ReadAllBytes(Owner("codex"));
+        using var errors = new StringWriter();
+
+        var result = await HookCommands.CleanupAsync(Profile, homes =>
+        {
+            Assert.Equal(Homes, homes);
+            return new StandaloneHooks(Profile, homes, Source, Legacy, () => active, locator, codex);
+        }, TextWriter.Null, errors);
+
+        Assert.Equal(0, result);
+        Assert.Equal("", errors.ToString());
+        Assert.False(File.Exists(Owner("claude")));
+        Assert.Equal("User instructions\n", File.ReadAllText(Instructions("claude")));
+        Assert.Equal(foreign, File.ReadAllBytes(Owner("codex")));
+        Assert.True(File.Exists(Hook));
+        Assert.NotNull(IntakeState.Load(Profile).State);
+    }
+
+    [Fact]
+    public async Task Cleanup_reports_partial_failure_and_still_disconnects_other_owned_agents()
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Write(Instructions("copilot"), "<!-- agent-bridge-owner:damaged -->\n");
+        var broken = File.ReadAllBytes(Instructions("copilot"));
+        using var errors = new StringWriter();
+
+        var result = await HookCommands.CleanupAsync(Profile, _ => Setup, TextWriter.Null, errors);
+
+        Assert.Equal(1, result);
+        Assert.Contains("incomplete", errors.ToString());
+        Assert.True(File.Exists(Owner("copilot")));
+        Assert.Equal(broken, File.ReadAllBytes(Instructions("copilot")));
+        Assert.False(File.Exists(Owner("claude")));
+        Assert.False(File.Exists(Instructions("claude")));
+    }
+
+    [Theory]
+    [InlineData("{invalid")]
+    [InlineData("[]")]
+    [InlineData("{\"version\":\"invalid\"}")]
+    [InlineData("{\"version\":1.5}")]
+    [InlineData("{\"version\":2147483648}")]
+    [InlineData("{\"version\":1,\"profile\":\"relative-profile\"}")]
+    public async Task Cleanup_preserves_invalid_ownership_and_still_removes_other_valid_owned_agents(string damaged)
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Write(Owner("copilot"), damaged);
+        var before = File.ReadAllBytes(Owner("copilot"));
+        using var errors = new StringWriter();
+
+        var result = await HookCommands.CleanupAsync(Profile, _ => Setup, TextWriter.Null, errors);
+
+        Assert.Equal(1, result);
+        Assert.Contains("copilot", errors.ToString());
+        Assert.Equal(before, File.ReadAllBytes(Owner("copilot")));
+        Assert.True(File.Exists(Registration("copilot")));
+        Assert.False(File.Exists(Owner("claude")));
+        Assert.False(File.Exists(Instructions("claude")));
+    }
+
+    [Fact]
+    public async Task Cleanup_reports_an_ownership_directory_as_failure_and_continues_other_valid_agents()
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        File.Delete(Owner("copilot"));
+        Directory.CreateDirectory(Owner("copilot"));
+        using var errors = new StringWriter();
+
+        var result = await HookCommands.CleanupAsync(Profile, _ => Setup, TextWriter.Null, errors);
+
+        Assert.Equal(1, result);
+        Assert.Contains(Owner("copilot"), errors.ToString());
+        Assert.True(Directory.Exists(Owner("copilot")));
+        Assert.True(File.Exists(Registration("copilot")));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
+    [Fact]
+    public async Task Cleanup_reports_an_unreadable_owner_and_preserves_it_while_removing_other_valid_agents()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var before = File.ReadAllBytes(Owner("copilot"));
+        using var errors = new StringWriter();
+        using (var unreadable = new FileStream(Owner("copilot"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var result = await HookCommands.CleanupAsync(Profile, _ => Setup, TextWriter.Null, errors);
+
+            Assert.Equal(1, result);
+            Assert.Contains("copilot", errors.ToString());
+            Assert.True(File.Exists(Registration("copilot")));
+            Assert.False(File.Exists(Owner("claude")));
+        }
+        Assert.Equal(before, File.ReadAllBytes(Owner("copilot")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cleanup_never_guesses_homes_or_takes_over_migrated_hooks(bool migrated)
+    {
+        if (migrated)
+        {
+            new IntakeState(Path.Combine(root, "legacy-runtime"), Legacy, "legacy", DateTimeOffset.UtcNow) { Homes = Homes }.Save(Profile);
+        }
+        var before = Listing();
+        using var output = new StringWriter();
+
+        var result = await HookCommands.CleanupAsync(Profile, _ => throw new InvalidOperationException("Must not create a writer"), output, TextWriter.Null);
+
+        Assert.Equal(0, result);
+        Assert.Contains(migrated ? "Migrated hooks were left alone" : "no automatic cleanup was attempted", output.ToString());
+        Assert.Equal(before, Listing());
+    }
+
+    [Fact]
+    public async Task Cleanup_refuses_unreadable_intake_instead_of_reporting_success()
+    {
+        Write(Path.Combine(Profile, IntakeState.FileName), "{invalid");
+        var before = Listing();
+        using var errors = new StringWriter();
+
+        var result = await HookCommands.CleanupAsync(Profile, _ => throw new InvalidOperationException("Must not create a writer"), TextWriter.Null, errors);
+
+        Assert.Equal(1, result);
+        Assert.Contains("Hook cleanup incomplete", errors.ToString());
+        Assert.Equal(before, Listing());
+    }
+
     [Theory]
     [InlineData("copilot")]
     [InlineData("claude")]
@@ -331,6 +470,47 @@ public sealed class StandaloneHooksTests : IDisposable
 
         Assert.True((await service.ApplyAsync(new AgentSetupRequest("codex", "install"))).Completed);
         Assert.NotNull(IntakeState.Load(Profile).State);
+    }
+
+    async Task<AgentReadiness> Readiness(string agent)
+    {
+        await using var service = new AgentReadinessService(Profile, Homes, LaunchConfig.Default,
+            new Locator { Locate = (_, _) => null }, codex, () => null);
+        return (await service.RefreshAsync(fresh: true)).Agents.Single(a => a.Id == agent);
+    }
+
+    [Fact]
+    public async Task Only_a_fully_completed_setup_is_reported_completed_and_a_failed_repair_reverts_it_to_incomplete()
+    {
+        // Intake is already enabled by another agent, as in the #705 review scenario.
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.True((bool?)Read(Owner("claude"))["setupCompleted"]);
+        codex.FailPlugin = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+
+        Assert.True(File.Exists(Owner("codex")));
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        var interrupted = await Readiness("codex");
+        Assert.Equal(HookSetupState.Incomplete, interrupted.HookSetup);
+        Assert.Equal(ReadinessState.Failed, interrupted.Hooks.State);
+        Assert.DoesNotContain("owned setup record", interrupted.Hooks.Detail);
+        Assert.Equal(HookSetupState.Completed, (await Readiness("claude")).HookSetup);
+
+        codex.FailPlugin = false;
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        var repaired = await Readiness("codex");
+        Assert.Equal(HookSetupState.Completed, repaired.HookSetup);
+        // Completed setup is not evidence that hooks run in a new session.
+        Assert.Equal(ReadinessState.Unknown, repaired.Hooks.State);
+        Assert.Equal(ReadinessState.Unknown, repaired.Activation.State);
+
+        codex.FailPlugin = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        Assert.Equal(HookSetupState.Incomplete, (await Readiness("codex")).HookSetup);
+        Assert.Equal(ReadinessState.Failed, (await Readiness("codex")).Hooks.State);
     }
 
     [Fact]
@@ -832,8 +1012,11 @@ public sealed class StandaloneHooksTests : IDisposable
         var entries = Read(Registration("copilot"))["hooks"]!["agentStop"]!.AsArray();
         Assert.Single(entries);
         Assert.Equal("other-hook", (string?)entries[0]!["exec"]);
+        Assert.Null(Read(Owner("copilot"))["setupCompleted"]);
+        Assert.Equal(HookSetupState.Incomplete, (await Readiness("copilot")).HookSetup);
         await Setup.InstallAsync("copilot", false, TextWriter.Null);
         Assert.Equal(2, Read(Registration("copilot"))["hooks"]!["agentStop"]!.AsArray().Count);
+        Assert.Equal(HookSetupState.Completed, (await Readiness("copilot")).HookSetup);
     }
 
     [Fact]
@@ -952,6 +1135,46 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.False(File.Exists(Owner("codex")));
         Assert.Equal("[hooks.state]\n\"user-hook\" = \"trusted\"\n", File.ReadAllText(trust));
         Assert.Equal(1, codex.Calls.Count(c => c[2] == "add" && c[1] == "marketplace"));
+    }
+
+    [Fact]
+    public async Task A_cancelled_removal_clears_completion_before_its_first_cleanup_step_and_stays_repairable()
+    {
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        Assert.True((bool?)Read(Owner("codex"))["setupCompleted"]);
+        using var stop = new CancellationTokenSource();
+        bool? completedAtFirstCleanup = true;
+        codex.OnPluginRemove = () => { completedAtFirstCleanup = (bool?)Read(Owner("codex"))["setupCompleted"]; stop.Cancel(); };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Setup.RemoveAsync("codex", false, TextWriter.Null, stop.Token));
+
+        Assert.Null(completedAtFirstCleanup);
+        Assert.True(codex.Present);
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        var interrupted = await Readiness("codex");
+        Assert.Equal(HookSetupState.Incomplete, interrupted.HookSetup);
+        Assert.Equal(ReadinessState.Failed, interrupted.Hooks.State);
+    }
+
+    [Fact]
+    public async Task A_removal_that_removes_the_Codex_plugin_but_not_its_marketplace_stays_owned_and_incomplete()
+    {
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        codex.FailMarketplace = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.RemoveAsync("codex", false, TextWriter.Null));
+
+        Assert.Contains(codex.Calls, c => c.Length > 1 && c[0] == "plugin" && c[1] == "remove");
+        Assert.True(File.Exists(Owner("codex")));
+        Assert.Null(Read(Owner("codex"))["setupCompleted"]);
+        var partial = await Readiness("codex");
+        Assert.Equal(HookSetupState.Incomplete, partial.HookSetup);
+        Assert.Equal(ReadinessState.Failed, partial.Hooks.State);
+
+        codex.FailMarketplace = false;
+        await Setup.RemoveAsync("codex", false, TextWriter.Null);
+        Assert.False(codex.Present);
+        Assert.False(File.Exists(Owner("codex")));
     }
 
     [Fact]
@@ -1109,6 +1332,10 @@ public sealed class StandaloneHooksTests : IDisposable
     [Theory]
     [InlineData(new[] { "hooks", "install", "copilot" }, 4, 1)]
     [InlineData(new[] { "hooks", "remove", "codex" }, 4, 1)]
+    [InlineData(new[] { "hooks", "cleanup" }, 4, 1)]
+    [InlineData(new[] { "hooks", "cleanup", "--profile", "test" }, 4, 1)]
+    [InlineData(new[] { "hooks", "cleanup", "--profile", "--dry-run" }, 2, 0)]
+    [InlineData(new[] { "hooks", "cleanup", "--dry-run" }, 2, 0)]
     [InlineData(new[] { "hooks", "install", "copilot", "--profile", "--dry-run" }, 2, 0)]
     [InlineData(new[] { "hooks", "remove", "codex", "--profile", "--dry-run" }, 2, 0)]
     [InlineData(new[] { "hooks", "install", "claude", "--dry-run", "--bogus" }, 2, 0)]
@@ -1157,6 +1384,7 @@ public sealed class StandaloneHooksTests : IDisposable
         public bool FailMarketplace;
         public bool FailListing;
         public Action? OnList;
+        public Action? OnPluginRemove;
         public Func<Task>? WaitOnList;
         public string? LegacyMarketplace;
         public readonly List<string[]> Calls = [];
@@ -1174,6 +1402,11 @@ public sealed class StandaloneHooksTests : IDisposable
                 if (LegacyMarketplace is { } legacy) { marketplaces.Add(new JsonObject { ["name"] = legacy, ["root"] = Path.Combine(Root, "missing-legacy") }); }
                 return new CommandResult(true, false, 0,
                     new JsonObject { ["marketplaces"] = marketplaces }.ToJsonString());
+            }
+            if (arguments[1] == "remove")
+            {
+                OnPluginRemove?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
             }
             if (arguments[1] == "marketplace")
             {

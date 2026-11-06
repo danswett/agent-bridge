@@ -143,13 +143,15 @@ const READS = {
   ToolCall: { read: readTool },
   Option: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'choice', options: [j] }] }).fields[0].options[0] ?? null },
   Field: { read: (j) => readQuestion({ fields: [j] }).fields[0] ?? null },
+  FieldConstraints: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'number', constraints: j }] }).fields[0].constraints },
   Question: { read: readQuestion },
   Background: { read: readBackground },
   ActivitySource: { read: readSource },
   OwnActivity: { read: readOwn },
   Activity: { read: readActivity },
   Subagent: { read: readSubagent },
-  Session: { read: readSession },
+  // attention (#800) is read from the PWA's own slice of it on; until then the status beside it is shown.
+  Session: { read: readSession, unread: ['attention'] },
   DiscoveryHeld: { read: readDiscoveryHeld },
   // As listAll pages through it: the cursor it reads is the one it sends for the next page.
   SessionList: {
@@ -231,9 +233,10 @@ const READS = {
   UsageReader: { read: (j) => readUsage({ agents: [{ agent: 'copilot', label: 'Copilot', readBy: j }] }).agents[0].readBy },
   // Every push must show something, or iOS revokes the app's notifications (sw.js): the worker
   // shows a generic notice for whatever it cannot read, and never drops one.
-  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at'], refuses: 'a push is always shown' },
-  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at'], refuses: 'a push is always shown' },
-  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at'], refuses: 'a push is always shown' },
+  // agent and sessions: a signIn notice's (#800), which the worker shows only as its title and body.
+  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at', 'notification.data.agent', 'notification.data.sessions'], refuses: 'a push is always shown' },
+  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at', 'data.agent', 'data.sessions'], refuses: 'a push is always shown' },
+  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at', 'agent', 'sessions'], refuses: 'a push is always shown' },
 };
 
 // Records the PWA sends that it checks first, mirroring the host's check word for word.
@@ -364,6 +367,7 @@ const BUILDS = {
 const NOT_REPLAYED = {
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
+  FocusRequest: 'the PWA does not send sessions.focus yet (#610)',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',
@@ -386,6 +390,7 @@ const NOT_REPLAYED = {
   // The PWA asks for progress from #600; until then a host sends neither to it.
   DeliveryProgress: 'progress frames come only to a client that sends progress: true, which the PWA does not yet',
   DeliveryTimings: 'timings come only to a client that sends progress: true, which the PWA does not yet',
+  Attention: 'read within Session once the PWA shows attention (#800); until then Session leaves it unread',
 };
 
 // ---- the replay ----

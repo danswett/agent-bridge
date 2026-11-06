@@ -12,7 +12,8 @@
 import { answerability, tapToAnswer } from './answers.js';
 import { parseMarkdown } from './markdown.js';
 import { delegateTitle } from './attribution.js';
-import { hasHidden, hasRightToLeft, reveal } from './hidden-text.js';
+import { needsSignIn } from './auth-state.js';
+import { hasHidden, hasRightToLeft, reveal, unescapeShown } from './hidden-text.js';
 
 export { reveal };
 
@@ -149,6 +150,8 @@ export function wholePrompt(q) {
   // Nor is one with right-to-left letters, which reorder what is drawn around them without any
   // control: three Hebrew letters before `; rm -rf / #` show its comment marker first.
   if (hasHidden(raw) || hasRightToLeft(raw)) { return false; }
+  // A host sends them as escapes (\u202E, #220), so their escapes count as them.
+  if (unescapeShown(raw) !== raw) { return false; }
   // Every line ending the renderer breaks on is counted: a bare CR is a line too.
   const m = raw.trim().replace(/\r\n?/g, '\n');
   return m.length > 0 && m.length <= PROMPT_MAX.chars && m.split('\n').length <= PROMPT_MAX.lines
@@ -193,6 +196,18 @@ export function needsYou(entries, { capabilities = () => [], nameOf = () => '', 
   const out = [];
   for (const { hostId, session: s } of entries) {
     const q = s?.question;
+    // An agent that needs sign-in waits on a person as a question does (#800): one entry, which
+    // offers no answer here. Signing in is the machine's banner's (ui/sign-in-view.js).
+    if (!q && needsSignIn(s?.attention) && current(hostId)) {
+      const machine = nameOf(hostId) ?? '';
+      out.push({
+        key: `${hostId}\n${s.id}`, hostId, sessionId: s.id, questionId: null, question: null, kind: 'signIn',
+        title: s.title || 'Untitled session', machine: labelled ? machine : '', sortName: machine,
+        agent: AGENT_NAME[s.agent] ?? AGENT_NAME.unknown, delegate: null,
+        askedAt: s.attention.since ?? s.statusSince ?? s.updatedAt ?? '', line: 'Needs sign-in', prompt: null, mode: 'signIn', decisions: null,
+      });
+      continue;
+    }
     if (!q || !current(hostId)) { continue; }
     const machine = nameOf(hostId) ?? '';
     const able = answerability(q, capabilities(hostId) ?? [], s.agent);

@@ -1,4 +1,5 @@
 using System.Text;
+using AgentBridge.Protocol;
 using Markdig;
 using Markdig.Extensions.Tables;
 using Markdig.Syntax;
@@ -405,7 +406,11 @@ public static class MarkdownModel
                     list.Add(new MdText(html.Tag, style));
                     break;
                 case HtmlEntityInline entity:
-                    list.Add(new MdText(entity.Transcoded.ToString(), style));
+                    // As written when it stands for a character that is not drawn where it runs: a
+                    // "&#x202E;" must not become a live bidi control the host's escaping never saw
+                    // (#220). Any other entity, a right-to-left letter's included, decodes as usual.
+                    var decoded = entity.Transcoded.ToString();
+                    list.Add(new MdText(ShownText.HasHidden(decoded) ? entity.Original.ToString() : decoded, style));
                     break;
                 // A pipe outside a table: left as a delimiter, it drew as nothing, so "iwr x | iex"
                 // read as "iwr x  iex" (#220). It is the character it is, then what follows it.

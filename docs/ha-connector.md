@@ -201,7 +201,7 @@ Per session:
 
 | Entity (pinned id) | Discovery topic | State / attributes |
 |---|---|---|
-| `sensor.<node>_status` | `homeassistant/sensor/<node>/status/config` | `working`, `waiting`, `idle`, `agents` (idle, background agents running), `shell` (idle, background commands running) or `ending`; attributes `session`, `machine`, `process_id`, `updated`, and only when non-empty or non-zero `model`, `background_agents`, `background_shells`, `compactions` (`Add-DaemonTuningAttributes`) |
+| `sensor.<node>_status` | `homeassistant/sensor/<node>/status/config` | `working`, `waiting`, `idle`, `agents` (idle, background agents running), `shell` (idle, background commands running) or `ending`; while the host sets the session's `attention` (#800, below), the clients' words instead: `Needs sign-in`, `Signed in · waiting for the session to confirm`, `Agent error` (`Not authorised` or `Rate limited` by class), `Not responding`. Attributes `session`, `machine`, `process_id`, `updated`, and only when non-empty or non-zero `model`, `background_agents`, `background_shells`, `compactions` (`Add-DaemonTuningAttributes`), and `attention` while it is set |
 | `sensor.<node>_activity` | `homeassistant/sensor/<node>/activity/config` | a line, cut to 255 with `...`: `Running: <tool>`, the reply's first line, `Thinking`, or `Idle`; attributes `session`, `machine`, `verbose`, `updated`, `driver`, `history` (12 deep, 24 with Detailed activity), and the card text as `Add-DaemonCardText` lays it out: `response` (to 6000 characters, then `_(truncated - see terminal)_`) with `response_kind` `text` or `reasoning`, and for an agent that does not interleave its thinking, `reasoning` (to 4000). Added, only for a session with sub-agents: `subagents` and `subagents_more` (below) |
 
 Both carry the device block (`identifiers: [<node>]`, `name`, `manufacturer: AI CLI bridge`,
@@ -222,6 +222,27 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
   (`Get-BridgeThoughtLine`, ported and fixture-checked), the reply's first line.
 * `driver` is `human` until an answer from the card sets it (stage 2, below); replies and
   launches set it from stages 3 and 5.
+* **Attention** (#800, [v1-sessions.md](protocol/v1-sessions.md#attention)). The host keeps a
+  session's `status` truthful: `idle` after a turn that ended on a 401 or an agent error, with the
+  turn before's reply still beside it. On its own, that read on the card as an idle session that
+  had answered. While `Session.attention` is set, the status sensor's state is the clients'
+  words for it, in the order of their status rules (`StatusRules`, `AuthState.ErrorWords`): the
+  session's own question still reads `waiting`, then `Needs sign-in` (or `Signed in · waiting for
+  the session to confirm` while recovery is `pending`), then a delegate's question `waiting`, then
+  `Not responding`, then `working`, then the error's words (`Not authorised` for `auth`,
+  `Rate limited` for `rate`, otherwise `Agent error`). An `ending` session still reads `ending`.
+    The card shows the state as written.
+  The status attributes gain `attention`:
+  `{kind, error_class?, provider?, message?, since}`, with `kind` one of `sign_in_needed`, `error`
+  or `not_responding`. `error_class` is only for an error. `provider` is only for a sign-in, and
+  only when it is `github`, `anthropic` or `openai`. `message` is the host's own sentence
+  (`AgentErrors.Template`, never the agent's words), on one line, within 300 characters, with its
+  template markup broken. It never carries the account, a sign-in code or a URL. A value the
+  connector doesn't know makes no claim, as on the clients: an unknown kind is an error, and an
+  unknown class is `other`. A session without attention publishes exactly the daemon's attributes.
+  End session still judges the session by its own status, so one idle after a failed turn ends at
+  one press, as the host ends it. The shadow shows these as differences from agent-ha-bridge,
+  which has no attention.
 * **Sub-agents** ([design/subagents.md](design/subagents.md) §7, #175). The host's top-level
   `response` and `reasoning` are the latest writer's, a delegate's included, as on
   agent-ha-bridge's card. The connector publishes the **main agent's own** instead: `own`'s
@@ -389,6 +410,8 @@ Where stage 2 knowingly differs from the daemon:
 |---|---|
 | A question the host cannot answer from a card (`AnswerAtMachine`, or a question the host had to truncate) is armed with `**This one has to be answered in the terminal** - <why>` appended and is never read | The host already knows these cannot be delivered; the daemon learns it later |
 | A question longer than the card's 6000 characters (with any hint) is answered in the terminal, never on the card; the note is kept within the limit | The daemon cuts it and still takes an answer, so an approval could authorise text nobody could read |
+| An approval holding a character not drawn where it runs (a bidi control, a zero-width character, a control but newline and tab), right-to-left letters, or a character reference that an HTML renderer would decode to one (`&#x202E;`, `&#8238` with no semicolon or with leading zeros, HTML5 names such as `&ZeroWidthSpace;`, `&NoBreak;` and `&nbsp;`, `&nbsp` with no semicolon), is answered in the terminal, on the card as its source in a code block (those characters shown as visible escapes, its fence longer than any run that starts one of its lines), so nothing in it is decoded or drawn as Markdown. Its push carries none of the prompt, only that an approval is waiting at the machine (#220). A host sends hidden characters and right-to-left letters already escaped, offering Approve once for them (#253, decision 3), so from a host it is a reference that holds an approval here, which Markdown would decode; the card shows every approval as its source all the same. A delegate's name is judged as part of its approval as the session reported it, before it is cleaned (#263) or its template braces are neutralised; a cleaned name that could still be drawn other than as written (right-to-left letters, or a reference) is "A delegate" on the card and in pushes, and "Delegate *name*" leads the card as literal text, what Markdown acts on in it backslash-escaped, so it cannot open a fence, link or emphasis around the prompt. A question whose card would now read or be answered otherwise under the same id (such a name arriving, a host updated to refuse it, a form's options or their values changed) is armed again: nothing on the card or a phone is taken for it from then until it is, however long a channel Home Assistant cannot read holds that up; it keeps what it has been through (attempts, presses and taps used); one answered, or maybe answered, is never armed again; and its phone buttons are withdrawn and sent again under the name of what it says now, so a tap on the old ones answers nothing, even after a restart. An approval the host holds at the machine or had to cut is cut, if the card must, inside its block, before the note saying why | The card and the phone draw text through the bidi algorithm, so what a person reads could run in another order. The host sends hidden characters and right-to-left letters escaped, and still offers Approve once (#253, decision 3), but a reference stays as written and this card's Markdown decodes it; the card holds to its rule whatever it is given. A code block spares the card from knowing what Markdown would make of the text around a reference (a code span, an HTML block, a heading). A phone may draw a push as HTML (decoding a reference) or as plain text (showing `&amp;` as written), and nothing here knows which. Neutralising a name's template braces adds a zero-width space of the card's own |
+| An approval says what its escapes stand for above it, "_Contains hidden characters_" or "_Contains right-to-left text_" (#220). Every approval is on the card as its source, in one code block whose fence nothing in it can close, as the PWA and the app draw it: none of it is read as Markdown. One Markdown would not draw as written (the agent's own words closing the command's fence, a link, an image or HTML, text after a block, or a line in a block shaped as a fence, `ApprovalShape`) is still answered in the terminal. One that does not fit whole on the card as its source is answered in the terminal, never cut | The host sends hidden characters escaped and Approve once is offered (#253, decision 3), yet PowerShell ends a `#` comment at a bare CR, so `# list files\u000DRemove-Item ...` reads as a comment and runs. The agent's own words reach the card unescaped until #212. Drawn as Markdown, an intention ending in `~~~` opened a block that swallowed the host's fence, so the command's backtick lines were markers, never drawn, and bash ran them as command substitutions |
 | An empty multi-select answer is allowed only for Copilot | The host's `Field` carries no `minItems`; Copilot's own forms allow it |
 | `takes_typed_answer` only for a lone choice that allows another answer | The daemon also offers it for yes/no, which the host's question model cannot take |
 | Claude forms use field slots, never the selector's choices | Claude's questions always arrive as forms here |
@@ -612,10 +635,14 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   phone). Once a question is armed on the card and still waiting, it goes to every service in
   `answerButtons.services`, once (`Sync-DaemonAnswerButtons`): the session's name, the question,
   the machine as the subtitle, the dashboard's decision view to open, and the daemon's payload
-  exactly (`tag: bridge_decision_<node>`, `group`, `action_data` naming session and question,
-  icon, colour and interruption level). Its options are buttons (`BRIDGE_<last 12 of the
-  question id>_<i>`, up to `maxButtons`, titles cut to 30 as the daemon cuts them, `Other (type
-  your answer)` left out), with a "Type an answer" text action. A phone that fails is logged and
+  (`tag: bridge_decision_<node>`, `group`, `action_data` naming session and question, icon,
+  colour and interruption level). Unlike the daemon's, the question is named `<id>~<16 hex>`, the
+  hex a digest of what its card shows and takes (its plan), so a tap on a notification of what a
+  question said before under the same id, one kept on a phone through a restart among them,
+  matches nothing it offers now, and the fixed-length suffix keeps any other question's id from
+  spelling it (#220). Its options are buttons (`BRIDGE_<last 12 of that name>_<i>`, up to
+  `maxButtons`, titles cut to 30 as the daemon cuts them, `Other (type your answer)` left out),
+  with a "Type an answer" text action. A phone that fails is logged and
   the others are still sent; a question no phone took is tried again 15 s later. A question
   answered only at the machine is sent as a notice with no actions; an approval (Codex's, or a
   permission prompt, however the card shows it) is not sent, as the daemon sends none (it has no
@@ -664,6 +691,38 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   questions included, exactly as the daemon's hooks send them (`Fixtures/ha-notify.json`),
   so on that path a delegate's question is treated as the session's are and neither
   replaces the other; the answer buttons are where the newer replaces the older.
+  **A turn that ended on an error or a failed sign-in is not a finished turn** (#800; the
+  host's Web Push rule, #845). Its session is idle beside the turn before's reply, and pushing
+  that reply was the owner's "replies with the last turn as if alive". No finished push goes
+  while `attention` is `signInNeeded` or `error` (or a kind not known here). That includes one
+  already waiting its 3 s when the attention arrives. The reply is taken as told, so it isn't
+  pushed later either. The next turn that does finish is pushed as ever.
+* **Needs sign-in** (#800), through the same two channels as a question's Needs you, mirroring
+  the host's `signIn` push (§3 of #800's
+  [6646501884](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6646501884)):
+  * There is **one per machine, agent and account**, never one per session. It goes on the first
+    pass after the first of its sessions needs a person to sign in: kind `signInNeeded`, and not
+    while recovery is `pending`. The pass runs each second, well inside the owner's 60 s. It goes
+    again **at most hourly** while any of its sessions still needs it.
+  * It goes to every phone in `answerButtons.services`, with no actions. The tag is
+    `bridge_signin_<slug>_<agent>_<first 8 hex of SHA-256(account)>`, with the question's
+    icon, colour and interruption level, the subtitle `<machine> - needs sign-in`, and the
+    dashboard to open. When `notifications.enabled` is on, it also goes on `notifications.service`.
+  * Title: `<machine> · Copilot needs sign-in`. Message: `2 sessions: <name>, <name>`, naming three
+    at most.
+  * **No account, code or URL** is in either one.
+  * It is withdrawn from the phones (`clear_notification` by its tag) once none of its sessions
+    needs a person: signed in, recovered or ended. A later need is news again. Nothing is withdrawn
+    while the host's session discovery is held. Retirement waits the same way: after a restart
+    under a hold, a session not found yet is missing, not signed in.
+  * When it was sent, which destinations have it and which phones hold it are kept in the
+    connector's state file. A restart within the hour therefore doesn't send it again, and still
+    withdraws it. A destination that missed it (a phone or the push service failing, or a pass
+    stopped part-way) is tried again every 15 s. Each destination is told again an hour after its
+    own delivery, never sooner, and a failing service is logged once until it works. Once the need
+    is over, what was delivered is forgotten at once, even while a withdrawal is still being
+    retried, so a need that comes back is told everywhere again.
+  * An error and Not responding send nothing. They show on the status only, as on the clients.
 
 Where stage 5b knowingly differs from the daemon:
 
@@ -674,6 +733,7 @@ Where stage 5b knowingly differs from the daemon:
 | Until migrate re-points the hooks, a machine whose agent-ha-bridge hooks still run may push a question twice | Both would be sending; `migrate` moves the hooks to the host, and nothing runs agent-ha-bridge's hooks after it |
 | The host's own Web Push (`push.*`) notifies the app's phones as well | A different channel, with its own settings; turn one off if both reach the same phone |
 | A tap must name an action its notification offered; a withdrawal that failed is retried, across a restart too | Beyond parity: the daemon reads the index off any action's suffix, and forgets a withdrawal whether or not it arrived |
+| A session that needs sign-in, or whose turn ended on an error, gets no finished push. Sign-in gets a notice of its own (#800) | The daemon has no attention, and the agent's stop hook pushed the turn before's reply as if the session were alive |
 ### Stage 6: update buttons
 
 The machine row's update entity, and its **Install Bridge Update** and **Check for Bridge
@@ -686,8 +746,8 @@ be established; a check that found nothing newer; completed) and the busy notice
 What is checked and installed is **this host's own product** (design G2): the app's package,
 which carries the host (`IHostUpdates`, Velopack on Windows, [app-windows.md](app-windows.md)),
 with the app's feed (GitHub releases of `danswett/agent-bridge`, or the app's `feed.txt`) and
-its "Include pre-releases" setting. `latest_version` on a migrated machine is therefore an
-agent-bridge version, never agent-ha-bridge's. A copy its updater did not install (a build
+its "Include pre-releases" setting. `latest_version` on a migrated machine is therefore a
+Slipgates version, never agent-ha-bridge's. A copy its updater did not install (a build
 folder, or a platform it does not package yet) serves no buttons and reports its own version as
 current, as stage 1 did; so does a host with `homeAssistant.updates.checkForUpdates` off, which
 looks nothing up, and a read-only host (`delivery.readOnly`), which acts on nothing from another
@@ -1199,7 +1259,7 @@ for retained state, and `config/entity_registry/list` for ids:
 1. Daemon → host: the machine row stays (online, session count, version, `(dev)`); each card
    keeps rendering status, activity, the reply text, the trail, compactions and background
    counts; Detailed activity toggles reasoning; usage rows stay; no `_2` ids; the update row
-   shows agent-bridge's version and its Install and Check buttons work; a question is answered
+   shows the Slipgates version and its Install and Check buttons work; a question is answered
    from the card, on a phone-sized browser too.
 2. A session ending: it leaves the list, the writer drops its card, and only then do its
    entities go; all 29 topics are empty.

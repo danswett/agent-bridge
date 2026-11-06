@@ -1,4 +1,4 @@
-/* Agent Bridge PWA. Mobile first (an iPhone on the Home Screen), fine on a desktop.
+/* The Slipgates web app (PWA). Mobile first (an iPhone on the Home Screen), fine on a desktop.
    Colours are the design language's roles and surfaces, from design/tokens.css (generated from
    design/tokens.json; docs/design/ui.md §3): never a colour of this file's own. Controls,
    links, focus and selection are bridge. Status is a glyph from the generated sprite and the
@@ -90,6 +90,18 @@ body {
 
 a { color: var(--ab-bridge); }
 :focus-visible { outline: 3px solid var(--ab-bridge); outline-offset: 2px; border-radius: 6px; }
+/* A ring only where a key moved focus (ui.md §9.1 A12, #373): js/ui/focus.js marks the one element
+   focused by a press, a touch or the app coming back from a notification, and it alone draws none,
+   the browser's own included, until a key is pressed. Never a page-wide outline: none. */
+[data-focus-quiet]:focus-visible { outline: none; }
+
+/* Chrome's words aren't selected by a press, a long press or a double tap (A13, #373): a control's
+   own words (a session's row and a Needs you title are buttons), a session's header, the app bar's
+   title and a page's title row, which stands in for it on a phone, and a banner's. Everything else
+   stays selectable and copyable: the conversation, code, prompts, questions and every field. */
+button, .button, [role="tab"], [role="menuitem"], .nav-item, .brand, .page-title, .session-header, .banner {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
 
 /* ---- the shell: app bar, navigation, pages (ui.md §7, PWA) ---- */
 /* A phone first: one column with the page's own title row, the bottom navigation fixed under it.
@@ -553,6 +565,46 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 @media (forced-colors: active) {
   .needs-you { border-color: Highlight; }
 }
+/* An agent that needs sign-in (#800): a banner per machine, agent and account, in the Needs you
+   role, above the lane. Its words aren't selected by a press (§9.1 A13); the code is, whole. */
+.sign-in-banners { display: grid; gap: 8px; margin: 8px 0 0; }
+.sign-in-banner {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: start;
+  border-color: var(--ab-needs); background: var(--ab-needs-fill); user-select: none;
+}
+.sign-in-mark { display: flex; margin-top: 2px; }
+.sign-in-body > p { margin: 0; overflow-wrap: anywhere; }
+.sign-in-head { font-weight: 600; color: var(--ab-needs-head); }
+.sign-in-line, .sign-in-expiry, .sign-in-where, .sign-in-uri { font-size: .875rem; color: var(--ab-text); }
+.sign-in-sessions { list-style: none; margin: 4px 0 0; padding: 0; }
+.sign-in-session {
+  min-height: 32px; padding: 0; text-align: left; overflow-wrap: anywhere;
+  font: inherit; color: var(--ab-text); background: none; border: 0; cursor: pointer;
+}
+@media (pointer: coarse) { .sign-in-session { min-height: var(--tap); } }
+.sign-in-session:hover { text-decoration: underline; }
+.sign-in-code-line { margin: 4px 0; }
+.sign-in-code { font: 600 1.5rem var(--ab-font-mono); letter-spacing: .12em; -webkit-user-select: all; user-select: all; color: var(--ab-text); }
+.sign-in-actions, .sign-in-flow-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.sign-in-problem { color: var(--ab-needs-text); font-size: .875rem; }
+.sign-in-copied:empty { display: none; }
+.sign-in-banner [aria-disabled="true"] { opacity: .6; cursor: progress; }
+/* The sign-in sheet (#800, ui.md §6.13): modal, so focus stays in it, and Cancel is where it
+   starts. Its code is selectable whole. */
+.sign-in-sheet {
+  width: min(28rem, calc(100vw - 32px)); padding: 16px 20px; border: 1px solid var(--ab-needs);
+  border-radius: var(--radius); background: var(--ab-card); color: var(--ab-text);
+}
+.sign-in-sheet::backdrop { background: var(--ab-shadow); }
+.sign-in-sheet-title { margin: 0 0 8px; font-size: 1rem; font-weight: 600; }
+.sign-in-sheet-body > p { margin: 0 0 4px; overflow-wrap: anywhere; }
+.sign-in-sheet-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+@media (forced-colors: active) {
+  .sign-in-sheet { border-color: CanvasText; }
+}
+@media (forced-colors: active) {
+  .sign-in-banner { border-color: Highlight; }
+}
 /* Moving rows: a grip on hover with a mouse, and a line where a dragged row will go. */
 .drag-handle { display: none; }
 @media (hover: hover) and (pointer: fine) {
@@ -590,7 +642,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   min-height: var(--tap); padding: 0 12px; text-align: left; font: inherit; color: var(--ab-text);
   background: none; border: 0; border-radius: 4px; cursor: pointer;
 }
-.row-menu-item:hover:not(:disabled), .row-menu-item:focus-visible { background: var(--ab-subtle); }
+.row-menu-item:hover:not(:disabled), .row-menu-item:focus-visible:not([data-focus-quiet]) { background: var(--ab-subtle); }
 .row-menu-item:disabled { color: var(--ab-text2); cursor: default; }
 
 /* ---- a session's row (ui.md §6.1) ----
@@ -633,8 +685,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   .session.selected > .row-main::before { forced-color-adjust: none; background: Highlight; }
   .session.selected .row-main { outline: 1px solid Highlight; }
 }
-/* The session a notification or a launch opened, for a moment. */
-.session.linked .row-main, .session-view.linked .session-header { box-shadow: inset 0 0 0 2px var(--ab-bridge); }
+/* The session a notification or a launch opened is shown selected, with nothing drawn around its
+   header or row: a Bridge ring there looked like focus nobody moved (A12, #373). */
 /* Facts on a line (meta.js): a separator is in the text face whatever face its neighbours are
    in, and stays with the fact before it. */
 .sep { font-family: var(--font-text); font-weight: 400; letter-spacing: normal; color: var(--ab-text2); }
@@ -984,7 +1036,7 @@ summary {
 .md-copy > span { padding: 3px 8px; border: 1px solid var(--ab-stroke2); border-radius: 6px; background: var(--ab-card); }
 .md-copy[data-copy="done"] { color: var(--ab-bridge); }
 .md-copy[data-copy="failed"] { color: var(--ab-danger-text); }
-.md-copy:focus-visible { outline: 2px solid var(--ab-bridge); outline-offset: -2px; border-radius: 8px; }
+.md-copy:focus-visible:not([data-focus-quiet]) { outline: 2px solid var(--ab-bridge); outline-offset: -2px; border-radius: 8px; }
 /* The fallback copy's scratch field: in the DOM for a moment, never seen. */
 .md-copy-buffer { position: fixed; top: 0; left: -9999px; width: 1px; height: 1px; padding: 0; border: 0; font-size: 16px; }
 .md blockquote { border-left: 3px solid var(--ab-stroke2); padding-left: 10px; color: var(--ab-text2); margin-left: 0; }

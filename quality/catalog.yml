@@ -542,6 +542,20 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: playwright-apt
+    kind: unit
+    ring: 1
+    select: affected
+    platforms: [linux-x64]
+    runner: hosted
+    # The download every job that runs `playwright install --with-deps` makes first (#799, #689):
+    # against stand-ins for npx, sudo and apt-get, it leaves the Azure mirror for Canonical's
+    # archive only at the time limit, and fails on any other apt failure or an unexpected mirror list.
+    triggers: [.github/actions/playwright-system-packages/**]
+    command: bash .github/actions/playwright-system-packages/test.sh
+    where: ci.yml light
+    status: exists
+
   - id: pwa-pages
     kind: packaging
     ring: 2
@@ -771,7 +785,7 @@ suites:
     triggers: [src/AgentBridge.Relay/**, src/AgentBridge.Transport/**, nuget.config, .github/actions/install-trivy/**]
     # Blocks on a fixable HIGH or CRITICAL vulnerability (none on main when added, #433); unfixed
     # ones go to code scanning from main only. relay.yml scan holds staging and production back.
-    command: see ci.yml product (trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay)
+    command: see ci.yml product (install-trivy's vulnerability-db, then trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay)
     where: ci.yml product, relay-image-sarif; relay.yml scan
     status: exists
 

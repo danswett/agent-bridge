@@ -161,6 +161,7 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     // Notifications sent (any call naming no entity), in order, with the account that sent them.
     public List<(string Service, JsonObject Data)> Notified { get; } = [];
     public List<(string Service, JsonObject Data)> NotifiedNow() { lock (gate) { return [.. Notified]; } }
+    public Func<string, CancellationToken, Task>? BeforeNotify { get; set; }
     public Func<string, bool>? NotifyFailsFor { get; set; }
     // What a notify call throws instead, when not null (a timeout, say).
     public Func<string, Exception?>? NotifyThrows { get; set; }
@@ -174,9 +175,9 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         if (ServiceTarget.Check(data) is { } refused) { throw new InvalidOperationException(refused); }
         if (data["entity_id"] is null)
         {
-            if (NotifyThrows?.Invoke($"{domain}.{service}") is { } thrown) { throw thrown; }
-            if (NotifyFailsFor?.Invoke($"{domain}.{service}") == true) { throw new HttpRequestException($"{domain}.{service}: Home Assistant answered 400 Bad Request"); }
-            lock (gate) { Notified.Add(($"{domain}.{service}", data.DeepClone().AsObject())); }
+            var notification = $"{domain}.{service}";
+            if (BeforeNotify is { } before) { return NotifyAfterAsync(notification, data, before, cancellationToken); }
+            Notify(notification, data);
             return Task.CompletedTask;
         }
         var entityId = data["entity_id"]!.GetValue<string>();
@@ -185,6 +186,19 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         lock (gate) { Services.Add(($"{domain}.{service}", entityId, value, TokenUser)); }
         Apply($"{domain}.{service}", entityId, value, TokenUser);
         return Task.CompletedTask;
+    }
+
+    async Task NotifyAfterAsync(string service, JsonObject data, Func<string, CancellationToken, Task> before, CancellationToken ct)
+    {
+        await before(service, ct);
+        Notify(service, data);
+    }
+
+    void Notify(string service, JsonObject data)
+    {
+        if (NotifyThrows?.Invoke(service) is { } thrown) { throw thrown; }
+        if (NotifyFailsFor?.Invoke(service) == true) { throw new HttpRequestException($"{service}: Home Assistant answered 400 Bad Request"); }
+        lock (gate) { Notified.Add((service, data.DeepClone().AsObject())); }
     }
 
     HaTrigger Apply(string service, string entityId, string value, string? userId)

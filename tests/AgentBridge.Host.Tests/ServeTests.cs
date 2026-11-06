@@ -5,6 +5,7 @@ using AgentBridge.Host.Core;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // The host's Protocol v1 service end to end: fixture sessions read by the real
@@ -14,6 +15,7 @@ public sealed class ServeTests : IAsyncLifetime
 {
     const string Id = "88888888-8888-4888-8888-888888888888";
     const string Other = "99999999-9999-4999-8999-999999999999";
+    const string Third = "77777777-7777-4777-8777-777777777777";
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
     readonly Fixture f = new();
@@ -92,7 +94,7 @@ public sealed class ServeTests : IAsyncLifetime
         Assert.Equal(1, hello.GetProperty("protocol").GetInt32());
         Assert.Equal("Test host", hello.GetProperty("machine").GetProperty("name").GetString());
         Assert.Equal("windows", hello.GetProperty("machine").GetProperty("os").GetString());
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
     }
 
     [Fact]
@@ -355,6 +357,229 @@ public sealed class ServeTests : IAsyncLifetime
         await source.RefreshAsync();
         var woke = Received.Read<SessionPatch>((await NextAsync(second)).Data);
         Assert.Equal((Other, (long?)null), (woke.Id, woke.Base));
+    }
+
+    // A client subscribed for patches that shows the fixture's session, beside a second one it
+    // does not; the quiet interval on a fake clock, the source's own 250 ms on the real one. The
+    // second session's first change after a quiet spell goes at once, and its next is held.
+    async Task<(SecureChannel Channel, FakeTimeProvider Time, SessionService.Feed Feed, long Before)> FocusedWithAChangeHeldAsync()
+    {
+        var otherEvents = f.CopilotSession(Other, 101, name: "Quiet session");
+        f.Processes.Run(AgentKind.Copilot, 101);
+        await source.RefreshAsync();
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        SessionService.Feed? feed = null;
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
+        service.FeedCreated += created => feed = (SessionService.Feed)created;
+        host.Hub.Handler = service.HandleAsync;
+        var ch = await OpenAsync();
+        Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true }));
+        await SnapshotAsync(ch);
+        Assert.Equal("{}", Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id })).GetRawText());
+
+        Fixture.Append(otherEvents, Copilot.Assistant("first", 4));
+        await source.RefreshAsync();
+        Assert.Equal(Other, Received.Read<SessionPatch>((await NextAsync(ch)).Data).Id);
+        var before = source.Revision;
+        Fixture.Append(otherEvents, Copilot.Assistant("second", 5));
+        await source.RefreshAsync();
+        await Wait.UntilAsync(() => feed!.Held == 1, "the quiet session's next change held", Patience);
+        return (ch, time, feed!, before);
+    }
+
+    [Fact]
+    public async Task Once_a_client_says_what_it_shows_other_sessions_changes_wait_for_the_quiet_interval_and_no_revision_passes_them()
+    {
+        var (ch, time, feed, before) = await FocusedWithAChangeHeldAsync();
+
+        await ChangeAsync("shown at once", 6);
+        var shown = Received.Read<SessionPatch>((await NextAsync(ch)).Data);
+        Assert.Equal(Id, shown.Id);
+        // The held change was made after `before`: a client resuming from a later revision would
+        // never be sent it.
+        Assert.True(shown.Revision <= before, $"revision {shown.Revision} passes the change held since {before}");
+        Assert.False(ch.Events.TryRead(out _));
+
+        time.Advance(service.QuietInterval);
+        var released = Received.Read<SessionPatch>((await NextAsync(ch)).Data);
+        Assert.Equal(Other, released.Id);
+        Assert.Equal(source.Revision, released.Revision);
+        Assert.Equal(0, feed.Held);
+    }
+
+    [Fact]
+    public async Task A_new_question_on_a_session_not_open_goes_at_once_while_another_sessions_change_stays_held()
+    {
+        var thirdEvents = f.CopilotSession(Third, 102, name: "Asking session");
+        f.Processes.Run(AgentKind.Copilot, 102);
+        var (ch, _, feed, before) = await FocusedWithAChangeHeldAsync();
+
+        Fixture.Append(thirdEvents, Copilot.User("go", 4), Copilot.TurnStart(5), Copilot.ToolStart("q1", "ask_user", new
+        {
+            message = "Which one?",
+            requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b" } } }, required = new[] { "pick" } },
+        }, 6));
+        await source.RefreshAsync();
+
+        var asked = await NextAsync(ch);
+        Assert.Equal(Third, asked.Data.GetProperty("id").GetString());
+        Assert.Contains("Which one?", asked.Data.GetRawText());
+        Assert.True(Received.Read<SessionPatch>(asked.Data).Revision <= before);
+        Assert.Equal(1, feed.Held);
+    }
+
+    // Queue exact states so a question disappearing can be tested independently of status,
+    // and a field changing independently of the parser's other changes to the session.
+    async Task AssertUrgentChangeAsync(Func<Session, Session> change, SessionStatus status = SessionStatus.Waiting,
+        bool question = true, bool answerAtMachine = false)
+    {
+        var (ch, _, feed, floor) = await FocusedWithAChangeHeldAsync();
+        var before = source.Snapshot().Single(s => s.Id == Id) with
+        {
+            Id = Third,
+            Status = status,
+            Question = question ? new Question
+            {
+                Id = "q1",
+                Kind = QuestionKind.Form,
+                Message = "Which one?",
+                AskedAt = Fixture.T0,
+                AnswerAtMachine = answerAtMachine,
+                Fields = [new Field { Name = "pick", Type = FieldType.Choice, Options = [new("a"), new("b")] }],
+            } : null,
+        };
+        Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, before, source.Revision + 1)));
+        var sent = await NextAsync(ch);
+        Assert.Equal(Third, sent.Data.GetProperty("id").GetString());
+        var heldJson = SessionPatches.Apply(null, null, Received.Read<SessionPatch>(sent.Data));
+
+        // Make this session quiet too: its urgent change must replace its held state without
+        // releasing the other session or advancing the watermark past that session's floor.
+        var held = before with { Title = "A held title" };
+        Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, held, source.Revision + 2)));
+        await Wait.UntilAsync(() => feed.Held == 2, "both quiet sessions' changes held", Patience);
+        var after = change(held);
+        Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, after, source.Revision + 3)));
+
+        // No clock advance: removing the matching Urgent branch leaves this event held.
+        var live = await NextAsync(ch);
+        Assert.Equal(Events.SessionPatch, live.Name);
+        var patch = Received.Read<SessionPatch>(live.Data);
+        Assert.Equal(Third, patch.Id);
+        Assert.Equal(sent.Seq, patch.Base);
+        Assert.True(patch.Revision <= floor);
+        Assert.True(JsonNode.DeepEquals(SessionPatches.Json(after), SessionPatches.Apply(heldJson, sent.Seq, patch)));
+        Assert.Equal(1, feed.Held);
+        Assert.False(ch.Events.TryRead(out _));
+    }
+
+    [Theory]
+    [InlineData("id")]
+    [InlineData("fields")]
+    public async Task Replacing_a_question_while_still_waiting_goes_at_once_even_when_the_session_is_not_open(string changed) =>
+        await AssertUrgentChangeAsync(session => session with
+        {
+            Question = changed == "id" ? session.Question! with { Id = "q2" } : session.Question! with
+            {
+                Fields = [new Field { Name = "pick", Type = FieldType.Choice, Options = [new("a"), new("c")] }],
+            },
+        });
+
+    [Fact]
+    public async Task Removing_a_question_while_still_waiting_goes_at_once_even_when_the_session_is_not_open() =>
+        await AssertUrgentChangeAsync(session => session with { Question = null });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Changing_only_answer_at_machine_while_still_waiting_goes_at_once_even_when_the_session_is_not_open(bool before) =>
+        await AssertUrgentChangeAsync(session => session with
+        {
+            Question = session.Question! with { AnswerAtMachine = !before },
+        }, answerAtMachine: before);
+
+    [Theory]
+    [InlineData(SessionStatus.Waiting)]
+    [InlineData(SessionStatus.Ending)]
+    public async Task Changing_only_status_to_waiting_or_ending_goes_at_once_even_when_the_session_is_not_open(SessionStatus status) =>
+        await AssertUrgentChangeAsync(session => session with { Status = status }, status: SessionStatus.Working, question: false);
+
+    // A resumed snapshot leaves out what did not change, which the client still holds, a pending
+    // question included: with nothing sent to compare with, a session's first change goes at once.
+    [Fact]
+    public async Task After_a_resume_the_first_change_of_a_session_not_sent_again_goes_at_once_while_another_stays_held()
+    {
+        var otherEvents = f.CopilotSession(Other, 101, name: "Quiet session");
+        f.Processes.Run(AgentKind.Copilot, 101);
+        await source.RefreshAsync();
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        SessionService.Feed? feed = null;
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0", Instance: "run-1")) { Time = time };
+        service.FeedCreated += created => feed = (SessionService.Feed)created;
+        host.Hub.Handler = service.HandleAsync;
+        var first = await OpenAsync();
+        Result(await first.RequestAsync(Ops.SessionsSubscribe, new { patch = true }));
+        var revision = (await SnapshotAsync(first))[^1].Data.GetProperty("revision").GetInt64();
+        var ch = await OpenAsync();
+        Assert.True(Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true, since = new { instance = "run-1", revision } })).GetProperty("resumed").GetBoolean());
+        Assert.Equal([Events.SessionsSynced], (await SnapshotAsync(ch)).Select(e => e.Name));
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = false }));
+
+        // The quiet session's first change goes for want of anything to compare with, its second
+        // after a quiet spell, its third is held.
+        for (var i = 0; i < 2; i++)
+        {
+            Fixture.Append(otherEvents, Copilot.Assistant("change " + i, 4 + i));
+            await source.RefreshAsync();
+            Assert.Equal(Other, Received.Read<SessionPatch>((await NextAsync(ch)).Data).Id);
+        }
+        Fixture.Append(otherEvents, Copilot.Assistant("held", 6));
+        await source.RefreshAsync();
+        await Wait.UntilAsync(() => feed!.Held == 1, "the quiet session's third change held", Patience);
+
+        await ChangeAsync("not sent since the resume", 7);
+        Assert.Equal(Id, Received.Read<SessionPatch>((await NextAsync(ch)).Data).Id);
+        Assert.Equal(1, feed!.Held);
+    }
+
+    [Fact]
+    public async Task The_focus_rate_window_resets_after_ten_seconds_and_a_refusal_does_not_end_the_channel_or_feed()
+    {
+        var (ch, time, feed, _) = await FocusedWithAChangeHeldAsync();
+        // The helper already sent the first focus request in this window.
+        for (var i = 1; i < 20; i++) { Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id })); }
+
+        time.Advance(TimeSpan.FromMilliseconds(9_999));
+        var refused = await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Other });
+        Assert.False(refused.GetProperty("ok").GetBoolean());
+        Result(await ch.RequestAsync(Ops.Hello, new { }));
+        Assert.Equal(1, feed.Held);
+
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Other }));
+        var released = Received.Read<SessionPatch>((await NextAsync(ch)).Data);
+        Assert.Equal(Other, released.Id);
+        Assert.Equal(0, feed.Held);
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id }));
+        await ChangeAsync("still delivering after a refusal", 6);
+        var live = Received.Read<SessionPatch>((await NextAsync(ch)).Data);
+        Assert.Equal(Id, live.Id);
+        Assert.True(ch.IsOpen);
+        Assert.Equal(1, service.Subscribers);
+    }
+
+    [Fact]
+    public async Task A_session_the_client_opens_has_its_held_change_sent_at_once()
+    {
+        var (ch, _, feed, _) = await FocusedWithAChangeHeldAsync();
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Other }));
+
+        var released = Received.Read<SessionPatch>((await NextAsync(ch)).Data);
+        Assert.Equal(Other, released.Id);
+        Assert.Equal(source.Revision, released.Revision);
+        Assert.Equal(0, feed.Held);
     }
 
     [Theory]
