@@ -1819,12 +1819,12 @@ verbs). Every state is words on the row, with at most one verb:
 - **Set up, not yet tested:** an agent whose hooks are set up but that no new session has
   tested yet reads "Not tested yet" (#705), never Ready.
 - **A host the app can't act on:** "Read-only · *reason*" when the host reports `blocked`
-  (for example "Read-only · this machine's host is older", in the one word every row uses for
-  it, #959); "Hook ownership couldn't be checked · *reason*" (or "Hook intake couldn't be
+  (for example "Read-only · this machine's bridge is older": a person never sees "host", #959,
+    #1022);  "Hook ownership couldn't be checked · *reason*" (or "Hook intake couldn't be
   checked · *reason*") when the hooks have
   failed and their `hookSetup` is `unknown`, the reason being one of access denied, file in use
   or couldn't read ("Can't check" alone when the host gives neither); and "Can't check · this
-  machine's host is older" only when `hookSetup` is `unknown` and the hooks are neither blocked
+  machine's bridge is older" only when `hookSetup` is `unknown` and the hooks are neither blocked
   nor failed, since a current host sends `unknown` only with those. All three are `text2`, with
   no status colour and no verb, and never fall back to Ready, Not set up or Needs repair.
 
@@ -2609,7 +2609,7 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   - Agent rows today (#784, #705): "Not installed"; "Not installed · install it on this
     machine"; "Installing…"; "Install failed · *reason*"; "Read-only · *reason*"; "Hook
     ownership couldn't be checked · *reason*"; "Hook intake couldn't be checked · *reason*";
-    "Can't check · this machine's host is older"; "Not tested yet". Actions: Install CLI, Cancel
+    "Can't check · this machine's bridge is older"; "Not tested yet". Actions: Install CLI, Cancel
     (named "Cancel CLI installation"); the consent dialog's Install CLI and runtimes.
   - Version lines (#231): "We couldn't read *Agent*'s version. Setup may not work; we'll
     check it afterwards."; "Update *Agent* to set it up".
