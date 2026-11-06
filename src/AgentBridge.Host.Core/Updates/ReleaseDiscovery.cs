@@ -104,8 +104,10 @@ public sealed class ReleaseDiscovery : IDisposable
             var state = Sane(Read(), time.GetUtcNow());
             var now = time.GetUtcNow();
             var cached = state.Url == url && state.Body is not null;
-            if (cached && now < state.FreshUntil) { return state.Body!; }
+            // A backoff first: a clock put back can make an older answer's FreshUntil future again,
+            // and serving it then would say a check succeeded that GitHub has just refused.
             if (state.NotBefore is { } wait && now < wait) { throw Held(state); }
+            if (cached && now < state.FreshUntil) { return state.Body!; }
             var answer = await AskAsync(url, cached ? state.ETag : null, cancellationToken);
             now = time.GetUtcNow();
             var unchanged = answer.Status == HttpStatusCode.NotModified && cached;
@@ -182,9 +184,16 @@ public sealed class ReleaseDiscovery : IDisposable
         }
     }
 
+    // A list of releases, each an object: `[null]` would read as no releases, so "up to date", and
+    // `[1]` would fail every check for the interval, so either is an answer that couldn't be read.
     static bool IsList(string body)
     {
-        try { using var doc = JsonDocument.Parse(body); return doc.RootElement.ValueKind == JsonValueKind.Array; }
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.ValueKind == JsonValueKind.Array
+                && doc.RootElement.EnumerateArray().All(r => r.ValueKind == JsonValueKind.Object);
+        }
         catch (JsonException) { return false; }
     }
 

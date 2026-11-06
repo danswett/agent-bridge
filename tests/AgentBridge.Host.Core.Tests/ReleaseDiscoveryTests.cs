@@ -194,6 +194,37 @@ public sealed class ReleaseDiscoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task A_list_holding_anything_but_releases_is_an_answer_that_could_not_be_read_not_none_newer()
+    {
+        using var discovery = Discovery();
+        github.Answer = _ => Ok("[null]", "\"v1\"");
+
+        var failed = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
+        Assert.StartsWith("GitHub's answer to the update check could not be read.", failed.Message);
+    }
+
+    [Fact]
+    public async Task A_refusal_under_a_clock_since_put_back_is_not_answered_from_the_list_before_it()
+    {
+        // Asked at 19:50 and refused at 20:00, on a clock since put back by a minute.
+        using (var before = new ReleaseDiscovery(folder, github, new FakeTimeProvider(Now - ReleaseDiscovery.Interval), random: () => 0))
+        {
+            github.Answer = _ => Ok(Releases, "\"v1\"");
+            await before.ReleasesAsync(Url, CancellationToken.None);
+        }
+        using (var refused = new ReleaseDiscovery(folder, github, new FakeTimeProvider(Now), random: () => 0))
+        {
+            github.Answer = _ => new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(5)) } };
+            await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => refused.ReleasesAsync(Url, CancellationToken.None));
+        }
+        using var discovery = new ReleaseDiscovery(folder, github, new FakeTimeProvider(Now - TimeSpan.FromMinutes(1)), random: () => 0);
+
+        var held = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
+        Assert.True(held.Limited);
+        Assert.Equal(2, github.Requests.Count);
+    }
+
+    [Fact]
     public async Task The_app_and_hosts_sharing_the_apps_folder_make_one_request_between_them_even_checking_at_once()
     {
         // Each process has its own; only the folder is shared.
