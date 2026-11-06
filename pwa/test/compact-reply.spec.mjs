@@ -111,4 +111,45 @@ test.describe('on a phone', () => {
     expect(await height(t)).toBe(44);
     expect(await height(box(v).locator('.reply-box'))).toBe(52);
   });
+
+  test('a question waiting puts one line above the box, whose link focuses its first choice and leaves the header as it was', async ({ page }) => {
+    const v = await session(page);
+    await upsert(page, IDLE, { status: 'waiting', statusSince: later(), updatedAt: later(), question: choices('q-935') });
+    const notice = box(v).locator('.reply-held');
+    await expect(notice).toHaveText('Answer its question first. Go to the question');
+    await expect(notice).toHaveCSS('color', await v.evaluate((el) => {
+      const p = el.ownerDocument.createElement('p');
+      p.style.color = 'var(--ab-needs-text)';
+      el.append(p);
+      const c = getComputedStyle(p).color;
+      p.remove();
+      return c;
+    }));
+    expect(await height(notice)).toBe(18);
+    // One line of notice, and the box: 99 at rest.
+    expect(await height(v.locator('.reply-slot'))).toBe(99);
+    await expect(input(v)).toBeDisabled();
+    // Read back up, the question out of sight, with the header folded to its bar.
+    await settle(v);
+    await scrollTo(v, 0);
+    await scrollTo(v, 400);
+    const before = await head(v);
+    expect(before.ty).toBe(-before.room);
+    await expect(v.locator('.question-slot .answer')).not.toBeInViewport();
+    await box(v).getByRole('button', { name: 'Go to the question' }).click();
+    await expect(v.locator('.question-slot').getByRole('button', { name: 'First' })).toBeFocused();
+    await settle(v);
+    await expect(v.locator('.question-slot .answer')).toBeInViewport();
+    expect((await head(v)).ty).toBe(before.ty);
+  });
+
+  test('the link is not drawn from 760: the notice says it in full', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    const v = await session(page, { long: false });
+    await upsert(page, IDLE, { status: 'waiting', statusSince: later(), updatedAt: later(), question: choices('q-935') });
+    await expect(box(v).locator('.reply-held')).toHaveText('The session is waiting for an answer to its question. Answer that first, then reply.');
+    // A phone's notice comes back when the window narrows.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(box(v).locator('.reply-held')).toHaveText('Answer its question first. Go to the question');
+  });
 });

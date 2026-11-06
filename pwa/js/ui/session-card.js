@@ -1363,7 +1363,7 @@ export class SessionCard {
         this.#reply = null;
       }
       if (hostId) {
-        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0 });
+        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0, onGoToQuestion: () => this.#goToQuestion() });
         if (this.#replyDraft.hostId === hostId) { this.#reply.els.input.value = this.#replyDraft.text; }
       }
       this.#replyHost = hostId;
@@ -1559,6 +1559,23 @@ export class SessionCard {
     if (!view) { return; }
     const fits = view.getBoundingClientRect().height <= this.els.scroll.getBoundingClientRect().height;
     this.#scrollTo(el && view.contains(el) && !fits ? el : view, behavior);
+  }
+
+  // The phone notice's "Go to the question" (ui.md §6.5): an app scroll to the question, which
+  // leaves the header as it was, and focus on its first choice. A question taking nothing yet (its
+  // machine offline) has no choice to focus: its heading takes focus, as a notification's does.
+  #goToQuestion() {
+    const view = this.#guarded?.isConnected ? this.#guarded : null;
+    if (!view) { return; }
+    const usable = (c) => !c.disabled && !c.closest('fieldset:disabled') && c.getClientRects().length > 0;
+    let target = [...view.querySelectorAll('.answer-controls button, .answer-controls input, .answer-controls select, .answer-controls textarea')].find(usable)
+      ?? [...view.querySelectorAll(QUESTION_CONTROLS)].find(usable);
+    if (!target) {
+      target = view.querySelector('.question-head');
+      if (target) { target.tabIndex = -1; }
+    }
+    target?.focus({ preventScroll: true });
+    this.revealQuestion(scrollBehavior(), target);
   }
 
   // A scroll to the question: the guard runs from now and, for a smooth scroll that has somewhere

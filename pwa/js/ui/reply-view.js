@@ -110,11 +110,15 @@ export class ReplyBox {
   #resize = null;
   #width = 0;
   #fitFrame = 0;
+  // Takes the person to the question the reply waits on, and focuses its first choice.
+  #onGoToQuestion = null;
 
   // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
-  // largeMax: the largest it takes through the blob store, 0 for none.
-  constructor({ machineName, replying, attach = false, largeMax = 0, uuid = () => globalThis.crypto.randomUUID() }) {
+  // largeMax: the largest it takes through the blob store, 0 for none. onGoToQuestion: the
+  // phone notice's link, to the question the reply waits on.
+  constructor({ machineName, replying, attach = false, largeMax = 0, onGoToQuestion = null, uuid = () => globalThis.crypto.randomUUID() }) {
     this.machineName = machineName;
+    this.#onGoToQuestion = onGoToQuestion;
     this.replying = replying;
     this.uuid = uuid;
     this.idBase = `r${++seq}`;
@@ -222,6 +226,7 @@ export class ReplyBox {
     e.bytes = h('span', { class: 'bytes', id: `${id}-bytes`, 'aria-live': 'polite' });
     e.hint = h('p', { class: 'note reply-hint', id: `${id}-hint`, hidden: true }, 'Line breaks are sent as spaces: the session gets your reply as one line.');
     e.held = h('p', { class: 'note warn reply-held', id: `${id}-held`, hidden: true }, 'The session is waiting for an answer to its question. Answer that first, then reply.');
+    e.toQuestion = h('button', { type: 'button', class: 'reply-question-link', onclick: () => this.#onGoToQuestion?.() }, 'Go to the question');
     e.error = h('p', { class: 'answer-error reply-error', role: 'alert', hidden: true });
     e.files = h('ul', { class: 'attachments', 'aria-label': 'Attachments', hidden: true });
     e.picker = h('input', { type: 'file', multiple: true, class: 'file-picker', hidden: true, tabindex: '-1', 'aria-hidden': 'true' });
@@ -288,16 +293,23 @@ export class ReplyBox {
     e.hint.hidden = !/[\r\n\u2028\u2029]/.test(text);
     const held = this.#held();
     const pending = this.#pending();
+    const linked = e.toQuestion === e.toQuestion.ownerDocument.activeElement;
     e.held.hidden = !held;
     if (this.#offline) {
       e.held.textContent = this.#offline;
+    } else if (held && this.#session.question.answerAtMachine) {
+      e.held.textContent = 'The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.';
+    } else if (held && this.#phone?.matches && this.#onGoToQuestion) {
+      // A phone's notice is one line, and its link takes the person to the question (ui.md §6.5).
+      e.held.replaceChildren(h('span', { class: 'reply-notice-text' }, 'Answer its question first.'), ' ', e.toQuestion);
     } else if (held) {
-      e.held.textContent = this.#session.question.answerAtMachine
-        ? 'The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.'
-        : 'The session is waiting for an answer to its question. Answer that first, then reply.';
+      e.held.textContent = 'The session is waiting for an answer to its question. Answer that first, then reply.';
     }
+    e.held.classList.toggle('reply-notice', e.held.contains(e.toQuestion));
     // Offline, the words can still be written, to go once it is back; a question would take them.
     e.input.disabled = !!this.#session?.question;
+    // The link gone with the question it led to: focus goes to the words, not the top of the page.
+    if (linked && (e.held.hidden || !e.held.contains(e.toQuestion)) && !e.input.disabled) { e.input.focus(); }
     e.attach.hidden = !this.#attach;
     e.attach.disabled = held || pending || this.#files.length + this.#preparing >= AttachmentLimits.perReply;
     for (const b of e.files.querySelectorAll('button.remove')) { b.disabled = pending; }

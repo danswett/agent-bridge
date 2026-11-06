@@ -1508,6 +1508,16 @@ summary {
     grid-column: 3; grid-row: 2; width: var(--tap); min-height: var(--tap); height: var(--tap);
     border: 6px solid transparent; background-clip: padding-box; border-radius: calc(var(--ab-radius-control) + 6px);
   }
+  /* The question notice: one line above the box in needs text, its link to the question (99 at rest
+     with the box). Too long for a narrow phone, its words are cut before the link is. */
+  .reply .reply-held.reply-notice {
+    display: flex; margin: 0 0 var(--ab-space-2); font-size: 13px; line-height: 18px; white-space: nowrap;
+  }
+  .reply-notice-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .reply-question-link {
+    flex: none; padding: 0; margin: 0 0 0 .25em; border: 0; background: none; color: inherit; font: inherit;
+    font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+  }
 }
 /* A button's pressed fill keeps its label at 4.5:1 (ui.md §9) rather than fading the whole
    control: a filled button's Bridge moves toward the text colour, darker on light and lighter on
