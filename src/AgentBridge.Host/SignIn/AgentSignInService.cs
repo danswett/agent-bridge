@@ -68,7 +68,8 @@ internal sealed class AgentSignInService : IAsyncDisposable
         timer = this.time.CreateTimer(_ => _ = SweepAsync(), null, TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
     }
 
-    public bool Enabled { get; init; } = AgentSignIn.EnabledByDefault;
+    // Off unless PhoneSignInSetup turns it on from the machine's permissions.phoneSignIn (#972).
+    public bool Enabled { get; init; }
     public TimeSpan Limit { get; init; } = TimeSpan.FromMinutes(10);
     public TimeSpan ReattachGrace { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan Kept { get; init; } = TimeSpan.FromMinutes(10);

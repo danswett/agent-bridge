@@ -1201,6 +1201,22 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Sign_in_from_devices_is_off_until_turned_on_through_the_host_and_then_offers_a_restart()
+    {
+        host.On(HostOps.Settings, _ => new SettingsResult(new HostSettingsView(true, PhoneSignIn: true), RestartRequired: true));
+        await Connected();
+        Assert.False(settings.PhoneSignIn);
+
+        settings.PhoneSignIn = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "host.settings");
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, PhoneSignIn: true), RestartRequired = true };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+
+        Assert.True(host.Sent(HostOps.Settings)[0].GetProperty("phoneSignIn").GetBoolean());
+        await Wait.UntilAsync(() => settings.RestartRequired && settings.PhoneSignIn, "the restart offer");
+    }
+
+    [Fact]
     public async Task Keeping_a_Dev_Box_awake_is_offered_on_a_Dev_Box_only_and_turned_on_through_the_host()
     {
         Saves(d => new HostSettingsView(true, DevBoxKeepAwake: d.GetProperty("devBoxKeepAwake").GetBoolean()));

@@ -64,6 +64,11 @@ public sealed class SessionSourceOptions
     // escaped anything in, EscapedApproval.Confirm or .Machine, said on each as EscapedText.Approve.
     public string EscapedApproval { get; init; } = AgentBridge.Protocol.EscapedApproval.Confirm;
 
+    // The agents a person's device may sign in again on this machine (#972): the host's
+    // permissions.phoneSignIn, for the agents it has a sign-in adapter for. Their signInNeeded
+    // attention says signIn phone. None by default, when nothing claims a phone sign-in.
+    public IReadOnlyCollection<AgentBridge.Protocol.AgentKind> PhoneSignIn { get; init; } = [];
+
     // On first sight only this much of the end of a transcript is parsed. The rest is
     // skimmed for counts and the first user message, never parsed as JSON wholesale:
     // a Copilot events.jsonl of 18 MB is ordinary and some reach hundreds.
