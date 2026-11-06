@@ -1264,6 +1264,9 @@ message.
 
 ### 6.12 Restored sessions (#780)
 
+**Not built yet:** planned for #780 Host B and its client slices; the field names here are the
+plan's, not a shipped contract.
+
 After a reboot or a host crash, the host starts again the sessions that were running and says so.
 Decided 2026-11 on #780; the protocol is #780's plan, and nothing here adds to it. Every element
 below reads one field, named in brackets. A client shows only what the host sends: it never
@@ -1286,12 +1289,13 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 
 **The machine notice** (`hello.machine.restore`, announced through `hello.changed`, #646)
 
-- **Where and how:** one banner per machine, in the same place and the same form as the
-  Discovery held banner (#293, #786): an informational InfoBar at the top of the session list,
-  above the rows and below any Discovery held banner for the same machine. It is closable.
+- **Where and how:** one banner per machine, in the same form as the Discovery held banner
+  (#293, #786): an informational InfoBar over every page, in the window's banner area (§7),
+  below that machine's Discovery held banner (Platforms, below, gives each client's place). It is
+  closable.
 - **Content:** a title and the lines below, with no line limit: every failure and its reason is
-  shown. A line whose list is empty is left out. The banner grows to fit; past half the list's
-  height it scrolls inside itself, so the rows stay visible.
+  shown. A line whose list is empty is left out. The banner grows to fit; past half the window's
+  height it scrolls inside itself, so the page stays visible.
   - Title: "*machine* restarted after a reboot at 03:12" (`cause: reboot`) or "*machine*'s host
     restarted at 03:12" (`cause: crash`), from `at`. With `signedInAt`, the reboot title ends
     "… · restored when you signed in at 08:40".
@@ -1308,7 +1312,8 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 - **Offered only:** when the client is read-only beside agent-ha-bridge (G5), or when the
   machine's `sessions.restoreOnStart` is off (`offered`), the notice still says what died, and
   the "Restored …" line reads instead "*n* sessions can be restored at the machine". It offers no
-  button: restoring happens at the machine.
+  button: restoring happens at the machine. Under G5 that stays so; with the setting merely off,
+  a Restore button with a confirmation, from any client, is #948.
 - **Dismissal:** per device, as #786's: closing it hides it on this device only, it is not saved
   across app restarts, and it comes back only if the host sends a new notice. Its close button is
   named "Dismiss restore notice on *machine*".
@@ -1348,7 +1353,7 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 - **Sound:** none. Decision #764 keeps sound for pending questions and approvals only, so this
   notice is silent on every platform. The push payload sets `notification.silent: true`, so an
   older service worker that shows kind `restored` as a `question` stays silent too.
-- **Opening it** opens the machine's session list, where the notice is.
+- **Opening it** opens the machine's session list, with the notice over it.
 - An older service worker shows kind `restored` as a `question`; that is accepted.
 
 **The Settings toggle** (`sessions.restoreOnStart`, per machine, through `SettingsRequest`)
@@ -1381,7 +1386,8 @@ arrives, as a `question`.
 - Continue's accessible name includes the session: "Continue *title*" (A1). One verb (A7).
 - The notice is a polite live region, announced once when it arrives, never again on a
   reconnect or a re-render (A6).
-- Keyboard order: the notice, then its close button, then the list (A3).
+- Keyboard order: the notice, then its close button, then the next banner's close button or the
+  page (A3, A4).
 - Reduced motion: the notice and Continue appear and go without animation (A10).
 - The mark is text, so it is read with the row; it needs no description of its own.
 
@@ -1404,11 +1410,14 @@ arrives, as a `question`.
 
 **Platforms**
 
-- **Windows app:** InfoBar (Informational) above the list; Continue a standard secondary
+- **Windows app:** InfoBar (Informational) in the window's banner area over every page, below
+  that machine's Discovery held InfoBar (§7, Windows: Banners); Continue a standard secondary
   Button; the toast through the app's ordinary notification path (§7).
-- **PWA:** the same banner. The restore notice alone is an exception to §7's "no icon and no
-  dismiss" app banners; every other PWA banner, Discovery held included, keeps §7's rule. The
-  push through `sw.js`, kind `restored`.
+- **PWA:** the same notice as one of §7's app banners, at the top of the content above the page,
+  over every page, after the app banners §7 lists. The PWA has no Discovery held banner (it
+  says "Discovery held" on the machine's row, §6.6), so there is none to sit below. The restore
+  notice alone is an exception to §7's "no icon and no dismiss" app banners; every other PWA
+  banner keeps §7's rule. The push through `sw.js`, kind `restored`.
 - **Apple (#260, owner welshofer):** note only. The same fields; the native form is that track's
   decision.
 - **Home Assistant:** read only. `sensor.agent_bridge_<machine>_restore` (state: the last restore
