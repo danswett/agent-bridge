@@ -258,7 +258,7 @@ once whenever `machine.readOnly` or `capabilities` would differ from what it las
 | `sessions.attach.direct` | `attachment.chunk` takes files up to 100 MiB, not only 256 KiB. Offered with `sessions.attach` on the local pipe only ([local-pipe.md](local-pipe.md)), where the bytes cost the relay nothing |
 | `sessions.stop` | `session.stop`. Left out on the same terms as `sessions.answer`. A client then offers no End session |
 | `sessions.approve` | Copilot permission prompts are approved or denied with `session.answer` ([Copilot permission prompts](#copilot-permission-prompts)). Offered only with `sessions.answer`, by a host whose `permissions.remoteApproval` is on (the default). Without it, every Copilot permission prompt is `answerAtMachine`, and a client says approving from the phone is turned off on that machine |
-| `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions and finished turns ([Notifications](#notifications)). Left out by a host whose `push.enabled` is off ([host-config.md](../host-config.md)): it then fails `push.subscribe` saying it doesn't send notifications, removes nothing on `push.unsubscribe` and lists no devices |
+| `push` | `push.subscribe`, `push.unsubscribe`, `push.list`: Web Push notifications of questions, finished turns and sessions that need sign-in ([Notifications](#notifications)). Left out by a host whose `push.enabled` is off ([host-config.md](../host-config.md)): it then fails `push.subscribe` saying it doesn't send notifications, removes nothing on `push.unsubscribe` and lists no devices |
 | `usage` | `usage.get`, `usage.subscribe`: how much of each agent's allowance is gone ([v1-usage.md](v1-usage.md)) |
 | `usage.shared` | `usage.get` and `usage.subscribe` take `{ "shared": true }` and add the readings this host keeps from the account's other machines, each with `readBy` ([v1-usage.md](v1-usage.md#shared-readings)). Without asking, a client gets the host's own report as before |
 | `sessions.launch` | `launch.options`, `session.launch`: starting or resuming a session in a workspace approved at the machine ([v1-launch.md](v1-launch.md)) |
@@ -1053,6 +1053,7 @@ agent-ha-bridge notifies a phone through Home Assistant.
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
 | `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified. Nor is a turn that ended on an error or a failed sign-in (`attention` `error` or `signInNeeded`): it is idle with the previous turn's answer still beside it, which a `finished` would quote as the new one's; one already due or held for the session is withdrawn while that attention lasts. A `finished` that would have replaced an answered question and does not go (withdrawn so, or refused by a device) sends that question's `resolved` instead to the devices still showing it, unless it is asked again | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
+| `signIn` | **New (#800).** Sessions of the machine need sign-in: `attention` `signInNeeded`, except while its `recovery` is `pending` (signed in, waiting for the session to show it). Sent as soon as the first of them does, with no delay, to every subscribed device, on screen or not: a turn that ended on a 401 is `idle` with the previous turn's answer beside it, and nothing else tells the person every one of those sessions has stopped. Then again each hour while any still does, counted from when one reached a device, a restart of the host included (one that never went is made again by the next host). Once none does, one still waiting to be sent is withdrawn, and the next failure is notified at once. Never one per session, and never for an `error` or `notResponding` (ui.md §6.13): the row says those | Machine, agent and account, per hour |
 
 A device is sent at most one `finished` per session every 10 minutes. One that follows sooner
 waits until the 10 minutes are up, a newer one replacing it, and is sent only if the session is
@@ -1075,9 +1076,13 @@ Every notice about one session on one machine shares:
 
 * a **tag**, `<machine id>:<session id>`: the device replaces the session's notification
   in place. A `resolved` notice turns a stale question into "no longer waiting"; a
-  `finished` one replaces the question it followed.
+  `finished` one replaces the question it followed. A `signIn` notice's is
+  `<machine id>:signin:<agent>:<first 8 hex of SHA-256 of the account>` (of the empty string when
+  the host does not know the account), one per machine, agent and account, so its hourly repeat
+  replaces it.
 * a **topic** (RFC 8030 `Topic`), the first 24 bytes of SHA-256 of
-  `agent-bridge-push|<machine id>|<session id>`, base64url (32 characters; Apple refuses
+  `agent-bridge-push|<machine id>|<session id>` (for `signIn`, the tag's part after the machine id
+  in place of the session id), base64url (32 characters; Apple refuses
   other lengths, spike S5 finding 6): the push service replaces an undelivered push with
   the newer one, so a phone that was offline gets one notice per session, not a backlog.
 
@@ -1085,6 +1090,7 @@ Every notice about one session on one machine shares:
 |---|---|---|
 | `question`, `resolved` | 24 h | `high`, `normal` |
 | `finished` | 6 h | `normal` |
+| `signIn` | 6 h | `high` |
 
 ### The payload
 
@@ -1108,12 +1114,13 @@ service worker shows from the same fields everywhere else:
 
 | Field | Notes |
 |---|---|
-| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. At most 120 bytes |
-| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
-| `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. A client opens that machine and session, and the question ready to answer |
-| `silent` | `true` for `resolved`, which replaces a question without alerting again |
-| `data.kind` | `question`, `finished` or `resolved`. A client reads a kind it doesn't know as `question` |
-| `data.machine`, `data.session`, `data.question` | The machine's device id, the session's `id`, the question's `id` (not for `finished`) |
+| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. `signIn`: "*Agent* on *machine* needs sign-in" (ui.md §6.13). At most 120 bytes |
+| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". `signIn`: "*n* sessions affected" ("1 session affected"); the title names the machine. Never the account, a code, a URL or any of the agent's words. Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
+| `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. `signIn`: `host` and `signin=<agent>` only, never `session` or `question` (#800 6646515428): an older client, which reads the kind as `question`, opens the machine and no question view or answer controls. A client opens that machine and session, and the question ready to answer |
+| `silent` | `true` for `resolved`, which replaces a question without alerting again. Absent for `signIn`, which has the question sound (owner, 2026-11-04, ui.md §6.13) |
+| `data.kind` | `question`, `finished`, `resolved` or `signIn`. A client reads a kind it doesn't know as `question` |
+| `data.machine`, `data.session`, `data.question` | The machine's device id, the session's `id`, the question's `id` (not for `finished`). Neither `session` nor `question` for `signIn`, which is about the machine |
+| `data.agent`, `data.sessions` | `signIn` only: whose sign-in it is (`copilot`, `claude`, `codex`), and how many of the machine's sessions need it |
 | `data.at` | When the host sent it |
 
 The JSON as encrypted is at most **3 KiB**: under RFC 8291's one 4096-byte record (3993
@@ -1322,6 +1329,8 @@ status rather than instead of it.
 * A change to it moves `updatedAt`. It is a few hundred bytes and never trimmed by the
   [session budget](#session-budget).
 * **Older clients** ignore it and read the status, so a signed-out session reads as idle to them.
+  The [`signIn` push](#when-a-host-notifies) reaches them all the same: they read its kind as
+  `question`.
 
 **What a host sends today.** Copilot only, from the `session.error` record that ends a turn,
 read by its structured fields (VM1's sign-in failures, #800, carry all three):
@@ -1332,6 +1341,19 @@ read by its structured fields (VM1's sign-in failures, #800, carry all three):
   otherwise, except while the session needs sign-in, which another error does not replace;
 * nothing for an `errorType` of `"model_call"`, which the CLI retries within the turn, or
   `"hook"`, which ends nothing. A delegate's error is its own, not the session's.
+
+`notResponding`, for any agent's session, from the host's own watchdog (#800 P0, part C): the
+session is `working` and its transcript has had no event of any kind (a model call, a hook or a
+delegate's tool counts) for **10 minutes**, or **30 minutes** while a tool, a delegate or a
+background shell is running. A Claude Code or Codex delegate that is still working writes its own
+transcript instead (Claude's beside the session's, Codex's a rollout of its own thread): its last
+event there, read by its timestamp and never the file's write time, counts too, and one the host
+cannot check (its transcript not found or unread, or more working than are listed) means the
+session is never called not responding. `since` and `lastEventAt` are the time of the session's own last event. Not over a
+question pending (the session is `waiting`) or another `attention`. It goes with the next event.
+Copilot's sign-in failure is written as `assistant.turn_end`, then `session.error` a few
+milliseconds later; read between the two, the session is briefly `idle` with no `attention`, which
+is why a `finished` push waits 3 s and is withdrawn once the `attention` comes.
 
 `message` comes from one table (`AgentErrors.Template`), with the agent's name and the status
 code when it is an HTTP status (100 to 599):
@@ -1355,7 +1377,7 @@ that turn's error, or "Copilot stopped with an error." when no error was read be
 turn. Clients, HA and a `finished` push therefore never carry any of the agent's error text.
 
 Claude Code and Codex send none yet: their records are read only once a real, redacted sample of
-each has been captured. `notResponding`, `account`, `signIn`, `recovery`, the per-machine
+each has been captured. `account`, `signIn`, `recovery`, the per-machine
 roll-up in `hello`, the `signIn` and `signedIn` notices and the `sessions.signin` capability
 (relaying the agent's own device-code sign-in to a person's device) follow in later slices of
 #800; their shape is in [#800](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6646501884),

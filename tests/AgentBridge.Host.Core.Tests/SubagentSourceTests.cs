@@ -745,7 +745,7 @@ public class CodexSubagentTests
         int _threadNext;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
-        public Replay(Func<string, string>? edit = null, long tailBytes = 4 * 1024 * 1024, Func<string[], long>? skim = null, Func<string[], long>? tail = null)
+        public Replay(Func<string, string>? edit = null, long tailBytes = 4 * 1024 * 1024, Func<string[], long>? skim = null, Func<string[], long>? tail = null, TimeSpan? stalledAfter = null)
         {
             _rollout = _f.CodexTranscript(Id);
             _thread = _f.CodexTranscript(Thread);
@@ -753,8 +753,11 @@ public class CodexSubagentTests
             _f.Processes.Run(AgentKind.Codex, 950);
             _lines = [.. Recorded(Id).SelectMany(l => (edit is null ? l : edit(l)).Split('\n'))];
             if (tail is not null) { tailBytes = tail(_lines); }
-            Source = skim is null ? _f.Source(tailBytes) : _f.Source(tailBytes, maxSkim: skim(_lines));
+            Source = skim is null ? _f.Source(tailBytes, stalledAfter: stalledAfter) : _f.Source(tailBytes, maxSkim: skim(_lines), stalledAfter: stalledAfter);
         }
+
+        // The sub-agent's own rollout, beside the session's.
+        public string ThreadRollout => _thread;
 
         public async Task<Session> Through(double second)
         {

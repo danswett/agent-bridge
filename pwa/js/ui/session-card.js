@@ -37,7 +37,7 @@ import { EndSession } from './stop-view.js';
 import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.js';
-import { backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
+import { aloud, backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
@@ -408,6 +408,8 @@ export class SessionCard {
   // the words that said so when last drawn, which move on with the clock.
   #stale = null;
   #shownStale = null;
+  // The row's name but for its age, as #nameRow puts it together: { drawn, unsaid }.
+  #rowName = { drawn: [], unsaid: [] };
   // The question last drawn (undefined before the first drawing), and whether a finger or a
   // mouse button is on the conversation: what decides a scroll to a question that arrives.
   #asked = undefined;
@@ -481,10 +483,12 @@ export class SessionCard {
     e.rowLine1 = h('span', { class: 'row-line1' }, e.rowTitle);
     e.rowFacts = h('span', { class: 'row-facts' });
     e.rowAge = h('time', { class: 'row-age' });
-    // The row reads as its glyph's name: "title, status, machine" (ui.md §9).
-    e.open = h('button', { type: 'button', class: 'row-main', id: this.ids.row, 'aria-labelledby': this.ids.glyph, onclick: () => this.onSelect(this) },
-      h('span', { class: 'row-glyph' }, e.rowGlyph),
-      h('span', { class: 'row-text' }, e.rowLine1, e.rowFacts),
+    // Named by #nameRow (ui.md §9.1 A1). The spaces between its lines draw nothing in the grid,
+    // but without them the title, the facts and the age read as run-together words
+    // ("…AppWaiting on you"), which no name can contain (axe label-content-name-mismatch, #365).
+    e.open = h('button', { type: 'button', class: 'row-main', id: this.ids.row, onclick: () => this.onSelect(this) },
+      h('span', { class: 'row-glyph' }, e.rowGlyph), ' ',
+      h('span', { class: 'row-text' }, e.rowLine1, ' ', e.rowFacts), ' ',
       e.rowAge);
     this.element = h('div', { class: 'session' }, e.open);
   }
@@ -670,14 +674,31 @@ export class SessionCard {
     // The row.
     e.rowTitle.textContent = title;
     setGlyph(e.rowGlyph, words.glyph, { size: 16, driven: words.driven, label: statusLabel(words, { title: s.title, machine: this.machineName }) });
+    // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words; not over
+    // rules 10-12 (#800), which say what is wrong. The glyph keeps the driven badge either way.
+    const drivenDrawn = words.driven && !ATTENTION_RULES.has(words.rule);
     if (this.#changed('row', [words.text, words.tone, words.driven, words.rule, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
-      // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words; not over
-      // rules 10-12 (#800), which say what is wrong. The glyph keeps the driven badge either way.
-      const status = words.driven && !ATTENTION_RULES.has(words.rule)
+      const status = drivenDrawn
         ? h('span', { class: 'row-status driver', dataset: { tone: 'agent' }, title: s.driverPrincipal ?? null }, 'Driven by an agent')
         : h('span', { class: 'row-status', dataset: { tone: words.tone } }, words.facts[0]);
       setFacts(e.rowFacts, [status, this.labelled && this.machineName ? h('span', { class: 'machine-label' }, this.machineName) : whereView()]);
     }
+    // The row's name (ui.md §9.1 A1, #365) starts with the words it draws, in the order drawn:
+    // its title, its second line's facts, then its age (#nameRow). What else §9.2's name holds
+    // follows, so nothing it said before goes unsaid: the status's later facts, or all of it
+    // under "Driven by an agent", the driver under a rule 10-12 status drawn in its place, and
+    // its machine while the row doesn't show it. Both halves key off drivenDrawn, as the row
+    // does, or a driven row needing sign-in reads "Driven by an agent" over "Needs sign-in".
+    // A status fact can carry a delegate's name, read without its commas there, as in the
+    // glyph's name (§9.2).
+    this.#rowName = {
+      drawn: [title, drivenDrawn ? 'Driven by an agent' : aloud(words.facts[0]), this.labelled && this.machineName ? this.machineName : where],
+      unsaid: [
+        drivenDrawn ? words.spoken : words.facts.slice(1).map(aloud).join(' \u00b7 '),
+        words.driven && !drivenDrawn ? 'driven by an agent' : null,
+        this.labelled ? null : this.machineName,
+      ],
+    };
 
     // The header: one meta line, glyph · status · machine · repository.
     e.titleText.textContent = title;
@@ -957,7 +978,6 @@ export class SessionCard {
     if (unread && !e.unread) {
       e.unread = h('span', { class: 'unread-dot' }, h('span', { class: 'sr-only', id: this.ids.unread }, 'New activity'));
       e.rowLine1.append(e.unread);
-      e.open.setAttribute('aria-labelledby', `${this.ids.glyph} ${this.ids.unread}`);
       this.element.classList.add('unread');
       // Activity dot (ui.md §5.3): fades in, and later out; it never pulses or repeats.
       enter(e.unread, 'activityDot');
@@ -965,9 +985,16 @@ export class SessionCard {
       leave(e.unread, 'activityDot');
       e.unread.remove();
       e.unread = null;
-      e.open.setAttribute('aria-labelledby', this.ids.glyph);
     }
     this.element.classList.toggle('unread', unread);
+    this.#nameRow();
+  }
+
+  // The row's name with its age, or "New activity" where the dot is drawn in the age's place.
+  #nameRow() {
+    const e = this.els;
+    const { drawn, unsaid } = this.#rowName;
+    e.open.setAttribute('aria-label', [...drawn, e.unread ? 'New activity' : e.rowAge.textContent, ...unsaid].filter(Boolean).join(', '));
   }
 
   setPinned(pinned) {
@@ -1457,6 +1484,7 @@ export class SessionCard {
       e.since.closest('.fact')?.toggleAttribute('hidden', !since);
     }
     e.rowAge.textContent = ago(rowAt(s), now);
+    this.#nameRow();
     e.agentAge.textContent = ago(mainVoice(s).at ?? s.updatedAt, now);
     if (this.#promptAt) { e.promptAge.textContent = ago(this.#promptAt, now); }
     this.delegates.refreshTimes(now);

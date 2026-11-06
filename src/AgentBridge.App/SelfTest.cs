@@ -303,6 +303,7 @@ static partial class SelfTest
             else { Check(false, "finds the Launch button"); }
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launched.png"));
             await CheckYourMessages(window, main, Check, outFile, launchedPrompt);
+            await CheckPrompts(window, main, demo, Check, outFile);
             Resize(window, 1000, 900);
 
             // Codex on the other machine starts only on a first message: nothing is sent without one.
