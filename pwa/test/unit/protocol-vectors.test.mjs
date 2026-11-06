@@ -473,6 +473,11 @@ const NOT_REPLAYED = {
   JournalStage: 'part of JournalEntry, read by readEntry',
   JournalException: 'part of JournalEntry: readEntry keeps a recognized type and a count of frames',
   JournalFrame: 'part of JournalEntry: readEntry keeps only how many frames there were',
+  // restore.run's PWA half is slice 2 of #948.
+  RestoreRunRequest: 'the PWA does not send restore.run yet (#948 slice 2)',
+  RestoreRunSession: 'the PWA does not read restore.run yet (#948 slice 2)',
+  RestoreRunResult: 'the PWA does not read restore.run yet (#948 slice 2)',
+  RestoreRunProgress: 'the PWA does not read restore.run yet (#948 slice 2)',
 };
 
 // ---- the replay ----
