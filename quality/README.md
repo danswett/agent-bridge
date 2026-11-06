@@ -401,9 +401,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      run analyse every language. CodeQL and dependency review skip drafts and run on ready for
      review; CodeQL, Dependencies, Workflow lint and Apple clients each cancel a superseded run
      of the same pull request, as ci.yml does. Only pull requests: these workflows group each
-     push run on `main` by its own run id, so none is cancelled. For ci.yml that matters beyond
-     publishing: a cancelled push run would be the latest finished one merge-rule's main_green
-     reads, and would hold every pull request as if main were red.
+     push run on `main` by its own run id, so none is cancelled. ci.yml's push runs on `main`
+     never cancel a run in progress either, but a first attempt still waiting can be replaced in
+     `ci-main` (item 7). That matters beyond publishing: a cancelled push run would be the latest
+     finished one merge-rule's main_green reads, and holds every pull request as if main were red
+     unless it's provably such a replaced waiting run (item 9).
 
    A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
    cancelled, and if any job the plan selected didn't succeed: when the whole ring runs, that's
