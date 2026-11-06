@@ -24,6 +24,7 @@ public sealed partial class InFlightRing : UserControl
     readonly ProgressRing ring = new() { Width = 16, Height = 16, IsActive = false };
     readonly Windows.UI.ViewManagement.UISettings settings = new();
     bool listening;
+    Microsoft.UI.Xaml.Controls.Primitives.ButtonBase? owner;
 
     public InFlightRing()
     {
@@ -62,13 +63,28 @@ public sealed partial class InFlightRing : UserControl
         ring.IsActive = Active;
         // In a contrast theme, GrayText (ui.md §9): a held request never looks active.
         if (Still) { ring.Foreground = new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? new Microsoft.UI.Xaml.Media.SolidColorBrush(SystemColours.Of(Windows.UI.ViewManagement.UIElementType.GrayText)) : Ui.Brush("AbText3"); }
-        else { ring.ClearValue(Control.ForegroundProperty); }
+        // Otherwise the owning button's ink: the platform's own accent ring was the accent button's
+        // fill, so on Send it drew teal on teal and wasn't seen. An enabled button's own Foreground,
+        // not the presenter's inherited one (#87FFFFFF on dark's #2DD4BF fill); a disabled one's
+        // (Approve and Deny while their answer goes) the dimmed ink its label takes, on its dimmed fill.
+        else { ring.SetBinding(Control.ForegroundProperty, new Microsoft.UI.Xaml.Data.Binding { Source = owner is { IsEnabled: true } ? owner : this, Path = new PropertyPath(nameof(Foreground)) }); }
+    }
+
+    Microsoft.UI.Xaml.Controls.Primitives.ButtonBase? OwningButton()
+    {
+        for (var e = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(this); e is not null; e = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(e))
+        {
+            if (e is Microsoft.UI.Xaml.Controls.Primitives.ButtonBase b) { return b; }
+        }
+        return null;
     }
 
     void Listen()
     {
         if (listening) { return; }
         listening = true;
+        owner = OwningButton();
+        if (owner is not null) { owner.IsEnabledChanged += OnOwnerEnabledChanged; }
         settings.AnimationsEnabledChanged += OnAnimationsChanged;
         SystemColours.Changed += OnColoursChanged;
     }
@@ -77,9 +93,12 @@ public sealed partial class InFlightRing : UserControl
     {
         if (!listening) { return; }
         listening = false;
+        if (owner is not null) { owner.IsEnabledChanged -= OnOwnerEnabledChanged; owner = null; }
         settings.AnimationsEnabledChanged -= OnAnimationsChanged;
         SystemColours.Changed -= OnColoursChanged;
     }
+
+    void OnOwnerEnabledChanged(object sender, DependencyPropertyChangedEventArgs e) => Apply();
 
     // Raised off the UI thread.
     void OnAnimationsChanged(Windows.UI.ViewManagement.UISettings sender, Windows.UI.ViewManagement.UISettingsAnimationsEnabledChangedEventArgs args) =>

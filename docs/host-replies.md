@@ -308,12 +308,17 @@ transcript; the reply is added to them, and the prompt recorded differs, so the 
 moments between the transcript check and the keys landing would take the words; the window
 is the worker's start-up, about the same as for an answer.
 
-**What a reason says.** A reply's or an answer's `reason` states only what happened, as a
-lowercase clause with no full stop, naming the agent's session: never where to look, which the
-client's receipt already says ("Check the conversation…", #967), and never "check at the
-machine" (#995). Where the host itself failed (an exception reading the screen, typing, or
+**What a reason says.** An `unconfirmed` reply's or answer's `reason` states only what
+happened, as a lowercase clause with no full stop, naming the agent's session: never where to
+look, which the client's receipt already says ("Check the conversation…", #967), and never
+"check at the machine" (#995). A refusal is different: nothing was typed, so its reason still
+says where the person's next move is ("answer at the machine", "reply at the machine"; Creative,
+6680283740 on #995). Where the host itself failed (an exception reading the screen, typing, or
 checking the transcript, or the attempt ledger unreadable), the reason is "the machine
-couldn't deliver it", and the exception's text goes to the host's log only (#802).
+couldn't deliver it", and the exception's text goes to the host's log only (#802). Launch and
+End session reasons follow the same rule (#1021): fixed words ("the machine couldn't start the
+session", "the machine couldn't end the session"), with their "check at the machine" tails
+where they had them (#467), and the exception's text in the host's log only.
 
 ## Progress and timings
 
@@ -355,3 +360,29 @@ reply 0b7e3c1d timings (ms after 2026-11-04T06:56:28.441Z): checked 2, turn 3, i
 A stage not reached is left out: a reply refused at step 1 logs only `settled` and `sent`. The
 receipt time is UTC, unlike the log's own local-time prefix, so a line is matched to the lines
 around it by its request id, and its times to an agent's transcript as they are, without an offset.
+
+### Confirmation, measured (#1025)
+
+Replies go unconfirmed more often than they fail to arrive, so each reply whose keys went and
+whose confirmation ran logs one more line, to measure how long each agent takes to record one:
+
+```
+reply 0b7e3c1d to 99999999 confirm: copilot, working, typed 25, recorded never, timeout 60 s, unconfirmed
+reply 0b7e3c1d late: recorded 93120
+```
+
+The agent; whether the session was `working` or `idle` when the keys went; `typed`, when the
+last key had gone; `recorded`, the agent's own time on the prompt that is the reply (`~` and the
+host's time where its record has none, `never` if it was not found by the timeout); the timeout
+in force; and the outcome. Times are in ms after receipt, as in the timings line. Never the
+reply's words.
+
+A reply that timed out with its prompt not found (not recorded, or another message recorded)
+keeps its outcome, and the host keeps looking for its prompt, without taking it, for five minutes
+more (`ReplyOptions.LateWatch`, every 5 s), and logs a `late:` line: when it was recorded after
+all, or `not recorded within 300 s more`. `ops/tools/reply-confirm-delays.ps1` reads these lines
+from the host's log, read-only, into the delay from `typed` to `recorded` per agent and state. It
+counts a reply as never recorded only once its late watch is known to be over (its `not recorded`
+line, or a log line 300 s after it with no host `stopped` or start line in between); the rest, still
+watched or not observable (transcript unreadable, host stopped or started within the watch), are
+reported apart.

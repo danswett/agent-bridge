@@ -700,11 +700,19 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     // see: Restart to update warns rather than taking that for nothing waiting. A host known not
     // to be running carries nothing.
     [Fact]
+    public void Sessions_waiting_or_working_are_warned_of_with_the_machines_bridge_stopping_for_a_moment()
+    {
+        var warning = RestartWarning.For([Make.Session("s1", SessionStatus.Working)]);
+
+        Assert.Contains("Restarting stops this machine's bridge for a moment", warning);
+    }
+
+    [Fact]
     public async Task A_host_that_is_reconnecting_is_warned_of_and_one_not_running_is_not()
     {
         await using var reconnecting = new HostConnection(_ => new TaskCompletionSource<IClientChannel>().Task, new LockedDispatcher());
         Assert.Equal(LinkState.Connecting, reconnecting.State);
-        Assert.StartsWith("This machine's host isn't connected right now", RestartWarning.For(reconnecting));
+        Assert.StartsWith("This machine's bridge isn't connected right now", RestartWarning.For(reconnecting));
 
         await using var stopped = new HostConnection(_ => Task.FromException<IClientChannel>(new HostNotRunningException("the host is not running")), new LockedDispatcher());
         stopped.Start();

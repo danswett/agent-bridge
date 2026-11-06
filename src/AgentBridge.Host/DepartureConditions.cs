@@ -1,9 +1,10 @@
 namespace AgentBridge.Host;
 
 public enum DeparturePurpose { Update, RemoteRestart, RemoteStop, WatchdogRecovery, Sleep, Shutdown, Reboot, SignOut }
-// LeaseExpired is appended so existing values keep their numbers. It is the coordinator's own
-// outcome (the provisional lease outlived its lifetime before commit), never a condition's kind.
-public enum DepartureBlocker { DeliveryInFlight, Typing, AnnounceUnacked, JournalUncertain, AppRunning, OtherHostRunning, ChannelChanged, TransferInFlight, ConditionFault, LeaseExpired }
+// LeaseExpired and Ineligible are appended so existing values keep their numbers. LeaseExpired is the
+// coordinator's own outcome (the provisional lease outlived its lifetime before commit), never a
+// condition's kind; Ineligible is a purpose's own eligibility (#801's remote restart).
+public enum DepartureBlocker { DeliveryInFlight, Typing, AnnounceUnacked, JournalUncertain, AppRunning, OtherHostRunning, ChannelChanged, TransferInFlight, ConditionFault, LeaseExpired, Ineligible }
 
 public interface IDepartureCondition
 {

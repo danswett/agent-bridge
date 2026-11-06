@@ -124,6 +124,34 @@
         "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
         "mac": "sYGDrFXpM-GeTaua26Rz1qZGCEYxRkDL9scaBxC-PU4"
       }
+    },
+    {
+      "name": "a-hook-repair-with-args",
+      "action": "manage.hooks.repair",
+      "now": 1793300060,
+      "body": {
+        "v": 1,
+        "action": "manage.hooks.repair",
+        "request": "7d0f3a2e-1c4b-4d5e-8f60-112233445566",
+        "principal": {
+          "kind": "user",
+          "device": "8f6549035c05abc0d83d83be0eb9bce6"
+        },
+        "target": {
+          "machine": "31031edf3b6085d01d1c4ba3b34c1274"
+        },
+        "to": "31031edf3b6085d01d1c4ba3b34c1274",
+        "issuedAt": 1793300000,
+        "expiresAt": 1793300300,
+        "args": {
+          "agent": "copilot"
+        }
+      },
+      "command": {
+        "body": "eyJ2IjoxLCJhY3Rpb24iOiJtYW5hZ2UuaG9va3MucmVwYWlyIiwicmVxdWVzdCI6IjdkMGYzYTJlLTFjNGItNGQ1ZS04ZjYwLTExMjIzMzQ0NTU2NiIsInByaW5jaXBhbCI6eyJraW5kIjoidXNlciIsImRldmljZSI6IjhmNjU0OTAzNWMwNWFiYzBkODNkODNiZTBlYjliY2U2In0sInRhcmdldCI6eyJtYWNoaW5lIjoiMzEwMzFlZGYzYjYwODVkMDFkMWM0YmEzYjM0YzEyNzQifSwidG8iOiIzMTAzMWVkZjNiNjA4NWQwMWQxYzRiYTNiMzRjMTI3NCIsImlzc3VlZEF0IjoxNzkzMzAwMDAwLCJleHBpcmVzQXQiOjE3OTMzMDAzMDAsImFyZ3MiOnsiYWdlbnQiOiJjb3BpbG90In19",
+        "by": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+        "mac": "OyH56shn-ByowT2uzkpM8MTKYEWa4gy_9HfsmUVkIjo"
+      }
     }
   ],
   "refused": [

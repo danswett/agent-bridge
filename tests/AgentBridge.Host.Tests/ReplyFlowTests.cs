@@ -536,6 +536,96 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.InRange(at, before, DateTimeOffset.UtcNow);
     }
 
+    // ---- measuring confirmation (#1025) ----
+
+    List<string> MeasuredReplier(TimeSpan confirm, TimeSpan lateWatch, CancellationToken stopping = default)
+    {
+        var logged = new List<string>();
+        Serve(Answerer(), new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            ConfirmTimeout = confirm,
+            PollInterval = TimeSpan.FromMilliseconds(25),
+            LateWatch = lateWatch,
+            LateLook = TimeSpan.FromMilliseconds(50),
+        }, m => { lock (logged) { logged.Add(m); } }, gate) { Stopping = stopping });
+        return logged;
+    }
+
+    static string[] Lines(List<string> logged)
+    {
+        lock (logged) { return [.. logged]; }
+    }
+
+    [Fact]
+    public async Task Each_reply_logs_one_confirmation_line_of_its_agent_state_times_timeout_and_outcome_and_never_its_words()
+    {
+        var logged = MeasuredReplier(TimeSpan.FromSeconds(2), TimeSpan.Zero);
+        injector.OnInject = plan => Fixture.Append(events, Now(Prompt(plan.Sends[0].Text)));
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        Assert.Equal("delivered", (await ReplyAsync(ch, "measure these private words", request)).Outcome);
+
+        var line = Assert.Single(Lines(logged), l => l.Contains(" confirm: ", StringComparison.Ordinal));
+        Assert.Matches($@"^reply {request[..8]} to {Id[..8]} confirm: copilot, idle, typed \d+, recorded \d+, timeout 2 s, delivered$", line);
+        Assert.DoesNotContain("private", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_reply_recorded_after_its_timeout_stays_unconfirmed_and_a_second_line_says_how_late_it_came()
+    {
+        var logged = MeasuredReplier(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
+        // Nothing is recorded while the reply waits.
+        injector.OnInject = _ => { };
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        var (outcome, _) = await ReplyAsync(ch, "on its way", request);
+
+        Assert.Equal("unconfirmed", outcome);
+        Assert.Matches($@"^reply {request[..8]} to {Id[..8]} confirm: copilot, idle, typed \d+, recorded never, timeout 1 s, unconfirmed$",
+            Assert.Single(Lines(logged), l => l.Contains(" confirm: ", StringComparison.Ordinal)));
+        Fixture.Append(events, Now(Prompt("on its way")));
+        var late = $"reply {request[..8]} late: recorded ";
+        await Wait.UntilAsync(() => Lines(logged).Any(l => l.StartsWith(late, StringComparison.Ordinal)), "the late line", Patience);
+        var ms = long.Parse(Assert.Single(Lines(logged), l => l.StartsWith(late, StringComparison.Ordinal))[late.Length..], System.Globalization.CultureInfo.InvariantCulture);
+        // Recorded after the timeout ran out, in ms after the request was received, as the agent timed it.
+        Assert.InRange(ms, 1000, 60_000);
+    }
+
+    [Fact]
+    public async Task A_reply_never_recorded_says_so_once_the_late_watch_is_over()
+    {
+        var logged = MeasuredReplier(TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(1));
+        injector.OnInject = _ => { };
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        Assert.Equal("unconfirmed", (await ReplyAsync(ch, "lost", request)).Outcome);
+
+        var never = $"reply {request[..8]} late: not recorded within 1 s more";
+        await Wait.UntilAsync(() => Lines(logged).Contains(never), "the late line", Patience);
+    }
+
+    [Fact]
+    public async Task A_late_watch_ends_when_the_host_stops_and_logs_nothing_more()
+    {
+        using var stop = new CancellationTokenSource();
+        var logged = MeasuredReplier(TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(30), stop.Token);
+        injector.OnInject = _ => { };
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        Assert.Equal("unconfirmed", (await ReplyAsync(ch, "stopped", request)).Outcome);
+        await stop.CancelAsync();
+        Fixture.Append(events, Now(Prompt("stopped")));
+        await Task.Delay(500);
+
+        Assert.DoesNotContain(Lines(logged), l => l.Contains(" late: ", StringComparison.Ordinal));
+    }
+
     // ---- the fast path (#599) ----
 
     [Fact]

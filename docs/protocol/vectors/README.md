@@ -14,6 +14,7 @@ are generated.
 | `push.json` | `push.subscribe`, `push.unsubscribe`, `push.list` and the notice a push carries |
 | `launch.json` | `launch.options`, `session.launch`, folder-trust questions and `launch.trust.answer` |
 | `transfer.json` | A launch's `transfer`, the signed command's parts, `session.transfer` (host to host) |
+| `manage.json` | `manage.get`, `manage.state`, `manage.restart` and `manage.hooks.repair` (#801), and the held `manage.config.set` and `manage.haToken.set` |
 | `update.json` | `update.get`, `update.state`, `update.check` and `update.install` |
 | `usage.json` | `usage.get`, `usage.update` and shared readings |
 | `signed-command.json` | Fixed keys, the commands they sign with the MAC each gives, and commands the machine must refuse |

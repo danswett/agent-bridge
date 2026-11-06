@@ -155,6 +155,30 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal((86400, "normal", PushNotice.Topic(Machine, "~restore")), (ttl, urgency, topic));
     }
 
+    // #801, Q-O3: who restarted the machine, kept in the other devices' trays. As a resolved notice
+    // the PWA's worker withdrew it the moment it showed it (Codex on #886); finished and done, it is
+    // silent and stays. The device that acted is not told, and the task says when it has gone.
+    [Fact]
+    public async Task A_machine_notice_reaches_the_other_devices_as_a_silent_one_kept_in_the_tray()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+
+        var sent = notifier.NotifyMachine(Phone, "DEV", "DEV was restarted from iPhone (pwa aaaaaaaa) at 21:00 PT.");
+        Assert.False(sent.IsCompleted);
+        await After(TimeSpan.Zero);
+
+        await sent.WaitAsync(TimeSpan.FromSeconds(30));
+        var (device, n, _, urgency, topic) = Assert.Single(Received());
+        Assert.Equal(Laptop, device);
+        Assert.Equal("finished", Kind(n));
+        Assert.Equal("done", n.GetProperty("data").GetProperty("class").GetString());
+        Assert.True(n.GetProperty("silent").GetBoolean());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}", n.GetProperty("navigate").GetString());
+        Assert.Equal(("normal", PushNotice.Topic(Machine, PushNotifier.MachineNotice)), (urgency, topic));
+    }
+
     // A subscribed URL that already routes somewhere (the page it was installed from was a session's)
     // still opens only the machine: its routing is replaced, not appended to, and nothing else in it
     // is lost.
@@ -1206,7 +1230,8 @@ public sealed class PushNotifierTests : IDisposable
     [Fact]
     public async Task A_push_the_relay_never_answers_is_retried_later_and_holds_up_nothing_else()
     {
-        Start();
+        // Two sessions' questions, each to go as itself, not grouped (#913 rule 3).
+        Start(new PushOptions { BurstWindow = TimeSpan.Zero });
         Subscribe(Phone);
         sender.Failures.Enqueue(new TimeoutException());
         source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
@@ -1298,7 +1323,7 @@ public sealed class PushNotifierTests : IDisposable
     [Fact]
     public async Task Sends_past_the_rate_limit_wait_for_the_next_minute_rather_than_being_refused()
     {
-        Start(new PushOptions { MaxPerMinute = 3 });
+        Start(new PushOptions { MaxPerMinute = 3, BurstWindow = TimeSpan.Zero });
         Subscribe(Phone);
         for (var i = 0; i < 5; i++) { source.Upsert(S($"s{i}", SessionStatus.Waiting, question: Q($"q{i}"))); }
         await After(TimeSpan.FromSeconds(2));
@@ -1538,6 +1563,347 @@ public sealed class PushNotifierTests : IDisposable
             Assert.Throws<InvalidOperationException>(() => Subscribe(peer.Device, peer: peer));
         }
         Assert.Empty(store.All);
+    }
+
+    // ---- #913 rule 5: one reminder ----
+
+    static bool Reminder(JsonElement n) => n.GetProperty("data").TryGetProperty("reminder", out var r) && r.GetBoolean();
+
+    static bool Silent(JsonElement n) => n.TryGetProperty("silent", out var s) && s.GetBoolean();
+
+    static string? QuestionOf(JsonElement n) => n.GetProperty("data").TryGetProperty("question", out var q) ? q.GetString() : null;
+
+    [Fact]
+    public async Task A_question_still_unanswered_15_minutes_after_its_notice_alerts_once_more_as_itself_on_every_device()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(2, sender.Sent.Count);
+
+        await After(TimeSpan.FromMinutes(15) - TimeSpan.FromSeconds(1));
+        Assert.Equal(2, sender.Sent.Count);
+        await After(TimeSpan.FromSeconds(1));
+
+        var received = Received();
+        Assert.Equal(4, received.Count);
+        Assert.All(received.Take(2), r => Assert.False(Reminder(r.Notification)));
+        var reminders = received.Skip(2).ToList();
+        Assert.Equal([Phone, Laptop], reminders.Select(r => r.Device).Order(StringComparer.Ordinal));
+        var original = received.Take(2).Single(r => r.Device == Phone);
+        var again = reminders.Single(r => r.Device == Phone);
+        Assert.True(Reminder(again.Notification));
+        // The question's own notice again, alerting, in its place.
+        Assert.Equal(("question", "needsYou", false), (Kind(again.Notification), again.Notification.GetProperty("data").GetProperty("class").GetString(), Silent(again.Notification)));
+        foreach (var field in new[] { "title", "body", "tag", "navigate" })
+        {
+            Assert.Equal(original.Notification.GetProperty(field).GetString(), again.Notification.GetProperty(field).GetString());
+        }
+        Assert.Equal("q1", QuestionOf(again.Notification));
+        Assert.Equal((original.Ttl, original.Urgency, original.Topic), (again.Ttl, again.Urgency, again.Topic));
+    }
+
+    [Fact]
+    public async Task A_question_answered_within_15_minutes_is_not_reminded()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        await After(TimeSpan.FromMinutes(10));
+        notifier.Answered(Laptop, "s1", "q1");
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromMinutes(30));
+
+        Assert.Equal(["question", "question", "resolved"], Received().Select(r => Kind(r.Notification)));
+        Assert.DoesNotContain(Received(), r => Reminder(r.Notification));
+    }
+
+    [Fact]
+    public async Task A_reminder_goes_once_and_a_further_question_while_the_session_still_needs_you_brings_no_second()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        await After(TimeSpan.FromMinutes(15));
+        Assert.Equal(1, Received().Count(r => Reminder(r.Notification)));
+        await After(TimeSpan.FromMinutes(15));
+        await After(TimeSpan.FromHours(2));
+
+        // q1 answered as q2 is asked: still needsYou, the same episode, which has had its reminder.
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q2", "And the cache?")));
+        await After(TimeSpan.FromSeconds(2));
+        await After(TimeSpan.FromMinutes(15));
+        await After(TimeSpan.FromMinutes(15));
+
+        Assert.Equal(["q1", "q1", "q2"], Received().Select(r => QuestionOf(r.Notification)));
+        Assert.Equal(1, Received().Count(r => Reminder(r.Notification)));
+    }
+
+    // sr2-1020: answered (or ending) while its reminder goes out, device by device: the devices still to
+    // be reminded are not, of a question nobody waits on any more.
+    [Theory]
+    [InlineData("answered")]
+    [InlineData("ending")]
+    public async Task A_reminder_still_queued_for_another_device_is_not_sent_once_the_session_no_longer_needs_you(string change)
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        var reminding = false;
+        sender.Respond = _ =>
+        {
+            if (reminding)
+            {
+                reminding = false;
+                source.Upsert(change == "answered" ? S("s1", SessionStatus.Working) : S("s1", SessionStatus.Waiting, question: Q("q1")) with { Status = SessionStatus.Ending });
+            }
+            return new PushResult(201, null);
+        };
+
+        reminding = true;
+        await After(TimeSpan.FromMinutes(15));
+        await After(TimeSpan.FromSeconds(1));
+
+        Assert.Single(Received(), r => Reminder(r.Notification));
+    }
+
+    // ---- #913 rule 3: bursts group ----
+
+    [Fact]
+    public async Task Questions_of_three_sessions_within_30_seconds_go_as_the_first_and_one_grouped_notice()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2", "Allow **Run a command**?", QuestionKind.Approval)));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(10));
+
+        var received = Received();
+        Assert.Equal(("question", "q1"), (Kind(received[0].Notification), QuestionOf(received[0].Notification)));
+        Assert.DoesNotContain(received, r => QuestionOf(r.Notification) is "q2" or "q3");
+        var groups = received.Skip(1).Select(r => r.Notification).ToList();
+        Assert.Equal(["group", "group"], groups.Select(Kind));
+        // One notice, made by the second question and changed in place, quietly, by the third.
+        Assert.All(groups, n => Assert.Equal($"{Machine}:~needsyou", n.GetProperty("tag").GetString()));
+        Assert.Equal([false, true], groups.Select(Silent));
+        Assert.Equal([2, 3], groups.Select(n => n.GetProperty("data").GetProperty("sessions").GetInt32()));
+        Assert.Equal(("high", PushNotice.Topic(Machine, "~needsyou")), (received[1].Urgency, received[1].Topic));
+        var last = groups[^1];
+        Assert.Equal(("Needs you", "DEV · 3 sessions waiting on you"), (last.GetProperty("title").GetString(), last.GetProperty("body").GetString()));
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}&needsyou=1", last.GetProperty("navigate").GetString());
+        // Nothing to answer from it (#253), and nothing of any session's (#263).
+        var data = last.GetProperty("data");
+        Assert.Equal(("", "needsYou"), (data.GetProperty("session").GetString(), data.GetProperty("class").GetString()));
+        Assert.Null(QuestionOf(last));
+        Assert.DoesNotContain("Which database?", last.GetRawText(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Fix the login", last.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_first_question_of_a_burst_goes_after_its_usual_delay_not_after_the_window()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(1));
+        Assert.Empty(sender.Sent);
+        await After(TimeSpan.FromSeconds(1));
+        var (_, first, _, urgency, _) = Assert.Single(Received());
+        Assert.Equal(("question", "q1", false, "high"), (Kind(first), QuestionOf(first), Silent(first), urgency));
+
+        // A second within the window is grouped: the first, already out, is not held back or taken back.
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["question", "group"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    [Fact]
+    public async Task A_question_alone_in_its_window_goes_as_itself()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        // No group of one.
+        await After(TimeSpan.FromSeconds(30));
+        Assert.Single(sender.Sent);
+
+        // After the first's window: as itself, opening a window of its own.
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        // Within that window, but its question is answered: nothing pending to group the next with.
+        source.Upsert(S("s2", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(2));
+        await After(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(["question", "question", "resolved", "question"], Received().Select(r => Kind(r.Notification)));
+        Assert.Equal(["q1", "q2", "q2", "q3"], Received().Select(r => QuestionOf(r.Notification)));
+    }
+
+    [Fact]
+    public async Task A_sign_in_within_a_burst_goes_as_its_own_notice_and_is_not_counted_in_the_group()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(2));
+
+        var received = Received();
+        Assert.Equal(["question", "signIn", "group"], received.Select(r => Kind(r.Notification)));
+        var signIn = received[1].Notification;
+        Assert.Equal($"{Machine}:{PushNotice.SignInKey(AgentKind.Copilot, null)}", signIn.GetProperty("tag").GetString());
+        Assert.Equal(2, received[2].Notification.GetProperty("data").GetProperty("sessions").GetInt32());
+    }
+
+    [Fact]
+    public async Task A_grouped_notice_changes_quietly_as_its_questions_are_answered_and_is_withdrawn_with_the_last()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+
+        source.Upsert(S("s2", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        var fewer = Received()[^1].Notification;
+        Assert.Equal(("group", 1, true), (Kind(fewer), fewer.GetProperty("data").GetProperty("sessions").GetInt32(), Silent(fewer)));
+        Assert.Equal(("Needs you", "DEV · 1 session waiting on you"), (fewer.GetProperty("title").GetString(), fewer.GetProperty("body").GetString()));
+
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+        var received = Received();
+        Assert.Equal(["question", "group", "group", "resolved", "resolved"], received.Select(r => Kind(r.Notification)));
+        Assert.Equal($"{Machine}:s1", received[3].Notification.GetProperty("tag").GetString());
+        var withdrawn = received[4].Notification;
+        Assert.Equal($"{Machine}:~needsyou", withdrawn.GetProperty("tag").GetString());
+        Assert.True(Silent(withdrawn));
+        Assert.Equal(("", false), (withdrawn.GetProperty("data").GetProperty("session").GetString(), withdrawn.GetProperty("data").TryGetProperty("class", out _)));
+        Assert.Equal(0, notifier.Pending);
+
+        await After(TimeSpan.FromMinutes(1));
+        Assert.Equal(5, sender.Sent.Count);
+    }
+
+    // sr2-1020: a question asked in the same pump as the group's last questions are answered goes as
+    // itself, alerting, even from a session first seen before them: once it joined a group about to
+    // empty, and was said only by a silent group of one.
+    [Fact]
+    public async Task A_question_asked_as_its_group_is_answered_alerts_as_itself_whatever_order_the_sessions_were_seen_in()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("c", SessionStatus.Working));
+        source.Upsert(S("a", SessionStatus.Waiting, question: Q("qa")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("b", SessionStatus.Waiting, question: Q("qb")));
+        await After(TimeSpan.FromSeconds(2));
+
+        source.Upsert(S("a", SessionStatus.Working));
+        source.Upsert(S("b", SessionStatus.Working));
+        source.Upsert(S("c", SessionStatus.Waiting, question: Q("qc")));
+        await After(TimeSpan.FromSeconds(2));
+
+        var received = Received();
+        var c = Assert.Single(received, r => QuestionOf(r.Notification) == "qc");
+        Assert.Equal(("question", false), (Kind(c.Notification), Silent(c.Notification)));
+        Assert.DoesNotContain(received, r => Kind(r.Notification) == "group" && r.Notification.GetProperty("data").GetProperty("sessions").GetInt32() == 1);
+    }
+
+    // sr-1020: what a restart found pending was on devices as itself, so it goes again as itself, each
+    // under its own tag, never grouped, and an answer elsewhere withdraws it there. Nor do they open a
+    // window that groups the next live question.
+    [Fact]
+    public async Task Questions_pending_when_the_host_starts_each_go_as_themselves_and_are_resolved_on_their_own_tags()
+    {
+        Start(null, S("s1", SessionStatus.Waiting, question: Q("q1")), S("s2", SessionStatus.Waiting, question: Q("q2")), S("s3", SessionStatus.Waiting, question: Q("q3")));
+        Subscribe(Phone);
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s4", SessionStatus.Waiting, question: Q("q4")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(["q1", "q2", "q3", "q4"], Received().Select(r => QuestionOf(r.Notification)));
+        Assert.Equal([$"{Machine}:s1", $"{Machine}:s2", $"{Machine}:s3", $"{Machine}:s4"], Received().Select(r => r.Notification.GetProperty("tag").GetString()));
+
+        source.Upsert(S("s2", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+
+        var received = Received();
+        Assert.DoesNotContain(received, r => Kind(r.Notification) == "group");
+        var resolved = received[^1].Notification;
+        Assert.Equal(("resolved", $"{Machine}:s2", "q2"), (Kind(resolved), resolved.GetProperty("tag").GetString(), QuestionOf(resolved)));
+        Assert.Equal(5, received.Count);
+    }
+
+    // The group's alert counts once it reaches a device, not once it is made: a session joining while
+    // the relay is down replaces the alerting notice still waiting, and its replacement alerts in its
+    // place. Once delivered, what changes it is silent.
+    [Fact]
+    public async Task A_group_whose_alert_never_left_while_the_relay_was_down_still_alerts_once_on_every_device()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Empty(sender.Sent);
+
+        sender.Connected = true;
+        await After(TimeSpan.Zero);
+        source.Upsert(S("s4", SessionStatus.Waiting, question: Q("q4")));
+        await After(TimeSpan.FromSeconds(2));
+
+        foreach (var device in new[] { Phone, Laptop })
+        {
+            var groups = Received().Where(r => r.Device == device && Kind(r.Notification) == "group").ToList();
+            Assert.Equal([(3, false, "high"), (4, true, "normal")],
+                groups.Select(g => (g.Notification.GetProperty("data").GetProperty("sessions").GetInt32(), Silent(g.Notification), g.Urgency)));
+        }
+    }
+
+    // Only a session joining it alerts: one leaving it, after a later question opened a new window,
+    // changes it quietly.
+    [Fact]
+    public async Task A_grouped_notice_that_only_loses_a_question_after_a_later_window_opened_stays_quiet()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        await After(TimeSpan.FromSeconds(60));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(2));
+
+        source.Upsert(S("s2", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+
+        var received = Received();
+        Assert.Equal(["question", "group", "question", "group"], received.Select(r => Kind(r.Notification)));
+        var fewer = received[^1];
+        Assert.Equal((1, true, "normal"), (fewer.Notification.GetProperty("data").GetProperty("sessions").GetInt32(), Silent(fewer.Notification), fewer.Urgency));
     }
 
     sealed class FakeSource : ISessionSource
