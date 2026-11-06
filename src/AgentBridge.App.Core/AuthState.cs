@@ -27,8 +27,8 @@ namespace AgentBridge.App.Core;
 // user code of GitHub's shape is shown, after the hidden-character check the lane applies; nothing
 // else of a signin.code is read, so no token can reach the app through it; an attention's message
 // is the host's own sentence (from kind, errorClass, statusCode and provider, never the agent's
-// text: 6649775484), shown as it is, plain and revealed; and a machine's reason is plain, revealed,
-// cut short, and dropped whole when it holds anything shaped like a token. Nothing
+// text: 6649775484), shown as it is, plain and revealed; and a refused start's reason is shown only
+// as this app's words for one of the host's known reasons (StartReasons), never the machine's. Nothing
 // here signs anyone in, enters a code, or opens a page: a person presses for each.
 public static partial class AuthState
 {
@@ -183,8 +183,22 @@ public static partial class AuthState
         var outcome = Str(r, "outcome") is { } o && StartOutcomes.Contains(o) ? o : "refused";
         var flow = Str(r, "flow") is { Length: > 0 } f ? f : null;
         // Only a refused says why: an outcome read as refused has no words of its own.
-        return new StartResult(outcome is "started" or "busy" && flow is null ? "refused" : outcome, flow, Str(r, "outcome") == "refused" ? AgentText(Str(r, "reason"), 200) : null);
+        var reason = Str(r, "outcome") == "refused" && Str(r, "reason") is { } said ? StartReasons.GetValueOrDefault(said) : null;
+        return new StartResult(outcome is "started" or "busy" && flow is null ? "refused" : outcome, flow, reason);
     }
+
+    // A refused start's reason in plain words, by the host's own reason (AgentSignInService), compared
+    // whole and by ordinal (ui.md §6.13: a reason is the host's, from a known set, never the machine's
+    // words). Any other reason, a request this app got wrong included, reads as none: "Sign-in
+    // refused". The raw text stays in the host's own log, for diagnostics (#802). The PWA's twin is
+    // auth-state.js START_REASONS.
+    public static readonly IReadOnlyDictionary<string, string> StartReasons = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["too many recent sign-in requests"] = "too many requests, try again later",
+        ["this credential store is busy"] = "another sign-in is under way",
+        ["too many sign-ins are pending"] = "too many sign-ins under way",
+        ["sign-in is unavailable or not authorized"] = "not available from this device",
+    };
 
     // signin.code's data, as it may be shown, or refused when it isn't GitHub's shape. Its three
     // fields are strict: one of the wrong type refuses it whole, so no half-read code is shown.

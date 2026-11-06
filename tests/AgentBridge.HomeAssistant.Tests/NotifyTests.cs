@@ -1313,12 +1313,12 @@ public sealed class NotifyTests : IDisposable
         // Told within the pass, well inside the owner's 60 s, on the phones and the push service.
         var notice = Assert.Single(Notices());
         Assert.Single(Notices(Tablet));
-        Assert.Equal($"{Machine} · Copilot needs sign-in", notice["title"]!.GetValue<string>());
+        Assert.Equal($"Copilot on {Machine} needs sign-in", notice["title"]!.GetValue<string>());
         Assert.Equal("1 session: Copilot: Fix the relay", notice["message"]!.GetValue<string>());
         Assert.Equal($"{Machine} - needs sign-in", notice["data"]!["subtitle"]!.GetValue<string>());
         Assert.False(notice["data"]!.AsObject().ContainsKey("actions"));
         var push = Assert.Single(Pushes());
-        Assert.Equal($"{Machine} · Copilot needs sign-in", push["title"]!.GetValue<string>());
+        Assert.Equal($"Copilot on {Machine} needs sign-in", push["title"]!.GetValue<string>());
         // No account, code or URL, and not the agent's answer from before.
         foreach (var sent in Sent().Select(n => HaContract.Serialize(n.Data)))
         {

@@ -113,7 +113,7 @@ public static class SignInBanners
     }
 
     // What a banner says, and what is read aloud when it comes or changes (ui.md §6.13): "Copilot on
-    // DEV-VM1 needs sign-in · @octocat" over "4 sessions affected".
+    // DEV-VM1 needs sign-in · @octocat" over "2 sessions affected: Fix the relay, Draft the notes".
     public static (string Head, string Line, string Said) Words(Banner b)
     {
         var who = b.Subject;
@@ -129,18 +129,30 @@ public static class SignInBanners
             var confirming = $"Signed in \u00b7 waiting for {Core.Words.Plural(b.Sessions.Count, "session", "sessions")} to confirm";
             return ($"{who}{acct}", confirming, $"{who}: {confirming}");
         }
+        var line = StateLine(b) ?? Affected(b) + string.Join(", ", b.Sessions.Select(s => s.Title));
+        return ($"{who} needs sign-in{acct}", line, $"{who} needs sign-in");
+    }
+
+    // What a needed banner says instead of its sessions, or null when it has nothing else to say.
+    static string? StateLine(Banner b)
+    {
         var f = b.Flow;
-        var line =
-            b.AtMachine ? "Sign in at the machine"
+        return b.AtMachine ? "Sign in at the machine"
             : f?.Outcome == "failed" ? (f.Reason is { } failed ? $"Sign-in failed \u00b7 {failed}" : "Sign-in failed")
             : f?.Outcome == "refused" ? (f.Reason is { } refused ? $"Sign-in refused \u00b7 {refused}" : "Sign-in refused")
             : b.Expired ? "Code expired"
             : b.Code is { Refused: false } code ? $"Waiting for sign-in \u00b7 code expires {AuthState.Clock(code.ExpiresAt)}"
             : b.Recovery == "checking" ? "Checking for a sign-in that still works\u2026"
             : b.Recovery == "signingIn" && f is null ? "Waiting for sign-in"
-            : $"{Core.Words.Plural(b.Sessions.Count, "session", "sessions")} affected";
-        return ($"{who} needs sign-in{acct}", line, $"{who} needs sign-in");
+            : null;
     }
+
+    // "2 sessions affected: " before the sessions' titles, each a link to its session (ui.md §6.13,
+    // owner decision 6675817525), with no line of titles of its own; without a session, the count alone.
+    public static string Affected(Banner b) => $"{Core.Words.Plural(b.Sessions.Count, "session", "sessions")} affected" + (b.Sessions.Count > 0 ? ": " : "");
+
+    // Whether the banner's line names its sessions: a needed banner with nothing else to say.
+    public static bool ListsSessions(Banner b) => b.State == "needed" && b.Sessions.Count > 0 && StateLine(b) is null;
 
     // What is said aloud as a banner changes, once each (§9.1 A6): every way an attempt can end, as the
     // banner or the sheet shows it, so none passes unsaid. Never the machine's own words, nor the code.
@@ -202,8 +214,11 @@ public sealed class SignInBannerViewModel : Observable
     public string Head => SignInBanners.Words(banner).Head;
     public string Line => SignInBanners.Words(banner).Line;
     public bool HasLine => Line.Length > 0;
+    // The line names its sessions, each a link (the view draws them in it): "2 sessions affected: ".
+    public bool ListsSessions => SignInBanners.ListsSessions(banner);
+    public bool PlainLine => HasLine && !ListsSessions;
+    public string Affected => SignInBanners.Affected(banner);
     public ObservableCollection<SignInSession> Sessions { get; }
-    public bool HasSessions => Sessions.Count > 0;
     public string Problem => banner.Flow?.Problem ?? "";
     public bool HasProblem => Problem.Length > 0;
 

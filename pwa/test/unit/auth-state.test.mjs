@@ -82,10 +82,22 @@ test('a start\'s outcome this client doesn\'t know, or one with no flow, is refu
   // The merged protocol (#834, #841) has started, busy and refused only: "Sign in at the machine"
   // comes from the host's signIn: machine, never from a start's result.
   assert.deepEqual(readStartResult({ outcome: 'machine', reason: 'no device flow' }), { outcome: 'refused', flow: null, reason: null });
-  assert.equal(readStartResult({ outcome: 'refused', reason: 'Signed out' }).reason, 'Signed out');
   assert.equal(readStartResult({ outcome: 'recovered', flow: 'f1' }).outcome, 'refused');
   assert.equal(readStartResult({ outcome: 'busy', flow: 'f1' }).outcome, 'busy');
   assert.equal(readStartResult(null).outcome, 'refused');
+});
+
+test('a refused start\'s reason is shown only in this client\'s words for one of the host\'s reasons, never the machine\'s own text', () => {
+  assert.equal(readStartResult({ outcome: 'refused', reason: 'this credential store is busy' }).reason, 'another sign-in is under way');
+  assert.equal(readStartResult({ outcome: 'refused', reason: 'too many recent sign-in requests' }).reason, 'too many requests, try again later');
+  assert.equal(readStartResult({ outcome: 'refused', reason: 'sign-in is unavailable or not authorized' }).reason, 'not available from this device');
+  // Anything else, however plain, reads as no reason: "Sign-in refused".
+  for (const raw of ['Signed out', 'This Credential Store Is Busy', 'this credential store is busy ', 'a supported agent and request UUID are required', 'constructor', 'toString', 7]) {
+    assert.equal(readStartResult({ outcome: 'refused', reason: raw }).reason, null, String(raw));
+  }
+  const one = [readSession({ id: 's1', agent: 'copilot', title: 'One', status: 'idle', attention: signInAttention() })];
+  const [b] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: one, canSignIn: true }], { flows: new Map([['m\ncopilot\noctocat', { state: 'done', outcome: 'refused', reason: readStartResult({ outcome: 'refused', reason: 'Error: EACCES C:\\Users\\mona' }).reason }]]) });
+  assert.equal(bannerWords(b).line, 'Sign-in refused');
 });
 
 test('a signin.done reads its outcome, an unknown one as failed, and the sessions it resumed', () => {
@@ -161,13 +173,9 @@ test('a code that has run out by this device\'s clock is expired, whatever the h
   assert.ok(flowExpired({ expiresAt: null }));
 });
 
-test('Needs you lists a session that needs sign-in as "Needs sign-in", with nothing to answer there; errors are not counted', () => {
+test('Needs you counts questions and approvals only: a session that needs sign-in is its banner\'s, and neither are errors counted', () => {
   const session = readSession({ id: 's1', agent: 'copilot', title: 'Coordinate the Shiproom', status: 'idle', attention: signInAttention() });
-  const [e] = needsYou([{ hostId: 'm', session }], { nameOf: () => 'DEV-VM1' });
-  assert.equal(e.mode, 'signIn');
-  assert.equal(e.line, 'Needs sign-in');
-  assert.equal(e.decisions, null);
-  assert.deepEqual(needsYou([{ hostId: 'm', session }], { current: () => false }), []);
+  assert.deepEqual(needsYou([{ hostId: 'm', session }], { nameOf: () => 'DEV-VM1' }), []);
   const failed = readSession({ id: 's2', status: 'idle', attention: { kind: 'error', errorClass: 'quota' } });
   const stalled = readSession({ id: 's3', status: 'working', attention: { kind: 'notResponding' } });
   assert.deepEqual(needsYou([{ hostId: 'm', session: failed }, { hostId: 'm', session: stalled }]), []);
@@ -178,7 +186,7 @@ const sessions = (n, attention = signInAttention()) => Array.from({ length: n },
 test('one banner per machine, agent and account rolls up every session it holds up, from the sessions alone if need be', () => {
   const [b] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(4), canSignIn: true }]);
   assert.equal(b.sessions.length, 4);
-  assert.deepEqual([bannerWords(b).head, bannerWords(b).line], ['Copilot on DEV-VM1 needs sign-in \u00b7 @octocat', '4 sessions affected']);
+  assert.deepEqual([bannerWords(b).head, bannerWords(b).line], ['Copilot on DEV-VM1 needs sign-in \u00b7 @octocat', '4 sessions affected: Session 4, Session 3, Session 2, Session 1']);
   assert.equal(bannerVerb(b), 'Sign in');
   const two = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: [...sessions(2), readSession({ id: 'c1', agent: 'claude', status: 'idle', attention: signInAttention({ agent: 'claude', account: null }) })] }]);
   assert.deepEqual(two.map((x) => [x.agent, x.sessions.length]).sort(), [['claude', 1], ['copilot', 2]]);
@@ -190,12 +198,12 @@ test('only a provider the host says has no device flow is "at the machine"; with
   assert.equal(bannerVerb(machine), null);
   // None said, or a word this client doesn't know: "Needs sign-in" with no action and no claim.
   const [unsaid] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(1, signInAttention({ signIn: undefined })), canSignIn: true }]);
-  assert.deepEqual([bannerVerb(unsaid), bannerWords(unsaid).line], [null, '1 session affected']);
+  assert.deepEqual([bannerVerb(unsaid), bannerWords(unsaid).line], [null, '1 session affected: Session 1']);
   // A word this client doesn't know: no Sign in the host may not relay, and no claim about the machine.
   const [unknown] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(1, signInAttention({ signIn: 'carrier-pigeon' })), canSignIn: true }]);
-  assert.deepEqual([bannerVerb(unknown), bannerWords(unknown).line], [null, '1 session affected']);
+  assert.deepEqual([bannerVerb(unknown), bannerWords(unknown).line], [null, '1 session affected: Session 1']);
   const [older] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: sessions(1), canSignIn: false }]);
-  assert.deepEqual([bannerVerb(older), bannerWords(older).line], [null, '1 session affected']);
+  assert.deepEqual([bannerVerb(older), bannerWords(older).line], [null, '1 session affected: Session 1']);
 });
 
 test('a flow under way offers no verb; one running elsewhere offers Show code; a failed or expired one, Try again', () => {
@@ -236,7 +244,7 @@ test('the newest session needing sign-in decides how, and its no claim wins over
   const rollUp = [{ agent: 'copilot', account: 'octocat', sessions: ['new', 'old'], signIn: 'phone' }];
   for (const [newest, older] of [['future-flow', 'phone'], [undefined, 'phone'], ['future-flow', 'machine'], [undefined, 'machine']]) {
     const [b] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', rollUp, sessions: [at('old', '2026-11-04T22:00:00.000Z', older), at('new', '2026-11-04T23:00:00.000Z', newest)], canSignIn: true }]);
-    assert.deepEqual([b.canSignIn, b.atMachine, bannerVerb(b), bannerWords(b).line], [false, false, null, '2 sessions affected'], `${newest} over ${older}`);
+    assert.deepEqual([b.canSignIn, b.atMachine, bannerVerb(b), bannerWords(b).line], [false, false, null, '2 sessions affected: new, old'], `${newest} over ${older}`);
   }
   // The newest saying phone is Sign in, whatever an older one said.
   const [p] = signInBanners([{ hostId: 'm', name: 'DEV-VM1', sessions: [at('old', '2026-11-04T22:00:00.000Z', 'machine'), at('new', '2026-11-04T23:00:00.000Z', 'phone')], canSignIn: true }]);
@@ -256,7 +264,7 @@ test('signed in and waiting for the sessions to confirm is never recovered, and 
   assert.deepEqual([b.state, bannerWords(b).line, bannerVerb(b)], ['confirming', 'Signed in · waiting for 2 sessions to confirm', null]);
   // One fails sign-in again: needed, counting it alone.
   const [again] = signInBanners(links(['pending', 'failed']));
-  assert.deepEqual([again.state, bannerWords(again).line, bannerVerb(again)], ['needed', '1 session affected', 'Sign in']);
+  assert.deepEqual([again.state, bannerWords(again).line, bannerVerb(again)], ['needed', '1 session affected: S1', 'Sign in']);
   // Neither counts in Needs you while confirming.
   assert.deepEqual(needsYou(links(['pending'])[0].sessions.map((session) => ({ hostId: 'm', session }))), []);
 });

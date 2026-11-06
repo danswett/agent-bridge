@@ -588,13 +588,13 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .sign-in-body > p { margin: 0; overflow-wrap: anywhere; }
 .sign-in-head { font-weight: 600; color: var(--ab-needs-head); }
 .sign-in-line, .sign-in-expiry, .sign-in-where, .sign-in-uri { font-size: .875rem; color: var(--ab-text); }
-.sign-in-sessions { list-style: none; margin: 4px 0 0; padding: 0; }
+/* A session the banner names (§6.13): a link in its line, as prose, so inline and underlined. */
 .sign-in-session {
-  min-height: 32px; padding: 0; text-align: left; overflow-wrap: anywhere;
+  display: inline; padding: 0; text-align: left; overflow-wrap: anywhere;
   font: inherit; color: var(--ab-text); background: none; border: 0; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
 }
-@media (pointer: coarse) { .sign-in-session { min-height: var(--tap); } }
-.sign-in-session:hover { text-decoration: underline; }
+.sign-in-session:hover { text-decoration-thickness: 2px; }
 .sign-in-code-line { margin: 4px 0; }
 .sign-in-code { font: 600 1.5rem var(--ab-font-mono); letter-spacing: .12em; -webkit-user-select: all; user-select: all; color: var(--ab-text); }
 .sign-in-actions, .sign-in-flow-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
@@ -616,6 +616,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 }
 @media (forced-colors: active) {
   .sign-in-banner { border-color: Highlight; }
+  .sign-in-session { color: LinkText; }
 }
 /* Moving rows: a grip on hover with a mouse, and a line where a dragged row will go. */
 .drag-handle { display: none; }

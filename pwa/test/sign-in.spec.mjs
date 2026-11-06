@@ -8,6 +8,10 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 const SESSIONS = ['signin-1', 'signin-2', 'signin-3', 'signin-4'];
+// The banner's line names its sessions, each a link (ui.md §6.13, owner decision 6675817525).
+const AFFECTED = '4 sessions affected: Coordinate the Shiproom, Fix the relay reconnect, Review the usage panel, Draft the release notes';
+// Needed again, newest first: the same four, in the order of their new failures.
+const AFFECTED_AGAIN = /^4 sessions affected: (?:[^,]+, ){3}[^,]+$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 async function openDemo(page, extra = '') {
@@ -31,17 +35,20 @@ test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
 });
 
-test('sessions that need sign-in say so on their rows and in Needs you, rolled up into one banner for the machine', async ({ page }) => {
+test('sessions that need sign-in say so on their rows, rolled up into one banner for the machine that names them, and are not in Needs you', async ({ page }) => {
   await openDemo(page);
   await expect(banner(page)).toHaveCount(1);
   await expect(banner(page).locator('.sign-in-head')).toHaveText('Copilot on DEV-VM1 needs sign-in \u00b7 @demo-user');
-  await expect(banner(page).locator('.sign-in-line')).toHaveText('4 sessions affected');
-  await expect(banner(page).locator('.sign-in-session')).toHaveText(['Coordinate the Shiproom', 'Fix the relay reconnect', 'Review the usage panel', 'Draft the release notes']);
+  await expect(banner(page).locator('.sign-in-line')).toHaveText(AFFECTED);
+  // Each title in that line is a link to its session, with no line of titles of its own.
+  await expect(banner(page).locator('.sign-in-line .sign-in-session')).toHaveText(['Coordinate the Shiproom', 'Fix the relay reconnect', 'Review the usage panel', 'Draft the release notes']);
+  await expect(banner(page).locator('.sign-in-session')).toHaveCount(4);
   for (const id of SESSIONS) {
     await expect(row(page, id).locator('.row-status')).toHaveText('Needs sign-in');
     await expect(row(page, id)).toHaveAttribute('data-rule', '10');
   }
-  await expect(page.locator('#needs-you .needs-entry[data-mode="signIn"] .needs-line')).toHaveText(Array(4).fill('Needs sign-in'));
+  // The banner owns sign-in (owner decision 6675817525): Needs you counts questions and approvals only.
+  await expect(page.locator('#needs-you .needs-entry[data-id^="signin-"]')).toHaveCount(0);
   // The other ways a session can stop: never idle, never working, never counted in Needs you.
   await expect(row(page, 'error-quota').locator('.row-status')).toHaveText('Agent error');
   await expect(row(page, 'stalled').locator('.row-status')).toHaveText(/^Not responding$/);
@@ -347,6 +354,9 @@ test('every way an attempt ends is said aloud, never in the machine\'s words', a
   await signIn(page).click();
   await expect(sheet(page)).toBeHidden();
   await expect(said).toHaveText('Sign-in refused for Copilot on DEV-VM1');
+  // Not one of the host's reasons: the machine's words are never on the banner (ui.md §6.13).
+  await expect(banner(page).locator('.sign-in-line')).toHaveText('Sign-in refused');
+  await expect(banner(page)).not.toContainText('secret');
   // A code that couldn't be shown.
   await page.evaluate(() => { window.agentBridgeDemo.nextCode = { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com.evil.example/login/device', expiresAt: new Date(Date.now() + 600000).toISOString() }; });
   await banner(page).getByRole('button', { name: 'Try again to sign in to Copilot on DEV-VM1' }).click();
@@ -516,14 +526,15 @@ test('a session button made while a code is shown keeps nothing that reaches it 
   });
   await signIn(page).click();
   await expect(sheet(page).locator('.sign-in-code')).toHaveText(code);
-  // A title changes while the code is up: the banner's session buttons are made again.
+  // A title changes while the code is up. The banner's line says when the code expires, so it names
+  // no session then; it does again once the code has gone.
   await page.evaluate(() => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get('signin-1'), title: 'Coordinate the Shiproom again' }); });
-  await expect(banner(page).getByRole('button', { name: 'Coordinate the Shiproom again' })).toHaveCount(1);
+  await expect(row(page, 'signin-1').locator('.row-title')).toHaveText('Coordinate the Shiproom again');
+  await expect(banner(page).getByRole('button', { name: 'Coordinate the Shiproom again' })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(sheet(page)).toBeHidden();
   await page.evaluate(() => window.agentBridgeDemo.finishSignIn('failed'));
   expect(await page.evaluate(() => window.agentBridgeDemo.signInCodesHeld)).toBe(0);
-  // The buttons are still the ones made while the code was shown.
   await expect(banner(page).getByRole('button', { name: 'Coordinate the Shiproom again' })).toHaveCount(1);
   const cdp = await page.context().newCDPSession(page);
   const chunks = [];
@@ -730,7 +741,6 @@ test('once the person signs in, the sessions wait to confirm, never recovered un
   await expect(page.locator('#sign-in-said .sign-in-said-line').last()).toHaveText('Copilot on DEV-VM1: Signed in \u00b7 waiting for 4 sessions to confirm');
   await expect(banner(page).locator('.sign-in-start')).toHaveCount(0);
   for (const id of SESSIONS) { await expect(row(page, id).locator('.row-status')).toHaveText('Signed in \u00b7 waiting for the session to confirm'); }
-  await expect(page.locator('#needs-you .needs-entry[data-mode="signIn"]')).toHaveCount(0);
   await expect(banner(page)).not.toContainText('recovered');
 
   // The model answered: the host clears them, and only now is it recovered.
@@ -751,10 +761,9 @@ test('a session that fails sign-in again while confirming goes straight back to 
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Signed in \u00b7 waiting for 4 sessions to confirm');
   await page.evaluate(() => window.agentBridgeDemo.failSignInAgain());
   await expect(banner(page).locator('.sign-in-head')).toHaveText('Copilot on DEV-VM1 needs sign-in \u00b7 @demo-user');
-  await expect(banner(page).locator('.sign-in-line')).toHaveText('4 sessions affected');
+  await expect(banner(page).locator('.sign-in-line')).toHaveText(AFFECTED_AGAIN);
   await expect(signIn(page)).toBeVisible();
   for (const id of SESSIONS) { await expect(row(page, id).locator('.row-status')).toHaveText('Needs sign-in'); }
-  await expect(page.locator('#needs-you .needs-entry[data-mode="signIn"]')).toHaveCount(4);
 });
 
 test('a stored sign-in that still worked reads "recovered by itself", with nobody pressing anything', async ({ page }) => {
@@ -771,7 +780,7 @@ test('a second recovery within the minute gets its own words and count, not the 
   await expect(banner(page).locator('.sign-in-line')).toHaveText('Recovered by itself');
   // A new episode: needed again, then a person here signs in and the host clears them.
   await page.evaluate(() => window.agentBridgeDemo.needSignInAgain());
-  await expect(banner(page).locator('.sign-in-line')).toHaveText('4 sessions affected');
+  await expect(banner(page).locator('.sign-in-line')).toHaveText(AFFECTED_AGAIN);
   await signIn(page).click();
   await expect(sheet(page).locator('.sign-in-code')).toBeVisible();
   await page.evaluate(() => window.agentBridgeDemo.finishSignIn('signedIn'));
@@ -932,7 +941,7 @@ for (const look of [
     // A way to sign in this client doesn't know: no claim, so nothing to press, never "at the machine".
     await setAttention(page, { signIn: 'rdp' });
     await expect(banner(page).locator('.sign-in-start')).toHaveCount(0);
-    await expect(banner(page).locator('.sign-in-line')).toHaveText('4 sessions affected');
+    await expect(banner(page).locator('.sign-in-line')).toHaveText(AFFECTED);
     await expect(banner(page)).not.toContainText('at the machine');
     await capture(banner(page), name('no-claim'), testInfo);
     await setAttention(page, { signIn: 'phone' });

@@ -103,7 +103,7 @@ export function signInBanners(links, { flows = new Map(), resolved = new Map(), 
 }
 
 // What a banner says, and what is read aloud when it comes or changes (ui.md §6.13): "Copilot on
-// DEV-VM1 needs sign-in · @octocat" over "4 sessions affected".
+// DEV-VM1 needs sign-in · @octocat" over "2 sessions affected: Fix the relay, Draft the notes".
 export function bannerWords(b) {
   const who = `${b.agentName} on ${b.machine}`;
   const acct = b.account ? ` \u00b7 @${b.account}` : '';
@@ -116,17 +116,29 @@ export function bannerWords(b) {
     const line = `Signed in \u00b7 waiting for ${plural(b.sessions.length, 'session', 'sessions')} to confirm`;
     return { head: `${who}${acct}`, line, said: `${who}: ${line}` };
   }
-  const f = b.flow;
-  let line = `${plural(b.sessions.length, 'session', 'sessions')} affected`;
-  if (b.atMachine) { line = 'Sign in at the machine'; }
-  else if (f?.outcome === 'failed') { line = f.reason ? `Sign-in failed \u00b7 ${f.reason}` : 'Sign-in failed'; }
-  else if (f?.outcome === 'refused') { line = f.reason ? `Sign-in refused \u00b7 ${f.reason}` : 'Sign-in refused'; }
-  else if (f?.expired) { line = 'Code expired'; }
-  else if (f?.code && !f.code.refused) { line = `Waiting for sign-in \u00b7 code expires ${clockTime(f.code.expiresAt)}`; }
-  else if (b.recovery === 'checking') { line = 'Checking for a sign-in that still works\u2026'; }
-  else if (b.recovery === 'signingIn' && !f) { line = 'Waiting for sign-in'; }
+  const line = stateLine(b) ?? `${affected(b)}${b.sessions.map((s) => s.title).join(', ')}`;
   return { head: `${who} needs sign-in${acct}`, line, said: `${who} needs sign-in` };
 }
+
+// What a needed banner says instead of its sessions, or null when it has nothing else to say.
+function stateLine(b) {
+  const f = b.flow;
+  if (b.atMachine) { return 'Sign in at the machine'; }
+  if (f?.outcome === 'failed') { return f.reason ? `Sign-in failed \u00b7 ${f.reason}` : 'Sign-in failed'; }
+  if (f?.outcome === 'refused') { return f.reason ? `Sign-in refused \u00b7 ${f.reason}` : 'Sign-in refused'; }
+  if (f?.expired) { return 'Code expired'; }
+  if (f?.code && !f.code.refused) { return `Waiting for sign-in \u00b7 code expires ${clockTime(f.code.expiresAt)}`; }
+  if (b.recovery === 'checking') { return 'Checking for a sign-in that still works\u2026'; }
+  if (b.recovery === 'signingIn' && !f) { return 'Waiting for sign-in'; }
+  return null;
+}
+
+// "2 sessions affected: " before the sessions' titles, each a link to its session (ui.md §6.13,
+// owner decision 6675817525), with no line of titles of its own; without a session, the count alone.
+const affected = (b) => `${plural(b.sessions.length, 'session', 'sessions')} affected${b.sessions.length ? ': ' : ''}`;
+
+// Whether the banner's line names its sessions: a needed banner with nothing else to say.
+const listsSessions = (b) => b.state === 'needed' && b.sessions.length > 0 && stateLine(b) === null;
 
 // What is said aloud as a banner changes, once each (§9.1 A6): every way an attempt can end, as the
 // banner or the sheet shows it, so none passes unsaid. Never the machine's own words, nor the code.
@@ -387,8 +399,8 @@ export class SignInBanners {
     const els = view.els;
     els.head = h('p', { class: 'sign-in-head' });
     // Focusable from script only (never a Tab stop): where focus goes once the button has gone.
+    // While the banner names its sessions, each title in it is a button that opens that session.
     els.line = h('p', { class: 'sign-in-line', tabindex: '-1' });
-    els.sessions = h('ul', { class: 'sign-in-sessions' });
     // Not a live region: it is in the list pane, which a phone hides, and drawn on every render. A
     // failed start is said politely through the sign-in live region instead (#start).
     els.problem = h('p', { class: 'sign-in-problem' });
@@ -396,7 +408,7 @@ export class SignInBanners {
     els.verb = h('button', { type: 'button', class: 'button sign-in-start', onclick: (e) => this.#start(view, e.detail > 0) });
     view.el = h('section', { class: 'banner sign-in-banner', tabindex: '-1', dataset: { key: b.key, hostId: b.hostId, agent: b.agent } },
       h('span', { class: 'sign-in-mark' }, glyph(view.state === 'needed' ? 'needs' : 'idle', { size: 16 })),
-      h('div', { class: 'sign-in-body' }, els.head, els.line, els.sessions, els.problem, els.actions));
+      h('div', { class: 'sign-in-body' }, els.head, els.line, els.problem, els.actions));
     return view;
   }
 
@@ -408,17 +420,25 @@ export class SignInBanners {
     view.el.dataset.state = b.state === 'needed' ? (b.flow?.code ? 'pending' : b.flow?.outcome ?? (b.flow?.expired ? 'expired' : b.recovery ?? 'needed')) : b.state;
     view.el.setAttribute('aria-label', words.head);
     els.head.textContent = words.head;
-    els.line.textContent = words.line;
-    els.line.hidden = !words.line;
-    const ids = b.sessions.map((s) => `${s.id}\n${s.title}`).join('\n\n');
-    if (view.ids !== ids) {
-      view.ids = ids;
-      // Each button keeps only where it goes, never the banner, whose flow may hold a code.
-      const { hostId } = b;
-      els.sessions.replaceChildren(...b.sessions.map(({ id, title }) => h('li', null,
-        h('button', { type: 'button', class: 'sign-in-session', onclick: () => this.open(hostId, id) }, title))));
+    // Drawn again only when its words change, so a session's button with focus keeps it.
+    const lists = listsSessions(b);
+    const drawn = `${lists}\n${words.line}\n${b.sessions.map((s) => s.id).join('\n')}`;
+    if (view.drawn !== drawn) {
+      view.drawn = drawn;
+      if (lists) {
+        // Each button keeps only where it goes, never the banner, whose flow may hold a code.
+        const { hostId } = b;
+        const parts = [affected(b)];
+        b.sessions.forEach(({ id, title }, i) => {
+          if (i > 0) { parts.push(', '); }
+          parts.push(h('button', { type: 'button', class: 'sign-in-session', onclick: () => this.open(hostId, id) }, title));
+        });
+        els.line.replaceChildren(...parts);
+      } else {
+        els.line.textContent = words.line;
+      }
     }
-    els.sessions.hidden = !b.sessions.length;
+    els.line.hidden = !words.line;
     const problem = this.#flows.get(b.key)?.problem ?? '';
     if (els.problem.textContent !== problem) { els.problem.textContent = problem; }
     els.problem.hidden = !problem;
