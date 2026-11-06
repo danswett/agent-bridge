@@ -878,7 +878,9 @@ export class SessionCard {
     }
     e.events.hidden = lines.length === 0;
     if (drawn) { items.forEach((li, i) => { if (!drawn.has(lines[i].key) && !drawn.has(was(lines[i]))) { enter(li, 'listItem'); } }); }
-    if (!had || document.activeElement === had) { return; }
+    // A control no longer drawn has lost focus, whatever activeElement says (WebKit keeps a
+    // hidden one there).
+    if (!had || (document.activeElement === had && had.isConnected && !had.hidden && had.getClientRects().length)) { return; }
     // Its line went into a closed fold: to the fold's button. Its name still drawn, in its line or
     // one of its own it moved to: to its name there. Else to what its line has left. The fold
     // gone from under its button or link: to the working delegate's name the link named, else

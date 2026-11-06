@@ -302,6 +302,42 @@ const addRun = (page, more) => page.evaluate(({ id, now, more }) => {
   const list = more.map((a) => ({ ...a, startedAt: at(a.startedAt), endedAt: at(a.endedAt) }));
   d.upsert({ ...s, updatedAt: new Date(now).toISOString(), subagents: [...s.subagents, ...list] });
 }, { id: SESSION, now: Date.now(), more });
+// The demo session's delegates, all of them these, their times in minutes ago.
+const listOnly = (page, list) => page.evaluate(({ id, now, list }) => {
+  const d = window.agentBridgeDemo;
+  const s = d.host.get(id);
+  const at = (m) => (m === undefined ? undefined : new Date(now - m * 60000).toISOString());
+  d.upsert({ ...s, updatedAt: new Date(now).toISOString(), subagents: list.map((a) => ({ ...a, startedAt: at(a.startedAt), endedAt: at(a.endedAt) })) });
+}, { id: SESSION, now: Date.now(), list });
+// Three started together and still working, so their line ends "and 1 more", then one more line.
+const THREE = (names) => [
+  ...names.map((name, i) => ({ id: `three-${i}`, kind: 'background', name, status: 'working', startedAt: 3 - i / 10 })),
+  { id: 'one-d', kind: 'background', name: 'Draft', status: 'working', startedAt: 1 },
+];
+// Where a line's "N more" is: its box, its line's, its words' first row, its glyph's centre and
+// the other names'.
+const moreBox = (more) => more.evaluate((el) => {
+  const r = (b) => ({ top: b.top, bottom: b.bottom, left: b.left, right: b.right });
+  const li = el.closest('li');
+  const text = li.querySelector('.delegate-event-text');
+  const range = document.createRange();
+  range.selectNodeContents(text.firstChild);
+  const mark = li.querySelector('.delegate-event-mark').getBoundingClientRect();
+  return { more: r(el.getBoundingClientRect()), li: r(li.getBoundingClientRect()), first: r(range.getClientRects()[0]), mark: mark.top + mark.height / 2,
+    names: [...text.querySelectorAll('.delegate-link:not(.delegate-more)')].flatMap((n) => [...n.getClientRects()].map(r)) };
+});
+// A "N more" a whole 44 target in its own line, over no other name, its glyph by its first row.
+const expectMoreTarget = (box) => {
+  expect(box.more.right - box.more.left).toBeGreaterThanOrEqual(44);
+  expect(box.more.bottom - box.more.top).toBeGreaterThanOrEqual(44);
+  expect(box.more.top).toBeGreaterThanOrEqual(box.li.top);
+  expect(box.more.bottom).toBeLessThanOrEqual(box.li.bottom);
+  for (const n of box.names) {
+    expect(n.bottom <= box.more.top || n.top >= box.more.bottom || n.right <= box.more.left || n.left >= box.more.right).toBe(true);
+  }
+  expect(box.mark).toBeGreaterThanOrEqual(box.first.top);
+  expect(box.mark).toBeLessThanOrEqual(box.first.bottom);
+};
 // A capture of what is shown. The page's own CSP violations are checked first: WebKit reports the
 // style element the screenshot adds itself as inline, the harness's not the page's, so it is cleared after.
 const capture = async (page, locator) => {
@@ -542,6 +578,17 @@ test.describe('on a phone', () => {
     expect(box.mark).toBeGreaterThanOrEqual(box.first.top);
     expect(box.mark).toBeLessThanOrEqual(box.first.bottom);
     expect(box.link.left).toBeGreaterThanOrEqual(box.first.left);
+  });
+
+  test('on a phone a line that wraps with its "N more" on a later row keeps its glyph by the first row, and "N more" a 44 target over no name', async ({ page }) => {
+    await openDemo(page);
+    const more = card(page).locator('.agent-block .delegate-events .delegate-more');
+    await listOnly(page, THREE(['Read the witness logic end to end', 'Run the full suite on both engines', 'Check the docs']));
+    await expect(more).toHaveText('1 more');
+    const box = await moreBox(more);
+    // Too long for one row at 390: "1 more" falls on a later one.
+    expect(box.more.top).toBeGreaterThanOrEqual(box.first.bottom);
+    expectMoreTarget(box);
   });
 
   test.describe('with touch', () => {
@@ -1026,13 +1073,7 @@ test.describe('at three panes', () => {
       : { id: 'wake-d', kind: 'background', name: 'Try the fix', status: 'ended', outcome: 'done', startedAt: 5, endedAt: 4 },
   ];
   // The demo session's delegates, all of them these, their times in minutes ago.
-  const listOnly = (page, list) => page.evaluate(({ id, now, list }) => {
-    const d = window.agentBridgeDemo;
-    const s = d.host.get(id);
-    const at = (m) => (m === undefined ? undefined : new Date(now - m * 60000).toISOString());
-    d.upsert({ ...s, updatedAt: new Date(now).toISOString(), subagents: list.map((a) => ({ ...a, startedAt: at(a.startedAt), endedAt: at(a.endedAt) })) });
-  }, { id: SESSION, now: Date.now(), list });
-  const wake = (list) => list.map((a) => (a.id === 'wake-a' || a.id === 'wake-b' ? { ...a, status: 'working', outcome: undefined, endedAt: undefined } : a));
+  const wake =  (list) => list.map((a) => (a.id === 'wake-a' || a.id === 'wake-b' ? { ...a, status: 'working', outcome: undefined, endedAt: undefined } : a));
 
   for (const [from, working, to, toName] of [
     ['button', false, 'the first line\'s first name', 'wake-a'],
@@ -1059,6 +1100,28 @@ test.describe('at three panes', () => {
       await expect(pane(page)).toHaveAttribute('data-id', toName);
     });
   }
+
+  test('a fold that stays as its last working delegate finishes gives keyboard focus from its gone still working link to its button, not the page', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const events = c.locator('.agent-block .delegate-events');
+    await listOnly(page, WAKING(true));
+    const working = events.locator('.delegate-fold-working');
+    await expect(working).toHaveText('1 still working');
+    await working.focus();
+    await listOnly(page, WAKING(false));
+    await expect(events.locator('.delegate-fold-toggle')).toHaveAccessibleName('4 delegates · 4 reported back');
+    await expect(working).toBeHidden();
+    await expect(events.locator('.delegate-fold-toggle')).toBeFocused();
+  });
+
+  test('a line\'s "N more" is a whole touch target, 44 by 44, over no other line or name, its glyph by its words', async ({ page }) => {
+    await openDemo(page);
+    const more = card(page).locator('.agent-block .delegate-events .delegate-more');
+    await listOnly(page, THREE(['Read the logs', 'Run the suite', 'Check the docs']));
+    await expect(more).toHaveText('1 more');
+    expectMoreTarget(await moreBox(more));
+  });
 
 
   test('a delegate named as the main agent, or as an instruction, is shown as a delegate everywhere and never speaks in the reply', async ({ page }) => {

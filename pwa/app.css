@@ -878,6 +878,17 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 }
 .delegate-link:hover { text-decoration-thickness: 2px; }
 @media (forced-colors: active) { .delegate-link { color: LinkText; } }
+/* "N more" is a whole 44 target (§9.1) with its words as small as the line's: padded to a tap
+   each way, it makes the row of words it is on a tap high, as the fold's line is, so it reaches
+   into no row or line beside it. Wherever it falls when its line wraps (a phone), the glyph keeps
+   to the first row's words: the line lines up their first baselines, and a zero-width character
+   gives the glyph's cell the baseline of a row of words. */
+.delegate-link.delegate-more {
+  display: inline-block; min-width: var(--tap); min-height: var(--tap); white-space: nowrap; text-align: center;
+  padding: calc((var(--tap) - var(--type-meta-line)) / 2) 0;
+}
+.delegate-event:has(.delegate-more) { align-items: first baseline; }
+.delegate-event:has(.delegate-more) > .delegate-event-mark::before { content: '\200b'; content: '\200b' / ''; }
 
 /* ---- the conversation (ui.md §6.4) ---- */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
