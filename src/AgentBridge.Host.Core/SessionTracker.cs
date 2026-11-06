@@ -28,6 +28,8 @@ internal sealed class SessionTracker
     Session? _built;
     // The restore boundary the last build was made with (QuestionsFrom).
     DateTimeOffset? _builtFrom;
+    // The restore boundary the session last built set the interrupted run's questions aside by.
+    public DateTimeOffset? BuiltFrom => _builtFrom;
     IReadOnlyList<ClaudeSubagents.Record> _nested = [];
     // What the last build asked Stalled, while the session could be called Not responding: null
     // when it could not (not working, or already showing another attention).
@@ -106,6 +108,7 @@ internal sealed class SessionTracker
         // A restore's boundary (QuestionsFrom) set or moved since the last build changes what it
         // shows as asked (#780), though nothing it reads did.
         changed |= _builtFrom != _state.AskedFrom;
+        _state.EndBacklog();
         if (!changed) { return _built!; }
         Builds++;
         _builtFrom = _state.AskedFrom;

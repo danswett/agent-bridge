@@ -1201,6 +1201,32 @@ public sealed class RestoreTests : IDisposable
         Assert.NotNull(asked.Question);
     }
 
+    // The clock is set back after the restore: a new question is dated before it. Told apart by where
+    // it is in the transcript, not by its time, it is shown and the session is waiting (Copilot on
+    // #837); the interrupted run's stays set aside.
+    [Fact]
+    public async Task A_new_question_dated_before_the_restore_by_a_clock_set_back_is_shown_and_the_interrupted_one_is_not()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999986";
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var real = f.Source();
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 3));
+        await real.RefreshAsync();
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(20), Cause = RestoreCause.Reboot, QuestionLost = true });
+        await Until(() => real.Get(Id)?.Restored is not null);
+        await real.RefreshAsync();
+        Assert.Equal((SessionStatus.Idle, (Question?)null), (real.Get(Id)!.Status, real.Get(Id)!.Question));
+
+        Fixture.Append(events, Copilot.User("again", 10), Copilot.TurnStart(11), Copilot.Permission("r2", "c2", Copilot.Prompts["commands"], 12));
+        await real.RefreshAsync();
+
+        var asked = real.Get(Id)!;
+        Assert.Equal(SessionStatus.Waiting, asked.Status);
+        // The new one, dated before the restore.
+        Assert.True(asked.Question!.AskedAt > Fixture.T0.AddSeconds(5) && asked.Question.AskedAt < Fixture.T0.AddSeconds(20));
+    }
+
     // Marked before it registers, and given a whole turn before the source first reads it: that
     // prompt came after the restore, by its own time, so Continue has gone.
     [Fact]
