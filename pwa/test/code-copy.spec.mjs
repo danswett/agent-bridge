@@ -268,9 +268,17 @@ for (const [what, setup] of [
     const response = `> 1. Run this:\n>\n>    ${tick}powershell\n>    # just a note\r Write-Output RAN ${HEBREW}\n>    ${tick}\n> 2. Then check.`;
     const r = await respond(page, response, drawn);
     await expect(r.locator('blockquote li .md-note')).toHaveText(['Contains hidden characters', 'Contains right-to-left text']);
-    const first = await r.locator('pre code').evaluate((c) => c.getClientRects()[0].top);
-    const notes = await r.locator('.md-notes').boundingBox();
-    const button = await r.getByRole('button', { name: 'Copy code' }).boundingBox();
+    await expect(r.getByRole('button', { name: 'Copy code' })).toHaveCount(1);
+    // All three from one layout: the phone header's padding (--head-h) follows its new height a frame
+    // after the text size changes, and moves the whole conversation when it does.
+    const { first, notes, button } = await r.evaluate((el) => {
+      const box = (e) => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; };
+      return {
+        first: el.querySelector('pre code').getClientRects()[0].top,
+        notes: box(el.querySelector('.md-notes')),
+        button: box(el.querySelector('button.md-copy')),
+      };
+    });
     expect(notes.y + notes.height).toBeLessThanOrEqual(first + 0.5);
     expect(button.y + button.height).toBeLessThanOrEqual(first + 0.5);
     // Copy keeps its whole tap target, beside the notes.

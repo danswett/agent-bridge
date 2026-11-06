@@ -40,14 +40,15 @@ export async function macOf(keyBytes, bodyBytes) {
 // A signed command for the machine with machinePublic: { body, by, mac }, each base64url. to is
 // the machine that acts on it; omitted, the machine it is signed for. question and shown: an
 // escaped approval's confirmation names the question and what was read (#803), in the order the
-// host's CommandTarget writes them, and nothing else does.
-export async function signCommand({ key, deviceId, machinePublic, action, session, to, question, shown, now = Date.now(), request = globalThis.crypto.randomUUID() }) {
+// host's CommandTarget writes them, and nothing else does. args: a management command's arguments
+// (#801), signed after expiresAt as the host's CommandBody writes them; absent for everything else.
+export async function signCommand({ key, deviceId, machinePublic, action, session, to, question, shown, args, now = Date.now(), request = globalThis.crypto.randomUUID() }) {
   const machine = await deviceIdOf(machinePublic);
   const issuedAt = Math.floor(now / 1000);
   const target = { machine, session };
   if (question !== undefined) { target.question = question; }
   if (shown !== undefined) { target.shown = shown; }
-  const body = utf8.encode(JSON.stringify({
+  const fields = {
     v: 1,
     action,
     request,
@@ -56,7 +57,9 @@ export async function signCommand({ key, deviceId, machinePublic, action, sessio
     to: to ?? machine,
     issuedAt,
     expiresAt: issuedAt + COMMAND_LIFETIME_S,
-  }));
+  };
+  if (args !== undefined) { fields.args = args; }
+  const body = utf8.encode(JSON.stringify(fields));
   const mac = await macOf(await commandKey(key, machinePublic, deviceId, machine), body);
   return { body: toBase64url(body), by: toBase64url(key.public), mac: toBase64url(mac) };
 }

@@ -73,7 +73,7 @@ export async function motionsStarted(page) {
 
 // On a phone, the view pushed over the list goes back to it first.
 async function backToList(page) {
-  const back = page.locator('.session-view:not([hidden]) .session-header .back');
+  const back = page.locator('.session-view:not([hidden]) .session-bar .back');
   if (await back.isVisible()) {
     await back.click();
     await expect(back).toBeHidden();

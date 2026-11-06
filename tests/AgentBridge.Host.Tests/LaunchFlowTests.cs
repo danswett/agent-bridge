@@ -1246,6 +1246,8 @@ public abstract partial class LaunchFlowFixture
         public string? Unavailable_;
         public volatile bool Registers = true;
         public bool ExitsAtOnce;
+        // Starting the agent fails with this.
+        public Exception? Throws;
         // The launcher hands its session to a process of its own (its pid + 3000) and exits.
         public bool HandsOn;
         public readonly string CodexId = "66666666-6666-4666-8666-666666666666";
@@ -1260,6 +1262,7 @@ public abstract partial class LaunchFlowFixture
 
         public Started Start(StartSpec spec)
         {
+            if (Throws is { } broken) { throw broken; }
             int pid;
             lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } if (HandsOn) { running.Add(pid + 3000); } }
             if (Registers) { Register(spec, HandsOn ? pid + 3000 : pid); }

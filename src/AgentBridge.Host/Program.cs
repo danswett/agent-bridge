@@ -459,7 +459,7 @@ async Task<int> ServeAsync(HostHandover handover)
     transfers.Launcher = launcher;
     // No reply into a session whose launch here has not seen its window ready (a restore at folder
     // trust above all): Enter would answer the question (#780).
-    if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; }
+    if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; typist.Stopping = stop.Token; }
     // Nor /exit, whose Enter would answer it the same way: such a session is terminated untyped (#855).
     if (stops is StopService stopper) { stopper.LaunchHeld = launcher.HeldForReply; }
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
@@ -497,6 +497,27 @@ async Task<int> ServeAsync(HostHandover handover)
     // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
     // Assistant's Install there.
     var updates = new UpdateService(HostVersion(), Log) { ReadOnly = ServeReadOnly, OfferedReadOnly = OfferedReadOnly };
+    // host.restart's and manage.restart's one way out, also the committed-departure watchdog's (#805
+    // N1): probes settled first (#238), and a stop asked for meanwhile is never turned into a restart.
+    // Remote management hears of the handover (bound below, once it exists), so a remote restart a stop
+    // won over is not reported done by the next host.
+    Action? handingOver = null;
+    var restart = new SettledRestart(usageMonitor is null ? null : (t, ct) => usageMonitor.SettleProbesAsync(t, ct),
+        () => { handingOver?.Invoke(); handover.Request(); }, stop.Cancel, stop.Token);
+    void RestartHost() => _ = Task.Run(restart.RunAsync);
+    using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
+    // Restart from a person's device through the relay (#801, docs/protocol/v1-sessions.md, "Managing
+    // a machine"), every planned departure through one quiet lease (#805). ServeReadOnly is the
+    // acting answer (G5's Active).
+    var (manage, lifecycle, _) = ManageComposition.For(settings, identity.Key, identity.Folder, deliveryGate, ServeReadOnly, OfferedReadOnly,
+        () =>
+        {
+            Log("restarting: asked by a person's device through the relay");
+            RestartHost();
+        },
+        push, name, Log, watchdog: departureWatchdog);
+    handingOver = manage.HandingOver;
+    manage.Start();
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         Drivers = drivers,
@@ -507,6 +528,7 @@ async Task<int> ServeAsync(HostHandover handover)
         EscapedApprovals = escapedApprovals,
         Updates = updates,
         Restore = () => restore.Notice,
+        Manage = manage,
     };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
@@ -557,6 +579,7 @@ async Task<int> ServeAsync(HostHandover handover)
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge"),
         ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)) : null;
     var agentSetup = standaloneHooks is null ? null : new AgentSetupService(standaloneHooks, ServeReadOnly, stop.Token);
+    if (agentSetup is not null) { manage.Hooks = new AgentSetupHookRepair(agentSetup, agentHomes, identity.Folder); }
     await using var agentInstall = standaloneHooks is null ? null : new AgentInstallService(identity.Folder,
         agentLocator, agentLocator.Refresh, new VersionCommandRunner(),
         () =>
@@ -571,11 +594,6 @@ async Task<int> ServeAsync(HostHandover handover)
         }, stop.Token);
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
-    // host.restart's one way out, also the committed-departure watchdog's (#805 N1): probes
-    // settled first (#238), and a stop asked for meanwhile is never turned into a restart.
-    var restart = new SettledRestart(usageMonitor is null ? null : (t, ct) => usageMonitor.SettleProbesAsync(t, ct), handover.Request, stop.Cancel, stop.Token);
-    void RestartHost() => _ = Task.Run(restart.RunAsync);
-    using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -606,7 +624,8 @@ async Task<int> ServeAsync(HostHandover handover)
         Agents = agentReadiness,
         AgentSetup = agentSetup,
         AgentInstall = agentInstall,
-        Lifecycle = new LifecycleCoordinator(deliveryGate, new DepartureConditions(), watchdog: departureWatchdog),
+        Lifecycle = lifecycle,
+        LocalAppDevice = manage.NoteLocalApp,
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -705,6 +724,7 @@ async Task<int> ServeAsync(HostHandover handover)
             trustAnswers.Attach(relay);
             escapedApprovals.Attach(relay);
             updates.Attach(relay);
+            manage.Attach(relay);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff.Reset();
@@ -754,6 +774,7 @@ async Task<int> ServeAsync(HostHandover handover)
             trustAnswers.Attach(null);
             escapedApprovals.Attach(null);
             updates.Attach(null);
+            manage.Attach(null);
         }
         reconnects++;
         // A sign-in during the wait goes straight to connecting.
@@ -925,7 +946,7 @@ static string OsName() =>
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log, blobs: blobs);
     return (
         new AnswerService(gate, source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled, Writes = writes }, Log),
-        new ReplyService(gate, source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome, Writes = writes }, Log, attachments),
+        new ReplyService(gate, source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome, Writes = writes, LateWatch = TimeSpan.FromMinutes(5) }, Log, attachments),
         attachments,
         new StopService(gate, source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log));
 }

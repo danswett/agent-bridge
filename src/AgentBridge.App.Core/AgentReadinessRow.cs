@@ -129,7 +129,7 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     string Fact(string words) => Status.Length > 0 && words.EndsWith(Status, StringComparison.Ordinal) ? "Not checked" : words;
     public string HookActivity => agent.LastHookHandledAt is { } at
         ? $"Last hook handled at {at.ToLocalTime():g}{(agent.Id == "agency" ? " (shared Copilot CLI hooks)" : "")}. This is not a new-session readiness test."
-        : "No hook observed by this detector during this host run.";
+        : "No hook seen since the bridge started.";
 
     // What the host said that the row says in other words, for the app's log: the raw text stays
     // there, never on the row.

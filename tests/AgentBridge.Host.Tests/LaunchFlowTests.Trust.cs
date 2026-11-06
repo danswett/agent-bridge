@@ -673,6 +673,28 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
     }
 
     [Fact]
+    public async Task A_trust_answer_that_fails_before_anything_is_typed_is_refused_in_fixed_words_with_the_exception_only_in_the_log()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        screens.Rows = ClaudeAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var id = (await LaunchTrustAsync(ch, new { agent = "claude", workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
+        // Only the answer's own look at whether the agent still runs fails; the host's following of it, on other threads, is left alone.
+        starter.Looking = () =>
+        {
+            if (new System.Diagnostics.StackTrace().ToString().Contains("AnswerTrustOnceAsync")) { throw new InvalidOperationException("SECRET-C:\\Users\\someone\\denied.dll"); }
+        };
+
+        var answer = await AnswerAsync(ch, Answer(ch, id, "trust", client.Key));
+
+        Assert.Equal(("refused", "nothing was typed; answer at the machine"), (answer.Outcome, answer.Reason));
+        Assert.Empty(screens.Typed);
+        Assert.Contains(logged, line => line.Contains("before anything was typed") && line.Contains("SECRET-C:\\Users\\someone\\denied.dll"));
+    }
+
+    [Fact]
     public async Task A_highlight_moved_whose_Enter_could_not_go_or_a_worker_that_failed_part_way_is_unconfirmed_never_refused()
     {
         locator.Installed["claude"] = @"C:\fake\claude.exe";
@@ -704,7 +726,9 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         var request = Guid.NewGuid().ToString();
         var broken = await AnswerAsync(ch, Answer(ch, other, "trust", client.Key, request: request));
         Assert.Equal("unconfirmed", broken.Outcome);
-        Assert.Contains("the worker went away", broken.Reason);
+        Assert.Contains("may not have reached", broken.Reason);
+        Assert.DoesNotContain("the worker went away", broken.Reason);
+        Assert.Contains(logged, line => line.Contains("failed part way") && line.Contains("the worker went away"));
         Assert.Equal(broken, await AnswerAsync(ch, Answer(ch, other, "trust", client.Key, request: request)));
     }
 

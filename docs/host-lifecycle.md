@@ -4,9 +4,12 @@ Implementation slice for #805/#580/#581, consumed by #819. The full design remai
 draft [#815](https://github.com/danswett/agent-bridge/pull/815).
 [SRE's slice decision](https://github.com/danswett/agent-bridge/pull/815#issuecomment-6654417590)
 permits **graceful, process-local** exclusion only; Connection may veto.
-Engineering's independent review is required. No scheduler, installer, apply loop,
-remote management command or forced-recovery watchdog is added; the only restart
-added is the committed-departure watchdog below, through the existing `host.restart` path.
+Engineering's independent review is required. No scheduler, installer, apply loop or
+forced-recovery watchdog is added; the only restart added is the committed-departure
+watchdog below, through the existing `host.restart` path. Its first consumer is #801's
+remote restart (`manage.restart`, [v1-sessions.md](protocol/v1-sessions.md#managing-a-machine)),
+which leaves only through `TryAcquireQuiet`, `AnnouncePlanned` and `CommitDeparture` with
+purpose `RemoteRestart`.
 
 ## One host, one delivery gate
 
@@ -55,14 +58,16 @@ Purpose is a label, not authorization. The closed `QuietBlockedReason` set is:
 The separate, closed `DepartureBlocker` set for commit/conditions is exactly:
 `DeliveryInFlight`, `Typing`, `AnnounceUnacked`, `JournalUncertain`,
 `AppRunning`, `OtherHostRunning`, `ChannelChanged`, `TransferInFlight`,
-`ConditionFault`, `LeaseExpired`. `LeaseExpired` (#885) is the coordinator's own
+`ConditionFault`, `LeaseExpired`, `Ineligible`. `LeaseExpired` (#885) is the coordinator's own
 outcome: the provisional lease's 30-second lifetime ran out before commit, whether
 or not the gate's expiry notification has run yet. Callers report it as
 "changed" and may start again; it was previously `ConditionFault`, which callers
 could not tell from a condition that really faulted. A lease released before its
 lifetime (abort, dispose, refused announcement) and a lease already committed still
 abort as `ConditionFault`. Registration refuses a condition whose `Kind` is
-`LeaseExpired`. `IDepartureCondition` exposes `Kind` and synchronous
+`LeaseExpired`. `Ineligible` is a purpose's own eligibility, such as #801's remote restart on a
+host turned read-only or with `permissions.remoteManage` off since the request was checked; its
+snapshot is refreshed just before commit, and a missing or stale one blocks. `IDepartureCondition` exposes `Kind` and synchronous
 `bool IsBlocking()`: lock-free and non-blocking, with no I/O or side effects, reading only its owner's in-memory
 snapshot refreshed outside the fence. Kinds are validated/captured at registration.
 No owner or transport getter runs while the delivery gate lock is held.
@@ -71,9 +76,11 @@ All conditions run exactly once, even if an earlier one blocks/throws; throws
 and re-entrant coordinator calls become `ConditionFault`, never a deadlock or
 authority to leave. Missing registration also fails closed with `ConditionFault`.
 The real App, other-host, channel and transfer conditions belong to their owners
-and are **not implemented** here. `ServeAsync` supplies a frozen empty registry;
-before connecting consumers, their owners must register their conditions at
-composition. No existing command is routed through an incomplete policy.
+and are **not implemented** here. `ServeAsync` registers one condition at
+composition, `RemoteRestartEligibility` for `RemoteRestart` (#801: not read-only,
+`permissions.remoteManage` on, no #800 sign-in entrypoint on); every other purpose has
+none, so its commit fails closed with `ConditionFault`. Before connecting other
+consumers, their owners must register their conditions at composition. No existing command is routed through an incomplete policy.
 
 The provisional lease is nonrenewable, expires after **30 seconds** using
 monotonic time, and atomically blocks new accepted work. It never interrupts
@@ -183,8 +190,9 @@ command request ID is in the relay-visible record.
 
 #819 must still validate its verified target/package/channel and host-only apply
 boundary; these are not quiet tests. It must not close the App automatically.
-#801 supplies approved-person authorization and #800 login-child eligibility.
-This slice connects neither consumer's departure/apply command.
+#801 supplies approved-person authorization, and its remote restart is connected
+(`manage.restart`, slice A); #800's login-child eligibility is, until #800 says more, a
+refusal while its sign-in entrypoint is on. #819's apply command is not connected.
 
 ## #580/#581 read-only adapters
 
