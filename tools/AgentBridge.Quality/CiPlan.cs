@@ -52,6 +52,16 @@ static partial class CiPlan
     const string ConcurrencyGroup =
         "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
     const string CancelInProgress = "${{ github.event_name == 'pull_request' }}";
+    // A waiting publish is replaced by the next to arrive, so only an attempt publish-gate checked
+    // reaches the publish-prerelease group (quality/README.md §4.7): its output names that attempt,
+    // and its newer-runs step holds a re-run until main's newer runs have finished. Any other
+    // attempt's publish (a re-run of only the failed jobs) waits apart and fails at its first step.
+    const string GateAttempt = "${{ github.run_attempt }}";
+    const string NewerRuns = "newer-runs";
+    const string NewerRunsIf = "github.run_attempt != '1'";
+    const string PublishGroup =
+        "${{ needs.publish-gate.outputs.attempt == github.run_attempt && 'publish-prerelease' || format('publish-unchecked-{0}', github.run_id) }}";
+    const string UncheckedIf = "needs.publish-gate.outputs.attempt != github.run_attempt";
     // The only shape a suite-gated step's if: may take: guards that hold in the whole ring too
     // (the runner's OS, not cancelled), then a disjunction of exactly the whole-ring bypass and the
     // suite tests. A substring check passed `... || contains(...)) && contains(...)`, which the
@@ -215,6 +225,12 @@ static partial class CiPlan
             // has no packages: the gate passing isn't enough to publish.
             else if (!TopLevelConjuncts(publishIf).Any(t => AppBuilt().IsMatch(t)))
                 Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish");
+            var publishGateOutputs = Child(publishGate, "outputs") as YamlMappingNode;
+            if (Normalize((publishGateOutputs is null ? null : Scalar(publishGateOutputs, "attempt")) ?? "") != GateAttempt)
+                Add($"ci.yml {PublishGate}'s output attempt isn't exactly {GateAttempt}, so publish can't tell which attempt it checked");
+            if (Child(publishGate, "continue-on-error") is not null
+                || !Steps(publishGate).Any(s => Scalar(s, "id") == NewerRuns && Expression(Scalar(s, "if") ?? "") == NewerRunsIf && Child(s, "continue-on-error") is null))
+                Add($"ci.yml {PublishGate} has no step {NewerRuns} with if: exactly {NewerRunsIf} and no continue-on-error, so an obsolete re-run's publish could replace a newer run's waiting one");
         }
         if (jobs.TryGetValue("publish", out var publish))
         {
@@ -223,6 +239,14 @@ static partial class CiPlan
             if (publishCondition.Contains("||", StringComparison.Ordinal) || IsTemplate(publishCondition)
                 || StatusFunction().IsMatch(publishCondition))
                 Add($"ci.yml publish's if: has a ||, ${{{{ }}}} inside or a status function, so it could run without {PublishGate} succeeding");
+            if (Child(publish, "concurrency") is not YamlMappingNode publishConcurrency
+                || Normalize(Scalar(publishConcurrency, "group") ?? "") != PublishGroup
+                || Normalize(Scalar(publishConcurrency, "cancel-in-progress") ?? "") != "false")
+                Add($"ci.yml publish's concurrency isn't group {PublishGroup} with cancel-in-progress false, so an attempt {PublishGate} didn't check could replace a waiting publish");
+            var checkedStep = Steps(publish).FirstOrDefault();
+            if (checkedStep is null || Expression(Scalar(checkedStep, "if") ?? "") != UncheckedIf || Child(checkedStep, "continue-on-error") is not null
+                || !(Scalar(checkedStep, "run") ?? "").TrimEnd().EndsWith("exit 1", StringComparison.Ordinal))
+                Add($"ci.yml publish's first step doesn't fail an attempt {PublishGate} didn't check (if: exactly {UncheckedIf}, ending in exit 1, no continue-on-error), so it could publish outside publish-prerelease");
         }
 
         // Steps that run when a suite is selected: the suite must exist, say it runs in this job,

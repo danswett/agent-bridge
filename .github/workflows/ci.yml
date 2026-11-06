@@ -30,7 +30,7 @@ permissions:
 # passed on, so a replaced run's changes are tested with a later one (the plan job), merge-rule
 # passes over a replaced run only when the newest run's commit builds on its commit, and
 # otherwise blocks until it's re-run (quality/README.md §4.9), and publish's own checks keep
-# releases in version order (publish-gate). A re-run (attempt 2 on) never joins ci-main, so it
+# releases in version and commit order (publish-gate). A re-run (attempt 2 on) never joins ci-main, so it
 # can't take a waiting push run's place: like a run by hand, it's grouped by its own run id,
 # never cancelled.
 concurrency:
@@ -679,11 +679,19 @@ jobs:
     # last release stays the newest build of the app. Release order doesn't rest on the order
     # main's runs start or finish, which GitHub doesn't promise (and an old run can be re-run):
     # publish runs one at a time (its concurrency group never cancels one in progress), and
-    # inside it publish-prerelease.ps1 publishes each version once and refuses a version older
-    # than any published, the version being this run's number. So a run that publishes after a
-    # newer run's release publishes nothing, and an older commit's run that gets there first is
-    # followed by the newer one. Had it to be main's head instead, an app change followed by a
-    # docs-only commit would never be released.
+    # inside it publish-prerelease.ps1 publishes each version once, refuses a version older than
+    # any published, the version being this run's number, and refuses a commit that doesn't
+    # hold the latest release's commit, since a run number says nothing of commit order. So a run
+    # that publishes after a newer commit's release publishes nothing, and an older commit's run
+    # that gets there first is followed by the newer one. Had it to be main's head instead, an
+    # app change followed by a docs-only commit would never be released.
+    # A waiting publish is replaced by the next to arrive, so what may arrive is held here,
+    # before the group: a first attempt is the one ci-main runs, but a re-run (attempt 2 on) runs
+    # beside it, and an obsolete one could replace a newer run's waiting publish. A re-run
+    # passes only when every main push run newer than it has finished, so none of theirs is
+    # waiting; otherwise it fails, to be re-run once they have. A re-run of only the failed jobs
+    # doesn't re-run this one, so publish goes to publish-prerelease only for the attempt this
+    # gate checked (its attempt output) and otherwise fails apart from the group.
     # quality-gate must have passed: every ci.yml check job the plan selected (product, app, the
     # PWA, Home Assistant and spike jobs, light) ran and succeeded, since a release is what
     # installed copies take within the half hour. That's this workflow's jobs only; CodeQL, perf
@@ -695,7 +703,36 @@ jobs:
       !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
       && needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read # main's other CI runs, which a re-run's publish mustn't overtake
+    outputs:
+      # The attempt this gate checked: publish waits in publish-prerelease only in that attempt.
+      attempt: ${{ github.run_attempt }}
     steps:
+      # The newest 100 main push runs, read once; this run not among them, or any line unreadable,
+      # fails. A newer run started after this read reaches publish only after its own build.
+      - name: A re-run publishes only once main's newer runs have finished
+        id: newer-runs
+        if: github.run_attempt != '1'
+        env:
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          fail() { echo "::error title=publish-gate::$1"; exit 1; }
+          gh api "repos/$REPO/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=100" \
+            --jq '.workflow_runs[] | "\(.id) \(.run_number) \(.status)"' > "$RUNNER_TEMP/main-runs" || fail "couldn't read main's CI runs"
+          own=
+          while read -r id number status; do
+            [[ "$id" =~ ^[0-9]+$ && "$number" =~ ^[0-9]+$ && -n "$status" ]] || fail "couldn't read main's CI runs"
+            [ "$id" != "$RUN_ID" ] || own=$number
+          done < "$RUNNER_TEMP/main-runs"
+          [ -n "$own" ] || fail "run $RUN_ID isn't among main's newest 100 CI runs, so a newer one may still publish"
+          while read -r id number status; do
+            if [ "$number" -gt "$own" ] && [ "$status" != completed ]; then
+              fail "main's newer run $number ($id) is $status; re-run this job once it has finished"
+            fi
+          done < "$RUNNER_TEMP/main-runs"
       - run: echo "::notice::main's CI passed with the app built at ${{ github.sha }}; publishing"
 
   publish:
@@ -708,15 +745,24 @@ jobs:
     permissions:
       contents: write
     # One publish at a time: the checks against what is already out, and the delta's base, hold
-    # until the release is up.
+    # until the release is up. Only for the attempt publish-gate checked: any other (a re-run of
+    # only the failed jobs, publish among them) runs in a group of its own and fails at once, so
+    # it can neither replace a waiting publish nor publish unserialized. Its fix is re-running
+    # publish-gate, which re-runs publish after it.
     concurrency:
-      group: publish-prerelease
+      group: ${{ needs.publish-gate.outputs.attempt == github.run_attempt && 'publish-prerelease' || format('publish-unchecked-{0}', github.run_id) }}
       cancel-in-progress: false
     timeout-minutes: 30
     outputs:
       # 'true' only when this run uploaded the release: attest then signs it.
       published: ${{ steps.publish.outputs.published }}
     steps:
+      - name: publish-gate checked this attempt
+        if: needs.publish-gate.outputs.attempt != github.run_attempt
+        shell: pwsh
+        run: |
+          "::error title=publish::publish-gate checked attempt '${{ needs.publish-gate.outputs.attempt }}', not this one (${{ github.run_attempt }}); re-run the publish-gate job, which re-runs publish after it"
+          exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false

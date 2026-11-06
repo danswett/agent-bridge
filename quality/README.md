@@ -323,7 +323,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, each pinned to the one
    job it follows), and its `if:` is
    `always()`; `publish-gate` needs `quality-gate` and requires its success as a top-level
-   condition, and `publish` needs `publish-gate` with no status function; the plan's suites and
+   condition, and `publish` needs `publish-gate` with no status function, waiting in
+   `publish-prerelease` only in the attempt `publish-gate` checked (item 7); the plan's suites and
    whole-ring reach steps only as `SUITES` and `WHOLE_RING`; and each step that reads the plan's
    suites names suites the catalog has, whose `where:` names that job explicitly, in the one
    condition shape that runs in the whole ring whatever the plan selected, with an
@@ -416,10 +417,17 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    check): a main run whose change left
    the app alone publishes nothing. Release order doesn't rest on the order main's runs go in,
    which GitHub doesn't promise: `publish` runs one at a time, and inside it
-   `publish-prerelease.ps1` publishes each version (the run number) once and never one older
-   than any published. So a run publishes even after `main` has moved on (an app change followed
-   by a docs-only commit is released by the first's run), and one reaching `publish` after a
-   newer release publishes nothing. CodeQL, perf and the relay
+   `publish-prerelease.ps1` publishes each version (the run number) once, never one older
+   than any published, and never from a commit that doesn't hold the latest release's commit
+   (a run number says nothing of commit order; behind it publishes nothing, and diverged or
+   unreadable stops publishing). So a run publishes even after `main` has moved on (an app
+   change followed by a docs-only commit is released by the first's run), and one reaching
+   `publish` after a newer release publishes nothing. A waiting publish is replaced by the
+   next to arrive, so only the attempt `publish-gate` checked joins `publish-prerelease`
+   (its `attempt` output): a re-run passes `publish-gate` only once every newer main push run
+   has finished, and a re-run of only the failed jobs, which doesn't re-run `publish-gate`,
+   fails at `publish` in a group of its own; retry a publish by re-running the `publish-gate`
+   job. The catalog check pins these shapes too. CodeQL, perf and the relay
    workflow run apart and don't hold a release.
 8. **Keeping the selector honest:** a whole-ring run (ring 2, every gated job) also says in its
    summary which jobs ring 1 chose for the same change. For every ring-2

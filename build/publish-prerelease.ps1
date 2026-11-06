@@ -144,7 +144,8 @@ foreach ($b in $builds) {
     $b.Identity = $identity
 }
 
-# --- Whether to publish: once per version, and never a version older than one already out.
+# --- Whether to publish: once per version, never a version older than one already out, and never
+# a commit the latest release's commit isn't part of.
 $releases = Get-Release
 $tagged = @(Invoke-Gh api "repos/$Repository/git/matching-refs/tags/$tag" --jq '.[].ref') -contains "refs/tags/$tag"
 $published = $tagged -or [bool]($releases | Where-Object { -not $_.draft -and $_.tag_name -eq $tag })
@@ -157,6 +158,26 @@ if ($published) {
     # Two merges close together: the later one's build published first. Installed copies take
     # the highest version, so this one would only be noise, and a delta base nobody has.
     Write-Plan "$tag is older than the published v$($newer[0]); not publishing it"
+}
+if ($publishing -and $released.Count -and -not $DryRun) {
+    # A run's number, and so its version, says nothing of its commit's place on main: an
+    # ancestor's run created after its descendant's gets the higher one. Installed copies take the
+    # highest version, so a commit that doesn't hold the latest release's would take them back to
+    # older code. Read here, under the publish lock; anything unreadable or off that line stops.
+    $latestTag = "v$($released[0])"
+    $ref = @(Invoke-Gh api "repos/$Repository/git/ref/tags/$latestTag" --jq '.object.type, .object.sha')
+    if ($ref.Count -ne 2 -or $ref[0] -cne 'commit' -or $ref[1] -cnotmatch '^[0-9a-f]{40}$') {
+        throw "couldn't read the commit $latestTag is tagged on ($($ref -join ' ')); not publishing $tag"
+    }
+    $latestCommit = $ref[1]
+    $ancestry = [string](Invoke-Gh api "repos/$Repository/compare/$latestCommit...$Commit" --jq '.status')
+    if ($ancestry -ceq 'behind') {
+        # The same race as an older version, the other way round: the newer commit is out already.
+        Write-Plan "$Commit is behind $latestTag's commit $latestCommit; not publishing $tag over it"
+        $publishing = $false
+    } elseif ($ancestry -cnotin 'ahead', 'identical') {
+        throw "$Commit doesn't follow $latestTag's commit $latestCommit (compare: '$ancestry'); not publishing $tag"
+    }
 }
 
 function Test-Delta($b, [string]$basePath) {

@@ -474,12 +474,17 @@ connector's Install button on a machine the dashboard drives.
   It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
   request or a fork. It
   is the only job with `contents: write`, and runs one at a time (concurrency group
-  `publish-prerelease`), and publishes each version once and never one older than any already
-  out, so release order doesn't rest on the order main's CI runs go in (first attempts share
+  `publish-prerelease`), and publishes each version once, never one older than any already
+  out and never from a commit that doesn't hold the latest release's commit, so release order
+  doesn't rest on the order main's CI runs go in (first attempts share
   concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
   its own): a run publishes even after `main` has moved on, and
-  one that reaches `publish` after a newer release publishes nothing (re-run a failed run to
-  publish it, while no newer one has).
+  one that reaches `publish` after a newer release publishes nothing. A waiting publish is
+  replaced by the next to arrive, so a re-run gets there only once every newer `main` push run
+  has finished (`publish-gate` fails it otherwise: re-run it later), and a re-run of only the
+  failed jobs, which leaves `publish-gate` as it was, fails at `publish` without joining the
+  group: to retry a failed publish, re-run the `publish-gate` job, which re-runs `publish`
+  after it.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
@@ -522,8 +527,11 @@ connector's Install button on a machine the dashboard drives.
   package alone (with the warning) and x64's delta as usual.
 * **Once per version:** a version whose tag exists is skipped, so re-running a run publishes
   nothing twice. A version older than one already published is skipped (two merges close
-  together, the later one's build first). A draft left by a failed attempt is deleted and the
-  version uploaded again.
+  together, the later one's build first). So is a version whose commit doesn't hold the
+  latest release's commit (`compare` says it is behind): an ancestor's run created after its
+  descendant's has the higher number, and would otherwise take installed copies back to older
+  code; a commit off that line, or a tag or comparison that can't be read, stops the publish.
+  A draft left by a failed attempt is deleted and the version uploaded again.
 * **Pruning:** the newest 20 pre-releases stay; older ones are deleted with their assets, and
   their tags stay. A full (non-pre-release) release, a draft, or a release not tagged
   `v<major>.<minor>.<patch>` is never touched.
