@@ -4,7 +4,7 @@ import { P256KeyPair } from '../../js/noise-p256.js';
 import { deviceIdOf } from '../../js/identity.js';
 import { fromBase64url, toBase64url } from '../../js/blobs.js';
 import { fromUtf8, utf8 } from '../../js/bytes.js';
-import { TRANSFER, collectRemote, commandKey, macOf, signTransfer, signTrust } from '../../js/transfer.js';
+import { TRANSFER, collectRemote, collectingRemote, commandKey, macOf, signTransfer, signTrust } from '../../js/transfer.js';
 import { checkLaunch, readLaunchResult } from '../../js/launch.js';
 import { HostClient } from '../../js/host-client.js';
 import { LaunchService } from '../../js/launch-service.js';
@@ -129,6 +129,19 @@ test("the other machines' sessions come from those that hand them on, with each 
   assert.deepEqual(c.closed.sort(), ['empty', 'old', 'studio']);
 });
 
+test('a lookup of the other machines\' sessions counts as under way until its last channel is done, so the connection never rests under it', async () => {
+  let open;
+  const connection = {
+    presence: [{ id: 'studio', name: 'studio', kind: 'host' }],
+    openChannel: () => new Promise((resolve) => { open = resolve; }),
+  };
+  const asking = collectRemote({ connection, targetId: 'target', me: 'me', makeClient: () => ({ hello: async () => ({ capabilities: [] }), close() {} }) });
+  assert.equal(collectingRemote(), true, 'while a channel opens');
+  await Promise.resolve();
+  open({ id: 'studio', close() {} });
+  assert.deepEqual(await asking, []);
+  assert.equal(collectingRemote(), false);
+});
 test('a launch that brings a session over waits for the transfer, not just for a start', async () => {
   const sent = [];
   const t = { send(m) { sent.push(m); return Promise.resolve(); }, close() {}, onmessage: null, onclose: null };

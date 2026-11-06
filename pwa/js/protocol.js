@@ -32,9 +32,10 @@ export const Events = Object.freeze({
   sessionRemove: 'session.remove',
   sessionsSynced: 'sessions.synced',
   discoveryChanged: 'discovery.changed',
+  helloChanged: 'hello.changed',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', push: 'push' });
+export const Capabilities = Object.freeze({ helloChanged: 'hello.changed', sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 

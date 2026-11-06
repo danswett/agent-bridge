@@ -220,7 +220,7 @@ static partial class SelfTest
             if (choice?.Card is { } choiceCard && ById<Button>(choice, "Option:pg") is { } pg)
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(pg).GetPattern(PatternInterface.Invoke)).Invoke();
-                var answered = await Until(() => choiceCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
+                var answered = await Until(() => choiceCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
                 result["receipt"] = choiceCard.ReceiptText;
                 Check(answered, "answers a question from its session and shows it was delivered");
                 // The receipt is laid out a pass after its text changes (#247): waited for, then the
@@ -239,7 +239,7 @@ static partial class SelfTest
             if (remoteChoice?.Card is { } remoteCard && ById<Button>(remoteChoice, "Option:device") is { } device)
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(device).GetPattern(PatternInterface.Invoke)).Invoke();
-                var answered = await Until(() => remoteCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
+                var answered = await Until(() => remoteCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
                 result["remoteReceipt"] = remoteCard.ReceiptText;
                 Check(answered, "answers a question on another machine from its session and shows it was delivered");
             }
@@ -342,7 +342,7 @@ static partial class SelfTest
             {
                 ((IInvokeProvider)new ButtonAutomationPeer(approveButton).GetPattern(PatternInterface.Invoke)).Invoke();
                 var approvalCard = main.AllCards.First(c => c.Id == "demo-approval");
-                var gone = await Until(() => approvalCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal) && main.NeedsYou.All(e => e.Card.Id != "demo-approval") && main.Waiting == waiting - 1, TimeSpan.FromSeconds(20));
+                var gone = await Until(() => approvalCard.ReceiptText.StartsWith("You answered", StringComparison.Ordinal) && main.NeedsYou.All(e => e.Card.Id != "demo-approval") && main.Waiting == waiting - 1, TimeSpan.FromSeconds(20));
                 result["laneReceipt"] = approvalCard.ReceiptText;
                 Check(gone, "approves a permission prompt from Needs you: the card shows it delivered, and the entry and the tray count go down");
             }
@@ -372,6 +372,12 @@ static partial class SelfTest
             AppLog.Write("self-test: sign-in");
             await CheckSignIn(window, main, remote, Check, outFile);
             await CaptureSignIn(window, main, remote, Check, outFile);
+            // The receipt's states (ui.md §6.5) in each theme and at the narrowest width; high
+            // contrast's pass draws them too.
+            await ProgressPasses(window, main, demo, Check, outFile, result);
+            // The gallery's sessions are gone, and the one open with them: high contrast's pass
+            // draws the Sessions page as the theme passes did, a delegate in its strip and inspector.
+            await ShowADelegate(window, main, Check);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");
@@ -970,6 +976,10 @@ static partial class SelfTest
     // middle of this method.
     static async Task CheckHighContrast(MainWindow window, MainViewModel main, DemoHost demo, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
+        // A receipt line already on screen as the switch is made, and not bound again after it: it
+        // follows the switch by itself (#625, Copilot 4485379205). The passes below draw anew.
+        var line = ById<TextBlock>(window.Sessions.SessionPaneView, "ReplyStatus") is { IsLoaded: true } l ? l : null;
+        var inkBefore = (line?.Foreground as SolidColorBrush)?.Color.ToString();
         var failedRow = await ShowFailedAgentRow(window, main);
         var contrast = await HighContrastPass.BeginAsync();
         result["highContrast"] = contrast.How;
@@ -989,11 +999,21 @@ static partial class SelfTest
             // Only a pass that turned it on is a transition: on already, the line was drawn in it.
             if (contrast.TurnedOn) { await CheckAgentRowRepainted(window, main, failedRow, check); }
             else if (main.Settings is { } drawn) { await drawn.CheckAgentsAsync(); }
+            if (line is { IsLoaded: true })
+            {
+                var windowText = Application.Current.Resources.TryGetValue("SystemColorWindowTextColor", out var w) && w is Windows.UI.Color text ? text.ToString() : null;
+                var followed = await Until(() => (line.Foreground as SolidColorBrush)?.Color.ToString() == windowText, TimeSpan.FromSeconds(5));
+                var inkAfter = (line.Foreground as SolidColorBrush)?.Color.ToString();
+                result["receiptInkAcrossContrast"] = $"{inkBefore} -> {inkAfter}";
+                check(followed, $"repaints a receipt line on screen in the window's text as high contrast turns on ({inkBefore} -> {inkAfter}, wanted {windowText})");
+            }
+            else { result["receiptInkAcrossContrast"] = "no receipt line on screen"; }
             var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
             await PictureYoursInHighContrast(window, check, outFile);
             await PictureAgentRows(window, main, outFile, "highcontrast");
             await PictureRowsTheAppCantActOn(window, main, demo, outFile, [ElementTheme.Default]);
+            await ProgressGallery(window, main, demo, check, outFile, result, "highcontrast");
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();

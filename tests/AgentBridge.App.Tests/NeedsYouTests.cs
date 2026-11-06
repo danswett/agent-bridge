@@ -145,7 +145,7 @@ public sealed class NeedsYouTests : IAsyncLifetime
         Assert.Equal(rows, Rows());
 
         ui.Post(() => Entry("idle").Approve());
-        await Wait.UntilAsync(() => Card("idle").Question!.StatusText.StartsWith("Delivered", StringComparison.Ordinal), "delivered");
+        await Wait.UntilAsync(() => Card("idle").Question!.StatusText.StartsWith("You answered", StringComparison.Ordinal), "delivered");
         await host.SendAsync(Events.SessionUpsert, Make.Session("idle", status: SessionStatus.Working, updated: Make.T0.AddMinutes(6)));
         await Wait.UntilAsync(() => main.NeedsYou.All(e => e.Card.Id != "idle"), "the entry leaving");
         Assert.Equal(rows, Rows());
@@ -162,11 +162,17 @@ public sealed class NeedsYouTests : IAsyncLifetime
         Assert.True(TestUi.Read(() => entry.CanAnswer));
 
         ui.Post(entry.Approve);
-        await Wait.UntilAsync(() => entry.StatusText == "Sending…", "sending");
         var q = Card("approval").Question!;
+        // On its way, the receipt says nothing for its first 400 ms, and then only to a screen
+        // reader: the button's ring shows it goes (Receipt, #617).
+        await Wait.UntilAsync(() => TestUi.Read(() => q.InFlight), "on its way");
+        Assert.Equal("", TestUi.Read(() => entry.StatusText));
+        clock.Advance(ReceiptTiming.Quiet);
+        await Wait.UntilAsync(() => TestUi.Read(() => q.Announcement) == "Sending answer", "sending");
         TestUi.Read(() =>
         {
-            Assert.Equal("Sending…", q.StatusText);
+            Assert.Equal("", q.StatusText);
+            Assert.Equal("", entry.StatusText);
             Assert.False(q.CanAnswer);
             Assert.False(entry.CanAnswer);
             return true;
@@ -174,7 +180,7 @@ public sealed class NeedsYouTests : IAsyncLifetime
         // A second press while it goes sends nothing, from the lane or the card.
         ui.Post(entry.Deny);
         reply.SetResult(new AnswerResult(AnswerOutcome.Delivered));
-        await Wait.UntilAsync(() => entry.StatusText == "Delivered. The session has your answer.", "delivered");
+        await Wait.UntilAsync(() => entry.StatusText == "You answered · \u2068Approve once\u2069", "delivered");
         var sent = Assert.Single(host.Sent(Ops.SessionAnswer));
         Assert.Equal("approval", sent.GetProperty("id").GetString());
         Assert.Equal("r1#d", sent.GetProperty("question").GetString());
@@ -198,7 +204,7 @@ public sealed class NeedsYouTests : IAsyncLifetime
 
         refuse = false;
         ui.Post(entry.Approve);
-        await Wait.UntilAsync(() => entry.StatusText.StartsWith("Delivered", StringComparison.Ordinal), "delivered");
+        await Wait.UntilAsync(() => entry.StatusText.StartsWith("You answered", StringComparison.Ordinal), "delivered");
         var sent = host.Sent(Ops.SessionAnswer);
         Assert.Equal(["deny", "approve"], sent.Select(s => s.GetProperty("fields").GetProperty("decision").GetString()));
         Assert.NotEqual(sent[0].GetProperty("request").GetString(), sent[1].GetProperty("request").GetString());
@@ -219,7 +225,7 @@ public sealed class NeedsYouTests : IAsyncLifetime
 
         fail = false;
         ui.Post(entry.Resend);
-        await Wait.UntilAsync(() => entry.StatusText.StartsWith("Delivered", StringComparison.Ordinal), "delivered");
+        await Wait.UntilAsync(() => entry.StatusText.StartsWith("You answered", StringComparison.Ordinal), "delivered");
         var sent = host.Sent(Ops.SessionAnswer);
         Assert.Equal(2, sent.Count);
         Assert.Equal(sent[0].GetProperty("request").GetString(), sent[1].GetProperty("request").GetString());

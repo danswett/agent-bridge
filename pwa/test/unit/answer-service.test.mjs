@@ -332,3 +332,28 @@ test('an answer whose request its client never sent is not marked sent', async (
   await flush();
   assert.deepEqual(recentTimings().at(-1).client.map(([mark]) => mark), ['result']);
 });
+
+// The relay connection rests while the app is out of sight, but never with an answer on its
+// way (connection.js, #610): busy says so, between resends too.
+test('an answer is on its way while it is sent and while a resend waits, and not once it has an outcome or waits for a channel', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { conn, service, submit } = setup();
+  assert.equal(service.busy, false);
+  submit();
+  assert.equal(service.busy, true);
+  conn.client.last().reject(new HostError('session.answer', 'timed out'));
+  await flush();
+  assert.equal(service.get('h1', 's1', 'q1').state, 'waiting');
+  assert.equal(service.busy, true, 'a resend is due on its own');
+  t.mock.timers.tick(5);
+  await flush();
+  conn.client.last().resolve({ outcome: 'delivered', reason: null });
+  await flush();
+  assert.equal(service.busy, false);
+
+  // One given with no channel up waits for one, as well at rest as awake.
+  conn.client = null;
+  service.submit({ hostId: 'h1', sessionId: 's1', questionId: 'q2', answer: ANSWER });
+  assert.equal(service.get('h1', 's1', 'q2').state, 'waiting');
+  assert.equal(service.busy, false);
+});
