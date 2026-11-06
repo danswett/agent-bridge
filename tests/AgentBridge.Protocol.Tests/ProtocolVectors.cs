@@ -564,6 +564,8 @@ public static class ProtocolVectors
             .Valid("question", data)
             .Valid("finished", data with { Kind = NoticeKind.Finished, Question = null })
             .Valid("sign-in", SignInData)
+            .Valid("a-reminder", data with { Reminder = true })
+            .Valid("group", GroupData)
             .Reads("an-unknown-kind-reads-as-a-question", $$"""{"v":1,"kind":"celebrate","machine":"{{MachineId}}","session":"{{SessionId}}","at":"2026-10-28T04:22:43.182Z"}""");
         var notification = new PushNotification
         {
@@ -577,11 +579,19 @@ public static class ProtocolVectors
             {
                 Title = "Copilot on DEV-VM1 needs sign-in", Body = "3 sessions affected", Tag = PushNotice.Tag(MachineId, PushNotice.SignInKey(AgentKind.Copilot, null)), Data = SignInData,
                 Navigate = PushNotice.SignInNavigate("https://danswett.github.io/agent-bridge/", MachineId, AgentKind.Copilot),
+            })
+            .Valid("group", new PushNotification
+            {
+                Title = "Needs you", Body = "DEV-VM1 · 3 sessions waiting on you", Tag = PushNotice.Tag(MachineId, "~needsyou"), Data = GroupData,
+                Navigate = PushNotice.NavigateNeedsYou("https://danswett.github.io/agent-bridge/", MachineId),
             });
         f.Record<PushMessage>(Host).Valid("question", new PushMessage { Notification = notification });
     }
 
     static PushNoticeData SignInData => new() { Kind = NoticeKind.SignIn, Machine = MachineId, Agent = AgentKind.Copilot, Sessions = 3, At = T0 };
+
+    // #913 rule 3: three questions of the machine's sessions within 30 s, as one notice.
+    static PushNoticeData GroupData => new() { Kind = NoticeKind.Group, Machine = MachineId, Session = "", Sessions = 3, Class = NotificationClass.NeedsYou, At = T0 };
 
     // ---- launching ----
 

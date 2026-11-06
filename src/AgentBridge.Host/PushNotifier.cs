@@ -57,6 +57,12 @@ public sealed record PushOptions
     // any of that machine's sessions for the agent and account still does; never once per session.
     public TimeSpan SignInRepeat { get; init; } = TimeSpan.FromHours(1);
     public TimeSpan SignInTtl { get; init; } = TimeSpan.FromHours(6);
+    // #913 rule 5: a question still unanswered this long after its session's first question notice of
+    // the episode alerts once more. Zero sends none.
+    public TimeSpan ReminderAfter { get; init; } = TimeSpan.FromMinutes(15);
+    // #913 rule 3: questions of other sessions notified this soon after one that went on its own join
+    // one grouped notice instead of going one by one. Zero groups nothing.
+    public TimeSpan BurstWindow { get; init; } = TimeSpan.FromSeconds(30);
 }
 
 // Notifies the account's phones (Web Push, through the relay) when a session asks a
@@ -76,6 +82,17 @@ public sealed record PushOptions
 //             as the first does, then at most every SignInRepeat while any still does. A turn that
 //             ended on a 401 is idle with the previous turn's answer, and nothing else told the
 //             owner that every session on the machine had stopped.
+//
+//   group     #913 rule 3: two or more questions within BurstWindow. The first goes at once, as
+//             itself, and opens the window; a question of another session made due while it is open
+//             (and while the first, or one grouped, is still pending) goes into one notice of this
+//             machine's, GroupKey's, made when the second arrives and changed in place, silently, as
+//             more join or are answered. Once none of them is pending it is withdrawn, as a resolved.
+//             Only questions: the Needs you list shows nothing else, so a sign-in is never grouped.
+//   reminder  #913 rule 5: a question still pending ReminderAfter after its session's first question
+//             notice of the episode (while the session is needsYou) goes once more, as itself with
+//             data.reminder, to the devices that notice went to. Once per episode, never repeated;
+//             lost with a restart of the host, which notifies the question again and counts anew.
 //
 // A finished turn is not notified to a device on screen now (Watching), which sees it, and is
 // collapsed to one per session and device per FinishedCollapse, until the device answers or
@@ -107,6 +124,23 @@ public sealed class PushNotifier : IAsyncDisposable
     // When each sign-in notice (PushNotice.SignInKey) was last made, while its sessions still need sign-in.
     readonly Dictionary<string, DateTimeOffset> signInSent = new(StringComparer.Ordinal);
     readonly Queue<DateTimeOffset> recent = new();
+    // #913 rule 3: the sessions in the grouped notice, each with its question, while that is pending.
+    readonly Dictionary<string, string> grouped = new(StringComparer.Ordinal);
+    // The burst window: until when it is open, and the session whose question went on its own and
+    // opened it.
+    DateTimeOffset burstUntil = DateTimeOffset.MinValue;
+    string? burstLead;
+    // Whether the grouped notice has alerted in this window: what changes it after that is silent.
+    bool burstAlerted;
+    bool groupChanged;
+    // A session joined the group since it was last made: only that may alert.
+    bool groupGrew;
+    // A grouped notice was made since the last was withdrawn.
+    bool groupOut;
+    // The devices an alerting grouped notice was made for that has not reached them yet: whatever
+    // replaces it before it goes (a session joining while the relay is down, rate-limited or retrying)
+    // alerts for them in its place, so a burst is never only ever said silently.
+    readonly HashSet<string> groupAlertOwed = new(StringComparer.Ordinal);
     readonly SemaphoreSlim wake = new(0);
     IPushSender? sender;
     // A sender whose connection failed a push: nothing more is tried on it, and the next
@@ -133,9 +167,19 @@ public sealed class PushNotifier : IAsyncDisposable
         public bool MainRunning;
         public readonly HashSet<string> Notified = new(StringComparer.Ordinal);
         public readonly Queue<string> NotifiedOrder = new();
+        // #913 rule 5: when this needsYou episode's reminder is due, and the devices (with the grant
+        // each had) its first notice went to. Reminded once it went, until the session leaves
+        // needsYou; RemindedQuestion keeps a question that went away and came back from going twice.
+        public DateTimeOffset? RemindAt;
+        public Dictionary<string, TrustedPeerLease?>? RemindTo;
+        public bool Reminded;
+        public string? RemindedQuestion;
+        // Which needsYou episode this is: a reminder queued in an earlier one is never sent (sr2-1020).
+        public int Episode;
     }
 
-    sealed record Due(NoticeKind Kind, DateTimeOffset At, string? Question);
+    // FromStart: a question already pending when the host started, notified again as itself (sr-1020).
+    sealed record Due(NoticeKind Kind, DateTimeOffset At, string? Question, bool FromStart = false);
 
     sealed class Outgoing
     {
@@ -153,6 +197,11 @@ public sealed class PushNotifier : IAsyncDisposable
         public TrustedPeerLease? Grant;
         // A finished notice waiting out FinishedCollapse.
         public bool Collapsed;
+        // A grouped notice that alerts.
+        public bool Alerts;
+        // A question's reminder, and the episode it reminds of: checked again as it goes.
+        public bool Reminder;
+        public int Episode;
     }
 
     // Whether a device has the app on screen now, subscribed to this host (SessionService.Watching).
@@ -181,7 +230,7 @@ public sealed class PushNotifier : IAsyncDisposable
             {
                 if (sessions.ContainsKey(s.Id)) { continue; }
                 var t = sessions[s.Id] = new Tracked { Last = s, MainKey = MainKey(s), MainRunning = s.WaitingOn is null && s.Status is SessionStatus.Working or SessionStatus.Waiting };
-                if (s.Question is { } q) { t.Due = new Due(NoticeKind.Question, now + this.options.QuestionDelay, q.Id); }
+                if (s.Question is { } q) { t.Due = new Due(NoticeKind.Question, now + this.options.QuestionDelay, q.Id, FromStart: true); }
             }
         }
     }
@@ -359,6 +408,7 @@ public sealed class PushNotifier : IAsyncDisposable
         outbox.RemoveAll(o => o.Device == device);
         foreach (var k in finishedSent.Keys.Where(k => k.Device == device).ToList()) { finishedSent.Remove(k); }
         foreach (var k in shownOn.Keys.Where(k => k.Device == device).ToList()) { shownOn.Remove(k); }
+        groupAlertOwed.Remove(device);
     }
 
     void OnChanged(object? _, SessionChange change)
@@ -370,8 +420,9 @@ public sealed class PushNotifier : IAsyncDisposable
             {
                 if (!sessions.TryGetValue(change.Id, out var t)) { return; }
                 t.Removed = true;
+                EndEpisode(t, change.Id);
                 Recovered(SignInKeyOf(t.Last));
-                t.Due = t.Shown is { } shown ? new Due(NoticeKind.Resolved, now, shown) : null;
+                t.Due = (t.Shown ?? grouped.GetValueOrDefault(change.Id)) is { } shown ? new Due(NoticeKind.Resolved, now, shown) : null;
                 if (t.Due is null) { Drop(change.Id); }
             }
             else if (change.Session is { } s) { Observe(s, now); }
@@ -386,6 +437,12 @@ public sealed class PushNotifier : IAsyncDisposable
         t.Last = s;
         t.Removed = false;
         if (SignInKeyOf(prev) is { } was && was != SignInKeyOf(s)) { Recovered(was); }
+        // Out of needsYou the episode is over, and its reminder with it (#913 rule 5).
+        if (!NeedsYou(s))
+        {
+            EndEpisode(t, s.Id);
+            t.Reminded = false;
+        }
         // The main agent's answer as it stood before any wait on a delegate began, and whether
         // its turn was running then.
         var baseline = t.MainKey;
@@ -422,6 +479,9 @@ public sealed class PushNotifier : IAsyncDisposable
             {
                 t.Due = new Due(NoticeKind.Question, now + options.QuestionDelay, q.Id);
             }
+            // Still on devices (it flickered away and back, which ended the episode): reminded as if
+            // notified now, unless it already was.
+            else if (t.Shown == q.Id || grouped.GetValueOrDefault(s.Id) == q.Id) { Arm(t, s, q.Id, now); }
             return;
         }
         // Answered (or gone) before it was notified: nothing to say.
@@ -443,8 +503,25 @@ public sealed class PushNotifier : IAsyncDisposable
         else if (s.Status != SessionStatus.Idle && t.Due is { Kind: NoticeKind.Finished }) { t.Due = null; }
         // A question on devices is no longer asked. Not at once: a turn that finishes soon
         // after replaces it with its own notice.
-        if (t.Shown is { } shown && t.Due is null) { t.Due = new Due(NoticeKind.Resolved, now + options.QuestionDelay, shown); }
+        if ((t.Shown ?? grouped.GetValueOrDefault(s.Id)) is { } shown && t.Due is null) { t.Due = new Due(NoticeKind.Resolved, now + options.QuestionDelay, shown); }
     }
+
+    static bool NeedsYou(Session s) => (s.Class ?? NotificationClasses.Of(s)) == NotificationClass.NeedsYou;
+
+    // The episode's reminder is cancelled, and one already queued for a device withdrawn: answered on
+    // one device, or ended, while the reminder went out to another, the next device was still sent an
+    // alerting reminder of a question nobody waits on (sr2-1020).
+    void EndEpisode(Tracked t, string id)
+    {
+        t.RemindAt = null;
+        t.RemindTo = null;
+        t.Episode++;
+        outbox.RemoveAll(o => o.Session == id && o.Reminder);
+    }
+
+    // As a reminder goes: its question still pending in the same episode, which still needs the person.
+    bool StillReminds(Outgoing o) => sessions.TryGetValue(o.Session, out var t) && !t.Removed && t.Episode == o.Episode
+        && t.Last is { Question: { } q } s && q.Id == o.Question && NeedsYou(s);
 
     // A finished notice that replaced a question on devices did not go (#841): withdrawn or
     // dropped for a failed turn's attention, which holds back every device's. The answered
@@ -513,6 +590,7 @@ public sealed class PushNotifier : IAsyncDisposable
                 if (recent.Count >= options.MaxPerMinute) { return NextWake(now); }
                 outbox.Remove(ready);
                 if (store.Get(ready.Device) is not { } found) { continue; }
+                if (ready.Reminder && !StillReminds(ready)) { continue; }
                 // A finished notice that waited (the relay down, the rate limit, a retry, or
                 // collapsed) is not sent to a device now on screen; a collapsed one only while
                 // still true.
@@ -535,7 +613,7 @@ public sealed class PushNotifier : IAsyncDisposable
                 var encrypted = WebPushCrypto.Encrypt(next.Plain, sub.Subscription);
                 lock (gate)
                 {
-                    if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != next.Grant) { continue; }
+                    if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != next.Grant || next.Reminder && !StillReminds(next)) { continue; }
                     var now = time.GetUtcNow();
                     while (recent.Count > 0 && now - recent.Peek() >= TimeSpan.FromMinutes(1)) { recent.Dequeue(); }
                     if (recent.Count >= options.MaxPerMinute)
@@ -584,6 +662,12 @@ public sealed class PushNotifier : IAsyncDisposable
         if (r.Status is >= 200 and < 300)
         {
             if (o.Kind == NoticeKind.Question && o.Question is { } q) { shownOn[key] = q; }
+            else if (o.Kind == NoticeKind.Group)
+            {
+                shownOn[key] = GroupKey;
+                // Its alert reached the device: what changes it from now is silent there.
+                if (o.Alerts) { groupAlertOwed.Remove(o.Device); }
+            }
             else { shownOn.Remove(key); }
             if (o.Kind == NoticeKind.Finished) { finishedSent[key] = time.GetUtcNow(); }
             // The hourly repeat counts from a notice that reached a device, and only that is kept
@@ -632,6 +716,7 @@ public sealed class PushNotifier : IAsyncDisposable
     {
         var times = new List<DateTimeOffset>();
         times.AddRange(sessions.Values.Where(t => t.Due is not null).Select(t => t.Due!.At));
+        times.AddRange(sessions.Values.Where(t => t.RemindAt is not null).Select(t => t.RemindAt!.Value));
         // Not one already past with no device to tell (SignIns made nothing), which woke the loop at
         // once, again and again. But one that came due while a push was in flight (#945) is only
         // made by the next pump: dropped, that push left nothing else to wake it, so the machine
@@ -662,10 +747,34 @@ public sealed class PushNotifier : IAsyncDisposable
             {
                 case NoticeKind.Question when !t.Removed && s?.Question?.Id == due.Question:
                     Remember(t, due.Question!);
-                    t.Shown = due.Question;
-                    Enqueue(s!, NoticeKind.Question, due.Question, store.All);
+                    // What the host found pending when it started is no burst (#913 rule 3): each was
+                    // on devices as itself before the restart, under its own tag, and only its own notice
+                    // gets the resolved that withdraws it there (shownOn). Grouped, an answer elsewhere
+                    // left the old notice on the phone. Nor does it open a window that would group the
+                    // next live question with what the person may already have seen.
+                    if (due.FromStart || !Group(id, t, due.Question!, now))
+                    {
+                        t.Shown = due.Question;
+                        // One of a burst's still counts in its group while pending, now with this question.
+                        if (grouped.ContainsKey(id)) { grouped[id] = due.Question!; }
+                        Enqueue(s!, NoticeKind.Question, due.Question, store.All);
+                        if (!due.FromStart && !InBurst(now))
+                        {
+                            (burstUntil, burstLead, burstAlerted) = (now + options.BurstWindow, id, false);
+                            // What was answered of an earlier group, its resolution not reached yet, is
+                            // no part of this burst: left in, a question joining it was counted with them,
+                            // alerting.
+                            foreach (var (was, _) in grouped.Where(g => !StillAsked(g.Key, g.Value)).ToList())
+                            {
+                                grouped.Remove(was);
+                                groupChanged = true;
+                            }
+                        }
+                    }
+                    Arm(t, s!, due.Question!, now);
                     break;
                 case NoticeKind.Finished when !t.Removed && s is { Status: SessionStatus.Idle, Question: null } && !Failed(s):
+                    if (grouped.Remove(id)) { groupChanged = true; }
                     t.FinishedKey = FinishedKey(s);
                     t.Replaced = t.Shown ?? t.Replaced;
                     t.Shown = null;
@@ -684,6 +793,7 @@ public sealed class PushNotifier : IAsyncDisposable
                     {
                         var q = due.Question!;
                         t.Shown = null;
+                        if (grouped.GetValueOrDefault(id) == q) { grouped.Remove(id); groupChanged = true; }
                         var answerer = answeredBy.GetValueOrDefault((id, q));
                         answeredBy.Remove((id, q));
                         // A question notice that never left needs no follow-up: it just goes.
@@ -695,7 +805,140 @@ public sealed class PushNotifier : IAsyncDisposable
             }
             if (t.Removed && t.Due is null) { Drop(id); }
         }
+        Remind(now);
+        if (groupChanged) { Regroup(now); }
         SignIns(now);
+    }
+
+    // #913 rule 3: whether a burst window is open. It closes early once nothing in it is pending: a
+    // question then is the first of a new burst, and goes as itself.
+    // Only what is still pending counts, as the session shows now: a grouped question answered, or a
+    // session gone, whose resolution this pump has not reached yet (the sessions are walked in the
+    // order they were first seen) once kept the window open, and the next question joined a group
+    // about to empty, silently, never alerting (sr2-1020).
+    bool InBurst(DateTimeOffset now) => now < burstUntil && (grouped.Any(g => StillAsked(g.Key, g.Value)) || burstLead is { } lead
+        && sessions.TryGetValue(lead, out var l) && l.Shown is { } shown && StillAsked(lead, shown));
+
+    bool StillAsked(string id, string question) => sessions.TryGetValue(id, out var t) && !t.Removed && t.Last?.Question?.Id == question;
+
+    // A question made due while a burst window is open joins the grouped notice, with the question
+    // that opened the window, rather than going as itself. Not the session that opened it, nor one
+    // whose own notice is on devices: a new question of that session replaces that notice.
+    bool Group(string id, Tracked t, string question, DateTimeOffset now)
+    {
+        if (!InBurst(now) || id == burstLead || t.Shown is not null) { return false; }
+        if (burstLead is { } lead && sessions.TryGetValue(lead, out var l) && l.Shown is { } shown && StillAsked(lead, shown))
+        {
+            groupGrew |= grouped.TryAdd(lead, shown);
+        }
+        groupGrew |= grouped.TryAdd(id, question);
+        grouped[id] = question;
+        groupChanged = true;
+        return true;
+    }
+
+    // The grouped notice as it stands, replacing the one before in place: alerting the first time a
+    // window adds to it, silently after and whenever one only leaves it. Withdrawn once none of its
+    // questions is pending, as a resolved to the devices it reached.
+    void Regroup(DateTimeOffset now)
+    {
+        var grew = groupGrew;
+        groupChanged = false;
+        groupGrew = false;
+        outbox.RemoveAll(o => o.Session == GroupKey);
+        var shownTo = store.All.Where(d => shownOn.ContainsKey((d.Device, GroupKey))).ToList();
+        if (grouped.Count == 0)
+        {
+            if (!groupOut) { return; }
+            groupOut = false;
+            groupAlertOwed.Clear();
+            EnqueueGroup(shownTo, NoticeKind.Resolved, 0, silent: true, now);
+            return;
+        }
+        var silent = burstAlerted || !grew;
+        if (!silent) { burstAlerted = true; }
+        groupOut = true;
+        EnqueueGroup(store.All, NoticeKind.Group, grouped.Count, silent, now);
+    }
+
+    // Silent is the notice's own; a device still owed the group's alert (one made for it that never
+    // reached it, replaced here) gets it alerting all the same, until an alerting one is delivered.
+    void EnqueueGroup(IReadOnlyList<PushSubscriber> to, NoticeKind kind, int count, bool silent, DateTimeOffset now)
+    {
+        foreach (var sub in to)
+        {
+            if (!MayNotify(sub)) { continue; }
+            var alerts = kind == NoticeKind.Group && (!silent || groupAlertOwed.Contains(sub.Device));
+            if (alerts) { groupAlertOwed.Add(sub.Device); }
+            outbox.Add(GroupOutgoing(sub, kind, count, alerts, now));
+        }
+    }
+
+    Outgoing GroupOutgoing(PushSubscriber sub, NoticeKind kind, int count, bool alerts, DateTimeOffset now) => new()
+    {
+        Device = sub.Device,
+        Session = GroupKey,
+        Kind = kind,
+        Plain = PushNotice.Serialize(GroupMessage(kind, count, sub.App, now, silent: !alerts)),
+        Ttl = (int)options.QuestionTtl.TotalSeconds,
+        Urgency = alerts ? "high" : "normal",
+        Topic = PushNotice.Topic(machine.Id, GroupKey),
+        Created = now,
+        NotBefore = now,
+        Grant = sub.Grant,
+        Alerts = alerts,
+    };
+
+    // The outbox's key, and the tag's part after the machine id, for the grouped notice: no session id
+    // has this shape. Its own, not the first question's session's: that session's later notices
+    // (resolved, finished, its next question) replace whatever its tag shows.
+    const string GroupKey = "~needsyou";
+
+    internal PushMessage GroupMessage(NoticeKind kind, int count, string app, DateTimeOffset now, bool silent) => PushNotice.Fit(new PushMessage
+    {
+        Notification = new PushNotification
+        {
+            // No agent text at all (#263): the machine's name and a count.
+            Title = PushGroupWords.Title,
+            Body = kind == NoticeKind.Group ? PushGroupWords.Body(count, machine.Name) : PushGroupWords.WithdrawnBody(machine.Name),
+            Navigate = PushNotice.NavigateNeedsYou(app, machine.Id),
+            Tag = PushNotice.Tag(machine.Id, GroupKey),
+            Silent = silent ? true : null,
+            Data = new PushNoticeData
+            {
+                Kind = kind, Machine = machine.Id, Session = "", Sessions = kind == NoticeKind.Group ? count : null,
+                Class = kind == NoticeKind.Group ? NotificationClass.NeedsYou : null, At = now,
+            },
+        },
+    });
+
+    // #913 rule 5: the reminder of a session's needsYou episode is armed by its first question notice
+    // (grouped or not), for the devices that notice went to, unless the episode has had its one.
+    void Arm(Tracked t, Session s, string question, DateTimeOffset now)
+    {
+        if (t.RemindAt is not null || t.Reminded || t.RemindedQuestion == question || options.ReminderAfter <= TimeSpan.Zero || !NeedsYou(s)) { return; }
+        t.RemindAt = now + options.ReminderAfter;
+        t.RemindTo = store.All.Where(MayNotify).ToDictionary(d => d.Device, d => d.Grant, StringComparer.Ordinal);
+    }
+
+    // A reminder that comes due goes as the session's pending question's own notice again, with
+    // data.reminder, if that question was notified and the session still needs the person. Only to
+    // the devices its first notice went to that still hold the same grant: one revoked or paired
+    // again since is not reminded of what it was never told under that grant.
+    void Remind(DateTimeOffset now)
+    {
+        foreach (var t in sessions.Values)
+        {
+            if (t.RemindAt is not { } at || at > now) { continue; }
+            var to = t.RemindTo;
+            t.RemindAt = null;
+            t.RemindTo = null;
+            if (t.Removed || t.Last is not { Question: { } q } s || !NeedsYou(s) || !t.Notified.Contains(q.Id) || t.RemindedQuestion == q.Id) { continue; }
+            (t.Reminded, t.RemindedQuestion) = (true, q.Id);
+            // On devices as itself from now, so its answer resolves it there.
+            t.Shown = q.Id;
+            Enqueue(s, NoticeKind.Question, q.Id, [.. store.All.Where(d => to is not null && to.TryGetValue(d.Device, out var g) && g == d.Grant)], reminder: true);
+        }
     }
 
     // The sign-in notice a session counts toward (PushNotice.SignInKey), or null. Not one whose
@@ -786,6 +1029,7 @@ public sealed class PushNotifier : IAsyncDisposable
     void Drop(string id)
     {
         sessions.Remove(id);
+        if (grouped.Remove(id)) { groupChanged = true; }
         foreach (var k in finishedSent.Keys.Where(k => k.Session == id).ToList()) { finishedSent.Remove(k); }
     }
 
@@ -802,13 +1046,13 @@ public sealed class PushNotifier : IAsyncDisposable
         while (t.NotifiedOrder.Count > 64) { t.Notified.Remove(t.NotifiedOrder.Dequeue()); }
     }
 
-    void Enqueue(Session s, NoticeKind kind, string? question, IReadOnlyList<PushSubscriber> to, bool ended = false)
+    void Enqueue(Session s, NoticeKind kind, string? question, IReadOnlyList<PushSubscriber> to, bool ended = false, bool reminder = false)
     {
         var now = time.GetUtcNow();
         foreach (var sub in to)
         {
             if (!MayNotify(sub)) { continue; }
-            var plain = PushNotice.Serialize(Notice(s, kind, question, sub.App, now, ended));
+            var plain = PushNotice.Serialize(Notice(s, kind, question, sub.App, now, ended, reminder));
             var ttl = kind == NoticeKind.Finished ? options.FinishedTtl : options.QuestionTtl;
             // The latest state of a session wins: a newer notice replaces one still waiting.
             outbox.RemoveAll(o => o.Device == sub.Device && o.Session == s.Id);
@@ -831,6 +1075,8 @@ public sealed class PushNotifier : IAsyncDisposable
                 NotBefore = notBefore,
                 Grant = sub.Grant,
                 Collapsed = notBefore > now,
+                Reminder = reminder,
+                Episode = reminder && sessions.TryGetValue(s.Id, out var tracked) ? tracked.Episode : 0,
             });
         }
     }
@@ -906,7 +1152,7 @@ public sealed class PushNotifier : IAsyncDisposable
 
         static string Named(RestoreSession o) => PushNotice.Flatten(o.Title) is { Length: > 0 } t ? t : $"{AgentName(o.Agent)} session";
     }
-    internal PushMessage Notice(Session s, NoticeKind kind, string? question, string app, DateTimeOffset now, bool ended = false)
+    internal PushMessage Notice(Session s, NoticeKind kind, string? question, string app, DateTimeOffset now, bool ended = false, bool reminder = false)
     {
         var title = PushNotice.Flatten(s.Title);
         if (title.Length == 0) { title = $"{AgentName(s.Agent)} session"; }
@@ -939,6 +1185,7 @@ public sealed class PushNotifier : IAsyncDisposable
                 {
                     Kind = kind, Machine = machine.Id, Session = s.Id, Question = kind == NoticeKind.Finished ? null : question,
                     Class = kind switch { NoticeKind.Question => NotificationClass.NeedsYou, NoticeKind.Finished => NotificationClass.Done, _ => null },
+                    Reminder = reminder ? true : null,
                     At = now,
                 },
             },
@@ -983,4 +1230,17 @@ public sealed class PushNotifier : IAsyncDisposable
             stop.Dispose();
         }
     }
+}
+
+// The grouped notice's words (#913 rule 3), in one place for Creative (6690989275). #913's example
+// names each machine ("3 sessions need you: DEV-VM1 (2), ULTRA (1)"); a host knows only its own, so
+// its group names it once. No agent text (#263), and nothing to answer from the notice (#253).
+static class PushGroupWords
+{
+    // The same for the group, its silent changes and its withdrawal: a change never re-titles it.
+    public const string Title = "Needs you";
+    // The machine first, after the same " · " as a single notice's first line.
+    public static string Body(int count, string machine) => count == 1 ? $"{machine} · 1 session waiting on you" : $"{machine} · {count} sessions waiting on you";
+    // The withdrawal, which a client may show for a moment as it replaces the group.
+    public static string WithdrawnBody(string machine) => $"{machine} · no longer waiting";
 }
