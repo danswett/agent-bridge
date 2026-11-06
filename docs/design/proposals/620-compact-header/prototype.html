@@ -341,6 +341,13 @@
     return el.getBoundingClientRect().top < $('stage').getBoundingClientRect().top + fullH;
   };
 
+  // The reply area mirrors it at the bottom edge: it never expands over the focused control in the conversation.
+  const footCoversFocus = () => {
+    const el = document.activeElement;
+    if (!el || el === scroller || !scroller.contains(el)) return false;
+    return el.getBoundingClientRect().bottom > $('stage').getBoundingClientRect().bottom - footH;
+  };
+
   function onScroll() {
     const max = scroller.scrollHeight - scroller.clientHeight;
     const s = Math.min(Math.max(scroller.scrollTop, 0), Math.max(max, 0)); // ignore rubber-band overscroll
@@ -374,7 +381,7 @@
     if (e <= 0) { freturned = false; frun = 0; fheld = null; }
     else if (ffocus && !freturned) freturned = true;
     else if (freturned && dir < 0 && frun >= DOWN && !ffocus) setFoot(false);
-    else if ((!freturned || ffading) && dir > 0 && frun >= UP && e > froom) setFoot(true);
+    else if ((!freturned || ffading) && dir > 0 && frun >= UP && e > froom && !footCoversFocus()) setFoot(true);
     render();
   }
 

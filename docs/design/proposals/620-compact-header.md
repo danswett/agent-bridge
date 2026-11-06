@@ -494,7 +494,8 @@ For D7 (#935), a second run covers the reply area, in both engines, with motion 
 reduced motion: it opens in full; rests at the end; rides near it; is compact past its room,
 with the draft's first line in the bar; 40 down stays and 70 down comes back; 20 up stays and
 40 up sends it; the header and the reply area never both take full room mid-conversation; a
-tap on the bar focuses the box; focus on Send brings it back; a scroll to the question keeps
+tap on the bar focuses the box; focus on Send brings it back; with a focused line under the
+bar, 66 down keeps it compact until the line would stay in view; a scroll to the question keeps
 it, or shows it in full when it lands at the end; Send is hit-testable at rest; no overflow
 and no errors. Captures were taken in dark, light and high contrast.
 

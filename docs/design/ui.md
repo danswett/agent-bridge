@@ -1147,7 +1147,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     brings the box back in full and focuses it.
   - **Away from the end,** 32 up sends it away and 64 down brings it back, with its own
     count. The end always shows it in full. A draft is never hidden: the bar shows its first
-    line.
+    line. Like the header, it never expands over the focused control: while that control
+    would be under it, it waits, still counting, until the control would stay in view.
   - **Focus anywhere in the reply area** brings it back at once and holds it. A scroll the
     app makes keeps it as it was, unless it lands at the end, where it shows in full. On a
     screen shorter than twice the header it folds with the header.
@@ -1614,8 +1615,8 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   read from the h2 and the status from the meta line. Nothing focused in the conversation
   lands under the header, and the header never expands over the focused control. In high contrast the bar is `Canvas` with a
   `CanvasText` hairline. The reply area's compact bar (§6.5, #935) is the same: its copy of the
-  draft is drawn only, focus anywhere in the reply area brings the box back in full, and
-  focus never lands on a hidden control.
+  draft is drawn only, focus anywhere in the reply area brings the box back in full, it never
+  expands over the focused control, and focus never lands on a hidden control.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
