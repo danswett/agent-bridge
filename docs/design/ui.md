@@ -1207,18 +1207,28 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **One card per question id:** an update to the same question changes its card in place,
     and never adds a second.
   - **Permissions asked together come one at a time** (#690): Copilot asks one for each of a
-    batch of parallel tool calls. The card shows the earliest, answered at the machine while
-    Copilot draws another ahead of it (a path request asked before a shell one), with "1 of
-    *N* permissions waiting" under its header (`question.waiting`), on every surface: the PWA, the Windows app
-    and Home Assistant's card. The next is a new question with its own id once this one is
-    answered, so a second tap or a stale button never answers it.
+    batch of parallel tool calls. The card shows the earliest, with "1 of *N* permissions
+    waiting" under its header (`question.waiting`), on every surface: the PWA, the Windows app
+    and Home Assistant's card. While others wait it is answered at the machine
+    (`answerAtMachine`: no controls, Deny included) whenever the host cannot tell it from them
+    on the session's screen: Copilot draws another ahead of it (a path request asked before a
+    shell one); its kind is not shell or path, whose dialogs the host knows; its own text has a
+    run of spaces that can wrap onto a blank row; any waiting request's text, its own included,
+    holds a hidden character, a right-to-left letter, a reference to one, a line-drawing
+    character or a tab; another waiting request has nothing drawn to check the screen against;
+    or another would be drawn the same. So an escaped approval among others is answered at the
+    machine until it waits alone, unless its only escapes are in a path request's access kind,
+    which its dialog never draws as written (v1-sessions.md, "Escaped approvals"). That can clear under the
+    same id as the others are answered. The next is a new question with its own id once this one
+    is answered, so a second tap or a stale button never answers it.
   - **An approval is drawn as it runs,** since Approve once allows all of it: exactly as
     written, in the code face, never read as Markdown, with its hidden characters,
     right-to-left letters and bare carriage returns escaped and the code notes beside it, and
     no Copy ("An approval's card", below, #220). It wraps and is never cut, so a long command or a
     diff keeps Approve once. One the host escaped anything in is approved only through the
     confirmation sheet ("Escaped approvals", below, #803), which replaced the one-tap Approve
-    once of the owner's "escape and allow" (#253).
+    once of the owner's "escape and allow" (#253); while other Copilot permissions wait it is
+    almost always answered at the machine instead (#690, above).
   - **A host sends an approval's hidden characters and right-to-left letters as escapes**
     (`\u202E`, `\u05D0`, #220). The card's notes, and Needs you, which never offers such a
     prompt inline (§6.1), count a host's escape as the character it stands for.
@@ -1254,8 +1264,6 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       waiting", since the protocol doesn't say what was answered elsewhere.
   - **History:** a resolved question stays as a read-only item where it was asked, across later
     turns: the latest 20 per session, for as long as the client runs, none across a restart.
-  - **Several at once** (if a host ever sends them): one card each, in the order asked, with
-    "1 of N" in the heading.
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
   tool's name and arguments in mono). Not while the session waits on a question: the card says
   what is happening.
@@ -1408,6 +1416,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     the devices `config.json` lists by short id, or only at the machine.
   - **Home Assistant:** Deny only, under the line "Approve from the *app* or at the machine.", or
     "Approve at the machine." when `approve` is `machine` or `tooMany`. It has no device key, and its users include agents.
+  - **Among other Copilot permissions waiting** (#690): the approval is `answerAtMachine` until
+    it waits alone (unless its only escapes are in a path request's access kind), and that wins
+    over everything above on every surface: no "Approve once…", no sheet, and no Deny, Home
+    Assistant's included.
   - **Needs you, toasts, pushes:** no special case. Never an inline Approve (#202); a tap opens
     the card.
   - The Mac, iPhone and iPad app does not have the sheet yet: its Approve on one is refused by the

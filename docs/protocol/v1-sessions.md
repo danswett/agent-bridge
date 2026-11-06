@@ -681,10 +681,15 @@ drawn where it runs is a visible escape (`\u202E`, or `\u{E0041}` past the first
 characters such as bidi controls and zero-width spaces and joiners, controls other than newline
 and tab, private-use and unassigned code points, unpaired surrogates, U+2028 and U+2029, and
 every default-ignorable code point; so is every right-to-left letter (`\u05D0`), which reorders
-what is drawn around it without any control. Approve once is still offered for such a prompt:
-the owner's "escape and allow" rule (#253, decision 3). The digest stays over the original text
+what is drawn around it without any control. Approve is still offered for such a prompt, as the
+owner's "escape and allow" rule has it (#253, decision 3), now only through the escaped-command
+confirmation ([Escaped approvals](#escaped-approvals), #803), and not while other permission
+requests wait, when the listed one is `answerAtMachine` (below, #690). The digest stays over the original text
 (and over a tool's name as written, where it held such a character or right-to-left letters, and
-over whether the prompt is answered at the machine at all), so a prompt holding a real U+202E and
+over whether the prompt is held at the machine for a reason the request itself gives: a kind no
+host drives, details that cannot be read, or a request to run outside the sandbox). It is not over
+`answerAtMachine` set for any other reason, `permissions.remoteApproval` off or another request
+waiting that it cannot be told from (#690), which can clear under the same `id`. So a prompt holding a real U+202E and
 one holding the six characters `\u202E` never share an id. An ordinary prompt's digest is a hash of
 `<kind>\n<message>`; one with more to it, or with a NUL in its message, is hashed in a
 length-prefixed form starting with a NUL, so no message can spell another prompt's identity (a
@@ -743,8 +748,16 @@ same once all white space is gone. Only shell and path prompts are identified so
 draws a waiting shell or other request first, then a hook's, then a path request, then a URL
 request, each in the order asked, so the earliest is drawn only when nothing waiting draws
 ahead of it: a path request asked before a shell one is `answerAtMachine` until the shell one
-is answered. A listed prompt that cannot be told apart so is `answerAtMachine` while that holds, and answerable
-again under the same `id` once it can. Otherwise
+is answered. A listed prompt that cannot be told apart so is `answerAtMachine` while that holds:
+another waiting request is drawn ahead of it, its kind is not shell or path, its own text has a
+run of spaces that can wrap onto a blank row, any waiting request's text (its own included)
+holds a line-drawing character, a tab, or a character a host shows escaped or a reference to
+one (`&#x202E;`), another waiting
+request has nothing drawn to check the screen against (a read naming no path), or another
+would be drawn the same. So an approval listed with `escaped` while others wait is
+`answerAtMachine`, Deny included, until it waits alone (unless its only escapes are in a path
+request's access kind, which its dialog never draws as written): the confirmation below is not
+offered for it. It is answerable again under the same `id` once it can be told apart. Otherwise
 the answer is `refused`, naming the other where its dialog is the one drawn ("the machine is
 showing a different permission (path access, request ed05e9d7)"), and the key is held from
 the frame's top edge. It is never retargeted to the request on screen. The key goes
@@ -759,6 +772,13 @@ An approval holding a character a host shows as an escape (a bidi control, a zer
 hidden character, a control but newline and tab, a right-to-left letter; #220) carries
 `escaped`, set by the host from what it actually escaped (#803). Clients never infer it from
 `\u` text, which an agent can write itself.
+
+A Copilot permission prompt listed with `escaped` while other permission requests wait is
+`answerAtMachine` until it waits alone, since the host cannot tell such text apart on the
+session's screen, unless its only escapes are in a path request's access kind
+([Copilot permission prompts](#copilot-permission-prompts), #690): everything
+below gives way to that, so no client offers the confirmation or Deny for it, Home Assistant's
+Deny included, and a `session.answer` for it is `refused`.
 
 ```json
 "escaped": { "shown": "<64 hex>", "marks": [[12, 6], [40, 6]], "approve": "confirm" }
@@ -1921,7 +1941,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `askedAt` | time | |
 | `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
 | `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once, or a Copilot permission request listed while others wait that the host cannot tell from them on the session's screen ([Copilot permission prompts](#copilot-permission-prompts)). That last can clear under the same `id` once it can be told apart, so a client reads the flag afresh on every update rather than once per question. It still has its fields, so a client can say what it asks, but a client shows no controls for it, says to answer it at the machine ("Waiting on you · answer at the machine", ui.md §2.2), and a `session.answer` for it is `refused` |
-| `escaped` | object? | An approval the host showed any character of as an escape: `shown`, `marks` and `approve` ([Escaped approvals](#escaped-approvals)). Approve on it takes the escaped-command confirmation; Deny does not. Absent when nothing was escaped |
+| `escaped` | object? | An approval the host showed any character of as an escape: `shown`, `marks` and `approve` ([Escaped approvals](#escaped-approvals)). Approve on it takes the escaped-command confirmation; Deny does not. Neither goes when it is also `answerAtMachine`, as one listed while other Copilot permissions wait usually is ([Copilot permission prompts](#copilot-permission-prompts), #690). Absent when nothing was escaped |
 | `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land. And while a permission prompt or a sub-agent's question waits beside it, the session's own Copilot `ask_user` is `answerAtMachine` too, since the CLI may be showing the other one; a host also checks the transcript for a pending permission prompt just before typing an answer |
 | `waiting` | int? | How many permission prompts the session has waiting, this one included, when more than one is (#690). Copilot asks one for each of a batch of parallel tool calls and shows them one at a time; the host lists the earliest still waiting, so this is always the first of them. A client says so ("1 of 4 permissions waiting"). The next comes as a new question with its own `id` once this one is answered, so an answer to this one never reaches it. Absent with one |
 

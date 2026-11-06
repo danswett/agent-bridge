@@ -228,10 +228,12 @@ public sealed class CopilotPermissionTests : IDisposable
         // No frame (the screen-reader layout), or its top edge scrolled off.
         Assert.Contains("whole frame", CopilotPermissionScreen.Locate(Shell, approve: true, ShellProbes, waiting).Problem);
         Assert.Contains("whole frame", CopilotPermissionScreen.Locate(shown[1..], approve: true, ShellProbes, waiting).Problem);
-        // Text holding a line-drawing character, a tab or a hidden character, in any waiting request.
+        // Text holding a line-drawing character, a tab or a hidden character, in any waiting request,
+        // this one's own included.
         foreach (var bad in (string[])["x\n\u256D", "\u2502", "a\tb", "\u200Bx", "x\u202E"])
         {
             Assert.Contains("could be drawn as part of Copilot's own dialog", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, Crowd([bad])).Problem);
+            Assert.Contains("could be drawn as part of Copilot's own dialog", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, waiting with { Drawn = [bad] }).Problem);
         }
         Assert.Contains("cannot be checked against the session's screen", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, Crowd([])).Problem);
         Assert.Contains("cannot tell this kind", CopilotPermissionScreen.Locate(shown, approve: true, ShellProbes, waiting with { Dialog = null }).Problem);

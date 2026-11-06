@@ -14,7 +14,7 @@ how the host does it and what it refuses.
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
-| Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped (#220); such an approval carries `escaped`, and Approve on it takes the two-step confirmation from a person's device this machine approved, through the relay only, or is held at the machine by `permissions.escapedApproval` (#803, [v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)). Deny goes as for any approval |
+| Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped (#220); such an approval carries `escaped`, and Approve on it takes the two-step confirmation from a person's device this machine approved, through the relay only, or is held at the machine by `permissions.escapedApproval` (#803, [v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)). Deny goes as for any approval. While other permission requests wait, such a character in the text Copilot was given for any of them, the listed one's own included, makes the listed one `answerAtMachine`, Deny included, unless it is only in a path request's access kind (#690, below) |
 | Copilot CLI | Other permission prompts (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read | Refused, `answerAtMachine` |
 | Claude Code | `AskUserQuestion`, one to four questions, each one option (`choice`) or several (`multi`, at least one, the first nine rows) | Yes |
 | Claude Code | Free text in `AskUserQuestion` ("Type something") | Refused: no field offers `allowOther` (below) |
@@ -187,7 +187,8 @@ that `permission.requested` with no `permission.completed` (and no session abort
 shutdown) after it, reading exactly as shown (`stale` otherwise), and no `ask_user`
 waiting (`refused`). A `permission.requested` written again for a request already waiting,
 with what it asks now, replaces that request's question: the one it revises is no longer
-listed or counted. Copilot can have several permission requests waiting at once, one for
+listed or counted, and the request counts as asked again, after the others waiting, both in
+the listing and in the transcript read just before typing. Copilot can have several permission requests waiting at once, one for
 each of a batch of parallel tool calls, and draws one at a time; the session lists the
 earliest, saying how many wait (#690). While others wait, the screen, not the order
 asked, says which is drawn, and it is identified positively, never by a probe (agent-written
@@ -208,10 +209,16 @@ text, which another request's command can end in or its diff hold). The key goes
   rows reads like two lines, and trailing white space is not drawn);
 * and this request is the earliest still waiting.
 
-A listed prompt the host cannot tell from the others so (any other kind, text that could
-draw part of the frame, another waiting request with nothing drawn to check, or one that would
-be drawn the same) is
-`answerAtMachine` while that holds, and answerable again under the same id once it does not. Otherwise it is `refused` ("the machine is showing a different permission (path access,
+A listed prompt the host cannot tell from the others so is `answerAtMachine` while that holds:
+another waiting request is drawn ahead of it (below), its kind's dialog is not one the host
+knows, its own text has a run of spaces that can wrap onto a blank row, any waiting request's
+text (its own included) could draw part of the frame or hide what is drawn, another waiting
+request has nothing drawn to check, or one would be drawn the same
+(`CopilotDialogs.Identifiable`, which mirrors the checks above). So an approval with `escaped`
+listed while others wait is `answerAtMachine` (an escape is such text), unless its only escapes
+are in a path request's access kind, which its dialog never draws as written: no confirmation is
+offered, and Approve and Deny are both refused, until it waits alone. Being held so is not in the digest, so it is
+answerable again under the same id once it can be told apart. Otherwise it is `refused` ("the machine is showing a different permission (path access,
 request ed05e9d7)" when another's dialog is the one drawn, or why the screen cannot say),
 and never typed for the request on screen instead: answer it at the machine. The key is
 held from the frame's top edge. The transcript is checked so before the screen is read and
