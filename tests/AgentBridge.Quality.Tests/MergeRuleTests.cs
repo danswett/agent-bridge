@@ -348,6 +348,37 @@ public class MergeRuleTests
     }
 
     [Fact]
+    public void Removing_the_waiver_label_doesnt_discard_a_failed_second_review()
+    {
+        // sr-962b: Copilot completed, the first receipt passed, the second family failed; taking the
+        // label off used to read the second receipt as absent and pass.
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], statuses: [First(), Second(state: "failure")]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal(["the second review of abcdef0 failed: sr-42b HIGH: security-review, gpt-6.1-sol"], verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_completed_Copilot_review_is_the_other_family_so_the_label_then_changes_nothing()
+    {
+        var labelled = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], labels: ["copilot-waived"], statuses: [First()]))!;
+        var unlabelled = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], statuses: [First()]))!;
+
+        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file"), (labelled.State, labelled.Description));
+        Assert.Equal((labelled.State, labelled.Description), (unlabelled.State, unlabelled.Description));
+    }
+
+    [Theory]
+    [InlineData("gemini-4-argon", "gpt-6.1-sol", "success")]
+    [InlineData("claude-opus-5.5 and gpt-5.6-terra", "gpt-6.1-sol", "failure")]
+    public void The_waiver_gate_passes_any_two_families_and_refuses_a_shared_one(string firstModel, string secondModel, string state)
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(["src/AgentBridge.Transport/Relay.cs"], reviews: [], labels: ["copilot-waived"], statuses: [First(firstModel), Second(secondModel)]))!;
+
+        Assert.Equal(state, verdict.State);
+    }
+
+    [Fact]
     public void A_sensitive_change_needs_a_listed_posters_receipt_on_the_head()
     {
         var files = new[] { "src/AgentBridge.Host/Pairing/Codes.cs", "docs/status.md" };

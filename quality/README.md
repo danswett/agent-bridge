@@ -445,9 +445,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      a listed poster on the same head, and the two receipts' descriptions must each name a model
      whose family the other doesn't share (`claude-opus-5.5` and `gpt-6.1-sol`, say). A sensitive
      file in `copilot_waiver.one_review_paths` (`docs/status.md`, whose row the receipt checks
-     against its decision) doesn't call for the second. A failed second receipt blocks like a
-     failed first one. Without what it needs, the label fails and names the missing receipt; it
-     lifts nothing else, and the verdict says `Copilot review waived (label)`.
+     against its decision) doesn't call for the second. A completed Copilot review on the head is
+     itself the other family, so with one there the label changes nothing. A failed second receipt
+     from a poster blocks like a failed first one, whether or not the label is on. Without what it
+     needs, the label fails and names the missing receipt; it lifts nothing else, and the verdict
+     says `Copilot review waived (label)`.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
      (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
      10-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out

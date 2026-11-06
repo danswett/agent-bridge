@@ -73,9 +73,11 @@ main_green:
 # head from a poster, and the two descriptions must each name a model from a different family:
 # Copilot caught #836's HIGH after two claude-opus-5.5 reviews missed it, and the second family is
 # what stands in for that. Sensitive files under one_review_paths don't call for the second
-# (Product, hub 6675322154: a status.md row the receipt checked against its decision). The label
-# alone waives nothing, and every other requirement stands. Adding a label takes triage rights:
-# the merge coordinator adds it.
+# (Product, hub 6675322154: a status.md row the receipt checked against its decision). A completed
+# Copilot review on the head is itself the other family, so the label then changes nothing (#962,
+# option a). A poster's failure in second_review blocks whether or not the label is on: taking the
+# label off mustn't discard a reviewer's veto (sr-962b). The label alone waives nothing, and every
+# other requirement stands. Adding a label takes triage rights: the merge coordinator adds it.
 copilot_waiver:
   labels: [copilot-waived]
   second_review: independent-review-2

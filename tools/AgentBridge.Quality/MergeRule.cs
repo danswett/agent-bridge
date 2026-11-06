@@ -248,11 +248,15 @@ static class MergeRule
         // The standing rule (#955): a waiver label lets the independent review's success receipt on
         // the head stand in for Copilot's review. A change that needs that review needs a second
         // one too, from another model family, unless every sensitive file it touches is one that
-        // one review is enough for. The label alone waives nothing.
+        // one review is enough for. A completed Copilot review is that other family, so with one on
+        // the head the label changes nothing (Quality's choice on #962, option a). The label alone
+        // waives nothing.
         var waivedBy = pr.Labels.FirstOrDefault(l => config.CopilotWaiver.Labels.Contains(l, StringComparer.OrdinalIgnoreCase));
         var oneReview = config.CopilotWaiver.OneReviewPaths.Select(p => new Glob(p, ignoreCase: true)).ToList();
         var needsSecond = marked || (pr.FullyRead && (!pr.FilesComplete || sensitive.Any(f => !oneReview.Any(g => g.IsMatch(f)))));
-        var second = waivedBy is null ? null : LatestReceipt(config, pr, config.CopilotWaiver.SecondReview);
+        // Read whatever the labels say: a reviewer's failure in the second context blocks below even
+        // after the label comes off (sr-962b: removing the label used to discard that veto).
+        var second = LatestReceipt(config, pr, config.CopilotWaiver.SecondReview);
         var families = needsSecond && receipt is not null && second is not null && DifferentFamilies(receipt.Description, second.Description);
         var waived = !copilot && waivedBy is not null && receipt?.State == "success"
             && (!needsSecond || (second?.State == "success" && families));
