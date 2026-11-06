@@ -42,7 +42,7 @@ A row the app can't act on has its own words and no verb, in the neutral seconda
 status colour, never Ready, Not set up or Needs repair, and nothing on it is a button that can't
 work (Creative's rulings on #784 and #705):
 - hooks the host holds back (`blocked`: a read-only host, or another profile's) say
-  "Read-only · *why*" ("an older bridge runs this machine", "another bridge profile owns its
+  "Read-only · *why*" ("this machine's host is older", "another bridge profile owns its
   hooks", or "set in this host's settings"), and Install CLI is hidden on them;
 - hooks the host reports `failed` with `hookSetup: unknown`, which its setup refuses, say "Hook
   ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or
@@ -50,6 +50,9 @@ work (Creative's rulings on #784 and #705):
 - `unknown` beside any other hooks comes only from a host older than the field, and says
   "Can't check · this machine's host is older". Its rows offer no Set up, Repair or Remove: the
   detail's words they once fell back on offered actions the host might refuse.
+
+Each reason is said once, on the status line: a Version or Hooks line beneath it that would give
+the same reason says only the fact ("Hooks: Not checked").
 
 No row shows an exception's, a command's or an installer's own text, which named paths: each
 says why from a known set (`AgentWords`), and the app's log keeps the host's words. That

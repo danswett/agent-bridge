@@ -123,7 +123,10 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
         : AgentWords.Plain(agent.Installation.Detail);
     public string? Executable => agent.Executable;
     public string Home => $"Agent home: {agent.Home}";
-    public string Checks => $"Version: {AgentWords.Plain(agent.VersionCheck.Detail)}\nHooks: {AgentWords.Plain(agent.Hooks.Detail)}\nSign-in: {agent.Authentication.Detail}\nTrust and launch: {agent.Activation.Detail}";
+    public string Checks => $"Version: {Fact(AgentWords.Plain(agent.VersionCheck.Detail))}\nHooks: {Fact(AgentWords.Plain(agent.Hooks.Detail))}\nSign-in: {agent.Authentication.Detail}\nTrust and launch: {agent.Activation.Detail}";
+    // A check the row's status line already gives the reason for says only the fact: the reason
+    // once, on the status line (Creative, 6675472997).
+    string Fact(string words) => Status.Length > 0 && words.EndsWith(Status, StringComparison.Ordinal) ? "Not checked" : words;
     public string HookActivity => agent.LastHookHandledAt is { } at
         ? $"Last hook handled at {at.ToLocalTime():g}{(agent.Id == "agency" ? " (shared Copilot CLI hooks)" : "")}. This is not a new-session readiness test."
         : "No hook observed by this detector during this host run.";

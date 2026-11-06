@@ -509,7 +509,7 @@ public sealed class SettingsTests : IAsyncLifetime
 
     [Theory]
     [InlineData("Hook setup incomplete: C:\\Users\\dana\\.codex\\agent-ha-bridge-owner.json is a legacy registration; use Migrate", "Setup failed · an older bridge's hooks are there; migrate them first")]
-    [InlineData("agent-ha-bridge is active or cannot be checked (running); use Migrate instead", "Setup failed · an older bridge runs this machine")]
+    [InlineData("agent-ha-bridge is active or cannot be checked (running); use Migrate instead", "Setup failed · this machine's host is older")]
     [InlineData("Hook setup incomplete: C:\\Users\\dana\\.codex\\agent-bridge-owner.json belongs to another installation; it was left alone", "Setup failed · another bridge profile owns its hooks")]
     [InlineData("Hook setup incomplete: Access to the path 'C:\\Users\\dana\\.codex\\config.toml' is denied.", "Setup failed · access denied")]
     [InlineData("Hook setup incomplete: this profile belongs to a migration; use migration status or rollback", "Setup failed · this profile is being migrated")]
@@ -662,7 +662,9 @@ public sealed class SettingsTests : IAsyncLifetime
         var row = new AgentReadinessRow(FromWire("failed", denied, "unknown"), canManage: true);
 
         Assert.Equal("Hook ownership couldn't be checked · access denied", row.Status);
-        Assert.Contains("Hooks: Hook ownership couldn't be checked · access denied", row.Checks);
+        // The reason is said once, on the status line; the Hooks line says only the fact.
+        Assert.Contains("Hooks: Not checked", row.Checks);
+        Assert.DoesNotContain("access denied", row.Checks);
         Assert.DoesNotContain("Access to the path", row.Status + row.Checks + row.Installation);
         Assert.DoesNotContain("agent-bridge-owner.json", row.Status + row.Checks + row.Installation);
         // The host's own words go to the app's log.
@@ -670,7 +672,7 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine", "Read-only · an older bridge runs this machine")]
+    [InlineData("Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine", "Read-only · this machine's host is older")]
     [InlineData("Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "Read-only · another bridge profile owns its hooks")]
     [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "Read-only · set in this host's settings")]
     [InlineData("Hook setup is unavailable while this host is read-only: this host's config.json has a problem, so it takes nothing from other devices; answer at the machine", "Read-only · set in this host's settings")]
@@ -685,7 +687,22 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(row.ShowSetUp);
         Assert.False(row.ShowRemove);
         Assert.Equal("Not installed · install it on this machine", row.Installation);
-        Assert.Contains($"Hooks: {words}", row.Checks);
+        Assert.Contains("Hooks: Not checked", row.Checks);
+        Assert.DoesNotContain(words, row.Checks);
+    }
+
+    [Fact]
+    public void A_check_whose_reason_the_status_line_gives_says_only_the_fact_and_others_keep_their_words()
+    {
+        const string why = "agent-ha-bridge is running for this user; answer at the machine";
+        var readOnly = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Blocked, hooksDetail: $"Hook setup is unavailable while this host is read-only: {why}")
+            with { VersionCheck = new(ReadinessState.Blocked, $"Version command not run while the host is read-only: {why}") });
+        var olderHost = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.NeedsAction, hooksDetail: "Explicit hook setup is needed.", setup: HookSetupState.Unknown));
+
+        Assert.Equal("Read-only · this machine's host is older", readOnly.Status);
+        Assert.StartsWith("Version: Not checked\nHooks: Not checked\n", readOnly.Checks, StringComparison.Ordinal);
+        Assert.Equal("Can't check · this machine's host is older", olderHost.Status);
+        Assert.Contains("Hooks: Explicit hook setup is needed.", olderHost.Checks);
     }
 
     [Fact]
