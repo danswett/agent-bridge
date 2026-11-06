@@ -118,6 +118,12 @@ public sealed class CopilotReplyTests : IDisposable
         Assert.True(CopilotPrompts.Before(events).Resumed);
         Fixture.Append(events, Copilot.Event("user.message", new { content = "look at @notes.txt", source = "user" }, 53));
         Assert.False(CopilotPrompts.Before(events).Asking);
+
+        // A subagent's question after a resume is its own: what the killed CLI left still waits.
+        Fixture.Append(events, Ask("q5", 60), Copilot.Event("session.resume", new { }, 61), Ask("q6", 62, agentId: "helper"),
+            Copilot.Event("permission.requested", new { requestId = "r6", permissionRequest = new { kind = "shell" } }, 63, agentId: "helper"));
+        Fixture.Append(events, Copilot.ToolDone("q6", 64, agentId: "helper"), Copilot.Event("permission.completed", new { requestId = "r6", result = new { kind = "approved" } }, 65, agentId: "helper"));
+        Assert.Equal((true, true), (CopilotPrompts.Before(events).Asking, CopilotPrompts.Before(events).Resumed));
     }
 
     // Copilot on #837: a helper's question the killed CLI left is kept with the helper that asked it,

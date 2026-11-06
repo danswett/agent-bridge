@@ -26,7 +26,7 @@ public sealed class QuestionView : StackPanel
     readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     readonly Grid receipt = new();
     // Drawn clear and unheard under the words: the room the longest outcome needs at this width
-    // (ReceiptWords.Room), kept from Send so neither a stage nor the outcome moves what is below.
+    // (QuestionViewModel.Room), kept from Send so neither a stage nor the outcome moves what is below.
     readonly TextBlock room = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0, IsHitTestVisible = false };
     readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     readonly Button resend = new() { Content = "Send again" };
@@ -129,6 +129,7 @@ public sealed class QuestionView : StackPanel
         }
 
         Watch(vm, Refresh);
+        vm.EscapedConfirmRequested += OnEscapedConfirm;
         Refresh();
         drawn = true;
     }
@@ -141,6 +142,130 @@ public sealed class QuestionView : StackPanel
         return b;
     }
 
+    void OnEscapedConfirm() => _ = ConfirmEscapedAsync();
+
+    // The confirmation sheet for an approval the host escaped anything in (#803, ui.md §6.4,
+    // "Escaped approvals"): the escaped command in full, the warning, and the confirm at the end of
+    // the command, held a second after the end is first shown. Cancel is the default and the Escape
+    // action, and sends nothing.
+    async Task ConfirmEscapedAsync()
+    {
+        if (XamlRoot is null || vm.Question.Escaped is not { } escaped) { return; }
+        var marks = escaped.Marks;
+        var content = new StackPanel { Spacing = 8 };
+        var where = string.Join(" on ", new[] { vm.SessionTitle, vm.MachineName }.Where(s => !string.IsNullOrEmpty(s)));
+        if (where.Length > 0) { content.Children.Add(new TextBlock { Text = where, Style = Muted(), TextWrapping = TextWrapping.Wrap }); }
+        var warnings = EscapedApprovalView.Warnings(vm.Question.Message, marks);
+        var warning = new StackPanel { Spacing = 4, Padding = new Thickness(12), CornerRadius = new CornerRadius(4), BorderThickness = new Thickness(1), BorderBrush = Ui.Brush("AbNeeds") };
+        foreach (var line in warnings) { warning.Children.Add(Boxed(line, null)); }
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(warning, string.Join(" ", warnings));
+        content.Children.Add(warning);
+        var hint = new TextBlock { Text = EscapedApprovalView.ScrollHint, Style = Muted() };
+        content.Children.Add(hint);
+        var command = Boxed(vm.Question.Message, marks);
+        AutomationId(command, "EscapedCommand");
+        var confirm = new Button { Content = EscapedApprovalView.ConfirmLabel, IsEnabled = false, HorizontalAlignment = HorizontalAlignment.Stretch, MinHeight = 48, Margin = new Thickness(0, 16, 0, 0) };
+        AutomationProperties(confirm, EscapedApprovalView.ConfirmName, "ConfirmEscaped");
+        var announce = new TextBlock { Visibility = Visibility.Collapsed };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(announce, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+        var problem = new TextBlock { Foreground = Ui.Brush("AbDangerText"), TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
+        var inner = new StackPanel { Spacing = 4 };
+        inner.Children.Add(command);
+        inner.Children.Add(confirm);
+        inner.Children.Add(problem);
+        var scroll = new ScrollViewer { Content = inner, MaxHeight = 360, IsTabStop = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(scroll, "The command, escaped");
+        content.Children.Add(scroll);
+        content.Children.Add(announce);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = EscapedApprovalView.Title,
+            Content = content,
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        // The confirm waits until the end of the command has been shown, then a moment more.
+        Microsoft.UI.Dispatching.DispatcherQueueTimer? timer = null;
+        void Seen()
+        {
+            if (timer is not null) { return; }
+            hint.Visibility = Visibility.Collapsed;
+            timer = DispatcherQueue.CreateTimer();
+            timer.Interval = EscapedApprovalView.ConfirmDelay;
+            timer.IsRepeating = false;
+            timer.Tick += (_, _) =>
+            {
+                confirm.IsEnabled = true;
+                announce.Text = EscapedApprovalView.Available;
+                announce.Visibility = Visibility.Visible;
+                // A live region's new text is read only when the change is raised (#836 review), as
+                // LaunchView's Announce does, once the text is laid out.
+                DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(announce)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
+            };
+            timer.Start();
+        }
+        void Look() { if (scroll.ScrollableHeight <= 0 || scroll.VerticalOffset >= scroll.ScrollableHeight - 1) { Seen(); } }
+        scroll.ViewChanged += (_, _) => Look();
+        scroll.Loaded += (_, _) => Look();
+        Acting(confirm).Click += (_, _) =>
+        {
+            confirm.IsEnabled = false;
+            if (vm.ConfirmEscaped() is { } why)
+            {
+                problem.Text = why;
+                problem.Visibility = Visibility.Visible;
+                // Pressed again, it checks afresh: the Try again once the machine is back.
+                confirm.IsEnabled = true;
+                return;
+            }
+            dialog.Hide();
+        };
+        await dialog.ShowAsync();
+        timer?.Stop();
+    }
+
+    // Text with the host's own escapes boxed (marks), or, with no marks, every \uXXXX code in it
+    // boxed (the warning's own sentences): the code face, a 1 px outline in the Danger role, a 2 px
+    // radius, 2 px side padding, no fill. Left to right, read in the order it runs.
+    static RichTextBlock Boxed(string text, IReadOnlyList<IReadOnlyList<int>>? marks)
+    {
+        var block = new RichTextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FlowDirection = FlowDirection.LeftToRight, TextReadingOrder = TextReadingOrder.UseFlowDirection };
+        var mono = (Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["MonoFontFamily"];
+        if (marks is not null) { block.FontFamily = mono; }
+        var paragraph = new Microsoft.UI.Xaml.Documents.Paragraph();
+        IEnumerable<EscapedApprovalView.Piece> pieces = marks is not null ? EscapedApprovalView.Segments(text, marks) : Codes(text);
+        foreach (var piece in pieces)
+        {
+            if (!piece.Mark) { paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = piece.Text }); continue; }
+            foreach (var part in EscapedApprovalView.Pieces(piece.Text))
+            {
+                // Every character drawn: what in a mark is not an escape is plain text (#836 review).
+                if (!part.Token) { paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = part.Text }); continue; }
+                var token = part.Text;
+                var label = new TextBlock { Text = token, FontFamily = mono };
+                var box = new Border { Child = label, BorderThickness = new Thickness(1), BorderBrush = Ui.Brush("AbDanger"), CornerRadius = new CornerRadius(2), Padding = new Thickness(2, 0, 2, 0) };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, EscapedApprovalView.Describe(token));
+                paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.InlineUIContainer { Child = box });
+            }
+        }
+        block.Blocks.Add(paragraph);
+        return block;
+    }
+
+    static IEnumerable<EscapedApprovalView.Piece> Codes(string text)
+    {
+        var at = 0;
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, @"\\u[0-9A-F]{4}"))
+        {
+            if (m.Index > at) { yield return new(text[at..m.Index], false); }
+            yield return new(m.Value, true);
+            at = m.Index + m.Length;
+        }
+        if (at < text.Length) { yield return new(text[at..], false); }
+    }
+
     // Past the first draw: what changes from here is news (an answer's outcome).
     bool drawn;
     // What the receipt last told a screen reader.
@@ -149,6 +274,7 @@ public sealed class QuestionView : StackPanel
     // The card let go of this question; the view stops following it.
     public void Detach()
     {
+        vm.EscapedConfirmRequested -= OnEscapedConfirm;
         foreach (var (s, h) in subscriptions) { s.PropertyChanged -= h; }
         subscriptions.Clear();
     }
@@ -208,14 +334,20 @@ public sealed class QuestionView : StackPanel
     void Tap(FieldViewModel f)
     {
         var panel = new StackPanel { Spacing = 6 };
+        var escaped = vm.EscapedMode;
         foreach (var o in f.Options)
         {
+            // Approve once on an approval the host escaped anything in opens the sheet, or is not
+            // offered here at all, its reason in its place (#803).
+            if (escaped is not null && o.Value == "approve" && escaped != "confirm") { continue; }
+            var opens = escaped == "confirm" && o.Value == "approve";
+            var shown = opens ? EscapedApprovalView.ApproveLabel : o.Label;
             var b = new OptionButton { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch };
-            var label = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
+            var label = new TextBlock { Text = shown, TextWrapping = TextWrapping.Wrap };
             b.Content = WithRing(label, trailing: true);
             if (o.Recommended || (vm.Approval && o.Tone == "allow")) { b.Style = (Style)Application.Current.Resources["AccentButtonStyle"]; }
             if (vm.Approval && o.Tone == "deny") { b.Foreground = Ui.Brush("AbDangerText"); }
-            AutomationProperties(b, o.Label, $"Option:{o.Value}");
+            AutomationProperties(b, shown, $"Option:{o.Value}");
             // Choose changes the selection first, so only while the question can be answered.
             Acting(b).Click += (_, _) => { if (vm.CanAnswer) { vm.Choose(o); } };
             refreshers.Add(() =>
@@ -230,12 +362,27 @@ public sealed class QuestionView : StackPanel
                 // Heard as pressed, as it is drawn (OptionButton): an enabled button that does nothing otherwise.
                 b.Pressed = sent;
                 // Its ring and check say it goes; the ✓ marks which option went once they are done.
-                label.Text = sent && !vm.InFlight && !vm.SendCheck ? $"✓ {o.Label}" : o.Label;
+                label.Text = sent && !vm.InFlight && !vm.SendCheck ? $"✓ {shown}" : shown;
                 Ring(b, sent && vm.InFlight, sent && vm.SendCheck, vm.StatusMark == ReceiptMark.Still);
             });
             panel.Children.Add(b);
         }
         Children.Add(panel);
+        if (vm.EscapedWhy is { } why)
+        {
+            var reason = new TextBlock { Text = why, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") };
+            AutomationId(reason, "EscapedWhy");
+            Children.Add(reason);
+            if (escaped == "device")
+            {
+                Children.Add(new Expander
+                {
+                    Header = "How to approve a device",
+                    Content = new TextBlock { Text = QuestionViewModel.EscapedHelp, TextWrapping = TextWrapping.Wrap },
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                });
+            }
+        }
         if (!f.AllowOther) { return; }
 
         var other = new ToggleButton { Content = "Other…", HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };

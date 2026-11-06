@@ -17,7 +17,9 @@ follow.
   "version": 1,
   "permissions": {
     "remoteApproval": true,
-    "trustedPeers": false
+    "trustedPeers": false,
+    "escapedApproval": "confirm",
+    "escapedApprovalDevices": null
   },
   "push": { "enabled": true },
   "delivery": { "readOnly": false },
@@ -76,6 +78,8 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 |---|---|---|
 | `version` | `1` | The schema. A file with a higher version, written by a newer Slipgates host, is not guessed at: remote approval and launching are both off until the host is updated |
 | `permissions.remoteApproval` | `true` | Copilot permission prompts may be approved or denied from another device ([host-answers.md](host-answers.md)) |
+| `permissions.escapedApproval` | `confirm` | How Approve is given for an approval holding characters the host shows as escapes (bidi controls, hidden characters, right-to-left letters; #803). `confirm`: a two-step confirmation from a person's phone, browser or Windows app this machine approved ([v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)). `machine`: only at the machine. Deny goes from anywhere either way. A value that is neither is read as `machine` and said in the log. Applies when the host restarts |
+| `permissions.escapedApprovalDevices` | absent | The devices, by device id, that may confirm one. Absent or `null`: the devices approved for folder trust (`launch.remoteFolderTrustDevices`, as the Windows app's Settings changes them), and only while `launch.remoteFolderTrust` is on, so a device approved there needs no second visit and turning folder trust off (for a lost phone, say) takes Approve from them too. A list, even an empty one, replaces that. Invalid ids are ignored with a problem; a value that is not a list approves none. At most 64. Applies when the host restarts |
 | `permissions.trustedPeers` | `false` | Transitional full-key remote authorization floor (#402), for disposable-host evaluation only. Restart-only; requires explicitly seeded pins. See [trusted peers](#trusted-peers-disposable-host-foundation) |
 | `delivery.readOnly` | `false` | A host that only shows sessions: it takes no answer, reply, stop, launch, permission approval or transfer from any device, whatever agent-ha-bridge is doing, and says so in `hello` (`machine.readOnly`, "this is a read-only comparison host"), refusing each with that reason. The shadow host beside agent-ha-bridge sets it ([host-shadow.md](host-shadow.md)), so a daemon restart never leaves it acting. Without it, a host is held only while agent-ha-bridge runs (design G5) |
 | `sessions.restoreOnStart` | `true` | After a reboot or a crash of the host, the sessions that died with it are restored, idle, through the resume path, one at a time, and what cannot be is offered to resume ([host-launch.md](host-launch.md#restoring-after-a-reboot-or-a-crash)). Nothing is ever typed into them. `false` restores nothing, only says what went, in `hello` and one notification, and keeps nothing waiting. A value that is not `true` or `false`, or a file that cannot be read, turns it off, but keeps what died offered (the person may have meant it on). Per machine

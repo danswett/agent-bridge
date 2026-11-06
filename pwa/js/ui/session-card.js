@@ -33,6 +33,7 @@ import { clockTime } from '../auth-state.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
 import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, receiptLive } from './receipt.js';
 import { answerability } from '../answers.js';
+import { escapedApprove } from '../escaped.js';
 import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
 import { lastSegment, pathView, setFacts } from './meta.js';
@@ -1332,7 +1333,9 @@ export class SessionCard {
     // Its machine offline, or back without its whole list yet (#269): the form stays, with what
     // was entered, but takes nothing until the machine says the question is still asked.
     const held = staleNote(ctx?.stale, this.machineName, 'answered');
-    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held])) { return; }
+    // An approval the host escaped anything in (#803): how Approve is given for it from here.
+    const escapedMode = q && answerable ? escapedApprove(q, ctx.capabilities) : null;
+    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held, escapedMode])) { return; }
     // Drawn by the app, not by the person typing in it: whatever this moves counts.
     this.#moves?.notOwn();
     // A new question while the last one's answer is still on its way: that answer goes on as a receipt.
@@ -1371,6 +1374,7 @@ export class SessionCard {
         answering: { service: ctx.service, hostId: ctx.hostId, sessionId: s.id },
         state: sameQuestion ? old.state : null,
         asker,
+        escaped: escapedMode ? { mode: escapedMode === 'confirm' && !ctx.confirm ? 'device' : escapedMode, sign: ctx.confirm ?? null, title: s.title ?? null } : null,
       });
       this.#panel.setHeld(held);
       view = this.#panel.element;

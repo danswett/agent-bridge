@@ -21,7 +21,18 @@ public interface ISessionAnswerer
     bool ApprovesPermissions => false;
 
     // watch: hears the delivery's stages as it goes (DeliveryWatch), for a caller that reports them.
-    Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null);
+    // confirmed: the confirmation an answer carried, as the host's relay path checks it (#803); only
+    // there is one made, so Approve on an approval the host escaped anything in goes from nowhere else.
+    Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null);
+}
+
+// A person's confirmation of an approval the host escaped anything in (#803), as the host that took
+// it through the relay checks it (AgentBridge.Host.EscapedApprovals).
+public interface IEscapedConfirmation
+{
+    // Null when it approves question as the host would send it now; otherwise why not. Asked when
+    // the answer is taken and again once its typing slot is held.
+    string? Check(Question question);
 }
 
 public sealed class AnswerOptions
@@ -121,17 +132,17 @@ public sealed class AnswerService : ISessionAnswerer
 
     public bool ApprovesPermissions => Available && options.CopilotRemoteApproval;
 
-    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
+    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key))
         {
             return Task.FromResult(Refused("request must be a UUID"));
         }
-        return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "answer", key, log), t => DeliverAsync(request, key, t), result =>
+        return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "answer", key, log), t => DeliverAsync(request, key, t, confirmed), result =>
             log($"answer {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
     }
 
-    async Task<AnswerResult> DeliverAsync(AnswerRequest request, Guid key, DeliveryTimeline timeline)
+    async Task<AnswerResult> DeliverAsync(AnswerRequest request, Guid key, DeliveryTimeline timeline, IEscapedConfirmation? confirmed)
     {
         try
         {
@@ -151,6 +162,7 @@ public sealed class AnswerService : ISessionAnswerer
                 return Refused($"answering is not supported for {session.Agent.ToString().ToLowerInvariant()} yet; answer at the machine");
             }
             if (Answers.Check(question, request) is { } invalid) { return Refused(invalid); }
+            if (EscapedRefusal(question, request, confirmed) is { } unconfirmed) { return Refused(unconfirmed); }
 
             if (!gate.TryClaim(session.Id, key)) { return Busy(); }
             try
@@ -158,8 +170,8 @@ public sealed class AnswerService : ISessionAnswerer
                 return session.Agent switch
                 {
                     AgentKind.Claude => await ClaudeAsync(session, question, request, timeline),
-                    AgentKind.Codex => await CodexAsync(session, question, request, timeline),
-                    _ when permission => await CopilotPermissionAsync(session, question, request, timeline),
+                    AgentKind.Codex => await CodexAsync(session, question, request, timeline, confirmed),
+                    _ when permission => await CopilotPermissionAsync(session, question, request, timeline, confirmed),
                     _ => await CopilotAsync(session, question, request, timeline),
                 };
             }
@@ -190,6 +202,39 @@ public sealed class AnswerService : ISessionAnswerer
         }
         catch (Exception) { return null; }
     }
+
+    // Why Approve on an approval the host escaped anything in cannot go as asked (#803), or null: Deny,
+    // and an approval with nothing escaped, need no confirmation. Asked of the question as listed
+    // when the answer is taken, and again once the typing slot is held, where Answers.Check is not
+    // asked again: so a device taken off the list, or a confirmation past its lifetime, meanwhile
+    // stops it. A confirmation is good only for the escaped message it was signed for: one carried
+    // to a question with nothing escaped refuses Approve too (#836 review). That a question still
+    // reads at the slot as it did when the answer was taken is the agent's own check, not this one:
+    // a Copilot prompt's id binds its content, and a Codex approval is rebuilt from its fresh marker
+    // to exactly the id answered (#958), never read from the cached listing.
+    internal static string? EscapedRefusal(Question question, AnswerRequest request, IEscapedConfirmation? confirmed)
+    {
+        if (question.Kind != QuestionKind.Approval || Decision(request.Fields) != true) { return null; }
+        if (question.Escaped is not { } escaped) { return request.Confirm is null && confirmed is null ? null : Changed; }
+        if (question.Truncated == true) { return "part of this approval didn't fit in the message from the machine, so it can only be approved at the machine"; }
+        if (escaped.Approve == EscapedApproval.TooMany)
+        {
+            return "this approval holds too many hidden characters to show on another device, so it can only be approved at the machine; deny it from here, or answer at the machine";
+        }
+        if (escaped.Approve != EscapedApproval.Confirm)
+        {
+            return "this machine takes Approve for an approval with escaped characters only at the machine (permissions.escapedApproval); deny it from here, or answer at the machine";
+        }
+        if (confirmed is null)
+        {
+            return request.Confirm is null
+                ? "this approval holds hidden or right-to-left characters, so Approve needs the escaped-command confirmation, which this app does not give: deny it, update the app, or answer at the machine"
+                : "an approval with escaped characters is approved only from a person's phone, browser or Windows app through the relay, or at the machine";
+        }
+        return confirmed.Check(question);
+    }
+
+    internal const string Changed = "the approval reads differently now from what was confirmed; read it again";
 
     static string AtMachine(AgentKind agent, Question question) => question.Kind == QuestionKind.Approval
         ? $"{Name(agent)} permission prompts can only be answered at the machine"
@@ -299,7 +344,7 @@ public sealed class AnswerService : ISessionAnswerer
     //     still reads so when it is typed (the worker checks it in the same attach);
     //   * delivered only when the transcript records that request approved, or denied with no
     //     message; anything else is unconfirmed. Never retried.
-    async Task<AnswerResult> CopilotPermissionAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline)
+    async Task<AnswerResult> CopilotPermissionAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, IEscapedConfirmation? confirmed)
     {
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Refused("the session's id is not a Copilot session id"); }
         if (CopilotPermissionPrompt.ParseQuestionId(question.Id) is not { } parsed) { return Refused("this Copilot permission prompt can only be answered at the machine"); }
@@ -320,7 +365,10 @@ public sealed class AnswerService : ISessionAnswerer
         try
         {
             if (probe.Active() is { } active) { return Refused(active); }
-            if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking for that permission"); }
+            if (source.Get(session.Id)?.Question is not { } listed || listed.Id != question.Id) { return Stale("the session is no longer asking for that permission"); }
+            // The confirmation again, as things are now: a device approved no longer, or a policy
+            // changed, stops it here, before any key.
+            if (EscapedRefusal(listed, request, confirmed) is { } unconfirmed) { return Refused(unconfirmed); }
             var state = CopilotPermissionTranscript.Before(transcript, requestId);
             if (!state.Readable) { return Refused("the session's transcript could not be read, so nothing is typed; answer at the machine"); }
             if (state.Request is not { } pending) { return Stale("Copilot is no longer asking for that permission"); }
@@ -497,7 +545,7 @@ public sealed class AnswerService : ISessionAnswerer
     // so the question is rebuilt from the fresh marker and its id must still be this one.
     // The session's listing is no help there: it is refreshed by a watcher or a poll, and can
     // still show the approval that was answered after the marker has moved on.
-    async Task<AnswerResult> CodexAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline)
+    async Task<AnswerResult> CodexAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, IEscapedConfirmation? confirmed)
     {
         if (question.Kind != QuestionKind.Approval) { return Refused("this Codex prompt can only be answered at the machine"); }
         if (CodexApprovalId.Parse(question.Id) is not { } parsed) { return Refused("this Codex approval can only be answered at the machine"); }
@@ -527,6 +575,10 @@ public sealed class AnswerService : ISessionAnswerer
             }
             if (!string.Equals(marker.DecisionId, parsed.DecisionId, StringComparison.Ordinal)) { return Stale("Codex is asking for a different approval now"); }
             if (!string.Equals(CodexApprovalId.Of(marker), question.Id, StringComparison.Ordinal)) { return Stale("Codex's approval reads differently from what was shown"); }
+            // The confirmation again, of the question answered: the fresh marker has just rebuilt to
+            // exactly its id, so it is what the person confirmed (#958). What may have changed
+            // meanwhile is the confirmation's own standing: a device taken off the list, or its lifetime.
+            if (EscapedRefusal(question, request, confirmed) is { } unconfirmed) { return Refused(unconfirmed); }
             if (marker.Attempted) { return Refused("agent-ha-bridge has already typed an answer into this approval, and it is never typed again; check at the machine"); }
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
@@ -608,6 +660,6 @@ public sealed class UnsupportedPlatformAnswerer : ISessionAnswerer
 {
     public bool Available => false;
 
-    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null) =>
+    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null) =>
         Task.FromResult(new AnswerResult(AnswerOutcome.Refused, "answering is not supported on this platform yet; answer at the machine"));
 }

@@ -27,7 +27,7 @@ namespace AgentBridge.Host.Core.Parsing;
 // came up to 90 minutes late, or never, in real transcripts. Every one of 125 run ends
 // in them was an agent turn_end that asked for no tools, at or before those signals.
 // remoteApproval: SessionSourceOptions.CopilotRemoteApproval, the host's permissions.remoteApproval.
-internal sealed class CopilotParser(SessionState state, TimeProvider time, bool remoteApproval = true) : TranscriptParser(state, time)
+internal sealed class CopilotParser(SessionState state, TimeProvider time, bool remoteApproval = true, string escapedApproval = EscapedApproval.Confirm) : TranscriptParser(state, time)
 {
     static readonly IReadOnlyList<byte[]> Markers =
     [
@@ -593,7 +593,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         var agent = stamped ?? (prompt.ToolCallId is { } call ? S.Tools.Find(call)?.Agent ?? S.Background.CallAgent(call) : null);
         // An agent asking is working, though a cold read may have seen nothing else of its run.
         if (agent is not null) { S.Background.AgentActive(agent, at); }
-        S.Ask(QuestionMapper.Approval(id, prompt.Message, at, atMachine: !remoteApproval || prompt.AtMachine is not null) with { Agent = agent });
+        S.Ask(QuestionMapper.Approval(id, prompt.Message, at, atMachine: !remoteApproval || prompt.AtMachine is not null, approve: escapedApproval, marks: prompt.Marks) with { Agent = agent });
     }
 
     void Context(JsonElement? context)

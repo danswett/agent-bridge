@@ -239,6 +239,11 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <TextBlock
+                    Style="{StaticResource AbSecondaryText}"
+                    AutomationProperties.AutomationId="EscapedApprovalDevices"
+                    Text="{x:Bind ViewModel.EscapedApprovalText, Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Some(ViewModel.EscapedApprovalText), Mode=OneWay}" />
 
                 <!-- A Dev Box only: its pending stop-on-disconnect kept away while the host runs. -->
                 <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowDevBox), Mode=OneWay}">

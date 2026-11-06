@@ -87,7 +87,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             Version = "0.1.0",
             Dev = true,
             Machine = machine,
-            Running = new HostSettingsView(RemoteApproval: true),
+            Running = new HostSettingsView(RemoteApproval: true, EscapedApproval: EscapedApproval.Confirm),
             ApplyRemoteFolderTrust = on => { onApply?.Invoke(on); lock (applied) { applied.Add(on); } },
             ApplyRemoteFolderTrustDevices = ids => { lock (applied) { approved.Add(ids); } },
             ApplyDevBoxKeepAwake = on => { lock (applied) { keptAwake.Add(on); } },
@@ -205,7 +205,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(RelayState.SignedOut, status.Relay.State);
         Assert.Null(status.Account);
         Assert.Equal(SignInState.Idle, status.SignIn.State);
-        Assert.Equal(new HostSettingsView(true), status.Settings);
+        Assert.Equal(new HostSettingsView(true, EscapedApproval: EscapedApproval.Confirm), status.Settings);
         Assert.False(status.RestartRequired);
     }
 
@@ -377,7 +377,7 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         var result = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteApproval = false, name = "  Desk\u0007top  " });
 
-        Assert.Equal(new HostSettingsView(false, "Desktop"), result.Settings);
+        Assert.Equal(new HostSettingsView(false, "Desktop", EscapedApproval: EscapedApproval.Confirm), result.Settings);
         Assert.True(result.RestartRequired);
         var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(profile, "config.json")))!;
         Assert.Equal("C:\\src", saved["workspaces"]![0]!.GetValue<string>());

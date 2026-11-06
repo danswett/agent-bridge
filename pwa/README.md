@@ -289,7 +289,7 @@ as unconfirmed rather than sent again. Outcomes:
 | Outcome | Shown | Then |
 |---|---|---|
 | `delivered` | The check on the control that sent it for about a second, then You answered · *value* | The host's upsert takes the question away; the card keeps the line |
-| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check at the machine. | Final; nothing offers to send it again |
+| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again |
 | `stale` | Already answered or gone | Final |
 | `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request |
 | `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request |
@@ -323,7 +323,7 @@ what was sent (anything typed meanwhile stays), and every other outcome keeps th
 | Outcome | Shown | Then |
 |---|---|---|
 | `delivered` | Send's check for about a second; no line | The session's upsert shows it as your last message |
-| `unconfirmed`, or unknown | Sent, but not confirmed. Check at the machine before sending it again. | The words stay; sending them again is a new reply |
+| `unconfirmed`, or unknown | Sent, but not confirmed. Check the conversation before sending it again. | The words stay; sending them again is a new reply |
 | `stale` | Not sent: the session has ended. | |
 | `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s |
 | `refused` | The machine refused this reply: *reason* (a question pending, an agent it can't reply to yet) | |
