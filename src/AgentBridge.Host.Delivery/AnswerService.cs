@@ -307,7 +307,11 @@ public sealed class AnswerService : ISessionAnswerer
             // does: reported typed and unconfirmed, and read back later. Thrown on, it reached
             // DeliverAsync's catch, which says nothing was typed (Copilot 4479319354).
             try { return Asked(); }
-            catch (Exception e) { return $"the host could not check the session again ({e.Message})"; }
+            catch (Exception e)
+            {
+                log($"the check of {Short(session.Id)} between a form's writes failed: {e.GetType().Name}: {e.Message}");
+                return "the host could not check the session again";
+            }
         }
         string? Asked()
         {
@@ -687,7 +691,11 @@ public sealed class AnswerService : ISessionAnswerer
     async Task<IReadOnlyList<string>?> ReadRowsAsync(int pid)
     {
         try { return (await injector.ReadScreenAsync(pid)).Rows; }
-        catch (Exception) { return null; }
+        catch (Exception e)
+        {
+            log($"could not read the screen of pid {pid}: {e.GetType().Name}: {e.Message}");
+            return null;
+        }
     }
 
     // The screen once two reads running are the same, within WordsWait; null, and why, if not.
@@ -777,7 +785,7 @@ public sealed class AnswerService : ISessionAnswerer
             }
             timeline.Recorded(record.At);
             var (matched, reason) = CopilotVerifier.Check(plan, record);
-            return matched ? Delivered(timeline) : Unconfirmed($"{reason}; check at the machine", AnswerStage.Recorded);
+            return matched ? Delivered(timeline) : Unconfirmed(reason, AnswerStage.Recorded);
         }
     }
 

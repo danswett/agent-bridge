@@ -250,7 +250,8 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
         var result = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
 
-        Assert.Equal(new AnswerResult(AnswerOutcome.Unconfirmed, "the machine couldn't deliver it"), result);
+        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        Assert.Equal("the machine couldn't deliver it", result.Reason);
         Assert.Contains(logged, l => l.Contains("pipe 0xC0FFEE to the worker broke", StringComparison.Ordinal));
     }
 
