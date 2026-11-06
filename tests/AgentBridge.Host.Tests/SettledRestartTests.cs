@@ -77,4 +77,29 @@ public sealed class SettledRestartTests
         await stopped.Restart(null).RunAsync().WaitAsync(Bound);
         Assert.Empty(stopped.Seen());
     }
+
+    // With the real HostHandover (sr2-886d's probe saw a replacement here): the stop that cut the
+    // settle short ends the host, and no replacement is started after it.
+    [Fact]
+    public async Task A_host_stopped_while_its_restart_is_settling_stops_without_starting_a_replacement()
+    {
+        var replacements = 0;
+        var settling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var code = await HostHandover.RunAsync(async handover =>
+        {
+            using var stop = new CancellationTokenSource();
+            var running = new SettledRestart((_, _) => settling.Task, handover.Request, stop.Cancel, stop.Token).RunAsync();
+
+            // Ctrl+C, or the OS stopping it, while a probe is still in flight.
+            stop.Cancel();
+            await running.WaitAsync(Bound);
+            // The host's shutdown then waits the probe out (UsageMonitor's disposal), as it did
+            // when the restart went on to hand over.
+            settling.SetResult();
+            return 0;
+        }, () => Interlocked.Increment(ref replacements));
+
+        Assert.Equal(0, code);
+        Assert.Equal(0, replacements);
+    }
 }

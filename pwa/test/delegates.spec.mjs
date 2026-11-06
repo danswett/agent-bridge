@@ -495,19 +495,12 @@ test.describe('where the inspector is not a pane of its own', () => {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test('a chip pressed for its delegate open behind another tab shows it, and pressed again lets it go', async ({ page }) => {
+  test('on a phone there is no chip row: the Delegates tab holds the delegates (owner, #629)', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
-    const chip = c.locator('.delegate-strip .strip-item[data-id="demo-agent-suite"]');
-    await chip.click();
-    await expect(pane(page)).toBeVisible();
-    await c.getByRole('tab', { name: 'Conversation' }).click();
-    await expect(pane(page)).toBeHidden();
-    await chip.click();
-    await expect(pane(page)).toBeVisible();
-    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
-    await chip.click();
-    await expect(pane(page)).toHaveCount(0);
+    await expect(c.locator('.delegate-strip')).toBeHidden();
+    await c.getByRole('tab', { name: 'Delegates' }).click();
+    await expect(c.locator('.delegates')).toBeVisible();
   });
 
   test('on a phone each delegate\'s row is a whole tap high', async ({ page }) => {
@@ -542,25 +535,6 @@ test.describe('on a phone', () => {
     }));
     expect(starts.length).toBeGreaterThan(4);
     for (const x of starts) { expect(x).toBeGreaterThan(2); }
-  });
-
-  test('a chip row under the header lists the delegates, and a chip opens its delegate in place of the list', async ({ page }) => {
-    await openDemo(page);
-    const c = card(page);
-    const strip = c.locator('.delegate-strip');
-    await expect(strip).toBeVisible();
-    await expect(strip.locator('.strip-item:not(.strip-fold)')).toHaveText([/^Read witness shell logic/, /^Run full test suite/]);
-    await strip.locator('.strip-item[data-id="demo-agent-suite"]').click();
-    await expect(c.getByRole('tab', { name: 'Delegates' })).toHaveAttribute('aria-selected', 'true');
-    await expect(pane(page)).toBeVisible();
-    await expect(pane(page).locator('.delegate-title')).toHaveText('Run full test suite');
-    await expect(pane(page).locator('.delegate-title')).toBeFocused();
-    await expect(strip.locator('.strip-item[data-id="demo-agent-suite"]')).toHaveAttribute('aria-pressed', 'true');
-    // The chips scroll sideways inside their row; the page never does.
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-    for (const chip of await strip.locator('.strip-item').all()) {
-      expect((await chip.boundingBox()).height).toBeGreaterThanOrEqual(44);
-    }
   });
 
   test('on a phone a fold\'s "still working" opens the earliest started still working on the Delegates tab, in view and focused', async ({ page }, testInfo) => {
@@ -1285,8 +1259,10 @@ test.describe('a pending approval as delegates come and go above it', () => {
   const THREE = [['d-one', 'Read the logs'], ['d-two', 'Run the suite'], ['d-three', 'Check the docs']];
   const CASES = [
     { title: 'the first delegate starting brings the strip and a "Started" line',
+      phone: 'the first delegate starting brings the Delegates tab count and a "Started" line',
       before: () => [], after: (now) => [running('d-new', 'Write the fix', now)] },
-    { title: 'a delegate listed with no start time brings the strip alone',
+    { title: 'a delegate listed with no start time brings the strip alone', stripOnly: true,
+      phone: 'a delegate listed with no start time changes the Delegates tab count alone',
       before: () => [], after: () => [running('d-new', 'Write the fix', null)] },
     { title: 'three delegates reporting back add three lines',
       before: (now, ago) => THREE.map(([id, name]) => running(id, name, ago)),
@@ -1301,7 +1277,7 @@ test.describe('a pending approval as delegates come and go above it', () => {
 
   for (const size of [{ name: 'on a phone', width: 390, height: 844 }, { name: 'at three panes', width: 1440, height: 900 }]) {
     for (const k of CASES) {
-      test(`${size.name}, ${k.title}: a tap at Deny's old place sends nothing`, async ({ page }) => {
+      test(`${size.name}, ${(size.width < 760 && k.phone) || k.title}: a tap at Deny's old place sends nothing`, async ({ page }) => {
         await page.setViewportSize({ width: size.width, height: size.height });
         await openDemo(page);
         const c = card(page);
@@ -1316,12 +1292,31 @@ test.describe('a pending approval as delegates come and go above it', () => {
         await expect(c.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
         await page.clock.install();
         await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+        // What could move Deny, so a failure says which of them did.
+        const layout = () => c.evaluate((card) => {
+          const v = card.closest('.session-view') ?? card.querySelector('.session-view');
+          const top = card.querySelector('.session-top');
+          const sc = card.querySelector('.stream-scroll');
+          const css = v ? getComputedStyle(v) : null;
+          return {
+            top: top?.offsetHeight, headH: css?.getPropertyValue('--head-h').trim(), ty: css?.getPropertyValue('--ty').trim(),
+            scrollTop: sc?.scrollTop, scrollH: sc?.scrollHeight, clientH: sc?.clientHeight, clientW: sc?.clientWidth,
+          };
+        });
         const was = await deny.boundingBox();
+        const wasLayout = await layout();
         const before = await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
         await asking(page, k.after(iso(70_000), iso(-20 * 60_000)), iso(70_000));
         await page.clock.runFor(20);
         const now = await deny.boundingBox();
-        expect(Math.abs(now.y - was.y) + Math.abs(now.x - was.x), 'the update moved Deny').toBeGreaterThan(1);
+        const moved = Math.abs(now.y - was.y) + Math.abs(now.x - was.x);
+        if (k.stripOnly && size.width < 760) {
+          // A phone has no strip (owner, #629): nothing above the question changes, so Deny stays put.
+          const detail = JSON.stringify({ deny: { was, now }, layout: { was: wasLayout, now: await layout() } });
+          expect(moved, `Deny stayed where it was: ${detail}`).toBeLessThanOrEqual(1);
+          return;
+        }
+        expect(moved, 'the update moved Deny').toBeGreaterThan(1);
         await page.mouse.click(was.x + was.width / 2, was.y + was.height / 2);
         await page.clock.runFor(50);
         expect(await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length)).toBe(before);

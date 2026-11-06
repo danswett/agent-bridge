@@ -27,6 +27,13 @@ public static class LocalApi
 
     public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null, RemoteAuthorization? authorization = null) => async (channel, op, data) =>
     {
+        // Managing a machine from another device (#801) is for the relay alone. Refused here for
+        // every caller, the app included, so nothing on this machine, an agent least of all, can
+        // reach it, and the #67 guard below stays exactly as it was.
+        if (ManageProtocol.IsOp(op))
+        {
+            throw Refuse(op, callers.Classify(channel), ManageService.ThroughTheRelay, log);
+        }
         if (op.StartsWith("host.", StringComparison.Ordinal))
         {
             if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller

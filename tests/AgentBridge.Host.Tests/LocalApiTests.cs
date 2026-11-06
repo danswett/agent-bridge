@@ -241,6 +241,26 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Null(readiness.Snapshot);
     }
 
+    // #67 stays as it is: no caller on this machine, the app included, reaches manage.* through the
+    // pipe, so an agent session cannot restart its own host however it asks.
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    [InlineData(CallerKind.App)]
+    public async Task An_agent_session_cannot_invoke_manage_restart_or_any_management_through_the_pipe(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+        Assert.DoesNotContain(ManageProtocol.Capability, (await ch.HelloAsync()).Capabilities);
+
+        foreach (var op in ManageProtocol.Ops)
+        {
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
+            Assert.Contains("through the relay", refused.Message);
+        }
+    }
+
     [Fact]
     public async Task The_local_app_can_set_up_hooks_and_host_status_requires_a_restart()
     {

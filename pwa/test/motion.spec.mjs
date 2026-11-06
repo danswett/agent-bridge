@@ -161,7 +161,7 @@ test('on a phone a session\'s content slides in from the trailing side, and the 
   await openDemo(page, { width: 390, height: 844 });
   const t = await tokens(page);
   await open(page, CLAUDE);
-  await view(page, CLAUDE).locator('.session-header .back').click();
+  await view(page, CLAUDE).locator('.session-bar .back').click();
   await expect(row(page, CLAUDE)).toBeVisible();
   const push = (await motions(page)).filter((m) => m.id === 'ab-motion-push');
   expect(push[0].from).toBe('translate(24px, 0px)');
@@ -174,7 +174,7 @@ test('an approval\'s command never moves: a session asking a question fades in w
   await openDemo(page, { width: 390, height: 844 });
   await expect(page.locator('#needs-you')).toBeVisible();
   await open(page, COPILOT);
-  await view(page, COPILOT).locator('.session-header .back').click();
+  await view(page, COPILOT).locator('.session-bar .back').click();
   await expect(row(page, COPILOT)).toBeVisible();
   const push = (await motions(page)).filter((m) => m.id === 'ab-motion-push');
   expect(push[0]).toMatchObject({ travels: false });
@@ -202,7 +202,7 @@ test('on a phone, Back to the list shows Needs you as it was: no mark fades in a
   await expect(page.locator(`#needs-you .needs-entry[data-id="${CLAUDE}"]`)).toBeVisible();
   const before = (await motions(page)).filter((m) => m.inLane).length;
   await open(page, CODEX);
-  await view(page, CODEX).locator('.session-header .back').click();
+  await view(page, CODEX).locator('.session-bar .back').click();
   await expect(page.locator(`#needs-you .needs-entry[data-id="${CLAUDE}"]`)).toBeVisible();
   await page.waitForTimeout(300);
   expect((await motions(page)).filter((m) => m.inLane)).toHaveLength(before);
@@ -216,7 +216,7 @@ test('with reduced motion nothing travels: the only motions are fades no longer 
   await page.waitForTimeout(400);
   expect(await cssMotions(page)).toEqual([]);
   await open(page, COPILOT);
-  await view(page, COPILOT).locator('.session-header .back').click();
+  await view(page, COPILOT).locator('.session-bar .back').click();
   await expect(row(page, COPILOT)).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 900 });
   await desktopTour(page);
@@ -237,7 +237,7 @@ test('a tap during a push lands: Back works while the session is still sliding i
   // Long enough to be sure the tap comes mid-motion.
   await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-push-duration', '5000ms'));
   await row(page, CLAUDE).locator('.row-main').click();
-  const back = view(page, CLAUDE).locator('.session-header .back');
+  const back = view(page, CLAUDE).locator('.session-bar .back');
   await expect(back).toBeAttached();
   expect(await page.evaluate(() => document.getAnimations().some((a) => a.id === 'ab-motion-push' && a.playState === 'running'))).toBe(true);
   const b = await back.boundingBox();
@@ -1498,7 +1498,7 @@ test('a question already there takes no click for a moment when its session is o
   expect(await tapThrough('.session[data-id="019a1b2c-codex-example"] .row-main')).toBe(true);
   await page.waitForTimeout(100);
   expect(await answers()).toBe(before);
-  await view(page, CODEX).locator('.session-header .back').click();
+  await view(page, CODEX).locator('.session-bar .back').click();
   await expect(row(page, CODEX)).toBeVisible();
   expect(await tapThrough('#needs-you .needs-entry[data-id="019a1b2c-codex-example"] .needs-title')).toBe(true);
   await page.waitForTimeout(100);

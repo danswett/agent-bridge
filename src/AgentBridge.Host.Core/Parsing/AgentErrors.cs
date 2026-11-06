@@ -58,7 +58,9 @@ internal static class AgentErrors
     internal static string Template(AttentionKind kind, ErrorClass? errorClass, int? status, AgentKind agent)
     {
         var words = Templates.GetValueOrDefault((kind, errorClass)) ?? Templates[(AttentionKind.Error, ErrorClass.Other)];
-        var name = agent switch { AgentKind.Copilot => "Copilot", AgentKind.Claude => "Claude Code", AgentKind.Codex => "Codex", _ => "The agent" };
+        // The name titles use (Creative 6675007095, ui.md §6.13): "Claude", never the product's
+        // "Claude Code", so a notice and the session's line read the same.
+        var name = agent switch { AgentKind.Copilot => "Copilot", AgentKind.Claude => "Claude", AgentKind.Codex => "Codex", _ => "The agent" };
         var code = status is >= 100 and <= 599 ? $" ({status})" : "";
         return string.Format(System.Globalization.CultureInfo.InvariantCulture, words, name) + code + ".";
     }

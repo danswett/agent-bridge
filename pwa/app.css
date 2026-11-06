@@ -104,7 +104,7 @@ a { color: var(--ab-bridge); }
    own words (a session's row and a Needs you title are buttons), a session's header, the app bar's
    title and a page's title row, which stands in for it on a phone, and a banner's. Everything else
    stays selectable and copyable: the conversation, code, prompts, questions and every field. */
-button, .button, [role="tab"], [role="menuitem"], .nav-item, .brand, .page-title, .session-header, .banner {
+button, .button, [role="tab"], [role="menuitem"], .nav-item, .brand, .page-title, .session-header, .session-bar, .banner {
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
 }
 
@@ -311,7 +311,6 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   .list-pane > :not(.session-list, .needs-you) { margin-left: var(--ab-space-3); margin-right: var(--ab-space-3); }
   .session-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .session-views { flex: 1; min-height: 0; }
-  .session-header .back, .session-header .more { display: none; }
   .session-header .icon-button { width: 32px; height: 32px; }
   .session-header .inspector-button { display: none; }
 }
@@ -778,7 +777,6 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .header-main { grid-column: 2; min-width: 0; }
 .session-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; letter-spacing: var(--ab-tracking-title); overflow-wrap: anywhere; }
 .header-actions { grid-column: 3; display: flex; align-items: center; gap: var(--ab-space-1); }
-.session-header .back { grid-column: 1; margin-left: calc(-1 * var(--ab-space-3)); }
 .session-header .icon-button[aria-pressed="true"] { color: var(--ab-bridge); background: var(--ab-selected); }
 /* One meta line: glyph · status · machine · repository. It flows as text so a separator stays
    with the fact before it, and never starts a line (#214). */
@@ -806,10 +804,15 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 /* Conversation and Tools, where the inspector isn't a pane of its own. */
 .view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); }
 .view-tab {
-  position: relative; flex: none; min-height: var(--tap); min-width: var(--tap); padding: 0 2px;
+  position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: var(--tap); min-width: var(--tap); padding: 0 2px;
   font: inherit; font-size: var(--type-row); line-height: var(--type-row-line); color: var(--ab-text2);
   background: none; border: 0; cursor: pointer; white-space: nowrap;
 }
+/* A phone's Delegates tab: the running count, and the needs glyph leading while one asks (#629). */
+.view-tab .tab-count { font-weight: 400; color: var(--ab-text2); }
+.view-tab .tab-count:empty { display: none; }
+.view-tab > .glyph { flex: none; }
 .view-tab:hover { color: var(--ab-text); }
 .view-tab[aria-selected="true"] { color: var(--ab-text); font-weight: 600; }
 .view-tab[aria-selected="true"]::after {
@@ -1305,11 +1308,19 @@ summary {
    needs ("Sent, but not confirmed. Check the conversation before sending it again."), empty unless it
    has something to say: two lines in a narrow box (a phone, or a pane narrowed by the inspector),
    one in a wide one, so neither an exception nor the outcome moves the box or the card's
-   controls. A reply's room stays until the box is typed in again. A longer refusal may grow. */
-form.reply, form.answer { container: receipt / inline-size; }
+   controls. A reply's room stays until the box is typed in again. A longer refusal may grow.
+   A box under 640 px is narrow. That is measured without a container query: with a size
+   container in or around the conversation, WebKit lays it out once without the container's
+   contents whenever they change (a question redrawn, a reply's line), and clamps the
+   conversation's scroll to that shorter layout, so it jumped back (#631; the list pane's head
+   above met the same with its rows). Instead an empty float's top padding, a percentage of the
+   line's width (the box's, the line being the form's child), is 2.8em in a narrow box and none in
+   a wide one. Only a receipt keeps that room: Launch's, folder trust's and End session's status
+   lines are one line wherever they are (#941 review). */
 .answer-status { min-height: 1.4em; }
-@container receipt (max-width: 639px) { .answer-status { min-height: 2.8em; } }
-.answer-status.room:empty { display: block; visibility: hidden; }
+:is(form.reply, form.answer) > .answer-status:not(:empty) { display: flow-root; }
+:is(form.reply, form.answer) > .answer-status::before { content: ""; float: left; padding-top: clamp(0px, (639.5px - 100%) * 1000, 2.8em); }
+:is(form.reply, form.answer) > .answer-status.room:empty { display: flow-root; visibility: hidden; }
 .answer-status.progress, .answer-receipt.progress, .answer-status.done, .answer-receipt.done { color: var(--ab-text2); }
 .answer-status.warn, .answer-receipt.warn { color: var(--ab-needs-text); }
 .answer-status.bad, .answer-receipt.bad { color: var(--ab-danger-text); }
@@ -1419,6 +1430,74 @@ form.reply, form.answer { container: receipt / inline-size; }
 }
 :is(.icon-button, .row-main, .view-tab, .machine-tab, .row-menu-item):active:not(:disabled) { background: var(--ab-selected); }
 .nav-item:active { background: var(--ab-selected); }
+/* ---- a phone's collapsing session header (ui.md §6.2, §5.3 Collapse, #631) ----
+   Below 760 the header floats over the conversation's top, so collapsing never moves the
+   conversation. A pinned bar (Back, the glyph and title, More) holds the top; the rest (title,
+   meta, tabs) rides the scroll under it, 1:1 near the top, and slides away or back mid-conversation
+   (collapse-header.js sets --ty, --covered and --head-h). Folded, it is only translated: its parts
+   stay in the accessibility tree and the tab order. The delegate strip is not drawn on a phone
+   (the Delegates tab is, #629): the chips are for three panes. From 760 none of this applies. */
+.session-bar { display: none; }
+@media (min-width: 760px) {
+  .session-head, .session-top { display: contents; }
+}
+@media (max-width: 759px) {
+  /* Resting values; collapse-header.js overrides them inline on the view. */
+  .session-view { --ty: 0px; --covered: 0px; --head-h: 0px; --stage-h: none; }
+  .session-view:not([hidden]) { position: relative; grid-template-rows: minmax(0, 1fr); }
+  .session-view > .view-body { grid-row: 1; }
+  .session-head { position: absolute; top: 0; left: 0; right: 0; z-index: 2; pointer-events: none; }
+  .session-top {
+    pointer-events: auto; background: var(--ab-shell); transform: translateY(var(--ty, 0px));
+    max-height: var(--stage-h, none); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+    touch-action: pan-x; will-change: transform;
+  }
+  .session-top::-webkit-scrollbar { display: none; }
+  .session-header { grid-template-columns: minmax(0, 1fr); padding: var(--ab-space-2) calc(var(--tap) + var(--ab-space-2)) var(--ab-space-3); }
+  .session-header .header-main { grid-column: 1; }
+  .header-actions { display: none; }
+  .delegate-strip:not([hidden]) { display: none; }
+  .stream-scroll {
+    padding-top: calc(var(--head-h, 0px) + var(--ab-space-4));
+    scroll-padding-top: calc(var(--covered, 0px) + var(--ab-space-2));
+  }
+  /* The header is whole over the other tabs, so what focus scrolls to there stays clear of all of it. */
+  .inspector { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); scroll-padding-top: calc(var(--head-h, 0px) + var(--ab-space-2)); }
+  /* The header scrolls within itself, so the tabs, its last row, keep room below them for a
+     focus ring's 5 px (3 px outline and 2 px offset), and the chosen tab's line keeps to the border. */
+  .session-top .view-tabs { padding-bottom: var(--ab-space-1); }
+  .session-top .view-tab[aria-selected="true"]::after { bottom: calc(-1px - var(--ab-space-1)); }
+
+  .session-bar {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 1; display: flex; align-items: center; gap: var(--ab-space-1);
+    min-height: 3rem; padding: 0 var(--ab-space-1); pointer-events: none; isolation: isolate;
+  }
+  .session-bar > .icon-button, .session-bar > .row-menu { pointer-events: auto; }
+  .session-bar::before {
+    content: ""; position: absolute; inset: 0; z-index: -1; background: var(--ab-shell); border-bottom: 1px solid var(--ab-stroke2);
+    opacity: 0; transition: opacity var(--ab-motion-cross-fade) linear;
+  }
+  .session-view[data-solid] .session-bar::before { opacity: 1; }
+  .bar-title {
+    flex: 1; min-width: 0; min-height: var(--tap); display: flex; align-items: center; gap: var(--ab-space-2);
+    font-size: 1.0625rem; line-height: 1.375rem; font-weight: 600; pointer-events: none;
+    opacity: 0; visibility: hidden; transition: opacity var(--ab-motion-cross-fade) linear, visibility 0s linear var(--ab-motion-cross-fade);
+  }
+  .session-view[data-titled] .bar-title { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+  .bar-title .glyph { flex: none; scale: 1.125; margin: 0 1px; }
+  .bar-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .animating .session-top { transition: transform var(--ab-motion-collapse-duration) var(--ab-motion-collapse-ease); }
+}
+@keyframes head-cross-fade { from { opacity: 0; } }
+@media (max-width: 759px) and (prefers-reduced-motion: reduce) {
+  .animating .session-top { transition: none; animation: head-cross-fade var(--ab-motion-collapse-duration) linear; }
+  .fading .session-top { transition: opacity var(--ab-motion-cross-fade) linear; opacity: 0; }
+}
+@media (max-width: 759px) and (forced-colors: active) {
+  .session-top { background: Canvas; color: CanvasText; }
+  .session-bar::before { forced-color-adjust: none; background: Canvas; border-bottom-color: CanvasText; }
+  .bar-title { color: CanvasText; }
+}
 /* A button's pressed fill keeps its label at 4.5:1 (ui.md §9) rather than fading the whole
    control: a filled button's Bridge moves toward the text colour, darker on light and lighter on
    dark, away from its label's; an outlined one takes the selected fill, and its Bridge label moves

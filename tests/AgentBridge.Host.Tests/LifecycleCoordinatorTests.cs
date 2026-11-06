@@ -67,7 +67,7 @@ public sealed class LifecycleCoordinatorTests
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => coordinator.TryAcquireQuiet(TimeSpan.FromSeconds(11), DeparturePurpose.RemoteRestart));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => coordinator.TryAcquireQuiet(TimeSpan.Zero, (DeparturePurpose)int.MaxValue));
         Assert.Equal(["DeliveryInFlight", "Typing", "AnnounceUnacked", "JournalUncertain", "AppRunning",
-            "OtherHostRunning", "ChannelChanged", "TransferInFlight", "ConditionFault", "LeaseExpired"], Enum.GetNames<DepartureBlocker>());
+            "OtherHostRunning", "ChannelChanged", "TransferInFlight", "ConditionFault", "LeaseExpired", "Ineligible"], Enum.GetNames<DepartureBlocker>());
     }
 
     [Fact]

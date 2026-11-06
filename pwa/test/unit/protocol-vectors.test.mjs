@@ -395,6 +395,16 @@ const NOT_REPLAYED = {
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
   UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it',
+  // #801 slice A is the host's half; the PWA's controls wait for ui.md's spec.
+  ManageCommand: 'the PWA does not manage machines yet (#801)',
+  ManageRepairArgs: 'the PWA does not manage machines yet (#801)',
+  ManageConfigArgs: 'held until the signed roster (#55)',
+  ManageHaTokenRequest: 'held until the signed roster (#55)',
+  ManageRestarts: 'the PWA does not manage machines yet (#801)',
+  ManagePending: 'the PWA does not manage machines yet (#801)',
+  ManageLast: 'the PWA does not manage machines yet (#801)',
+  ManageState: 'the PWA does not manage machines yet (#801)',
+  ManageResult: 'the PWA does not manage machines yet (#801)',
   Attention: 'read within Session once the PWA shows attention (#800); until then Session leaves it unread',
   // The PWA shows what a reboot took once Design's spec lands (#780, client slice); until then
   // it ignores machine.restore and reads a restored push as a question (title and body only).
@@ -540,7 +550,7 @@ for (const v of signed.valid) {
     const command = await signCommand({
       key: signer, deviceId: signed.keys.signer.device, machinePublic: machine.public,
       action: v.body.action, session: v.body.target.session, question: v.body.target.question, shown: v.body.target.shown,
-      to: v.body.to, now: v.body.issuedAt * 1000, request: v.body.request,
+      args: v.body.args, to: v.body.to, now: v.body.issuedAt * 1000, request: v.body.request,
     });
     assert.deepEqual(JSON.parse(fromUtf8.decode(fromBase64url(command.body))), v.body);
     assert.deepEqual(command, v.command);

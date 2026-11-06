@@ -184,7 +184,8 @@ public sealed class StopService : ISessionStopper
         }
         catch (Exception e)
         {
-            return Refused($"the host could not end the session: {e.Message}");
+            log($"end of {Short(request.Id)} failed before it was tried: {e.Message}");
+            return Refused("the machine couldn't end the session");
         }
 
         if (!gate.TryClaim(session.Id, key)) { return Busy(); }
@@ -192,7 +193,11 @@ public sealed class StopService : ISessionStopper
         try
         {
             try { result = await EndProcessAsync(session, processId, startedAt, confirmed); }
-            catch (Exception e) { result = Failed($"the host could not finish ending the session ({e.Message}); check at the machine"); }
+            catch (Exception e)
+            {
+                log($"end of {Short(session.Id)} (pid {processId}) failed part way: {e.Message}");
+                result = Failed("the machine couldn't finish ending the session; check at the machine");
+            }
         }
         finally { gate.Release(session.Id, key); }
         // Removed as soon as it has gone, rather than at the next discovery pass; shown as it
