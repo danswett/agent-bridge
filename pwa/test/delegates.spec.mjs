@@ -900,7 +900,19 @@ test.describe('a pending approval as delegates come and go above it', () => {
         await expect(c.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
         await page.clock.install();
         await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+        // What could move Deny, so a failure says which of them did.
+        const layout = () => c.evaluate((card) => {
+          const v = card.closest('.session-view') ?? card.querySelector('.session-view');
+          const top = card.querySelector('.session-top');
+          const sc = card.querySelector('.stream-scroll');
+          const css = v ? getComputedStyle(v) : null;
+          return {
+            top: top?.offsetHeight, headH: css?.getPropertyValue('--head-h').trim(), ty: css?.getPropertyValue('--ty').trim(),
+            scrollTop: sc?.scrollTop, scrollH: sc?.scrollHeight, clientH: sc?.clientHeight, clientW: sc?.clientWidth,
+          };
+        });
         const was = await deny.boundingBox();
+        const wasLayout = await layout();
         const before = await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
         await asking(page, k.after(iso(70_000), iso(-20 * 60_000)), iso(70_000));
         await page.clock.runFor(20);
@@ -908,7 +920,8 @@ test.describe('a pending approval as delegates come and go above it', () => {
         const moved = Math.abs(now.y - was.y) + Math.abs(now.x - was.x);
         if (k.stripOnly && size.width < 760) {
           // A phone has no strip (owner, #629): nothing above the question changes, so Deny stays put.
-          expect(moved, 'Deny stayed where it was').toBeLessThanOrEqual(1);
+          const detail = JSON.stringify({ deny: { was, now }, layout: { was: wasLayout, now: await layout() } });
+          expect(moved, `Deny stayed where it was: ${detail}`).toBeLessThanOrEqual(1);
           return;
         }
         expect(moved, 'the update moved Deny').toBeGreaterThan(1);
