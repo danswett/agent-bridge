@@ -314,6 +314,28 @@ style (§4.2).
 and the brand assets, which move from the interim Inter Tight in a follow-up to #558. Windows' title bar keeps the system caption style, as Fluent
 does.
 
+### 4.4 Text size (PWA)
+
+The PWA's Settings has **Text size**: Smaller, Default and Larger, a row of three toggle buttons
+under "On this device only." It is for a person whose device draws the ramp too big or too small
+(a tablet in landscape gets the desktop ramp of §4.3), and it is the web's stand-in for the
+system text size the native apps already follow.
+
+- **Scale:** Smaller is 0.9×, Larger is 1.15×, and Default is §4.3 exactly. Every role, its line
+  height and anything sized in `rem` scale together, so the ramp keeps its proportions. No role
+  goes under 11 px (§4.2's floor for mono, held for every role here).
+- **What doesn't scale:** text fields stay 16 px at every size, because Safari zooms the page
+  into a field set smaller. Icons, spacing and hit targets stay as they are; only a width set
+  in `rem` to hold its text grows with that text.
+- **Per device:** the choice is kept in this browser's storage, never synced to the person's
+  other devices or to a machine. Default keeps nothing.
+- **Before the first paint:** the stored choice is applied before the page is drawn, so the
+  app never opens at one size and then jumps to another.
+- **Narrow phones:** a page title never breaks inside a word. Where the Sessions title, Sort and
+  the icons don't fit on one line (under 370 px, or 390 px at Larger), the header takes the list
+  pane's two lines: the title and Sort, then the count and the icons, so Tab's order is still
+  the order drawn (§9.1).
+
 ## 5. Space, shape, layout and motion
 
 ### 5.1 Spacing and radius
@@ -1805,7 +1827,8 @@ machine's name, Relay and sign-in, "Agents on this machine" (each agent's row, b
 devices" with the two answer toggles of Workspaces and trust, this app's toggles, and the
 Host log. The host section's "Restore sessions after a reboot or crash" switch (§6.12) is
 **Not built yet (#780)**. The sectioned pane below, its table and the card for an agent
-installed later are **Not built yet (#384 slice 5)**.
+installed later are **Not built yet (#384 slice 5)**. The PWA's Settings also has Text size
+(§4.4), on this device only.
 
 **An agent's row today** (the creative director's #784 words; #705's per-row names and
 verbs). Every state is words on the row, with at most one verb:

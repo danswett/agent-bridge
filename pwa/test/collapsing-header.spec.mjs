@@ -508,6 +508,21 @@ test.describe('on a phone, with the person\'s settings', () => {
     })).toBe(true);
   });
 
+  // #1040: Smaller text shrank a rem-sized bar under the fold's 48 px, and the chosen tab's line
+  // showed beneath it.
+  for (const size of ['smaller', 'larger']) {
+    test(`at ${size} text the header folds wholly behind the bar`, async ({ page }) => {
+      await page.addInitScript((s) => localStorage.setItem('agent-bridge.app.textSize', s), size);
+      const v = await session(page);
+      const m = await folded(v, 400);
+      expect(m.bar).toBeGreaterThanOrEqual(48);
+      expect(m.covered).toBe(m.bar);
+      const tabs = await v.locator('.session-top .view-tabs').boundingBox();
+      const bar = await v.locator('.session-bar').boundingBox();
+      expect(tabs.y + tabs.height).toBeLessThanOrEqual(bar.y + bar.height + 0.5);
+    });
+  }
+
   test('a wheel on the header scrolls the conversation, and the title\'s opening focus no longer holds the header whole', async ({ page }) => {
     const v = await session(page);
     // Opened, focus is on the title (#707), inside the header: the hold.
