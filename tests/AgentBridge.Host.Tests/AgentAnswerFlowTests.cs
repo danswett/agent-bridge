@@ -74,6 +74,9 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Fields = JsonSerializer.SerializeToElement(fields).EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone()),
     };
 
+    // The Codex approval's id as the session lists it: "<DecisionId>#<digest>" (#958).
+    string CodexQuestion => source.Get(CodexId)!.Question!.Id;
+
     static readonly Dictionary<string, object> Chosen = new() { ["Which database?"] = "SQLite", ["Which features?"] = new[] { "Auth", "Search" } };
 
     string Recorded(string database = "SQLite", string features = "Auth, Search") =>
@@ -169,8 +172,8 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Assert.Contains("already typed into this prompt once", again.Reason);
 
         var codex = Answerer();
-        Assert.Equal(AnswerOutcome.Unconfirmed, (await codex.AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" }))).Outcome);
-        Assert.Equal(AnswerOutcome.Refused, (await Answerer().AnswerAsync(Request(CodexId, "node-1", new { decision = "deny" }))).Outcome);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await codex.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }))).Outcome);
+        Assert.Equal(AnswerOutcome.Refused, (await Answerer().AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "deny" }))).Outcome);
         Assert.Equal(typed + 1, injector.Plans.Count);
     }
 
@@ -203,7 +206,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         guard.Reason = "the session runs as administrator";
 
         Assert.Equal(new AnswerResult(AnswerOutcome.Refused, guard.Reason), await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen)));
-        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, guard.Reason), await Answerer().AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" })));
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, guard.Reason), await Answerer().AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" })));
         Assert.Empty(injector.Plans);
     }
 
@@ -213,7 +216,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         probe.Answers = new Queue<string?>([null, "agent-ha-bridge is running for this user", null, "agent-ha-bridge is running for this user"]);
 
         Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "agent-ha-bridge is running for this user"), await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen)));
-        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "agent-ha-bridge is running for this user"), await Answerer().AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" })));
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "agent-ha-bridge is running for this user"), await Answerer().AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" })));
         Assert.Empty(injector.Plans);
     }
 
@@ -222,7 +225,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     {
         var marker = File.ReadAllBytes(Path.Combine(f.CodexRegistrations, CodexId + ".approval.json"));
 
-        var approved = await Answerer().AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" }));
+        var approved = await Answerer().AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }));
 
         Assert.Equal(AnswerOutcome.Unconfirmed, approved.Outcome);
         Assert.Contains("typed approve", approved.Reason);
@@ -233,7 +236,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
         f.CodexApprovalMarker(CodexId, "node-2");
         await source.RefreshAsync();
-        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer().AnswerAsync(Request(CodexId, "node-2", new { decision = "deny" }))).Outcome);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer().AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "deny" }))).Outcome);
         Assert.Equal("n", injector.Plans[1].Plan.Sends[0].Text);
     }
 
@@ -242,14 +245,14 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     {
         string? unsettled = "the host has not yet checked Codex approvals";
 
-        var refused = await Answerer(_ => unsettled).AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" }));
+        var refused = await Answerer(_ => unsettled).AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }));
 
         Assert.Equal(AnswerOutcome.Refused, refused.Outcome);
         Assert.Contains("not yet checked", refused.Reason);
         Assert.Empty(injector.Plans);
         // Nothing was claimed either, so once settled it can be answered.
         unsettled = null;
-        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer(_ => unsettled).AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" }))).Outcome);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer(_ => unsettled).AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }))).Outcome);
     }
 
     [Fact]
@@ -259,21 +262,105 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         // Each is written after the host last read the session, so only the check just
         // before typing can see it.
         f.CodexApprovalMarker(CodexId, "node-9");
-        Assert.Equal(new AnswerResult(AnswerOutcome.Stale, "Codex is asking for a different approval now"), await answerer.AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" })));
+        Assert.Equal(new AnswerResult(AnswerOutcome.Stale, "Codex is asking for a different approval now"), await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" })));
 
         File.Delete(Path.Combine(f.CodexRegistrations, CodexId + ".approval.json"));
-        Assert.Equal(new AnswerResult(AnswerOutcome.Stale, "Codex is no longer asking for that approval"), await answerer.AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" })));
+        Assert.Equal(new AnswerResult(AnswerOutcome.Stale, "Codex is no longer asking for that approval"), await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" })));
 
         File.WriteAllText(Path.Combine(f.CodexRegistrations, CodexId + ".approval.json"), "{\"SessionId\":");
-        var unreadable = await answerer.AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" }));
+        var unreadable = await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }));
         Assert.Equal(AnswerOutcome.Refused, unreadable.Outcome);
         Assert.Contains("could not be read", unreadable.Reason);
 
         f.CodexApprovalMarker(CodexId, "node-1", attempted: true);
-        var attempted = await answerer.AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" }));
+        var attempted = await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }));
         Assert.Equal(AnswerOutcome.Refused, attempted.Outcome);
         Assert.Contains("agent-ha-bridge has already typed", attempted.Reason);
 
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_Codex_approval_relisted_with_another_command_before_the_answer_is_taken_is_stale_and_types_nothing()
+    {
+        var shown = CodexQuestion;
+        f.CodexApprovalMarker(CodexId, "node-1", "Needs approval: rm -rf ~", Fixture.T0.AddSeconds(5), command: "rm -rf ~");
+        await source.RefreshAsync();
+
+        var result = await Answerer().AnswerAsync(Request(CodexId, shown, new { decision = "approve" }));
+
+        Assert.StartsWith("node-1#", CodexQuestion);
+        Assert.NotEqual(shown, CodexQuestion);
+        Assert.Equal(new AnswerResult(AnswerOutcome.Stale, "the session is no longer asking that question"), result);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_Codex_approval_relisted_with_another_command_after_the_answer_is_taken_is_stale_at_the_typing_slot()
+    {
+        var shown = CodexQuestion;
+        // Written after the host last read the session, so its listing still shows the
+        // approval that was answered: only the fresh marker says the command changed.
+        f.CodexApprovalMarker(CodexId, "node-1", "Needs approval: rm -rf ~", Fixture.T0.AddSeconds(5), command: "rm -rf ~");
+
+        var result = await Answerer().AnswerAsync(Request(CodexId, shown, new { decision = "approve" }));
+
+        Assert.Equal(shown, CodexQuestion);
+        Assert.Equal(new AnswerResult(AnswerOutcome.Stale, "Codex's approval reads differently from what was shown"), result);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_Codex_approval_relisted_cut_short_or_escaped_under_the_same_generation_is_never_typed()
+    {
+        var shown = CodexQuestion;
+        Action[] relistings =
+        [
+            // Only the hook's preview, which a client could not show whole.
+            () => f.CodexApprovalMarker(CodexId, "node-1", "Needs approval: git push", Fixture.T0.AddSeconds(5), legacy: true),
+            // A character that is not drawn as it runs.
+            () => f.CodexApprovalMarker(CodexId, "node-1", "Needs approval: git push", Fixture.T0.AddSeconds(5), command: "git push\u202E"),
+        ];
+        foreach (var relist in relistings)
+        {
+            relist();
+            Assert.Equal(new AnswerResult(AnswerOutcome.Stale, "Codex's approval reads differently from what was shown"),
+                await Answerer().AnswerAsync(Request(CodexId, shown, new { decision = "approve" })));
+        }
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_Codex_approval_written_again_unchanged_under_its_generation_is_still_typed()
+    {
+        var shown = CodexQuestion;
+        f.CodexApprovalMarker(CodexId, "node-1", "Needs approval: git push", Fixture.T0.AddSeconds(9));
+
+        var result = await Answerer().AnswerAsync(Request(CodexId, shown, new { decision = "approve" }));
+
+        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        Assert.Equal("y", Assert.Single(injector.Plans).Plan.Sends[0].Text);
+    }
+
+    [Fact]
+    public async Task A_Codex_generation_already_typed_into_is_never_typed_again_whatever_it_reads_as_later()
+    {
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer().AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }))).Outcome);
+        f.CodexApprovalMarker(CodexId, "node-1", "Needs approval: rm -rf ~", Fixture.T0.AddSeconds(9), command: "rm -rf ~");
+        await source.RefreshAsync();
+
+        var result = await Answerer().AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "an answer was already typed into this prompt once, and is never typed again; check at the machine"), result);
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_Codex_answer_naming_only_the_bare_decision_id_is_stale_and_types_nothing()
+    {
+        var result = await Answerer().AnswerAsync(Request(CodexId, "node-1", new { decision = "approve" }));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Stale, "the session is no longer asking that question"), result);
         Assert.Empty(injector.Plans);
     }
 

@@ -90,6 +90,9 @@ public static class ProtocolVectors
         Id = "req-41#3f9a", Kind = QuestionKind.Approval, Message = "Run `git push`?", AskedAt = T0,
         Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new("approve", "Approve once"), new("deny", "Deny")] }],
     };
+    // A Codex approval as a host lists it: its id is the hook marker's DecisionId and a digest
+    // of what is shown (#958; the host's MappingTests pin this one). Opaque to a client.
+    static readonly Question CodexApproval = Approval with { Id = "019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01#e2c96713aea78522", Message = "Allow **Bash**?\n\n```\ngit push\n```" };
     static readonly Question ManyTexts = new()
     {
         Id = "call_q3", Kind = QuestionKind.Form, Message = "Notes", AskedAt = T0,
@@ -204,6 +207,7 @@ public static class ProtocolVectors
             .Valid("form", Form)
             .Valid("plain", Plain)
             .Valid("approval", Approval)
+            .Valid("a-codex-approval", CodexApproval)
             .Valid("truncated", Plain with { Truncated = true, Fields = [] })
             .Valid("a-delegates-question-answered-at-the-machine", Plain with { AnswerAtMachine = true, Agent = "agent-1" })
             .Reads("an-unknown-kind-reads-as-a-form", """{"id":"q","kind":"wizard","message":"m","fields":[],"askedAt":"2026-10-28T04:22:43.182Z"}""")
