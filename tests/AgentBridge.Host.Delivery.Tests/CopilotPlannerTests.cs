@@ -545,6 +545,21 @@ public class CopilotPlannerTests
         Assert.Equal([("a@b.c", true)], Keys(Plan(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b.c" }))));
         Assert.Equal("\"t\": must be an email address", Outside(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b." })));
     }
+
+    // The bound above stops the old match only on a runner that reaches it; this stops it on any.
+    // The email check is FieldConstraints.Email(), which returns the private EmailPattern field
+    // (src/AgentBridge.Protocol/FieldConstraints.cs). Its classes overlap on dots, so without
+    // NonBacktracking the match backtracks quadratically (#844 review, #990). Read by reflection,
+    // since Protocol keeps both private: a rename or a second overload throws here and fails loudly.
+    [Fact]
+    public void The_email_check_is_matched_without_backtracking()
+    {
+        var email = typeof(FieldConstraints).GetMethod("Email", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?? throw new MissingMethodException(nameof(FieldConstraints), "Email");
+        var regex = Assert.IsType<System.Text.RegularExpressions.Regex>(email.Invoke(null, null));
+
+        Assert.True(regex.Options.HasFlag(System.Text.RegularExpressions.RegexOptions.NonBacktracking), $"the email check is built with {regex.Options}");
+    }
     // An empty answer is typed as nothing, and Copilot then records no answer at all to a field
     // the form requires; one of only spaces might be recorded trimmed to that, and so might one of
     // control characters, which are typed as spaces though trim() alone keeps them (review of #844).
