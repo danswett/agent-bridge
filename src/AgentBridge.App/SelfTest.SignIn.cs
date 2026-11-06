@@ -5,13 +5,15 @@ using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
 
 // Sign-in (#800, ui.md §6.13), on the demo's other machine: sessions whose agent needs sign-in say so
-// on their rows and in Needs you, under one banner for the machine, agent and account; an error and
+// on their rows, never in Needs you, under one banner for the machine, agent and account whose line
+// names them as links; an error and
 // a session not responding say so on their rows. Only Sign in asks the machine for a code; its sheet
 // starts on Cancel, shows the code selectable and named a character at a time, and its buttons are
 // named for what they act on. A spoofed link is refused whole. Signed in, the sessions wait to confirm, never recovered until the
@@ -19,6 +21,9 @@ namespace AgentBridge.App;
 // scenario's sessions go again after, so the passes after this one see the demo as it was.
 static partial class SelfTest
 {
+    // A line's words as drawn, a link's included.
+    static string Flat(IEnumerable<Inline> inlines) => string.Concat(inlines.Select(i => i switch { Run r => r.Text, Span s => Flat(s.Inlines), _ => "" }));
+
     static async Task CheckSignIn(MainWindow window, MainViewModel main, DemoHost remote, Action<bool, string> check, string outFile)
     {
         window.ShowPage("sessions");
@@ -44,14 +49,18 @@ static partial class SelfTest
             while (up is not null && !ReferenceEquals(up, rows)) { up = VisualTreeHelper.GetParent(up); }
             check(rows is not null && up is not null && rows.ActualHeight >= 200, $"scrolls the sign-in banners with the session list, which keeps its height ({rows?.ActualHeight:F0} px)");
             var head = Find<TextBlock>(Banner()!).FirstOrDefault(t => AutomationProperties.GetAutomationId(t) == "SignInHead");
-            var line = Find<TextBlock>(Banner()!).FirstOrDefault(t => AutomationProperties.GetAutomationId(t) == "SignInLine");
-            check(head?.Text == "Copilot on Build server needs sign-in · @demo-user" && line?.Text == "3 sessions affected" && AutomationProperties.GetName(Banner()!) == head.Text,
-                $"heads the banner with the machine, agent and account, says how many sessions it holds up, and is named as shown ({head?.Text} / {line?.Text})");
+            // Its line names its sessions, each a link to it, with no line of titles of its own (ui.md §6.13).
+            var line = Find<TextBlock>(Banner()!).FirstOrDefault(t => AutomationProperties.GetAutomationId(t) == "SignInAffected" && t.IsLoaded && t.ActualHeight > 0);
+            var said = line is null ? "" : Flat(line.Inlines);
+            var links = line?.Inlines.OfType<Hyperlink>().Select(l => Flat(l.Inlines)).ToList() ?? [];
+            check(head?.Text == "Copilot on Build server needs sign-in · @demo-user" && said == "3 sessions affected: Coordinate the release, Fix the relay reconnect, Review the usage panel"
+                && links.SequenceEqual(["Coordinate the release", "Fix the relay reconnect", "Review the usage panel"]) && AutomationProperties.GetName(Banner()!) == head.Text,
+                $"heads the banner with the machine, agent and account, names the sessions it holds up in its line as links, and is named as shown ({head?.Text} / {said} / {links.Count} links)");
             var verb = Verb()!;
             check(verb.Content as string == "Sign in" && AutomationProperties.GetName(verb) == "Sign in to Copilot on Build server", $"names Sign in for what it signs in, its words first ({AutomationProperties.GetName(verb)})");
             check(DemoHost.SignInSessions.All(id => Row(id) == "Needs sign-in") && Row("demo-error-quota") == "Agent error" && Row("demo-stalled") == "Not responding",
                 $"says Needs sign-in, Agent error and Not responding on their rows, never Idle or Working ({string.Join(", ", DemoHost.SignInSessions.Append("demo-error-quota").Append("demo-stalled").Select(Row))})");
-            check(await Until(() => main.Waiting == waiting + 3, TimeSpan.FromSeconds(5)), $"counts the three sessions that need sign-in in Needs you, not the error or the one not responding ({main.Waiting - waiting})");
+            check(await Until(() => main.Waiting == waiting, TimeSpan.FromSeconds(5)), $"counts none of them in Needs you or the badge: the banner owns sign-in (owner decision 6675817525; {main.Waiting - waiting} more)");
             check(remote.SignInLog.Count == 0, "asks the machine for nothing until a person presses Sign in");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".signin.png"));
 

@@ -588,13 +588,28 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .sign-in-body > p { margin: 0; overflow-wrap: anywhere; }
 .sign-in-head { font-weight: 600; color: var(--ab-needs-head); }
 .sign-in-line, .sign-in-expiry, .sign-in-where, .sign-in-uri { font-size: .875rem; color: var(--ab-text); }
-.sign-in-sessions { list-style: none; margin: 4px 0 0; padding: 0; }
+/* A session the banner names (§6.13): a link in its line, as prose, so inline and its title
+   underlined (not the comma it keeps). */
 .sign-in-session {
-  min-height: 32px; padding: 0; text-align: left; overflow-wrap: anywhere;
+  display: inline; padding: 0; text-align: left; overflow-wrap: anywhere;
   font: inherit; color: var(--ab-text); background: none; border: 0; cursor: pointer;
 }
-@media (pointer: coarse) { .sign-in-session { min-height: var(--tap); } }
-.sign-in-session:hover { text-decoration: underline; }
+.sign-in-title { text-decoration: underline; text-underline-offset: 2px; }
+.sign-in-session:hover .sign-in-title { text-decoration-thickness: 2px; }
+/* A title and its comma stay together, so no line starts with a comma; a title longer than the
+   line still wraps inside itself, its comma after its last word. */
+.sign-in-item { white-space: nowrap; }
+.sign-in-item > .sign-in-session { white-space: normal; }
+/* Each title is a target that never overlaps the next line's (A11): 32px with a pointer, 44px on
+   touch (Creative 6678354001, as #940's delegate names), each the height of its line box. So the
+   line's leading is the target's, not the sentence's, with a fine pointer too: A11 over normal
+   leading. */
+.sign-in-line.sign-in-links { line-height: 32px; }
+.sign-in-links .sign-in-session { min-height: 32px; vertical-align: top; }
+@media (pointer: coarse) {
+  .sign-in-line.sign-in-links { line-height: var(--tap); }
+  .sign-in-links .sign-in-session { min-height: var(--tap); }
+}
 .sign-in-code-line { margin: 4px 0; }
 .sign-in-code { font: 600 1.5rem var(--ab-font-mono); letter-spacing: .12em; -webkit-user-select: all; user-select: all; color: var(--ab-text); }
 .sign-in-actions, .sign-in-flow-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
@@ -616,6 +631,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 }
 @media (forced-colors: active) {
   .sign-in-banner { border-color: Highlight; }
+  .sign-in-session { color: LinkText; }
 }
 /* Moving rows: a grip on hover with a mouse, and a line where a dragged row will go. */
 .drag-handle { display: none; }

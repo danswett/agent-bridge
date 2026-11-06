@@ -2113,7 +2113,9 @@ that survives a failed turn never hides the error behind "Delegating".
   "· *reason*", the reason is the host's categorised reason in plain words, from a known set.
   Raw text from the machine or the CLI is never shown, verbatim or trimmed: it belongs in
   diagnostics (#802). A line with no reason from that set reads without one ("Sign-in
-  refused").
+  refused"). The set for a refused start, by the host's reason: "too many requests, try again
+  later", "another sign-in is under way", "too many sign-ins waiting on this machine" and "not
+  available from this device".
 
 **Machine banner** (one per machine, agent and account, rolled up from the sessions' `attention`)
 
@@ -2123,7 +2125,10 @@ that survives a failed turn never hides the error behind "Delegating".
 - Title: "*Agent* on *machine* needs sign-in" plus "· @*account*" when known. Line 2: "*n*
   sessions affected: *A*, *B*" ("1 session affected: *A*" for one). Each title is a link that
   opens that session; there is no separate line of titles. The titles come from the client's own
-  records (never from text in the record).
+  records (never from text in the record), each drawn as a host's sentence is: revealed (a hidden
+  or right-to-left character as its escape) and at most 120 characters. A link keeps its comma,
+  so no line starts with one, and each is a target at least 32px tall with a pointer and 44px on
+  touch, the height of its line box (§9.1 A11).
 - One button, **Sign in**, only with the capability and `signIn: phone`. Without the capability
   there is no button and no instruction: a missing capability doesn't prove the agent can't sign
   in from a device.
