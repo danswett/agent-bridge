@@ -43,8 +43,7 @@ status colour, never Ready, Not set up or Needs repair, and nothing on it is a b
 work (Creative's rulings on #784 and #705):
 - hooks the host holds back (`blocked`: a read-only host, or another profile's) say
   "Read-only · *why*" ("an older bridge runs this machine", "another bridge profile owns its
-  hooks", "this host is set to read-only", "this host's settings have a problem", or "this host is
-  read-only"), and Install CLI is hidden on them;
+  hooks", or "set in this host's settings"), and Install CLI is hidden on them;
 - hooks the host reports `failed` with `hookSetup: unknown`, which its setup refuses, say "Hook
   ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or
   "Hook intake couldn't be checked · *why*" for this profile's intake record;
@@ -58,14 +57,15 @@ includes a setup's outcome: "Set up · restart the host, then start a new sessio
 "Repaired · …", "Removed · sessions already running keep their hooks until they end", or
 "Setup failed · *why*" ("Repair failed", "Removal failed"), and the CLI's line: "Not installed"
 with **Install CLI** where the host installs it, else "Not installed · install it on this
-machine" with no verb; "Installing…" while it runs, **Install CLI** pressed with its ring and
-still focusable (ui.md §9.1 A4) and **Cancel** beside it ("Cancel CLI installation"); then the
+machine" with no verb; "Installing…" while it runs, **Install CLI** showing its ring (a plain button,
+never a toggle, with its item status "Installing…", still focusable and its presses ignored, ui.md
+§9.1 A4) and **Cancel** beside it ("Cancel CLI installation"); then the
 state the check finds, or "Install failed · *why*" (for example "Windows Package Manager couldn't
 install it") with **Install CLI** offered again. **Remove connection** comes after the verb, in
 Danger text, never an accent button, and is shown only when the host says this profile has a
 setup to remove (`completed` or `incomplete`; the host refuses a removal without one). Both ask for
 confirmation naming the agent (Cancel is the default) and use the host's owned hook backend. The
-buttons are named for their agent ("Set up Copilot CLI", "Remove Copilot CLI's connection"), with
+buttons are named for the product they act on ("Set up Copilot CLI", "Remove Copilot CLI's connection"; sessions, pushes and banners name the agent instead), with
 AutomationIds of their own (`SetUpAgent_<id>`, `RemoveAgent_<id>`). A setup's progress ("Setting
 up…", "Repairing…", "Removing…") and result stay on its own row (`AgentStatus_<id>`), a polite
 live region named for its agent ("Copilot CLI: Setting up…") and raised again as each is drawn,

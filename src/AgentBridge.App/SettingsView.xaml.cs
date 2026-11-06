@@ -4,7 +4,6 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 
@@ -49,11 +48,9 @@ public sealed partial class SettingsView : UserControl
 
     async void OnInstallAgent(object sender, RoutedEventArgs e)
     {
-        if (sender is not ToggleButton { Tag: string id } button) { return; }
-        // Pressed only while its installation runs (ui.md §9.1 A4): a press toggles it, so it's put
-        // back, and a press while it runs does nothing more.
+        if (sender is not Button { Tag: string id }) { return; }
+        // While its installation runs, a press does nothing (ui.md §9.1 A4).
         var row = viewModel?.Agents.FirstOrDefault(a => a.Id == id);
-        button.IsChecked = row?.Installing == true;
         if (viewModel is not { CanInstallAgents: true } v || row is not { CanInstall: true }) { return; }
         var dialog = new ContentDialog
         {
@@ -77,7 +74,7 @@ public sealed partial class SettingsView : UserControl
             Title = remove ? row.RemoveQuestion : row.SetUpQuestion,
             Content = remove
                 ? "Remove only this installation's hook registrations and owned guidance blocks. Other settings, instructions, CLI sign-in and hook trust stay unchanged. Existing sessions keep their hooks until they end."
-                : "Register hooks and guidance owned by this installation, preserving other settings and instructions. Copilot and Agency share their hooks. You will need to restart the host and start a new agent session. Codex also asks you to trust its hooks at this machine. Nothing restarts or accepts trust automatically.",
+                : "Register hooks and guidance owned by this installation, preserving other settings and instructions. Copilot CLI and Agency share their hooks. You will need to restart the host and start a new agent session. Codex also asks you to trust its hooks at this machine. Nothing restarts or accepts trust automatically.",
             PrimaryButtonText = remove ? "Remove connection" : row.SetUpVerb ?? "Set up",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close,

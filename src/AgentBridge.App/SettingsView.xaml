@@ -101,11 +101,11 @@
                                          when there is one, and Remove after it as the destructive one, in Danger text
                                          on a standard button, as End session is. -->
                                     <local:WrapRow Spacing="8">
-                                        <!-- Pressed, with its ring, while its installation runs, and still
-                                             focusable (ui.md §9.1 A4); Cancel beside it then. -->
-                                        <ToggleButton
+                                        <!-- Showing its ring while its installation runs, still focusable, with its
+                                             presses ignored (ui.md §9.1 A4, as Send does); Cancel beside it then. A
+                                             ToggleButton read as "pressed", a state the person didn't choose (A1). -->
+                                        <Button
                                             Tag="{x:Bind Id}"
-                                            IsChecked="{x:Bind Installing}"
                                             Visibility="{x:Bind local:Ui.Show(ShowInstall)}"
                                             IsEnabled="{x:Bind InstallEnabled}"
                                             Click="OnInstallAgent"
@@ -116,7 +116,7 @@
                                                 <ProgressRing Width="16" Height="16" IsActive="{x:Bind Installing}" Visibility="{x:Bind local:Ui.Show(Installing)}" />
                                                 <TextBlock Text="Install CLI" />
                                             </StackPanel>
-                                        </ToggleButton>
+                                        </Button>
                                         <Button
                                             Content="Cancel"
                                             Tag="{x:Bind Id}"

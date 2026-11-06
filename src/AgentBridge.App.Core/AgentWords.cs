@@ -31,9 +31,10 @@ public static class AgentWords
     public static string ReadOnly(string detail) => "Read-only · " + (
         Has(detail, "agent-ha-bridge") ? "an older bridge runs this machine"
         : Has(detail, "Another bridge profile") ? "another bridge profile owns its hooks"
-        : Has(detail, "read-only comparison host") ? "this host is set to read-only"
-        : Has(detail, "config.json has a problem") ? "this host's settings have a problem"
-        : "this host is read-only");
+        // Whether set read-only or read-only for a problem in its config, it's the host's settings
+        // (HostSettings.ReadOnlyReason, ProblemReason), and "Read-only · this host is read-only" said
+        // it twice (Creative, 6675018272).
+        : "set in this host's settings");
 
     // Hooks the host found broken in a way it can't repair: an ownership record it couldn't read or
     // doesn't recognise, or this profile's intake record it couldn't use (AgentReadinessService.Hooks).
@@ -72,7 +73,7 @@ public static class AgentWords
         : Has(detail, "Windows Package Manager exited") ? "Windows Package Manager couldn't install it"
         : Has(detail, "launch executable was not found") ? "the CLI wasn't found afterwards"
         : Has(detail, "configured executable is missing") ? "the configured path is missing"
-        : Has(detail, "cleanup could not be confirmed") ? "its cleanup couldn't be confirmed"
+        : Has(detail, "cleanup could not be confirmed") ? "the installer's processes may still be running"
         : Has(detail, "launch settings") ? "this profile's launch settings have a problem"
         : Has(detail, "Another CLI installation") ? "another installation was running"
         : Has(detail, "read-only") || Has(detail, "agent-ha-bridge") ? "this host is read-only"
@@ -92,7 +93,7 @@ public static class AgentWords
             : Has(raw, "agent-ha-bridge") ? "an older bridge runs this machine"
             : Has(raw, "belongs to another installation") || Has(raw, "Another bridge profile") ? "another bridge profile owns its hooks"
             : Has(raw, "no hook registration owned by this profile") ? "this profile set up nothing to remove"
-            : Has(raw, "migration") ? "this profile belongs to a migration"
+            : Has(raw, "migration") ? "this profile is being migrated"
             : Has(raw, "read-only") ? "this host is read-only"
             : Has(raw, "native hook is missing") ? "the app's hook is missing; reinstall the app"
             : Has(raw, "denied") ? "access denied"

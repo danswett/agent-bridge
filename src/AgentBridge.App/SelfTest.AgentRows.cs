@@ -4,7 +4,6 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
@@ -199,8 +198,14 @@ static partial class SelfTest
                 string[] said = [.. settings.Agents.Select(a => $"{a.Id}: {a.Installation} | {a.Status}")];
                 result?.Add("agentRowsTheAppCantActOn", said);
                 var words = Find<TextBlock>(rows).Select(t => t.Text).ToList();
-                var shown = Buttons(rows).Where(b => b.Button.Visibility == Visibility.Visible).Select(b => b.Id)
-                    .Concat(Find<ToggleButton>(rows).Where(b => b.Visibility == Visibility.Visible).Select(AutomationProperties.GetAutomationId)).ToList();
+                var shown = Buttons(rows).Where(b => b.Button.Visibility == Visibility.Visible).Select(b => b.Id).ToList();
+                // Install CLI is a plain button: a toggle would be read as "on" or "pressed", a state the
+                // person didn't choose (Creative, 6675018272).
+                var install = Buttons(rows).FirstOrDefault(b => b.Id == "InstallAgent_claude");
+                var installPeer = install.Button is null ? null : FrameworkElementAutomationPeer.CreatePeerForElement(install.Button);
+                check(installPeer is not null && install.Name == "Install CLI for Claude Code" && installPeer.GetPattern(PatternInterface.Toggle) is null
+                    && installPeer.GetPattern(PatternInterface.Invoke) is not null && AutomationProperties.GetItemStatus(install.Button!) == "",
+                    $"offers Install CLI again after a failed installation, a button named for the product with no toggle state ({install.Name}; toggle: {installPeer?.GetPattern(PatternInterface.Toggle) is not null})");
                 check(said.SequenceEqual([
                         "copilot: Not installed · install it on this machine | Read-only · an older bridge runs this machine",
                         "claude: Install failed · Windows Package Manager couldn't install it | Hook ownership couldn't be checked · access denied",

@@ -197,6 +197,8 @@ public sealed class SettingsTests : IAsyncLifetime
             Assert.True(installing.InstallEnabled);
             Assert.False(installing.CanInstall);
             Assert.Equal("Cancel CLI installation", installing.CancelInstallName);
+            // Named for the product, and busy by its item status, never a toggle's pressed state.
+            Assert.Equal(("Install CLI for Claude Code", "Installing…"), (installing.InstallName, installing.InstallItemStatus));
         }
         finally { finish.TrySetResult(); }
         await pending;
@@ -209,6 +211,16 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(row.Installing);
         Assert.True(row.ShowInstall);
         Assert.True(row.CanInstall);
+        Assert.Equal("", row.InstallItemStatus);
+    }
+
+    [Theory]
+    [InlineData("Installer cleanup could not be confirmed. Further CLI installations are blocked in this host. Check Windows installation activity before restarting the host and checking agents; nothing was uninstalled.", "the installer's processes may still be running")]
+    [InlineData("Installation cancelled. Windows may already have installed a runtime or CLI; check agents again. Nothing was uninstalled.", "cancelled")]
+    [InlineData("The CLI executable is now available. Its version, account, hooks and trust still need separate checks.", null)]
+    public void An_installation_says_why_it_failed_from_a_known_set_and_nothing_when_it_did_not(string detail, string? why)
+    {
+        Assert.Equal(why, AgentWords.InstallFailure(detail));
     }
 
     [Fact]
@@ -500,9 +512,21 @@ public sealed class SettingsTests : IAsyncLifetime
     [InlineData("agent-ha-bridge is active or cannot be checked (running); use Migrate instead", "Setup failed · an older bridge runs this machine")]
     [InlineData("Hook setup incomplete: C:\\Users\\dana\\.codex\\agent-bridge-owner.json belongs to another installation; it was left alone", "Setup failed · another bridge profile owns its hooks")]
     [InlineData("Hook setup incomplete: Access to the path 'C:\\Users\\dana\\.codex\\config.toml' is denied.", "Setup failed · access denied")]
+    [InlineData("Hook setup incomplete: this profile belongs to a migration; use migration status or rollback", "Setup failed · this profile is being migrated")]
     public void A_failed_setup_says_why_from_a_known_set_never_its_path(string raw, string words)
     {
         Assert.Equal(words, AgentWords.SetupFailed(remove: false, "Set up", raw));
+    }
+
+    [Fact]
+    public void A_settings_row_names_the_product_where_the_host_names_the_agent()
+    {
+        // The host's labels are the agents' ("Claude", "Copilot"): Launchers.All.
+        var claude = new AgentReadinessRow(Agent("claude", "Claude", ReadinessState.NeedsAction), canManage: true);
+        var copilot = new AgentReadinessRow(Agent("copilot", "Copilot", ReadinessState.NeedsAction), canManage: true);
+
+        Assert.Equal(("Claude Code", "Set up Claude Code", "Install CLI for Claude Code"), (claude.Label, claude.SetUpName, claude.InstallName));
+        Assert.Equal(("Copilot CLI", "Remove Copilot CLI's connection"), (copilot.Label, copilot.RemoveName));
     }
 
     [Fact]
@@ -648,7 +672,8 @@ public sealed class SettingsTests : IAsyncLifetime
     [Theory]
     [InlineData("Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine", "Read-only · an older bridge runs this machine")]
     [InlineData("Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "Read-only · another bridge profile owns its hooks")]
-    [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "Read-only · this host is set to read-only")]
+    [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "Read-only · set in this host's settings")]
+    [InlineData("Hook setup is unavailable while this host is read-only: this host's config.json has a problem, so it takes nothing from other devices; answer at the machine", "Read-only · set in this host's settings")]
     public void Hooks_held_back_from_this_app_say_read_only_and_why_with_no_install_or_verb(string detail, string words)
     {
         var row = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Blocked, installation: ReadinessState.Missing, hooksDetail: detail), canManage: true, canInstall: true);

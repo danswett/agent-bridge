@@ -15,7 +15,15 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // says only what its own setup said.
     AgentSetupNote? Result => shared ?? note;
     public string Id => agent.Id;
-    public string Label => agent.Label;
+    // Settings rows name the product being installed and set up ("Claude Code", "Copilot CLI");
+    // sessions, pushes and banners name the agent ("Claude"), as the host's label does (Creative,
+    // 6675018272).
+    public string Label => agent.Id switch
+    {
+        "copilot" => "Copilot CLI",
+        "claude" => "Claude Code",
+        _ => agent.Label,
+    };
     // Whether this profile's setup finished, from the host's `hookSetup` (Unknown from an older host).
     public HookSetup Setup { get; } = setup ?? HookSetups.Of(agent);
     bool Installed => agent.Installation.State == ReadinessState.Working;
@@ -41,14 +49,14 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // This row's CLI installation, from the host's progress (or the app's request before it says).
     public bool Installing => install is { InProgress: true } i && i.Agent == Id;
     public bool CanInstall => canInstall && ShowInstall && !Installing;
-    // While it runs, Install CLI stays pressed with its ring and keeps focus (ui.md §9.1 A4): it stays
-    // enabled, and a press does nothing until the outcome.
+    // While it runs, Install CLI shows its ring and keeps focus (ui.md §9.1 A4): it stays enabled,
+    // and a press does nothing until the outcome.
     public bool InstallEnabled => CanInstall || Installing;
     public string InstallName => $"Install CLI for {Label}";
     public string InstallId => $"InstallAgent_{Id}";
     public string CancelInstallName => "Cancel CLI installation";
     public string CancelInstallId => $"CancelAgentInstall_{Id}";
-    // Said of Install CLI while it's pressed, so a screen reader hears it's busy (ui.md §9.1 A4).
+    // Said of Install CLI while its installation runs, so a screen reader hears it's busy (ui.md §9.1 A4).
     public string InstallItemStatus => Installing ? AgentWords.Installing : "";
     // Why this row's last installation failed, from a known set, while the CLI is still missing.
     public string? InstallFailure => !Installing && agent.Installation.State == ReadinessState.Missing
@@ -117,7 +125,7 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     public string Home => $"Agent home: {agent.Home}";
     public string Checks => $"Version: {AgentWords.Plain(agent.VersionCheck.Detail)}\nHooks: {AgentWords.Plain(agent.Hooks.Detail)}\nSign-in: {agent.Authentication.Detail}\nTrust and launch: {agent.Activation.Detail}";
     public string HookActivity => agent.LastHookHandledAt is { } at
-        ? $"Last hook handled at {at.ToLocalTime():g}{(agent.Id == "agency" ? " (shared Copilot hooks)" : "")}. This is not a new-session readiness test."
+        ? $"Last hook handled at {at.ToLocalTime():g}{(agent.Id == "agency" ? " (shared Copilot CLI hooks)" : "")}. This is not a new-session readiness test."
         : "No hook observed by this detector during this host run.";
 
     // What the host said that the row says in other words, for the app's log: the raw text stays
