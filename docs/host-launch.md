@@ -298,7 +298,7 @@ not be set aside) or failed, or the write failed.
 
 **Worktrees.** The reclaimer keeps the worktree of every session owed or still being judged, as it
 keeps a live session's, and of a restored session while it is still stamped, live or just gone, so the record's own snapshot holds
-its folder as it dies (#855), and of a session restored on request until it registers, starts nothing, or
+its folder as it dies (#855; every worktree while that folder is not known), and of a session restored on request until it registers, starts nothing, or
 its stamp goes (every worktree, while its folder is not known, and across a restart, when only its stamp is left). A folder deleted since is placed under what is left of its path, so it keeps
 the worktree it was in; one owed without a folder, one whose place cannot be resolved (a link that
 cannot be read), or a record set aside, keeps every worktree.
@@ -313,7 +313,9 @@ counted on the monotonic clock, so a clock set back stretches neither.
 seen it. A step the host did not live through is not counted against them (#855): while it runs, a step of more
 than 7 days that the monotonic clock did not take; at a start, a record last written more than 7 days
 before, which the wall clock cannot tell from a machine off that long, so each offer keeps the time it had left
-when the record was written. A smaller step counts, as days with the machine off do.
+when the record was written, less 3 hours. While anything is offered the record is written at least every 3 hours,
+so the host can have run at most that long after it: days it ran with nothing else to write are never forgiven, and an
+offer goes after 7 days the host saw, however often it crashes. A smaller step counts, as days with the machine off do.
 Anything else that stops the record from starting, or from being looked at later, is logged and keeps
 every worktree for that run; the host goes on serving.
 

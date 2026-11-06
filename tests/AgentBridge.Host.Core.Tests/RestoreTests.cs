@@ -930,7 +930,8 @@ public sealed class RestoreTests : IDisposable
 
     // Engineering on #813 (6675455641; #855): a record last written more than a week ago (a clock set
     // forward, or a machine off that long) let every offer go at once, nobody having seen it. Each
-    // keeps what it had left when the record was written.
+    // keeps what it had left when the record was written, less the SeenEvery the host may have run
+    // after it (cr2-982).
     [Fact]
     public async Task An_offer_in_a_record_written_more_than_a_week_ago_keeps_the_time_it_had_left()
     {
@@ -945,11 +946,39 @@ public sealed class RestoreTests : IDisposable
         r.Start();
 
         Assert.Equal(["/work/repo"], r.Folders()!);
-        Assert.Equal(now.AddDays(-1), Assert.Single(Written().Owed).At);
-        Time.Advance(RestoreRecorder.OwedFor - TimeSpan.FromDays(1) - TimeSpan.FromMinutes(1));
+        Assert.Equal(now.AddDays(-1) - RestoreRecorder.SeenEvery, Assert.Single(Written().Owed).At);
+        Time.Advance(RestoreRecorder.OwedFor - TimeSpan.FromDays(1) - RestoreRecorder.SeenEvery - TimeSpan.FromMinutes(1));
         Assert.Single(r.Folders()!);
         Time.Advance(TimeSpan.FromMinutes(2));
         Assert.Empty(r.Folders()!);
+    }
+
+    // Engineering, cr2-982: the record's Written changed only when something was written, so days the
+    // host ran with nothing to write, then a crash and a week down, read as a week away, and were
+    // forgiven too: crash after crash, an offer was kept for ever. Written at least every SeenEvery
+    // while anything is offered, it goes after seven days the host saw, whatever the crashes.
+    [Fact]
+    public async Task An_offer_goes_after_seven_days_the_host_saw_however_often_it_crashes_and_stays_down_more_than_a_week()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        for (var run = 0; run < 3; run++)
+        {
+            var r = Recorder();
+            r.Start();
+            Assert.Equal(["/work/repo"], r.Folders()!);
+            Time.Advance(TimeSpan.FromDays(2));
+            // A crash: the record stays as the running host last wrote it.
+            var record = File.ReadAllBytes(Record);
+            await r.DisposeAsync();
+            File.WriteAllBytes(Record, record);
+            Time.Advance(TimeSpan.FromDays(8));
+        }
+
+        await using var last = Recorder();
+        last.Start();
+        Assert.Equal(["/work/repo"], last.Folders()!);
+        Time.Advance(TimeSpan.FromDays(1));
+        Assert.Empty(last.Folders()!);
     }
 
     // The same, the clock set forward while the host runs: the step the monotonic clock did not take
@@ -1015,6 +1044,24 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(["/work/repo"], r.Folders()!);
         source.Remove("a");
         Assert.Equal(["/work/repo"], r.Folders()!);
+    }
+
+    // Engineering, cr2-982: one still stamped whose folder is not known may be in any worktree, so every
+    // worktree is kept, as for an owed one, until its stamp lapses. Skipped, it was kept by nothing if
+    // it died between the reclaimer's two reads.
+    [Fact]
+    public async Task A_restored_session_whose_folder_is_not_known_keeps_every_worktree_while_it_is_stamped()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        await using var r = Recorder(resumer: new Resumer());
+        r.Start();
+        await Until(() => told.Count == 1);
+
+        source.Upsert(S("a") with { Cwd = null });
+        Assert.Null(r.Folders());
+
+        Time.Advance(RestoreRecorder.LoopWithin + RestoreRecorder.Coalesce);
+        Assert.Empty(r.Folders()!);
     }
 
     [Fact]

@@ -185,6 +185,10 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     public static readonly TimeSpan BusyRetry = TimeSpan.FromSeconds(15);
     // A restore's stamp due to go while its agent's discovery is held is looked at again this often.
     public static readonly TimeSpan HeldRetry = TimeSpan.FromMinutes(1);
+    // While anything is offered, the record is written at least this often, so its Written says when
+    // the host was last seen to within this: a record last written long ago is then time the host did
+    // not see, never days it ran with nothing to write (Engineering, cr2-982).
+    public static readonly TimeSpan SeenEvery = TimeSpan.FromHours(3);
     public const string RestorePrincipal = "host-restore";
     // What the record keeps of launches whose sessions have not been seen (bounded, never growing).
     const int LaunchesKept = 256;
@@ -369,7 +373,10 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             // then neither kept its folder (Trust on #837; #855). Kept here too, it is in one snapshot.
             foreach (var (id, e) in live)
             {
-                if ((e.Restored is not null || restoredAt.ContainsKey(id)) && e.Cwd is { Length: > 0 } cwd && !requested.ContainsKey(id) && !owed.Any(w => w.Entry.Id == id)) { folders.Add(cwd); }
+                if (!(e.Restored is not null || restoredAt.ContainsKey(id)) || requested.ContainsKey(id) || owed.Any(w => w.Entry.Id == id)) { continue; }
+                // Its folder not known: any worktree may be its, as for an owed one (Engineering, cr2-982).
+                if (e.Cwd is not { Length: > 0 } cwd) { return null; }
+                folders.Add(cwd);
             }
             return folders;
         }
@@ -478,12 +485,16 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 }
                 // A record last written more than OwedFor ago: a clock set forward, or a machine off a
                 // week, which the wall clock cannot tell apart. Counted, every offer went at once with
-                // nobody having seen it (Engineering on #813; #855). Each keeps what it had left when
-                // the record was written, and its folder with it.
-                var away = now - previous.Written > OwedFor ? now - previous.Written : TimeSpan.Zero;
+                // nobody having seen it (Engineering on #813; #855). That time is not counted against
+                // them, and their folders are kept. Only what the host cannot have seen: an offer is
+                // written at least every SeenEvery, so the host may have run up to that long after the
+                // record's Written, and that is counted. Measured from Written alone, days the host ran
+                // with nothing to write were forgiven too, and a crash after each kept an offer for ever
+                // (Engineering, cr2-982).
+                var away = now - previous.Written > OwedFor ? now - previous.Written - SeenEvery : TimeSpan.Zero;
                 if (away > TimeSpan.Zero && previous.Owed.Any(w => w.Decided))
                 {
-                    log($"restore: the record was last written {away.TotalDays:0} days ago, more than the {OwedFor.TotalDays:0} days an offer is kept; what it offered keeps the time it had left then");
+                    log($"restore: the record was last written {(now - previous.Written).TotalDays:0} days ago, more than the {OwedFor.TotalDays:0} days an offer is kept; what it offered keeps the time it had left then, less the {SeenEvery.TotalHours:0} hours the host may have run since");
                 }
                 // Sessions earlier runs left owed. Those offered already are not news, and are not
                 // restored now: a person resumes them from Launch. Those still being judged are, and
@@ -732,6 +743,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 if (owed[i].Decided) { owed[i] = owed[i] with { At = owed[i].At + step }; }
             }
             log($"restore: the clock moved {step.TotalDays:0} days further than the host ran; what is offered keeps the time it had left");
+            // Written down, or a crash before the next write lost it (Engineering, cr2-982).
+            ScheduleWriteLocked(Coalesce);
         }
         looked = (now, stamp);
     }
@@ -1447,6 +1460,9 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         {
             if (options.Marks?.Interrupted(id) is { } found) { interruptedAt[id] = found; }
         }
+        // While anything is offered, written at least every SeenEvery, so the next start knows how long
+        // the host was not there (StartOnce).
+        if (owed.Any(w => w.Decided)) { Next(now + SeenEvery); }
         var file = new RestoreFile
         {
             Boot = boot,
