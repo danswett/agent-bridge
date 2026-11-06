@@ -155,12 +155,16 @@ public sealed partial class SessionsPage
             catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { sheet.CopiedCode(false); }
         }
         copy.Click += (_, _) => CopyCode();
-        // Enter copies the code, as Copy is the sheet's default (Creative 6675007095), wherever focus is
-        // but on Open, whose own Enter opens the page. Space still presses what has focus, and Escape
-        // is Cancel. Only while the code is shown: nothing else is copied.
+        // Enter copies the code, as Copy is the sheet's default (Creative 6675007095), while focus is on
+        // Copy, the code or the sheet's words. A focused button's Enter is its own (Creative
+        // 6691577488): on Open it opens the page, on Cancel it cancels, as a person tabbing there
+        // means. Space still presses what has focus, and Escape is Cancel. Only while the code is
+        // shown: nothing else is copied.
         dialog.AddHandler(UIElement.PreviewKeyDownEvent, new KeyEventHandler((_, e) =>
         {
-            if (e.Key != Windows.System.VirtualKey.Enter || !sheet.HasCode || ReferenceEquals(FocusManager.GetFocusedElement(dialog.XamlRoot), openPage)) { return; }
+            var focused = FocusManager.GetFocusedElement(dialog.XamlRoot);
+            if (e.Key != Windows.System.VirtualKey.Enter || !sheet.HasCode
+                || focused is Microsoft.UI.Xaml.Controls.Primitives.ButtonBase && !ReferenceEquals(focused, copy)) { return; }
             e.Handled = true;
             CopyCode();
         }), true);
@@ -171,7 +175,7 @@ public sealed partial class SessionsPage
             try { await Windows.System.Launcher.LaunchUriAsync(uri); }
             catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { }
         };
-        // Cancel is where it starts (§6.13), so Space can't open or copy anything unmeant; Enter copies.
+        // Cancel is where it starts (§6.13), so Space or Enter can't open or copy anything unmeant.
         // Programmatic: WinUI draws the ring only when the last input was a key, never after a touch
         // or a click (§9.1 A12).
         dialog.Opened += (_, _) =>

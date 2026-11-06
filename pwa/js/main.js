@@ -184,20 +184,24 @@ function focusLinked() {
 
 // A sign-in push's link (#969): its machine's sign-in banner for its agent, with focus on the
 // banner's action, once that machine's list is whole (#269), when the banners say whether any
-// session still needs it; and only if the person has not moved on meanwhile (watchFocus). No banner
-// for it then (signed in since): the machine as it is, and nothing said.
+// session still needs it; and only if the person has not moved on meanwhile (watchFocus). The
+// banners are on the sessions list, which another page, or a session over the list on a phone,
+// hides, and focus() on a hidden banner does nothing: so the list is shown first, before what has
+// focus is noted, and the link is let go only once its banner is on screen. No banner for it then
+// (signed in since): the machine as it is, and nothing said.
 function focusSignIn() {
   if (!linked.shown) {
+    page.showList();
     const want = { ...linked, shown: true, left: document.activeElement };
     setLinked(want);
     watchFocus(want);
   }
   if (!page.hosts.route(linked.host)) { return; }
   const { host, signin, left } = linked;
-  setLinked(null);
   const now = document.activeElement;
-  if (now && now !== document.body && now !== left) { return; }
-  page.signIns?.reveal(host, signin);
+  if (now && now !== document.body && now !== left) { setLinked(null); return; }
+  if (page.signIns?.reveal(host, signin) === 'hidden') { return; }
+  setLinked(null);
 }
 
 // A tap on a notification while the app is open: the worker says where to go.

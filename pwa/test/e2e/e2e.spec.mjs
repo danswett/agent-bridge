@@ -73,7 +73,8 @@ test.afterAll(async () => {
 async function signIn(page) {
   await page.goto(appUrl);
   await page.click('#signin-button');
-  await expect(page.locator('#avatar')).toBeVisible({ timeout: 30000 });
+  // Not shown on a phone, whose bar has no avatar: what unhides it is the sign-in.
+  await expect(page.locator('#avatar')).not.toHaveAttribute('hidden', '', { timeout: 30000 });
   await expect(page.locator('#conn')).toHaveText('Connected', { timeout: 20000 });
   // Every machine is shown at first: settled once each has said what it is, so a tap on the
   // list that follows lands on the list it was aimed at.
@@ -457,6 +458,49 @@ test.describe('notifications', () => {
     } finally {
       await host.remove('signin-link');
     }
+  });
+
+  // Tapped while the list isn't on screen (6692135282): Settings shows no banner, nor does a phone
+  // with a session over the list, and focus() on a hidden banner does nothing. The link shows the
+  // list first, then focuses the banner.
+  test.describe('on a phone', () => {
+    test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+    // A phone signed in, with a session that needs sign-in, and the tap that a push's link makes.
+    const away = async (page, body) => {
+      const t = new Date().toISOString();
+      await host.upsert({ id: 'signin-away', agent: 'copilot', title: 'Fix the relay', status: 'idle', statusSince: t, updatedAt: t, activity: {},
+        attention: { kind: 'signInNeeded', since: t, agent: 'copilot', provider: 'github', signIn: 'phone' } });
+      try {
+        await signIn(page);
+        const signInButton = page.locator('#sign-in-banners .sign-in-banner[data-agent="copilot"]').getByRole('button', { name: 'Sign in to Copilot on fixture-host' });
+        await expect(signInButton).toBeVisible({ timeout: 30000 });
+        const tap = () => page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
+          `${appUrl}?host=${host.deviceId}&signin=copilot`);
+        await body(signInButton, tap);
+        await expect(signInButton).toBeVisible();
+        await expect(signInButton).toBeFocused();
+      } finally {
+        await host.remove('signin-away');
+      }
+    };
+
+    test('a sign-in notification tapped from Settings shows the list with Sign in focused', async ({ page }) => {
+      await away(page, async (signInButton, tap) => {
+        await go(page, 'settings');
+        await expect(signInButton).toBeHidden();
+        await tap();
+      });
+    });
+
+    test('a sign-in notification tapped from a session open over the list shows the list with Sign in focused', async ({ page }) => {
+      await away(page, async (signInButton, tap) => {
+        await open(page, 'signin-away');
+        await expect(signInButton).toBeHidden();
+        await tap();
+        await expect(view(page, 'signin-away')).toBeHidden();
+      });
+    });
   });
 
   // A notification's session, opened while its machine's list is not yet whole (#269).

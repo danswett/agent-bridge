@@ -2245,8 +2245,9 @@ that survives a failed turn never hides the error behind "Delegating".
   "Needs sign-in" with no button and no instruction, never phone sign-in and never "at the
   machine".
 - Not dismissible while it lasts: it goes by itself once every affected session is recovered.
-- **Opened from a sign-in push** (`?host=<id>&signin=<agent>`, #969): the PWA shows that machine,
-  and once its list is whole puts focus on that agent's banner's action (Sign in, or its line when
+- **Opened from a sign-in push** (`?host=<id>&signin=<agent>`, #969): the PWA shows that machine's
+  sessions list (from another page, or in place of a session open over the list on a phone), and
+  once its list is whole puts focus on that agent's banner's action (Sign in, or its line when
   there is nothing to press there). If no session for that agent still needs sign-in, the machine
   shows as it is, with nothing said; an agent the client doesn't know is ignored. The link picks a
   banner and nothing more.
@@ -2289,7 +2290,7 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
   - Buttons: **Copy** is the one primary, on every client: copying the code is the step that
     moves a phone's sign-in forward, and Open follows it. Open and Cancel are secondary. Focus
     starts on Cancel, and Escape is Cancel. In the app, Copy is also the sheet's default: Enter
-    copies the code (but on Open, whose Enter opens the page). Nothing is copied or opened without a press.
+    copies the code (but on Open or Cancel, whose own Enter presses them). Nothing is copied or opened without a press.
 - **A URL not on the allowlist, or a malformed code:** the sheet shows "This sign-in code
   couldn't be shown." with **Try again** (a new request) and Cancel. No link and no raw text,
   and it doesn't send the person to the machine: that's only for the host's `signIn: machine`.
