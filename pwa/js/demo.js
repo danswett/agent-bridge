@@ -525,11 +525,11 @@ export class DemoHost {
     });
     if (resume) { this.launchOptions = { ...o, resumable: o.resumable.filter((r) => r.id !== resume.id) }; }
     const permissions = data.permissions ?? o.defaults.permissions;
-    return { outcome: 'started', session: id, launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd, worktree: !!workspace?.isolate, permissions } };
+    return { outcome: 'started', ...(scripted?.session === null ? {} : { session: id }), launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd, worktree: !!workspace?.isolate, permissions } };
   }
 
-  // What an unconfirmed launch says it started, as a host's does: the agent and the folder, so a
-  // session-less one (a Codex, until it registers) can be told when it does.
+  // What an unconfirmed launch says it started, as a host's does (docs/protocol/v1-launch.md):
+  // the agent, the folder and whether it is a new worktree.
   #launchedFor(data) {
     const o = this.launchOptions;
     const resume = data.resume ? o.resumable.find((r) => r.id === data.resume) : null;

@@ -30,8 +30,10 @@ const AGENT_DEFAULT = '';
 const sentence = (s) => (s && !/[.!?]$/.test(s) ? `${s}.` : s);
 const bytes = (s) => new TextEncoder().encode(s).length;
 
-// What a launch's progress or outcome says. tone: progress | ok | warn | bad.
-export function describeLaunch(entry, { machineName } = {}) {
+// What a launch's progress or outcome says. tone: progress | ok | warn | bad. session: the id of
+// the session it started, when known; a start without one has no card to open, so it says where
+// to find it.
+export function describeLaunch(entry, { machineName, session = entry?.detail?.session } = {}) {
   const on = machineName ? ` on ${machineName}` : '';
   switch (entry.state) {
     case 'sending':
@@ -49,7 +51,7 @@ export function describeLaunch(entry, { machineName } = {}) {
   const how = d.launched?.worktree ? ' in a new worktree' : '';
   switch (entry.outcome) {
     case 'started':
-      return { text: d.launched?.transfer ? `Session brought over and started${how}. The original is still on its machine.` : `Session started${how}.`, tone: 'ok' };
+      return { text: d.launched?.transfer ? `Session brought over and started${how}. The original is still on its machine.` : `Session started${how}.${session ? '' : ' Open it from the list.'}`, tone: 'ok' };
     case 'unconfirmed':
       return { text: `Launched${how}, but not confirmed${entry.reason ? `: ${sentence(entry.reason)}` : '. Check at the machine.'}`, tone: 'warn' };
     case 'busy':
@@ -146,7 +148,7 @@ export class LaunchPanel {
       signal: this.#alive.signal,
     });
     // Every machine's: one launched on and then left is still followed.
-    service.onAny?.((entry) => this.#follow.follow(entry?.hostId, entry, (id) => !!this.session(entry?.hostId, id), () => this.sessions(entry?.hostId), (id) => this.session(entry?.hostId, id)));
+    service.onAny?.((entry) => this.#follow.follow(entry?.hostId, entry, (id) => !!this.session(entry?.hostId, id), (id) => this.session(entry?.hostId, id)));
     this.#build();
   }
 
@@ -156,7 +158,7 @@ export class LaunchPanel {
   // The jump to a session's card still waiting for it to arrive (#jumpTo).
   #jumpTimer = null;
   // By machine, the launch shown as started since its unconfirmed outcome: { request, session },
-  // its session's id when it is known (one whose outcome named none is told by its agent and folder).
+  // its session's id when it is known: the one its outcome named, or a Trust answered here started.
   #lateStarted = new Map();
 
   // A session registered or changed on a machine shown.
@@ -851,11 +853,13 @@ export class LaunchPanel {
 
   #show(entry) {
     const e = this.els;
+    // Its session, as the Open button below goes by.
+    const session = this.#sessionOf(entry);
     // Unconfirmed when it came, and seen to have started since: said as a start.
     if (entry?.state === 'done' && entry.outcome === 'unconfirmed' && this.#lateStarted.get(entry.hostId)?.request === entry.request) {
       entry = { ...entry, outcome: 'started', reason: null };
     }
-    const shown = entry ? describeLaunch(entry, { machineName: this.#target?.machineName }) : { text: '', tone: '' };
+    const shown = entry ? describeLaunch(entry, { machineName: this.#target?.machineName, session }) : { text: '', tone: '' };
     this.root.dataset.launch = !entry ? 'none' : entry.state !== 'done' ? entry.state : entry.outcome;
     // Said once: drawn again unchanged (each listing redraws it), a polite live region would say
     // it again.
@@ -864,7 +868,7 @@ export class LaunchPanel {
     this.root.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
     e.resend.hidden = entry?.state !== 'failed';
     e.resend.disabled = !!this.#target?.held;
-    e.open.hidden = !(entry?.state === 'done' && this.#sessionOf(entry));
+    e.open.hidden = !(entry?.state === 'done' && session);
     this.#lock(entry);
   }
 

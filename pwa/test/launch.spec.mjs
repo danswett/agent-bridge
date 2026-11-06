@@ -93,6 +93,21 @@ test.describe('on a phone', () => {
     await expect(field(page, 'resume').locator(`option[value="${RESUMABLE}"]`)).toHaveCount(0);
   });
 
+  test('a start whose outcome names no session says to open it from the list, and opens nothing (#973)', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'started', session: null });
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+
+    await expect(status(page)).toHaveText('Session started in a new worktree. Open it from the list.');
+    await expect(panel(page)).toHaveAttribute('data-launch', 'started');
+    await expect(panel(page).locator('.launch-open')).toBeHidden();
+    await expect(field(page, 'prompt')).toHaveValue('');
+    await page.waitForTimeout(1000);
+    await expect(page.locator('.session-view:visible')).toHaveCount(0);
+  });
+
   test('an agent that starts only on a first message is not launched without one, and nothing is sent', async ({ page }) => {
     await openDemo(page);
     await openPanel(page);
@@ -961,35 +976,9 @@ test.describe('a launch followed after it was not confirmed', () => {
     await expect(view(page, LATE)).toBeHidden();
   });
 
-  test('a Codex launch that named no session starts when a new Codex session registers in its folder, and not in another', async ({ page }) => {
-    const OTHER = '7b1d3f5a-9c2e-4a6b-8d0f-1e3a5c7b9d2f';
-    const upsert = (id, cwd) => page.evaluate(({ id: i, cwd: c }) => {
-      const at = new Date().toISOString();
-      window.agentBridgeDemo.upsert({ id: i, agent: 'codex', title: 'Add pagination.', cwd: c, status: 'working', statusSince: at, startedAt: at, updatedAt: at, processId: 4300, activity: { userMessage: 'Add pagination.', turnCount: 1 } });
-    }, { id, cwd });
-    await openDemo(page);
-    await openPanel(page);
-    await script(page, { outcome: 'unconfirmed', reason: 'the session started, but it did not confirm it was ready within 60 seconds' });
-    await field(page, 'agent').selectOption('codex');
-    await field(page, 'workspace').selectOption('agent-bridge');
-    await field(page, 'prompt').fill('Add pagination.');
-    await launchButton(page).tap();
-    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
-    await expect(panel(page).locator('.launch-open')).toBeHidden();
-
-    await upsert(OTHER, 'C:\\Users\\demo\\notes');
-    await expect(row(page, OTHER)).toHaveCount(1);
-    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
-    await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
-
-    await upsert(LATE, 'c:/users/demo/repos/agent-bridge');
-    await expect(view(page, LATE)).toBeInViewport();
-    await expect(status(page)).toHaveText('Session started in a new worktree.');
-    await expect(field(page, 'prompt')).toHaveValue('');
-  });
-
-  test('two new Codex sessions in its folder leave a launch that named none not confirmed: neither is said to be it (#973)', async ({ page }) => {
-    const OTHER = '7b1d3f5a-9c2e-4a6b-8d0f-1e3a5c7b9d2f';
+  // Which session a launch naming none started is not guessed (#973): it waits for the host to
+  // name it (#983).
+  test('a Codex launch that named no session stays not confirmed when a new Codex session registers in its folder (#973)', async ({ page }) => {
     await openDemo(page);
     await openPanel(page);
     await script(page, { outcome: 'unconfirmed', reason: 'the session started, but it did not confirm it was ready within 60 seconds' });
@@ -999,15 +988,12 @@ test.describe('a launch followed after it was not confirmed', () => {
     await launchButton(page).tap();
     await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
 
-    await page.evaluate((ids) => {
-      const at = new Date().toISOString();
-      ids.forEach((id, i) => window.agentBridgeDemo.upsert({ id, agent: 'codex', title: 'Add pagination.', cwd: 'C:\\Users\\demo\\repos\\agent-bridge', status: 'working', statusSince: at, startedAt: at, updatedAt: at, processId: 4300 + i, activity: { userMessage: 'Add pagination.', turnCount: 1 } }));
-    }, [LATE, OTHER]);
+    await register(page, 'codex');
     await expect(row(page, LATE)).toHaveCount(1);
-    await expect(row(page, OTHER)).toHaveCount(1);
     await page.waitForTimeout(2000);
     await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
     await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
+    await expect(panel(page).locator('.launch-open')).toBeHidden();
     await expect(page.locator('.session-view:visible')).toHaveCount(0);
   });
 
