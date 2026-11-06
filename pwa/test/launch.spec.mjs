@@ -41,6 +41,19 @@ test.afterEach(async ({ page }) => {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
+  // Only a receipt keeps two lines' room in a narrow box: Launch's status is the line it says
+  // (#941 review: the receipt's room had spread to it, 20.6 px to 41.2 px).
+  test('a one-line launch status takes one line', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    const lines = await status(page).evaluate((el) => {
+      el.textContent = 'Session started.';
+      return el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).fontSize);
+    });
+    expect(lines).toBeGreaterThan(1);
+    expect(lines).toBeLessThan(2);
+  });
+
   test('a launch sends every setting and the whole prompt, then jumps to the new session\'s card', async ({ page }) => {
     await openDemo(page);
     await openPanel(page);

@@ -789,8 +789,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Mid-conversation,** 64 up in one direction brings the whole header back over the
     conversation (`collapse`), and 32 down sends it away. The count restarts when the
     direction changes, so reading back and forth changes nothing. A tap on the bar's title
-    brings it back, and the top always shows it in full. The reply area does the mirror image
-    (§6.5, #935), so the two never both take full room mid-conversation.
+    brings it back, and the top always shows it in full.
   - **Only the person's own scrolling counts:** a finger, a wheel, a trackpad, the keys or the
     scroll bar. A scroll the app makes (to a question, a restored position) and a response
     growing below leave the header as it was, except on a screen shorter than twice the
@@ -803,9 +802,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **While the session waits on you,** the bar's glyph is `needs` on its disc.
   - **The title stays the one h2.** The bar's copy is drawn, not read; the status is read from
     the meta line. Nothing is announced. Focus moving into the header brings it back, and it
-    stays while focus is there. Focus the app puts on the title as a session opens (#707)
-    doesn't hold it: the person's own scrolling folds it as usual. The conversation's scroll padding is what the header covers
-    plus 8, so focus never lands under it. Tab order is Back, More, the tabs, then
+    stays while focus is there, until a press on the conversation. Focus the app puts on the
+    title as a session opens (#707) doesn't hold it: the person's own scrolling folds it as
+    usual. The conversation's scroll padding is what the header covers plus 8, so focus
+    never lands under it. Tab order is Back, More, the tabs, then
     the conversation. The tabs are one tab stop, on the selected tab; Left and Right move
     and select, wrapping, and Home and End go to the first and last.
   - **Reduced motion:** coming back and going are a cross-fade with no travel; near the top

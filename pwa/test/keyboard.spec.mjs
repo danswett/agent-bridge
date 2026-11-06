@@ -26,7 +26,7 @@ test.afterEach(async ({ page }) => {
 // box and inspector, which sits to their right.
 const REGIONS = [
   ['skip link', '.skip'], ['app bar', '#appbar'], ['navigation', '#nav'], ['banner', '.banner'],
-  ['list', '#list-pane'], ['session header', '.session-header'], ['session tabs', '.view-tabs'],
+  ['list', '#list-pane'], ['session header', '.session-header, .session-bar'], ['session tabs', '.view-tabs'],
   ['conversation', '.stream-scroll'], ['reply box', '.reply-slot'], ['inspector', '.inspector'],
   ['page', '.route.page'],
 ];
@@ -367,7 +367,8 @@ test.describe('on a phone', () => {
   test('Escape closes the overflow menu first, leaving the session pushed, and the next Escape returns to the list', async ({ page }) => {
     const { v, open } = await pushed(page);
     const more = v.getByRole('button', { name: 'More' });
-    await tabTo(page, more, { max: 6 });
+    // On a phone More is in the pinned bar, before the title in the tab order (ui.md §6.2, #631).
+    await tabTo(page, more, { key: 'Shift+Tab', max: 6 });
     await page.keyboard.press('Enter');
     await expect(page.getByRole('menu')).toBeVisible();
     await page.keyboard.press('Escape');
@@ -446,8 +447,11 @@ test.describe('on a phone', () => {
     await page.keyboard.press('Enter');
     const v = view(page, CLAUDE);
     await expect(v.locator('.session-title')).toBeFocused();
+    // The pinned bar's Back and More come first (ui.md §6.2): back from the title to Back.
+    const back = v.getByRole('button', { name: 'Sessions' });
+    await tabTo(page, back, { key: 'Shift+Tab', max: 4 });
     // The box's last control while it is empty: Send waits for something to send.
-    const stops = await tabTo(page, v.getByRole('button', { name: 'Attach a file or image' }));
+    const stops = [await focused(page), ...await tabTo(page, v.getByRole('button', { name: 'Attach a file or image' }))];
     const parts = stops.map((s) => s.region).filter((r, i, all) => r !== all[i - 1]);
     // Nothing in this session's conversation takes focus, so Tab goes from the tabs to the reply box.
     expect(parts).toEqual(['session header', 'session tabs', 'reply box']);
@@ -558,7 +562,8 @@ test.describe('on a phone', () => {
     await page.keyboard.press('Enter');
     const v = view(page, CLAUDE);
     const more = v.getByRole('button', { name: 'More' });
-    await tabTo(page, more, { max: 6 });
+    // More is in the pinned bar, before the title (ui.md §6.2).
+    await tabTo(page, more, { key: 'Shift+Tab', max: 6 });
     await page.keyboard.press('Enter');
     const menu = page.getByRole('menu');
     await expect(menu).toBeVisible();
