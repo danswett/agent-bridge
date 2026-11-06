@@ -5,6 +5,28 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:AgentBridge.App"
     xmlns:core="using:AgentBridge.App.Core">
+    <UserControl.Resources>
+        <!-- An agent row's status in its tone (Ui.ToneKey). A ThemeResource follows the theme the row
+             is drawn in and high contrast as XAML applies them; a brush set from code at an event
+             raced high contrast's resources and kept the Light one (#705 review). An explicit style
+             replaces the implicit one, so the face is set here too. -->
+        <Style x:Key="AgentStatusAbBridge" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbBridge}" />
+        </Style>
+        <Style x:Key="AgentStatusAbNeedsText" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbNeedsText}" />
+        </Style>
+        <Style x:Key="AgentStatusAbDangerText" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbDangerText}" />
+        </Style>
+        <Style x:Key="AgentStatusAbText2" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
+            <Setter Property="Foreground" Value="{ThemeResource AbText2}" />
+        </Style>
+    </UserControl.Resources>
     <ScrollViewer AutomationProperties.AutomationId="SettingsPane">
         <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, which pushed
              the column off the right edge (see LaunchView). -->
@@ -64,10 +86,7 @@
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Agents on this machine" AutomationProperties.HeadingLevel="Level2" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" AutomationProperties.AutomationId="AgentsState" Text="{x:Bind ViewModel.AgentsState, Mode=OneWay}" />
                 <Button Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
-                <TextBlock Text="{x:Bind ViewModel.AgentSetupStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentSetupStatus" />
-                <TextBlock Text="{x:Bind ViewModel.AgentInstallStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="AgentInstallStatus" />
-                <Button Content="Cancel CLI installation" Click="OnCancelAgentInstall" Visibility="{x:Bind local:Ui.Show(ViewModel.AgentInstallInProgress), Mode=OneWay}" IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}" AutomationProperties.AutomationId="CancelAgentInstall" />
-                <ItemsControl ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
+                <ItemsControl x:Name="AgentList" ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="core:AgentReadinessRow">
                             <Border Background="{ThemeResource AbSubtle}" CornerRadius="{StaticResource AbRadiusCard}" Padding="16" Margin="0,0,0,8">
@@ -78,11 +97,62 @@
                                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Home}" IsTextSelectionEnabled="True" />
                                     <TextBlock Text="{x:Bind Checks}" TextWrapping="Wrap" />
                                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind HookActivity}" />
+                                    <!-- One verb for the hooks' state, named for the agent (#678): the accent action
+                                         when there is one, and Remove after it as the destructive one, in Danger text
+                                         on a standard button, as End session is. -->
                                     <local:WrapRow Spacing="8">
-                                        <Button Content="Install CLI" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanInstall}" Click="OnInstallAgent" AutomationProperties.AutomationId="InstallAgent" />
-                                        <Button Content="Set up / Repair" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanSetUp}" Click="OnSetUpAgent" AutomationProperties.AutomationId="SetUpAgent" />
-                                        <Button Content="Remove connection" Tag="{x:Bind Id}" IsEnabled="{x:Bind CanRemove}" Click="OnRemoveAgent" AutomationProperties.AutomationId="RemoveAgent" />
+                                        <!-- Showing its ring while its installation runs, still focusable, with its
+                                             presses ignored (ui.md §9.1 A4, as Send does); Cancel beside it then. A
+                                             ToggleButton read as "pressed", a state the person didn't choose (A1). -->
+                                        <Button
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(ShowInstall)}"
+                                            IsEnabled="{x:Bind InstallEnabled}"
+                                            Click="OnInstallAgent"
+                                            AutomationProperties.Name="{x:Bind InstallName}"
+                                            AutomationProperties.ItemStatus="{x:Bind InstallItemStatus}"
+                                            AutomationProperties.AutomationId="{x:Bind InstallId}">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <ProgressRing Width="16" Height="16" IsActive="{x:Bind Installing}" Visibility="{x:Bind local:Ui.Show(Installing)}" />
+                                                <TextBlock Text="Install CLI" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button
+                                            Content="Cancel"
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(Installing)}"
+                                            Click="OnCancelAgentInstall"
+                                            AutomationProperties.Name="{x:Bind CancelInstallName}"
+                                            AutomationProperties.AutomationId="{x:Bind CancelInstallId}" />
+                                        <Button
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Content="{x:Bind SetUpVerb}"
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(ShowSetUp)}"
+                                            IsEnabled="{x:Bind CanSetUp}"
+                                            Click="OnSetUpAgent"
+                                            AutomationProperties.Name="{x:Bind SetUpName}"
+                                            AutomationProperties.AutomationId="{x:Bind SetUpId}" />
+                                        <Button
+                                            Content="Remove connection"
+                                            Foreground="{ThemeResource AbDangerText}"
+                                            Tag="{x:Bind Id}"
+                                            Visibility="{x:Bind local:Ui.Show(ShowRemove)}"
+                                            IsEnabled="{x:Bind CanRemove}"
+                                            Click="OnRemoveAgent"
+                                            AutomationProperties.Name="{x:Bind RemoveName}"
+                                            AutomationProperties.AutomationId="{x:Bind RemoveId}" />
                                     </local:WrapRow>
+                                    <!-- This row's setup, as it runs and once it ends, read out for this agent. -->
+                                    <TextBlock
+                                        Text="{x:Bind Status}"
+                                        TextWrapping="Wrap"
+                                        IsTextSelectionEnabled="True"
+                                        Loaded="OnAgentStatusLoaded"
+                                        Visibility="{x:Bind local:Ui.Some(Status)}"
+                                        AutomationProperties.LiveSetting="Polite"
+                                        AutomationProperties.Name="{x:Bind StatusName}"
+                                        AutomationProperties.AutomationId="{x:Bind StatusId}" />
                                 </StackPanel>
                             </Border>
                         </DataTemplate>

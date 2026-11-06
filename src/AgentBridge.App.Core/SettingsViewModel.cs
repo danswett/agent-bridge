@@ -48,11 +48,19 @@ public sealed class SettingsViewModel : Observable
     string updateStatus = "";
     string? updateVersion;
     string log = "";
-    string agentSetupStatus = "";
     string agentInstallStatus = "";
     bool agentInstallInProgress;
     bool installRequestPending;
+    string? installing;
     HostStatus? installStatusSeen;
+    // Each row's last setup note, by agent: rows are rebuilt from every status, the notes are not.
+    readonly Dictionary<string, AgentSetupNote> agentNotes = new(StringComparer.Ordinal);
+    // Each hooks' last setup result, by the agent whose hooks they are (AgentReadinessRow.HooksOf):
+    // Copilot CLI's serve Agency's row too.
+    readonly Dictionary<string, AgentSetupNote> hookResults = new(StringComparer.Ordinal);
+    // Counts the times the host was seen gone: a setup that ends after its host went (#705 review)
+    // says nothing on the rows of the host that came back.
+    int hostsGone;
 
     public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay)
     {
@@ -92,14 +100,42 @@ public sealed class SettingsViewModel : Observable
     public bool RestartRequired => Status?.RestartRequired == true;
     public bool ElevatedWarning => Status?.Elevated == true;
 
-    public IReadOnlyList<AgentReadinessRow> Agents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && Status?.Agents is { } report
-        ? [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents, CanInstallAgents))] : [];
-    public bool CanManageAgents => HostRunning && host.Can(HostOps.AgentSetupCapability) && !Busy && !AgentInstallInProgress
-        && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
-    public string AgentSetupStatus { get => agentSetupStatus; private set => Set(ref agentSetupStatus, value); }
-    public bool CanInstallAgents => HostRunning && host.Can(HostOps.AgentInstallCapability) && !Busy && !AgentInstallInProgress
+    public IReadOnlyList<AgentReadinessRow> Agents
+    {
+        get
+        {
+            if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability) || Status?.Agents is not { } report) { return []; }
+            AgentReadinessRow[] rows = [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents, CanInstallAgents, agentNotes.GetValueOrDefault(a.Id),
+                shared: hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(a.Id)), install: InstallOf(a.Id), installOffered: InstallOffered))];
+            // What the rows say in other words is logged once each, so the raw text is still there
+            // to diagnose, never on a row.
+            foreach (var row in rows)
+            {
+                foreach (var raw in row.Raw())
+                {
+                    bool fresh;
+                    lock (loggedRaw) { fresh = loggedRaw.Add(raw); }
+                    if (fresh) { LogTo($"agents: {row.Id}: {raw}"); }
+                }
+            }
+            return rows;
+        }
+    }
+    // Where the app's log is (AppLog in the app).
+    public Action<string> LogTo { get; init; } = _ => { };
+    readonly HashSet<string> loggedRaw = new(StringComparer.Ordinal);
+    // The host offers CLI installation here: none on a read-only host, beside agent-ha-bridge, or once
+    // an installer's cleanup couldn't be confirmed, so no Install CLI there at all.
+    bool InstallOffered => HostRunning && host.Can(HostOps.AgentInstallCapability)
         && Status?.AgentInstallation?.Blocked != true
         && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
+    // An agent's installation as its row says it: the app's request until the host's progress says.
+    AgentInstallProgress? InstallOf(string agent) =>
+        installRequestPending && installing == agent ? new(agent, true, "")
+        : Status?.AgentInstallation is { } progress && progress.Agent == agent ? progress : null;
+    public bool CanManageAgents => HostRunning && host.Can(HostOps.AgentSetupCapability) && !Busy && !AgentInstallInProgress
+        && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
+    public bool CanInstallAgents => InstallOffered && !Busy && !AgentInstallInProgress;
     public string AgentInstallStatus { get => agentInstallStatus; private set => Set(ref agentInstallStatus, value); }
     public bool AgentInstallInProgress => agentInstallInProgress || Status?.AgentInstallation?.InProgress == true;
     public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
@@ -410,6 +446,9 @@ public sealed class SettingsViewModel : Observable
 
     public void Refresh()
     {
+        // A setup's result is about the host that ran it: a host gone (stopped, restarted as it said
+        // to) takes the rows' notes with it.
+        if (!HostRunning) { agentNotes.Clear(); hookResults.Clear(); hostsGone++; }
         if (!installRequestPending && HostRunning && Status is { } status && !ReferenceEquals(status, installStatusSeen))
         {
             installStatusSeen = status;
@@ -457,7 +496,20 @@ public sealed class SettingsViewModel : Observable
     {
         if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability)) { throw new InvalidOperationException(AgentsState); }
         // A fresh check can wait for one active scan before its own four bounded probes.
-        await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromMinutes(1));
+        var fresh = await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromMinutes(1));
+        // Fresh evidence replaces what the last setups said of each row, but for what the host can't
+        // say (AgentReadinessRow.Keeps): a removal that left the owned record, which keeps Set up
+        // (#705 review).
+        // Kept for every row on those hooks, Agency's with Copilot CLI's, and the row that ran it keeps
+        // its words.
+        foreach (var (hooks, result) in hookResults.ToList())
+        {
+            if (fresh?.Agents.Any(a => AgentReadinessRow.HooksOf(a.Id) == hooks && new AgentReadinessRow(a).Keeps(result)) != true) { hookResults.Remove(hooks); }
+        }
+        foreach (var (id, note) in agentNotes.ToList())
+        {
+            if (hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(id)) != note) { agentNotes.Remove(id); }
+        }
         await host.RefreshStatusAsync();
     });
 
@@ -471,17 +523,41 @@ public sealed class SettingsViewModel : Observable
         {
             throw new InvalidOperationException($"Agent setup is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
         }
-        AgentSetupStatus = remove ? "Removing only this installation's hooks..." : "Setting up owned hooks...";
-        var result = await host.CallAsync<AgentSetupResult>(HostOps.AgentsSetup,
-            new AgentSetupRequest(agent, remove ? "remove" : "install"), TimeSpan.FromMinutes(4));
-        AgentSetupStatus = result.Detail;
+        var verb = Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb;
+        var gone = hostsGone;
+        Note(agent, new(remove ? "Removing…" : verb == "Repair" ? "Repairing…" : "Setting up…", Tone.Progress));
+        AgentSetupResult result;
+        try
+        {
+            result = await host.CallAsync<AgentSetupResult>(HostOps.AgentsSetup,
+                new AgentSetupRequest(agent, remove ? "remove" : "install"), SetupTimeout);
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            // A host that never answers may have changed some of the hooks: the pipe's timeout is a
+            // TimeoutException, a cancellation an OperationCanceledException (#705 review). A refusal's
+            // own text names paths, so the row says why from a known set and the log keeps the text.
+            LogTo($"agents: {agent}: {(remove ? "removal" : "setup")} failed: {e.Message}");
+            if (gone == hostsGone) { Note(agent, new(e is TimeoutException or OperationCanceledException ? AgentWords.TookTooLong : AgentWords.SetupFailed(remove, verb, e.Message), Tone.Bad)); }
+            throw;
+        }
+        if (result.Detail.Length > 0) { LogTo($"agents: {agent}: {(remove ? "removal" : "setup")}: {result.Detail}"); }
+        if (gone == hostsGone) { Note(agent, new(AgentWords.SetupResult(remove, verb, result), result.Completed ? Tone.Ok : Tone.Bad, Removed: remove && result.Completed)); }
         await host.RefreshStatusAsync();
-        if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
+        // A setup or removal that failed can have changed some hooks too (a removal that stopped
+        // part-way leaves a setup that didn't finish), so the evidence is checked afresh either way;
+        // the cached readiness would hide Repair until another scan (#705 review). After a failure,
+        // the failure is what's said, not a scan's error.
         if (host.Can(HostOps.AgentReadinessCapability))
         {
-            await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromMinutes(1));
-            await host.RefreshStatusAsync();
+            try
+            {
+                await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromMinutes(1));
+                await host.RefreshStatusAsync();
+            }
+            catch (Exception e) when (!result.Completed && e is not (OutOfMemoryException or StackOverflowException)) { }
         }
+        if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
     });
 
     public Task InstallAgentAsync(string agent) => RunAsync(async () =>
@@ -498,6 +574,7 @@ public sealed class SettingsViewModel : Observable
         AgentInstallStatus = "Installing the CLI and required runtimes with Windows Package Manager...";
         agentInstallInProgress = true;
         installRequestPending = true;
+        installing = agent;
         installStatusSeen = Status;
         RaiseAll();
         AgentInstallResult result;
@@ -529,6 +606,16 @@ public sealed class SettingsViewModel : Observable
         if (!AgentInstallInProgress) { return; }
         await host.CallAsync(HostOps.AgentsInstallCancel);
     });
+
+    // How long a setup may take at the host before its row says it took too long (tests shorten it).
+    internal TimeSpan SetupTimeout { get; set; } = TimeSpan.FromMinutes(4);
+
+    void Note(string agent, AgentSetupNote note)
+    {
+        agentNotes[agent] = note;
+        if (note.Tone != Tone.Progress) { hookResults[AgentReadinessRow.HooksOf(agent)] = note; }
+        Raise(nameof(Agents));
+    }
 
     public Task CheckForUpdatesAsync() => RunAsync(async () =>
     {

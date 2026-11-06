@@ -249,6 +249,9 @@ static class DesignKeys
         "AbMotionReorderDuration",
         "AbMotionReorderEase",
         "AbMotionReorderReduced",
+        "AbMotionCollapseDuration",
+        "AbMotionCollapseEase",
+        "AbMotionCollapseReduced",
     ];
 
     // The bundled fonts and their licences, as the app's folder holds them
