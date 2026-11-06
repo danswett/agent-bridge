@@ -409,7 +409,14 @@ into one folder with one version. An app update is a host update, so they never 
     process id, a path or an error's own words, which go to the log. A failed install is a
     warning bar whose button reads **Try again**; while restarting, the button shows its progress
     ring, ignores presses, keeps focus and says "Restarting…" to a screen reader, never drawn at
-    rest in accent (Creative on #719, 6675195544). A newer release downloaded while
+    rest in accent (Creative on #719, 6675195544). There is one restart with one state, whichever
+    control starts it: Settings' Restart to update goes through the banner's
+    (`SettingsViewModel.ShareRestart`), so the control pressed shows its ring, the banner shows
+    "Restarting to update…", and a failure shows on the banner as the warning with Try again and
+    in Settings' status line in the same words, as a status, not an error (Engineering's
+    second-family review, 6676638175; Creative, 6676653935). A check from Settings that GitHub
+    refuses or limits while a release is ready shows both: the offer first, then #709's sentence
+    with its next check, as a status; Restart to update stays. A newer release downloaded while
     one waits takes its place. A release an earlier run downloaded is
     ready from the next start, before any check (`UpdateManager.UpdatePendingRestart`), so it is
     offered offline or while the feed refuses (#530), but only if it came from the feed and

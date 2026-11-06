@@ -208,7 +208,8 @@ public partial class App : Application
             autoUpdater.StateChanged += () => ui.Post(appUpdate.Changed);
             updater.Changed += () => ui.Post(settings.UpdatesChanged);
             main.AppUpdate = appUpdate;
-            settings.RestartDownloaded = autoUpdater.RestartToUpdateAsync;
+            // One restart, with one state, whichever control starts it (Creative, 6676653935).
+            settings.ShareRestart(appUpdate);
             // When an update is ready, changed in Settings, is acted on and said to the devices at once.
             var updates = autoUpdater;
             settings.PreferencesChanged += () => _ = updates.TickAsync();

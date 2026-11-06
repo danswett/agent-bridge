@@ -111,6 +111,25 @@ static partial class SelfTest
                     await Task.Delay(300);
                     await Looks(look => Picture(row, File("settings", look), Under(row)));
                 }
+
+                // A restart started from Settings and refused by another profile (Creative,
+                // 6676653935): one restart, one state, so the banner shows the failure as a
+                // warning with Try again, and Settings' status line says the same words, as a
+                // status, not an error.
+                var sharedRestart = new AppUpdateViewModel(() => "0.1.999", _ => Task.FromResult<string?>(refused));
+                main.AppUpdate = sharedRestart;
+                page.ShareRestart(sharedRestart);
+                await page.InstallUpdateAsync(_ => Task.FromResult(true));
+                const string refusedWords = "The update didn't install because another bridge profile is running from this installation.";
+                var both = await Until(() => row is { ActualHeight: > 0 } && status is not null && Text(status) == refusedWords
+                    && bar is { IsOpen: true, Severity: InfoBarSeverity.Warning, Message: refusedWords } && Action() is { } again && AutomationProperties.GetName(again) == "Try again"
+                    && page.Error is null, TimeSpan.FromSeconds(5));
+                check(both, $"shows a restart from Settings that another profile refused on the banner, with Try again, and in Settings' words, not as an error{where} ({(status is null ? "" : Text(status))})");
+                if (both)
+                {
+                    await Looks(look => Picture(row!, File("settings-refused", look), Under(row!)));
+                    await Looks(look => Picture(bar!, File("bar-settings-refused", look), Under(bar!)));
+                }
             }
         }
         finally

@@ -2207,6 +2207,70 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(observed.Source, heard);
     }
 
+    // Engineering's second-family review of #719 (6676638175), Creative (6676653935): with a
+    // release ready, a check GitHub refused or limited lost its words and its retry time behind the
+    // offer. Both now show: the offer first, then #709's sentence, as a status, not an error.
+    [Fact]
+    public async Task A_check_GitHub_limits_with_a_release_ready_shows_the_offer_and_then_the_limit_not_as_an_error()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        var limited = new AgentBridge.Host.Core.Updates.ReleaseDiscoveryException(
+            "GitHub is limiting how often this network can check for updates.", DateTimeOffset.UtcNow + TimeSpan.FromMinutes(5), limited: true);
+        updater.CheckFails = limited;
+
+        await settings.CheckForUpdatesAsync();
+
+        Assert.Null(settings.Error);
+        Assert.Equal($"Version 0.2.0 is ready. Restart to update. {limited.Message}", settings.UpdateStatus);
+        Assert.True(settings.UpdateAvailable);
+    }
+
+    // Engineering's second-family review of #719 (6676638175), Creative (6676653935): one restart,
+    // with one state, whichever control starts it. Wired as App wires them: Settings' Restart to
+    // update refused by another profile shows on the banner as a failure with Try again, and in
+    // Settings' status line in the same words, never as an error.
+    [Fact]
+    public async Task A_restart_from_Settings_another_profile_refuses_shows_on_the_banner_with_Try_again_and_in_Settings_in_the_same_words()
+    {
+        await Connected();
+        var observed = new ObservedUpdater(updater);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        await observed.CheckAsync();
+        await observed.DownloadAsync(_ => { });
+        var auto = new AutoUpdater(observed, connection, manager, () => prefs, p => prefs = p, _ => { }, _ => "another profile's host (pid 77) runs from this installation");
+        var banner = AppUpdateViewModel.For(auto);
+        page.ShareRestart(banner);
+        Assert.Equal("0.2.0", banner.Version);
+
+        await page.InstallUpdateAsync(_ => Task.FromResult(true));
+
+        const string refused = "The update didn't install because another bridge profile is running from this installation.";
+        Assert.Equal((true, "Try again", refused), (banner.Failed, banner.ActionLabel, banner.Message));
+        Assert.Equal(refused, page.UpdateStatus);
+        Assert.Null(page.Error);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    // And while it runs, the control pressed (Settings') shows its ring and says so, and the banner
+    // shows it restarting.
+    [Fact]
+    public async Task A_restart_from_Settings_shows_on_Settings_button_and_on_the_banner_while_it_runs()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        var held = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var banner = new AppUpdateViewModel(() => "0.2.0", _ => held.Task);
+        settings.ShareRestart(banner);
+
+        var press = settings.InstallUpdateAsync();
+        Assert.Equal((true, "Restarting\u2026", true, "Restarting to update\u2026"), (settings.RestartingHere, settings.RestartStatus, banner.Restarting, banner.Message));
+        held.SetResult(AutoUpdater.NotNow);
+        await press;
+
+        Assert.Equal((false, "", false), (settings.RestartingHere, settings.RestartStatus, banner.Restarting));
+    }
     // Creative on #719 (6643004091): Settings' own download is said at most every quarter.
     [Fact]
     public async Task A_download_from_Settings_is_announced_at_most_every_quarter()

@@ -304,12 +304,24 @@
                     <TextBlock Text="{x:Bind local:SettingsView.AppLine(ViewModel.AppVersion, ViewModel.InstalledText), Mode=OneWay}" Style="{StaticResource AbSecondaryText}" />
                     <local:WrapRow Spacing="8">
                         <Button Content="Check for updates" AutomationProperties.AutomationId="CheckUpdates" Click="OnCheckUpdates" IsEnabled="{x:Bind local:Ui.Not(ViewModel.Busy), Mode=OneWay}" />
+                        <!-- Restarting from here, it shows its ring and says so, and ignores presses
+                             (OnInstallUpdate), as the banner's does (Creative, 6676653935). -->
                         <Button
-                            Content="Restart to update"
-                            Style="{StaticResource AccentButtonStyle}"
+                            Style="{x:Bind local:Ui.ActionStyle(ViewModel.RestartingHere), Mode=OneWay}"
                             AutomationProperties.AutomationId="InstallUpdate"
+                            AutomationProperties.Name="Restart to update"
+                            AutomationProperties.ItemStatus="{x:Bind ViewModel.RestartStatus, Mode=OneWay}"
                             Visibility="{x:Bind local:Ui.Show(ViewModel.UpdateAvailable), Mode=OneWay}"
-                            Click="OnInstallUpdate" />
+                            Click="OnInstallUpdate">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ProgressRing
+                                    Width="16"
+                                    Height="16"
+                                    IsActive="{x:Bind ViewModel.RestartingHere, Mode=OneWay}"
+                                    Visibility="{x:Bind local:Ui.Show(ViewModel.RestartingHere), Mode=OneWay}" />
+                                <TextBlock Text="Restart to update" />
+                            </StackPanel>
+                        </Button>
                     </local:WrapRow>
                     <!-- Not disabled while Settings is busy: its own restart warning keeps Settings busy, and
                          focus must come back to it after Not now (ui.md §9.1 A4). OnInstallUpdate ignores a

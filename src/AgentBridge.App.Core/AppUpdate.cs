@@ -131,16 +131,21 @@ public sealed class AppUpdateViewModel : Observable
     }
 
     // confirm(warning): the dialog that says what a restart would interrupt; true to go ahead.
-    public async Task RestartAsync(Func<string, Task<bool>> confirm)
+    // The one restart, whichever control started it: the banner's, or Settings' (SettingsViewModel
+    // .ShareRestart), so both show its progress and how it ended (Engineering's second-family
+    // review of #719, 6676638175; Creative, 6676653935). Null once handed to Velopack;
+    // AutoUpdater.NotNow if the person chose not to; otherwise why it did not install.
+    public async Task<string?> RestartAsync(Func<string, Task<bool>>? confirm)
     {
-        if (!CanRestart) { return; }
+        if (!CanRestart) { return restarting ? "an update is already being installed" : "no update has been downloaded yet"; }
         restarting = true;
         problem = null;
         Notify();
+        string? why = null;
         try
         {
             // The banner says it is restarting only once the person has said to.
-            var why = await restart(async warning =>
+            why = await restart(confirm is null ? null : async warning =>
             {
                 restarting = false;
                 Notify();
@@ -150,8 +155,9 @@ public sealed class AppUpdateViewModel : Observable
                 return go;
             });
             problem = why == AutoUpdater.NotNow ? null : why;
+            return why;
         }
-        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { problem = e.Message; }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { problem = e.Message; return e.Message; }
         finally
         {
             restarting = false;

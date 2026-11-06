@@ -513,9 +513,34 @@ public sealed class SettingsViewModel : Observable
     {
         // A release the app downloaded in the background is said here whenever Settings itself is
         // doing nothing about updates (#516): what an earlier check here said ("Up to date", say)
-        // is older than that download, so it gives way.
-        get => !Busy && Downloaded is { } ready ? Ready(ready) : updateStatus;
+        // is older than that download, so it gives way. A restart of it that failed, here or on
+        // the banner, is said in the banner's words (one restart, one state); and a check GitHub
+        // refused or limited since follows the offer, never hiding it nor hidden by it (Creative,
+        // 6676653935).
+        get => !Busy && Downloaded is { } ready
+            ? shared is { Failed: true } restart ? restart.Message : Ready(ready) + (discoveryNote is { } note ? $" {note}" : "")
+            : updateStatus;
         private set => Set(ref updateStatus, value);
+    }
+    // What the release discovery said when a check here could not ask GitHub (#709), until the
+    // next check here or a change of source.
+    string? discoveryNote;
+    // The banner's restart, which Settings' Restart to update is too (ShareRestart).
+    AppUpdateViewModel? shared;
+    // Settings' own Restart to update under way: its button shows its ring and says so (Creative,
+    // 6676653935), as the banner's does.
+    public bool RestartingHere { get => restartingHere; private set { if (Set(ref restartingHere, value)) { Raise(nameof(RestartStatus)); } } }
+    bool restartingHere;
+    public string RestartStatus => restartingHere ? "Restarting\u2026" : "";
+
+    // Settings' Restart to update is the banner's (App): one restart, with one state, whichever
+    // control starts it. The banner shows it restarting and how it ended; Settings' status line
+    // says the same words.
+    public void ShareRestart(AppUpdateViewModel banner)
+    {
+        shared = banner;
+        banner.PropertyChanged += (_, _) => Raise(nameof(UpdateStatus));
+        RestartDownloaded = banner.RestartAsync;
     }
     // A release found by a check here, or downloaded in the background: Restart to update shows.
     public bool UpdateAvailable => updater.InstalledVersion is not null && (updateVersion ?? Downloaded) is not null;
@@ -584,7 +609,7 @@ public sealed class SettingsViewModel : Observable
             foundAt = sourceAt;
             // Everything a check here said is the old source's, "Up to date" included: kept, it
             // claimed the new source current without ever asking it (Copilot, ac778916).
-            (updateVersion, readyHere, updateStatus) = (null, null, "");
+            (updateVersion, readyHere, updateStatus, discoveryNote) = (null, null, "", null);
             return;
         }
         if (readyHere is null)
@@ -798,12 +823,13 @@ public sealed class SettingsViewModel : Observable
     {
         if (updater.InstalledVersion is null) { UpdateStatus = "Updates are off in a development copy."; return; }
         UpdateStatus = "Checking…";
+        discoveryNote = null;
         // Its answer is for the source as it began: one changed meanwhile drops it (Reconcile).
         var at = sourceAt;
         // GitHub limiting or unreachable is a wait, said as the status with when the next check
-        // is (#530), not an error to act on.
+        // is (#530), not an error to act on; after a release ready, it follows that offer.
         try { updateVersion = await updater.CheckAsync(); }
-        catch (ReleaseDiscoveryException e) { UpdateStatus = e.Message; return; }
+        catch (ReleaseDiscoveryException e) { UpdateStatus = e.Message; discoveryNote = e.Message; return; }
         UpdateStatus = updateVersion is not { } v ? UpToDate
             : updater.Ready == v ? Ready(v)
             : $"Version {v} is available.";
@@ -862,16 +888,27 @@ public sealed class SettingsViewModel : Observable
         // confirm itself, and reports how it went to the account's devices.
         if (RestartDownloaded is { } restart)
         {
-            var why = await restart(confirm is null ? null : async warning =>
+            string? why;
+            RestartingHere = true;
+            try
             {
-                UpdateStatus = "";
-                var go = await confirm(warning);
-                if (go) { UpdateStatus = "Stopping the host to update it…"; }
-                return go;
-            });
+                why = await restart(confirm is null ? null : async warning =>
+                {
+                    UpdateStatus = "";
+                    RestartingHere = false;
+                    var go = await confirm(warning);
+                    if (go) { UpdateStatus = "Stopping the host to update it…"; }
+                    RestartingHere = go;
+                    return go;
+                });
+            }
+            finally { RestartingHere = false; }
             if (why is null) { return; }
             UpdateStatus = "";
             if (why == AutoUpdater.NotNow) { return; }
+            // Shared with the banner: its failed state says it, here too (UpdateStatus), as a
+            // status, not an error. Otherwise the error says it.
+            if (shared is not null) { return; }
             throw new InvalidOperationException(AppUpdateViewModel.DidNotInstall(why, updater.Ready is not null));
         }
         if (RestartWarning.For(host) is { } warning && confirm is not null)
