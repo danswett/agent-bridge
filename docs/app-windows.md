@@ -619,8 +619,14 @@ which always runs it unelevated.
 
 ### agent-ha-bridge on the same machine (G4, G5)
 
-The app never writes agent hook registrations (no Copilot, Claude or Codex hooks), and its
-names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
+The app writes no agent hook registrations itself. Its Settings agent rows ask the host
+(`host.agents.setup`) to set up, repair or remove this profile's own Copilot CLI, Claude Code or
+Codex hooks; the host writes them (`StandaloneHooks`) beside a record of what it owns
+(`agent-bridge-owner.json`), so a removal takes only that. Beside agent-ha-bridge those rows are
+read-only: the host is read-only and refuses setup (`AgentSetupService`, and
+`StandaloneHooks.Preflight` while agent-ha-bridge is active or its directory remains), reports
+the hooks as blocked, and the rows say "Read-only · this machine's host is older" with no verb.
+The app's names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
 sessions (their session folders) and Claude sessions (Claude Code's own
 `~/.claude/sessions/<pid>.json`), and Codex ones run with `--no-daemon`, as every launch
 from this host is (the terminal holds `~/.codex/thread-writer-locks/<id>.lock`). A Codex
@@ -761,7 +767,7 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   to show the dry run's report, confirm, and show the result, and it cannot be reached through
   the relay.
 * Code signing.
-* Arm64 builds, the first-run wizard's agent detection and winget installs.
+* The first-run wizard's agent detection and winget installs.
 
 ## Testing
 
