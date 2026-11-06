@@ -444,6 +444,45 @@ public class CopilotTests
         Assert.StartsWith("r1#", crowded.Id);
     }
 
+    // A request with nothing the host can find on screen (a read naming no path) cannot be told
+    // from the one listed, so delivery refuses every answer while it waits (CopilotPermissionScreen
+    // .Crowded); listed as answerable, the shell request offered controls that could never deliver
+    // (Copilot review of #769).
+    [Fact]
+    public async Task A_permission_beside_one_with_nothing_drawn_to_check_is_answered_at_the_machine_until_that_one_ends()
+    {
+        await using var s = new Session_();
+        var bare = new System.Text.Json.Nodes.JsonObject { ["kind"] = "read" };
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2), Copilot.Permission("r2", "c2", bare, 3))).Question!;
+        var alone = (await s.After(Copilot.PermissionDone("r2", "c2", "approved", 4))).Question!;
+
+        Assert.StartsWith("r1#", crowded.Id);
+        Assert.Equal((true, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+        Assert.Equal((crowded.Id, (bool?)null), (alone.Id, alone.AnswerAtMachine));
+    }
+
+    // Copilot can write permission.requested again for a request it has already asked, with what
+    // it now asks. The revision replaces the question it revises: kept, the earlier one was listed
+    // first, counted the request twice, and stayed after the request ended (Copilot review of #769).
+    [Fact]
+    public async Task A_permission_asked_again_under_the_same_request_replaces_the_question_it_revises()
+    {
+        await using var s = new Session_();
+        var revised = Copilot.Prompts["commands"].DeepClone().AsObject();
+        revised["fullCommandText"] = "npm run build";
+
+        var first = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2))).Question!;
+        var again = (await s.After(Copilot.Permission("r1", "c1", revised, 3))).Question!;
+        var done = await s.After(Copilot.PermissionDone("r1", "c1", "approved", 4));
+
+        Assert.NotEqual(first.Id, again.Id);
+        Assert.StartsWith("r1#", again.Id);
+        Assert.Contains("npm run build", again.Message);
+        Assert.Null(again.Waiting);
+        Assert.Null(done.Question);
+    }
+
     // Copilot draws a waiting shell, edit, read, MCP or tool request before a hook's, a hook's
     // before a path request, and a path request before a URL request, whichever was asked first
     // (cli-main.js 1.0.105, CopilotDialogs.DrawOrder). A path request listed first while one that

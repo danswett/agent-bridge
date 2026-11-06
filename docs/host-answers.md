@@ -185,7 +185,9 @@ Bound to the request. The question's id is `<requestId>#<digest>`, the digest a 
 the message the client was shown. Immediately before typing, the transcript must show
 that `permission.requested` with no `permission.completed` (and no session abort or
 shutdown) after it, reading exactly as shown (`stale` otherwise), and no `ask_user`
-waiting (`refused`). Copilot can have several permission requests waiting at once, one for
+waiting (`refused`). A `permission.requested` written again for a request already waiting,
+with what it asks now, replaces that request's question: the one it revises is no longer
+listed or counted. Copilot can have several permission requests waiting at once, one for
 each of a batch of parallel tool calls, and draws one at a time; the session lists the
 earliest, saying how many wait (#690). While others wait, the screen, not the order
 asked, says which is drawn, and it is identified positively, never by a probe (agent-written
@@ -200,13 +202,15 @@ text, which another request's command can end in or its diff hold). The key goes
   question, with nothing else. Only the shell prompt (the intention, the command in a box,
   "Do you want to run this command?") and the path prompt ("Allow path access", the paths
   and any read-only directories in boxes, "Do you want to allow this?") are known so;
-* no other waiting request would be drawn the same (its title, body and question alike once
-  all white space is gone: a box wraps a long line hard at its width, so one line on two rows
-  reads like two lines, and trailing white space is not drawn);
+* every other waiting request has something drawn to check the screen against (a read naming
+  no path has nothing), and none would be drawn the same (its title, body and question alike
+  once all white space is gone: a box wraps a long line hard at its width, so one line on two
+  rows reads like two lines, and trailing white space is not drawn);
 * and this request is the earliest still waiting.
 
 A listed prompt the host cannot tell from the others so (any other kind, text that could
-draw part of the frame, or another waiting request that would be drawn the same) is
+draw part of the frame, another waiting request with nothing drawn to check, or one that would
+be drawn the same) is
 `answerAtMachine` while that holds, and answerable again under the same id once it does not. Otherwise it is `refused` ("the machine is showing a different permission (path access,
 request ed05e9d7)" when another's dialog is the one drawn, or why the screen cannot say),
 and never typed for the request on screen instead: answer it at the machine. The key is

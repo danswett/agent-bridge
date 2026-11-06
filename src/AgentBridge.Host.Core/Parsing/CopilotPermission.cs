@@ -139,14 +139,15 @@ public static class CopilotDialogs
     public static bool Unsafe(string text) => text.Any(c => c is >= '\u2500' and <= '\u257F' or '\t') || AgentBridge.Protocol.ShownText.Misleads(text);
 
     // Whether the first of several waiting prompts can be told from the others on screen: Copilot
-    // draws it first, its dialog is known, nothing given for any of them is unsafe, and none would
-    // draw the same.
+    // draws it first, its dialog is known, every other has something drawn to check it against,
+    // nothing given for any of them is unsafe, and none would draw the same. As delivery checks it
+    // (CopilotPermissionScreen.Crowded), so nothing is listed as answerable that it refuses.
     public static bool Identifiable(CopilotPermissionPrompt mine, IEnumerable<CopilotPermissionPrompt> others)
     {
         var rest = others.ToList();
         if (rest.Any(o => DrawOrder(o.Kind) < DrawOrder(mine.Kind))) { return false; }
         if (mine.Dialog is not { } dialog || Unfindable(dialog) || mine.Drawn.Any(Unsafe)) { return false; }
-        return rest.All(o => !o.Drawn.Any(Unsafe) && (o.Dialog is not { } theirs || !Alike(dialog, theirs)));
+        return rest.All(o => o.Drawn.Count > 0 && !o.Drawn.Any(Unsafe) && (o.Dialog is not { } theirs || !Alike(dialog, theirs)));
     }
 
     // Which waiting prompt Copilot CLI 1.0.105 draws. It keeps a queue for each sort of prompt,

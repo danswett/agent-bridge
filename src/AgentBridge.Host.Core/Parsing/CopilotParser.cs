@@ -602,6 +602,13 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     {
         if (CopilotPermission.Describe(data) is not { } prompt) { return; }
         var id = prompt.QuestionId;
+        // Asked again under the same request, with what it asks now: the question it revises goes,
+        // or it is listed first, counted twice, and outlives the request (Copilot review of #769).
+        if (_permissionQuestion.TryGetValue(prompt.RequestId, out var was) && was != id)
+        {
+            S.Answer(was);
+            S.Permissions.Remove(was);
+        }
         _permissionQuestion[prompt.RequestId] = id;
         S.Permissions[id] = prompt;
         var agent = stamped ?? (prompt.ToolCallId is { } call ? S.Tools.Find(call)?.Agent ?? S.Background.CallAgent(call) : null);
