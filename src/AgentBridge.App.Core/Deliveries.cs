@@ -26,6 +26,11 @@ public sealed record Delivery
     // across resends of the same request. Null from a host that doesn't say.
     public string? Stage { get; init; }
     public object? Payload { get; init; }
+    // What an answer chose, in the words the person saw as it went (an option's label, free text's
+    // first line; ReceiptWords.AnsweredValue), for its receipt. Taken once, as it is sent, and never
+    // looked up again: the same question can come back with an option relabelled, and "You
+    // answered · Keep files" must not turn into "Delete files" (#625 cr2-625; Daily 6676016464).
+    public string? Chosen { get; init; }
     // Whether a copy whose outcome was lost may go again to a host that has since restarted.
     // The host remembers request ids only in memory, so only ops it guards across restarts
     // otherwise (answers: its attempt ledger; End session: its two-press rule) may.
@@ -123,7 +128,7 @@ public sealed class Deliveries
     // stands, so doing it again sends nothing. before: work on the connection ahead of the op
     // (a reply's files), given a progress callback.
     public Delivery Submit(string key, string op, Func<string, object> data, Func<string, bool> final, object? payload = null,
-        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true, TimeSpan? giveUp = null)
+        Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true, TimeSpan? giveUp = null, string? chosen = null)
     {
         Delivery entry;
         var held = Hold?.Invoke(op);
@@ -134,8 +139,8 @@ public sealed class Deliveries
             {
                 return existing;
             }
-            if (held is not null) { return new Delivery { Key = key, Request = "", State = DeliveryState.Done, Outcome = Held, Reason = held, Payload = payload }; }
-            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy, GiveUp = giveUp };
+            if (held is not null) { return new Delivery { Key = key, Request = "", State = DeliveryState.Done, Outcome = Held, Reason = held, Payload = payload, Chosen = chosen }; }
+            entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, Chosen = chosen, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy, GiveUp = giveUp };
             if (KindOf(op) is { } kind)
             {
                 if (marks.Count >= MaxMarked) { marks.Remove(marks.MinBy(m => m.Value.Start).Key); }

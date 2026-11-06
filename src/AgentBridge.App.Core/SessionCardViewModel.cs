@@ -53,8 +53,6 @@ public sealed partial class SessionCardViewModel : Observable
     string? orphanText;
     string? orphanNote;
     string? receiptKey;
-    // The question the receipt's answer answered, which says its value ("You answered · value").
-    Question? receiptQuestion;
     // Times the receipt's words as the question's own did, on the same request's history: an
     // answer left at Passed to the agent still stalls here, a handoff inside the quiet window or a
     // dwell still waits it out, and nothing is said twice or more than once a second.
@@ -355,7 +353,7 @@ public sealed partial class SessionCardViewModel : Observable
                 OrphanText = draft;
                 OrphanNote = "The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.";
             }
-            else if (ctx.Deliveries.Get(question.Key) is not null) { (receiptKey, receiptQuestion) = (question.Key, question.Question); }
+            else if (ctx.Deliveries.Get(question.Key) is not null) { receiptKey = question.Key; }
             question.Detach();
             Question = null;
         }
@@ -417,7 +415,7 @@ public sealed partial class SessionCardViewModel : Observable
         }
         if (receipt is null)
         {
-            receipt = new Receipt(ctx.Deliveries.Time, ctx.Deliveries.Ui, (d, stalled) => QuestionViewModel.Describe(d, ctx.MachineName(), stalled, receiptQuestion), DrawReceipt, SayReceipt);
+            receipt = new Receipt(ctx.Deliveries.Time, ctx.Deliveries.Ui, (d, stalled) => QuestionViewModel.Describe(d, ctx.MachineName(), stalled), DrawReceipt, SayReceipt);
             Raise(nameof(HasReceipt));
         }
         receipt.Show(e);

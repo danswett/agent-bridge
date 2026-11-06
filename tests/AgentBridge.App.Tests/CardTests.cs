@@ -97,6 +97,31 @@ public sealed class CardTests : IAsyncLifetime
         card.Detach();
     }
 
+    // #625 cr2-625, Daily 6676016464: the receipt says what the person chose, in the words they saw
+    // then. Looked up in the question rebuilt for a relabelled option, it said the new label, on the
+    // question and on the card's receipt after it.
+    [Fact]
+    public async Task A_confirmed_answer_keeps_the_label_it_was_chosen_by_when_its_question_comes_back_relabelled_and_once_it_goes()
+    {
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        var asked = Make.Choice();
+        var card = new SessionCardViewModel(Make.Session(question: asked), Context());
+        card.Question!.Choose(card.Question.Fields[0].Options.Single(o => o.Value == "pg"));
+        await Wait.UntilAsync(() => card.Question?.StatusText == "You answered · \u2068PostgreSQL (Recommended)\u2069", "delivered");
+
+        // The same question, its option relabelled: the question is rebuilt, the receipt is not.
+        var relabelled = asked with { Fields = [asked.Fields[0] with { Options = [.. asked.Fields[0].Options!.Select(o => o.Value == "pg" ? o with { Label = "Drop the database" } : o)] }] };
+        card.Update(Make.Session(question: relabelled));
+        await Wait.UntilAsync(() => card.Question is { } q && q.Fields[0].Options.Any(o => o.Label == "Drop the database") && q.StatusText.Length > 0, "the rebuilt question");
+        Assert.Equal("You answered · \u2068PostgreSQL (Recommended)\u2069", card.Question!.StatusText);
+
+        // The question goes: the card's own receipt says the same.
+        card.Update(Make.Session());
+        await Wait.UntilAsync(() => card.Question is null && card.ReceiptText.Length > 0, "the card's receipt");
+        Assert.Equal("You answered · \u2068PostgreSQL (Recommended)\u2069", card.ReceiptText);
+        card.Detach();
+    }
+
     [Fact]
     public async Task Other_text_is_sent_as_other_and_a_refusal_lets_the_person_answer_again()
     {

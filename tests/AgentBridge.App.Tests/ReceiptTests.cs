@@ -384,7 +384,7 @@ public sealed class ReceiptTests
     public void A_confirmed_answers_value_is_shown_in_a_direction_of_its_own_but_spoken_without_the_isolates()
     {
         var tap = Make.Choice();
-        var line = QuestionViewModel.Describe(new Delivery { Key = "k", Request = "r", State = DeliveryState.Done, Outcome = "delivered", Payload = Answer(tap, "pg") }, null, question: tap);
+        var line = QuestionViewModel.Describe(new Delivery { Key = "k", Request = "r", State = DeliveryState.Done, Outcome = "delivered", Payload = Answer(tap, "pg"), Chosen = ReceiptWords.AnsweredValue(tap, Answer(tap, "pg")) }, null);
 
         Assert.Equal("You answered · \u2068PostgreSQL (Recommended)\u2069", line.Whole);
         Assert.Equal("Answer delivered. You answered PostgreSQL (Recommended)", line.Speech);

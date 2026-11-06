@@ -57,7 +57,7 @@ public sealed partial class QuestionViewModel : Observable
         Tap = question.Fields.Count == 1 && question.Fields[0].Type == FieldType.Choice;
         otherOpen = Tap && Fields[0].OtherChosen;
         StatusRoom = ReceiptWords.Room(machineName);
-        receipt = new Receipt(deliveries.Time, deliveries.Ui, (e, stalled) => Describe(e, machineName, stalled, question), Shown, Said);
+        receipt = new Receipt(deliveries.Time, deliveries.Ui, (e, stalled) => Describe(e, machineName, stalled), Shown, Said);
         deliveries.Changed += OnDelivery;
         Refresh();
     }
@@ -263,7 +263,8 @@ public sealed partial class QuestionViewModel : Observable
         }
         if (problem is not null) { Fail(problem, field); return; }
         Error = null;
-        var entry = deliveries.Submit(Key, Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer);
+        // The words chosen, as this question shows them now (Delivery.Chosen).
+        var entry = deliveries.Submit(Key, Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer, chosen: ReceiptWords.AnsweredValue(Question, answer));
         // Watched from here, not only from a change seen on its way: a fast delivery can be done
         // before the first change is posted, and its button still owes it the check.
         if (entry.State is DeliveryState.Sending or DeliveryState.Waiting) { watched = entry.Request; }
@@ -358,16 +359,16 @@ public sealed partial class QuestionViewModel : Observable
     // card's receipt once the question has gone: the receipt's words (Receipt; ui.md §6.4, decided
     // on #617, "quiet unless something's wrong"). On its way: nothing on the line but a stall or a
     // wait (the button's ring says it goes), never Up next. Confirmed: "You answered · value" in
-    // text2, where question gives the value (ReceiptWords.AnsweredValue). Any other outcome keeps
-    // its words. stalled: whether the state it is in has stalled (Receipt).
-    public static ReceiptLine Describe(Delivery e, string? machineName, bool stalled = false, Question? question = null)
+    // text2, the value as it was chosen (Delivery.Chosen), never from the question as it is now.
+    // Any other outcome keeps its words. stalled: whether the state it is in has stalled (Receipt).
+    public static ReceiptLine Describe(Delivery e, string? machineName, bool stalled = false)
     {
         var at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
         return e.State switch
         {
             DeliveryState.Sending or DeliveryState.Waiting => ReceiptWords.InFlight(answer: true, e, machineName, stalled),
             DeliveryState.Failed => Said("failed", $"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad),
-            _ => Outcome(e, machineName, at, question),
+            _ => Outcome(e, machineName, at),
         };
     }
 
@@ -376,12 +377,12 @@ public sealed partial class QuestionViewModel : Observable
 
     static ReceiptLine Said(string key, string text, Tone tone) => new(key, text, null, tone, ReceiptMark.None, $"Answer: {text}");
 
-    static ReceiptLine Outcome(Delivery e, string? machineName, string at, Question? question)
+    static ReceiptLine Outcome(Delivery e, string? machineName, string at)
     {
         var outcome = e.Outcome is { } o && OutcomeText.ContainsKey(o) ? o : "unconfirmed";
         if (outcome == "delivered")
         {
-            var value = ReceiptWords.AnsweredValue(question, e.Payload as AnswerRequest);
+            var value = e.Chosen;
             // In text2, with no badge: the answer's button says it was delivered, with its check.
             return new("delivered", "You answered", value is null ? null : ReceiptWords.Isolated(value), Tone.Progress, ReceiptMark.Check, value is null ? "Answer delivered. You answered" : $"Answer delivered. You answered {value}");
         }

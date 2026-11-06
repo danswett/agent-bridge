@@ -121,7 +121,9 @@ public sealed class ToastResponder
         deliveries.Changed += Watch;
         try
         {
-            var entry = deliveries.Submit(key, AgentBridge.Protocol.Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer);
+            // The words chosen, as the app knows the question at the click (Delivery.Chosen).
+            var asked = SessionOf(action.Machine, action.Session)?.Question is { } q && q.Id == action.Question ? q : null;
+            var entry = deliveries.Submit(key, AgentBridge.Protocol.Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer, chosen: ReceiptWords.AnsweredValue(asked, answer));
             if (entry.State is DeliveryState.Done or DeliveryState.Failed) { done.TrySetResult(entry); }
             Delivery result;
             try { result = await done.Task.WaitAsync(OutcomeWait); }
