@@ -30,7 +30,13 @@ public sealed partial class FlowPanel : Panel
             if (!double.IsNaN(laidAt)) { NewWidths++; }
             laidAt = availableSize.Width;
         }
-        return Lay(availableSize.Width, (_, _) => { });
+        var size = Lay(availableSize.Width, (_, _) => { });
+        // A child that left (a footer's delegate line ending) is forgotten, not kept for the panel's life.
+        if (offered.Count > Children.Count)
+        {
+            foreach (var gone in offered.Keys.Where(k => !Children.Contains(k)).ToList()) { offered.Remove(gone); }
+        }
+        return size;
     }
 
     protected override Size ArrangeOverride(Size finalSize)
