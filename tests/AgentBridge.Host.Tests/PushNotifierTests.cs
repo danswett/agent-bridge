@@ -155,6 +155,30 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal((86400, "normal", PushNotice.Topic(Machine, "~restore")), (ttl, urgency, topic));
     }
 
+    // #801, Q-O3: who restarted the machine, kept in the other devices' trays. As a resolved notice
+    // the PWA's worker withdrew it the moment it showed it (Codex on #886); finished and done, it is
+    // silent and stays. The device that acted is not told, and the task says when it has gone.
+    [Fact]
+    public async Task A_machine_notice_reaches_the_other_devices_as_a_silent_one_kept_in_the_tray()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+
+        var sent = notifier.NotifyMachine(Phone, "DEV", "DEV was restarted from iPhone (pwa aaaaaaaa) at 21:00 PT.");
+        Assert.False(sent.IsCompleted);
+        await After(TimeSpan.Zero);
+
+        await sent.WaitAsync(TimeSpan.FromSeconds(30));
+        var (device, n, _, urgency, topic) = Assert.Single(Received());
+        Assert.Equal(Laptop, device);
+        Assert.Equal("finished", Kind(n));
+        Assert.Equal("done", n.GetProperty("data").GetProperty("class").GetString());
+        Assert.True(n.GetProperty("silent").GetBoolean());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}", n.GetProperty("navigate").GetString());
+        Assert.Equal(("normal", PushNotice.Topic(Machine, PushNotifier.MachineNotice)), (urgency, topic));
+    }
+
     // A subscribed URL that already routes somewhere (the page it was installed from was a session's)
     // still opens only the machine: its routing is replaced, not appended to, and nothing else in it
     // is lost.

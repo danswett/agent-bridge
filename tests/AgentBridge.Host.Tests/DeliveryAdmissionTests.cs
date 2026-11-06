@@ -79,7 +79,9 @@ public sealed class DeliveryAdmissionTests
         Assert.Single(Regex.Matches(program, @"new DeliveryGate\(").Cast<Match>());
         Assert.Contains("relayBlobs, codexUnsettled, deliveryGate)", program);
         Assert.Matches(@"Launcher\(source, g5, attachments, transfers, deliveryGate(, restore)?\)", program);
-        Assert.Contains("new LifecycleCoordinator(deliveryGate,", program);
+        // The lease every planned departure takes is composed with remote management (#801), over the same gate.
+        Assert.Contains("ManageComposition.For(settings, identity.Key, identity.Folder, deliveryGate,", program);
+        Assert.Contains("new LifecycleCoordinator(delivery,", File.ReadAllText(Path.Combine(root.FullName, "src", "AgentBridge.Host", "ManageComposition.cs")));
         foreach (var name in new[] { "AnswerService", "ReplyService", "StopService" }) { Assert.Contains($"new {name}(gate,", program); }
         Assert.Contains("new LaunchService(deliveryGate,", program);
     }

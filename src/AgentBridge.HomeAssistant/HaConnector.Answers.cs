@@ -784,7 +784,7 @@ public sealed partial class HaConnector
             ? new JsonObject { ["error"] = "the session is waiting on a question", ["hint"] = "answer it first, then reply" }
             : new JsonObject
             {
-                ["error"] = "this machine's host does not take replies from the dashboard yet",
+                ["error"] = "this machine's bridge doesn't take replies from the dashboard yet",
                 ["hint"] = "reply at the machine",
             }, ct);
     }

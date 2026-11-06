@@ -300,7 +300,9 @@ public partial class App : Application
             RelayAccount? now = null;
             if (local.Can(HostOps.Capability))
             {
-                try { now = await local.CallAsync<RelayAccount>(HostOps.RelayAccount, ct: ct); }
+                // Says this app's own device id, so its host refuses that key through the relay
+                // (#801): this app manages its own machine from Settings.
+                try { now = await local.CallAsync<RelayAccount>(HostOps.RelayAccount, new RelayAccountRequest(Wire.DeviceId(identity.Key.Public)), ct: ct); }
                 catch (HostErrorException) { }
             }
             Volatile.Write(ref last, now);

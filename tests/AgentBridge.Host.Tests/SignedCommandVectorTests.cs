@@ -69,6 +69,10 @@ public sealed class SignedCommandVectorTests
         // Naming the question and exactly what was read, so no other question's Approve rides it (#803).
         var confirm = Body(EscapedApproval.Action, Session, MachineId);
         Valid("an-escaped-approval-confirmed", confirm with { Target = confirm.Target with { Question = "req-42#9b1c", Shown = EscapedApproval.Shown("Allow **shell**?") } }, EscapedApproval.Action);
+        // A management command's arguments travel inside the signed body, after expiresAt, so the
+        // MAC covers them (#801; Connection's Q-C4 on #886). It names no session.
+        var repair = Body(ManageProtocol.HooksRepair, null!, MachineId);
+        Valid("a-hook-repair-with-args", repair with { Target = repair.Target with { Session = null }, Args = JsonSerializer.SerializeToElement(new ManageRepairArgs("copilot"), ProtocolJson.Options) }, ManageProtocol.HooksRepair);
 
         var refused = new JsonArray();
         var signed = SignedCommands.Sign(Phone, Machine.Public, Transfer);

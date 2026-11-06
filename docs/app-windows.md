@@ -43,7 +43,7 @@ status colour, never Ready, Not set up or Needs repair, and nothing on it is a b
 work (Creative's rulings on #784 and #705):
 - hooks the host holds back (`blocked`: a read-only host, or another profile's) say
   "Read-only · *why*" ("this machine's bridge is older", "another bridge profile owns its
-  hooks", or "set in this host's settings"), and Install CLI is hidden on them;
+  hooks", or "set in this bridge's settings"), and Install CLI is hidden on them;
 - hooks the host reports `failed` with `hookSetup: unknown`, which its setup refuses, say "Hook
   ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or
   "Hook intake couldn't be checked · *why*" for this profile's intake record;
@@ -56,7 +56,7 @@ the same reason says only the fact ("Hooks: Not checked").
 
 No row shows an exception's, a command's or an installer's own text, which named paths: each
 says why from a known set (`AgentWords`), and the app's log keeps the host's words. That
-includes a setup's outcome: "Set up · restart the host, then start a new session to check it",
+includes a setup's outcome: "Set up · restart the bridge, then start a new session to check it",
 "Repaired · …", "Removed · sessions already running keep their hooks until they end", or
 "Setup failed · *why*" ("Repair failed", "Removal failed"), and the CLI's line: "Not installed"
 with **Install CLI** where the host installs it, else "Not installed · install it on this

@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Windows.System;
 
 namespace AgentBridge.App;
 
@@ -15,7 +16,7 @@ namespace AgentBridge.App;
 // on their rows, never in Needs you, under one banner for the machine, agent and account whose line
 // names them as links; an error and
 // a session not responding say so on their rows. Only Sign in asks the machine for a code; its sheet
-// starts on Cancel, shows the code selectable and named a character at a time, and its buttons are
+// starts on Cancel, with Copy its one primary button, which Enter presses but on another button, whose Enter is its own; it shows the code selectable and named a character at a time, and its buttons are
 // named for what they act on. A spoofed link is refused whole. Signed in, the sessions wait to confirm, never recovered until the
 // host clears them; then the banner says so. The
 // scenario's sessions go again after, so the passes after this one see the demo as it was.
@@ -81,11 +82,42 @@ static partial class SelfTest
                 var cancel = Find<Button>(sheet).FirstOrDefault(b => b.Name == "CloseButton");
                 var startsOnCancel = await Until(() => ReferenceEquals(FocusManager.GetFocusedElement(root), cancel), TimeSpan.FromSeconds(5));
                 check(startsOnCancel && AutomationProperties.GetName(cancel!) == "Cancel sign-in for Copilot on Build server", "starts the sheet on Cancel, named for the sign-in it cancels");
+                // Copy is the one primary and the default; Cancel is secondary (Creative 6675007095).
+                var accent = (Style)Application.Current.Resources["AccentButtonStyle"];
+                var dialog = Find<ContentDialog>(sheet).FirstOrDefault();
+                check(ReferenceEquals(copy!.Style, accent) && !ReferenceEquals(cancel!.Style, accent) && dialog?.DefaultButton == ContentDialogButton.None,
+                    $"draws Copy as the one primary button and Cancel as secondary (Copy accent {ReferenceEquals(copy.Style, accent)}, Cancel accent {ReferenceEquals(cancel?.Style, accent)}, default {dialog?.DefaultButton})");
+                // Enter on Copy copies the code, the sheet still open and nothing cancelled.
+                var shown = main.SignInSheet!;
+                var copies = 0;
+                Action<string> counted = _ => copies++;
+                shown.CopiedSaid += counted;
+                async Task<string> Enter(Func<bool> done)
+                {
+                    var by = SelfTest.Press(window.Handle, VirtualKey.Enter, foreground: true, extended: false);
+                    if (!await Until(done, TimeSpan.FromSeconds(2)) && by == "SendInput")
+                    {
+                        by = SelfTest.Press(window.Handle, VirtualKey.Enter, foreground: false, extended: false);
+                        await Until(done, TimeSpan.FromSeconds(2));
+                    }
+                    return by;
+                }
+                copy!.Focus(FocusState.Keyboard);
+                var onCopy = await Until(() => ReferenceEquals(FocusManager.GetFocusedElement(root), copy), TimeSpan.FromSeconds(2));
+                var keyed = await Enter(() => copies > 0);
+                check(onCopy && copies == 1 && main.SignInSheet is { Copied.Length: > 0 } && Sheet() is not null && remote.SignInLog.SequenceEqual([AuthState.Start]),
+                    $"copies the code on Enter at Copy, the sheet still open and nothing cancelled (by {keyed}: '{main.SignInSheet?.Copied}', {copies} copies, {remote.SignInLog.Count} ops)");
                 check(remote.SignInLog.SequenceEqual([AuthState.Start]), "sends signin.start once, on the press");
                 await Picture(sheet, Path.ChangeExtension(outFile, ".signin-sheet.png"));
-                Press(cancel!);
+                // A focused button's Enter is its own (Creative 6691577488): on Cancel it cancels the
+                // sign-in, and copies nothing.
+                cancel!.Focus(FocusState.Keyboard);
+                var onCancel = await Until(() => ReferenceEquals(FocusManager.GetFocusedElement(root), cancel), TimeSpan.FromSeconds(2));
+                keyed = await Enter(() => Sheet() is null);
                 var cancelled = await Until(() => Sheet() is null && remote.SignInLog.Count == 2, TimeSpan.FromSeconds(10));
-                check(cancelled && remote.SignInLog[1] == AuthState.Cancel, "cancels the flow at the machine when the sheet is cancelled");
+                shown.CopiedSaid -= counted;
+                check(onCancel && cancelled && remote.SignInLog[1] == AuthState.Cancel && copies == 1,
+                    $"closes the sheet on Enter at Cancel, cancels the flow at the machine and copies nothing (by {keyed}: {copies} copies, {remote.SignInLog.Count} ops)");
                 check(await Until(() => Verb() is { } v && ReferenceEquals(FocusManager.GetFocusedElement(root), v), TimeSpan.FromSeconds(5)), "puts focus back on Sign in when the sheet closes");
             }
 

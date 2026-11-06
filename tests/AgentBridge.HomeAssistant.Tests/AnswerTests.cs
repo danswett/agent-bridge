@@ -1072,6 +1072,7 @@ public sealed class AnswerTests : IDisposable
         Assert.Empty(answered);
         Assert.Equal("Reply NOT sent", Activity);
         Assert.Equal("reply at the machine", Detail.GetProperty("hint").GetString());
+        Assert.Equal("this machine's bridge doesn't take replies from the dashboard yet", Detail.GetProperty("error").GetString());
         Assert.False(Detail.TryGetProperty("answer_consumed_at", out _));
     }
 
