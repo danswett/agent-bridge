@@ -19,7 +19,7 @@ public sealed partial class QuestionViewModel : Observable
         // Said as "You answered · value" with the check badge (Describe).
         ["delivered"] = _ => "You answered",
         // Describe names the machine itself (ui.md §6.5: "Check at machine before sending it again").
-        ["unconfirmed"] = _ => ReceiptWords.Unconfirmed(null),
+        ["unconfirmed"] = _ => ReceiptWords.AnswerUnconfirmed,
         ["stale"] = _ => "Already answered or gone: the session is no longer asking this.",
         ["busy"] = _ => "Another answer to this session is being delivered. Try again in a moment.",
         ["refused"] = _ => "The machine refused this answer.",
@@ -56,7 +56,7 @@ public sealed partial class QuestionViewModel : Observable
         Fields = [.. question.Fields.Select(f => new FieldViewModel(f, question.Kind == QuestionKind.Approval))];
         Tap = question.Fields.Count == 1 && question.Fields[0].Type == FieldType.Choice;
         otherOpen = Tap && Fields[0].OtherChosen;
-        StatusRoom = ReceiptWords.Room(machineName);
+        StatusRoom = Room(machineName);
         receipt = new Receipt(deliveries.Time, deliveries.Ui, (e, stalled) => Describe(e, machineName, stalled), Shown, Said);
         deliveries.Changed += OnDelivery;
         Refresh();
@@ -168,7 +168,7 @@ public sealed partial class QuestionViewModel : Observable
     // Whether that is a failure or a refusal, which a screen reader hears at once (assertively);
     // set before Announcement is raised, so the view reads it with the words.
     public bool AnnouncementUrgent { get; private set; }
-    // The longest outcome's words, which the view keeps room for (ReceiptWords.Room).
+    // The longest outcome's words, which the view keeps room for (Room).
     public string StatusRoom { get; }
 
     // Whether the person may answer (again): nothing sent yet, or what was sent was not typed.
@@ -372,6 +372,15 @@ public sealed partial class QuestionViewModel : Observable
         };
     }
 
+    // The room an answer's receipt keeps (ui.md §6.5; ReceiptWords.Room): the longest of the
+    // outcomes it usually ends in. Its unconfirmed sentence is shorter than a reply's, which it
+    // used to keep room for; busy is now the longest. A longer refusal may still grow it.
+    public static string Room(string? machineName)
+    {
+        var at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
+        return new[] { "unconfirmed", "stale", "busy", "refused" }.Select(o => OutcomeText[o](at)).MaxBy(t => t.Length)!;
+    }
+
     static ReceiptLine Changed(ReceiptLine failed) =>
         new("changed", $"{failed.Text} The question changed since, so answer it again.", null, Tone.Bad, ReceiptMark.None, $"Answer: {failed.Text} The question changed since, so answer it again.");
 
@@ -386,7 +395,7 @@ public sealed partial class QuestionViewModel : Observable
             // In text2, with no badge: the answer's button says it was delivered, with its check.
             return new("delivered", "You answered", value is null ? null : ReceiptWords.Isolated(value), Tone.Progress, ReceiptMark.Check, value is null ? "Answer delivered. You answered" : $"Answer delivered. You answered {value}");
         }
-        var text = outcome == "unconfirmed" ? ReceiptWords.Unconfirmed(machineName) : OutcomeText[outcome](at);
+        var text = OutcomeText[outcome](at);
         if (outcome == "refused" && e.Reason is { } r) { text = $"The machine refused this answer: {r}."; }
         if (outcome == "unconfirmed" && e.Reason is { } u) { text += $" ({u})"; }
         return Said(outcome, text, outcome == "refused" ? Tone.Bad : Tone.Warn);

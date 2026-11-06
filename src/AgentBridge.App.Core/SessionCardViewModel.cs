@@ -245,7 +245,7 @@ public sealed partial class SessionCardViewModel : Observable
     // Whether that is a failure or a refusal, said assertively; set before ReceiptAnnouncement.
     public bool ReceiptAnnouncementUrgent { get; private set; }
     // The longest outcome's words, which the view keeps room for (ReceiptWords.Room).
-    public string ReceiptRoom => $"Your answer: {ReceiptWords.Room(ctx.MachineName())}";
+    public string ReceiptRoom => $"Your answer: {QuestionViewModel.Room(ctx.MachineName())}";
 
     // Why nothing on this card can be answered, replied to or ended from here, if so.
     public string? ReadOnlyWhy => ctx.ReadOnlyWhy();

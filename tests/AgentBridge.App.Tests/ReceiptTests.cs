@@ -380,6 +380,18 @@ public sealed class ReceiptTests
         Assert.Equal(value, ReceiptWords.AnsweredValue(text, new AnswerRequest { Id = "s1", Question = "q1", Request = "r", Text = answer }));
     }
 
+    // #625, Engineering 6676371806: an answer not confirmed said the reply's words, "before sending
+    // it again", though an answer is final and never resent (ui.md §6.5, #617).
+    [Fact]
+    public void An_unconfirmed_answer_says_check_at_the_machine_and_never_to_send_it_again_while_a_reply_still_does()
+    {
+        var unconfirmed = new Delivery { Key = "k", Request = "r", State = DeliveryState.Done, Outcome = "unconfirmed" };
+        Assert.Equal("Sent, but not confirmed. Check at the machine.", QuestionViewModel.Describe(unconfirmed, "ULTRA").Whole);
+        Assert.Equal("Sent, but not confirmed. Check at the machine. (no word from the agent)", QuestionViewModel.Describe(unconfirmed with { Reason = "no word from the agent" }, "ULTRA").Whole);
+        Assert.DoesNotContain("sending it again", QuestionViewModel.Room("ULTRA"), StringComparison.Ordinal);
+        Assert.Equal("Sent, but not confirmed. Check at ULTRA before sending it again.", ReceiptWords.Unconfirmed("ULTRA"));
+    }
+
     [Fact]
     public void A_confirmed_answers_value_is_shown_in_a_direction_of_its_own_but_spoken_without_the_isolates()
     {

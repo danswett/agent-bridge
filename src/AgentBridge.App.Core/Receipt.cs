@@ -54,14 +54,20 @@ public static class ReceiptWords
     // A word break before the 21st character would leave too little of the value: cut at ValueMax instead.
     const int MinCut = 20;
 
-    // The room a receipt keeps from Send to the outcome (ui.md §6.5): the longest outcome's words,
-    // which the view lays out unseen under the line, so it wraps them as it would wrap the line
-    // (two lines at phone width, one on a wide window). A longer refusal may still grow it.
+    // The room a reply's receipt keeps from Send to the outcome (ui.md §6.5): the longest outcome's
+    // words, which the view lays out unseen under the line, so it wraps them as it would wrap the
+    // line (two lines at phone width, one on a wide window). A longer refusal may still grow it.
+    // An answer's is its own (QuestionViewModel.Room).
     public static string Room(string? machineName) => Unconfirmed(machineName);
 
-    // Not confirmed, for a reply and an answer alike (ui.md §6.5): the machine by its name.
+    // A reply not confirmed (ui.md §6.5): the machine by its name, and a reply may be sent again.
     public static string Unconfirmed(string? machineName) =>
         $"Sent, but not confirmed. Check at {(string.IsNullOrEmpty(machineName) ? "the machine" : machineName)} before sending it again.";
+
+    // An answer not confirmed (ui.md §6.5, #617): never "before sending it again", as an answer is
+    // final and never resent. Said with the reply's words, it invited a second answer (#625,
+    // Engineering 6676371806).
+    public const string AnswerUnconfirmed = "Sent, but not confirmed. Check at the machine.";
 
     static string? StageText(string? stage) => stage switch
     {
