@@ -2,7 +2,9 @@
 
 Read this before you change anything, whether you are a person or an agent. For where the
 project stands and what comes next, see [docs/status.md](docs/status.md). For the
-architecture, see [docs/design.md](docs/design.md).
+architecture, see [docs/design.md](docs/design.md). If you are an agent session joining a team,
+also read [docs/agents/onboarding.md](docs/agents/onboarding.md): who does what, how a PR lands,
+and how sessions stay in sync.
 
 ## The one rule that outranks the rest
 
