@@ -19,7 +19,9 @@ namespace AgentBridge.Host;
 //     one press is one answer however many times it is sent; signed at most five minutes before;
 //   * while permissions.escapedApproval is confirm.
 // Checked when the answer is taken and again once its typing slot is held (AnswerService), so a
-// device removed from the list, or a command changed, meanwhile stops it before any key.
+// device removed from the list meanwhile stops it before any key. A command changed meanwhile is
+// another question id, which the slot's own checks refuse (for Codex, as stale, from the question
+// rebuilt from its fresh marker, #958).
 public sealed class EscapedApprovals(P256KeyPair key, string policy, Func<IReadOnlyCollection<string>> devices, Action<string>? log = null, TimeProvider? time = null)
 {
     readonly Action<string> log = log ?? (_ => { });

@@ -734,7 +734,7 @@ hidden character, a control but newline and tab, a right-to-left letter; #220) c
 
 | Field | Meaning |
 |---|---|
-| `shown` | SHA-256, lower-case hex, of the question's `message` as sent, in UTF-8. The question id binds what Copilot wrote; `shown` binds what the person read |
+| `shown` | SHA-256, lower-case hex, of the question's `message` as sent, in UTF-8. The question id binds what the agent asked (a Copilot permission prompt's `<requestId>#<digest>`, a Codex approval's `<DecisionId>#<digest>`); `shown` binds what the person read |
 | `marks` | The host's own escapes in `message`: `[start, length]` in UTF-16 code units, in order, **one mark for each escape** (`\uXXXX` with four upper-case hex digits, or `\u{XXXXX}` past the first plane), adjacent ones too, and nothing else in it. Text an agent wrote itself is never in one. A client checks each mark against that grammar and draws every character of the message; a question whose marks don't check is held at the machine for Approve, as a malformed `escaped` is. At most 512; a question with more carries the first 512 and `approve` `tooMany`, and is not `truncated` for it, so Deny still goes |
 | `approve` | `confirm`: Approve takes the confirmation below. `machine`: this machine's `permissions.escapedApproval` keeps Approve at the machine. `tooMany`: more escapes than `marks` carries, so what a person reads is not described exactly and Approve is taken only at the machine, whatever the policy; Deny goes as for any approval. A client that reads any other value holds Approve at the machine |
 
@@ -758,16 +758,19 @@ A host takes it only:
   itself, and one this machine approved: `permissions.escapedApprovalDevices`, or while that is
   absent `launch.remoteFolderTrustDevices` while `launch.remoteFolderTrust` is on ([host-config.md](../host-config.md));
 * with a MAC for this machine, `action` `session.approve:escaped`, `to` and `target.machine` this
-  machine, `target.session` and `target.question` the answer's, `request` the answer's own,
+  machine, `target.session` and `target.question` the answer's (the question's `id` as listed: for
+  a Codex approval `<DecisionId>#<digest>`, never the bare `DecisionId`, #958), `request` the answer's own,
   `target.shown` equal to `escaped.shown` and to the digest of the message the host would send
   now, computed again, and a lifetime of at most 5 minutes;
 * while `escaped.approve` is `confirm`, and never for a `truncated` question.
 
 It checks all of this when the answer arrives and again once the answer's turn to type has come,
-so a device removed from the list or a command changed meanwhile stops it before any key. A
-`confirm` is good only for the escaped message it was signed for: an Approve carrying one is
-`refused` when the question it answers has no `escaped` now (Codex can list a plain command under
-the same id), as when its digest differs.
+so a device removed from the list, or a confirmation past its lifetime, meanwhile stops it before
+any key. A command changed meanwhile is another question, with another id: a Codex approval is
+rebuilt from its marker as it reads immediately before typing, never from the session's listing,
+and one that no longer rebuilds to the id answered is `stale` (#958). A `confirm` is good only for
+the escaped message it was signed for: an Approve carrying one is `refused` when the question it
+answers has no `escaped`, as when its digest differs.
 Everything else about the approval is as above. A resend of the same answer carries the same
 command and gets the first outcome; a new press is a new request and a new command. Anything
 missing or wrong is `refused` with the reason, nothing typed: an older client's Approve with no

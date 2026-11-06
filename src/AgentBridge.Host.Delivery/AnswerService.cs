@@ -205,12 +205,13 @@ public sealed class AnswerService : ISessionAnswerer
 
     // Why Approve on an approval the host escaped anything in cannot go as asked (#803), or null: Deny,
     // and an approval with nothing escaped, need no confirmation. Asked of the question as listed
-    // when the answer is taken, and of it as listed again once the typing slot is held, where
-    // Answers.Check is not asked again, so a question cut by then is refused here. A confirmation is
-    // good only for the escaped message it was signed for: one carried to a question with nothing
-    // escaped refuses Approve too. Codex keys an approval by its marker's DecisionId, which does not
-    // bind the command, so a confirmed Approve that skipped the check here when the same id was
-    // listed again with a plain command approved that command instead (#836 review).
+    // when the answer is taken, and again once the typing slot is held, where Answers.Check is not
+    // asked again: so a device taken off the list, or a confirmation past its lifetime, meanwhile
+    // stops it. A confirmation is good only for the escaped message it was signed for: one carried
+    // to a question with nothing escaped refuses Approve too (#836 review). That a question still
+    // reads at the slot as it did when the answer was taken is the agent's own check, not this one:
+    // a Copilot prompt's id binds its content, and a Codex approval is rebuilt from its fresh marker
+    // to exactly the id answered (#958), never read from the cached listing.
     internal static string? EscapedRefusal(Question question, AnswerRequest request, IEscapedConfirmation? confirmed)
     {
         if (question.Kind != QuestionKind.Approval || Decision(request.Fields) != true) { return null; }
@@ -565,8 +566,7 @@ public sealed class AnswerService : ISessionAnswerer
         {
             if (probe.Active() is { } active) { return Refused(active); }
             if (options.CodexApprovalsUnsettled?.Invoke(registration) is { } unsettled) { return Refused(unsettled); }
-            if (source.Get(session.Id)?.Question is not { } listed || listed.Id != question.Id) { return Stale("the session is no longer asking for that approval"); }
-            if (EscapedRefusal(listed, request, confirmed) is { } unconfirmed) { return Refused(unconfirmed); }
+            if (source.Get(session.Id)?.Question?.Id != question.Id) { return Stale("the session is no longer asking for that approval"); }
             var marker = ApprovalMarkerRead.Read(registration, session.Id);
             switch (marker.State)
             {
@@ -575,6 +575,10 @@ public sealed class AnswerService : ISessionAnswerer
             }
             if (!string.Equals(marker.DecisionId, parsed.DecisionId, StringComparison.Ordinal)) { return Stale("Codex is asking for a different approval now"); }
             if (!string.Equals(CodexApprovalId.Of(marker), question.Id, StringComparison.Ordinal)) { return Stale("Codex's approval reads differently from what was shown"); }
+            // The confirmation again, of the question answered: the fresh marker has just rebuilt to
+            // exactly its id, so it is what the person confirmed (#958). What may have changed
+            // meanwhile is the confirmation's own standing: a device taken off the list, or its lifetime.
+            if (EscapedRefusal(question, request, confirmed) is { } unconfirmed) { return Refused(unconfirmed); }
             if (marker.Attempted) { return Refused("agent-ha-bridge has already typed an answer into this approval, and it is never typed again; check at the machine"); }
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }

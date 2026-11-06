@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Xunit;
@@ -610,6 +611,9 @@ public class CopilotTests
         Assert.Equal(["\\u200B", "\\u202E"], Marked(q));
         Assert.Equal(EscapedApproval.Machine, q.Escaped!.Approve);
         Assert.Equal(EscapedApproval.Shown(q.Message), q.Escaped.Shown);
+        // The policy is carried, never bound into the id (#958): the typing slot rebuilds the id from
+        // the marker alone, so a machine that takes Approve only at the machine still has Deny typed.
+        Assert.Equal(CodexApprovalId.Of(new ApprovalMarkerRead(ApprovalMarkerState.Present, "d1", Question: "", Tool: "Bash\u200B", Command: "echo ok #\u202E;hs")), q.Id);
     }
 
     [Fact]
