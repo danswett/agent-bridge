@@ -33,6 +33,25 @@ function Get-Api([string]$path) {
   if ($head -match '(?mi)^etag:\s*(.+?)\s*$') { $cache[$path] = @{ etag = $Matches[1]; body = $body } }
   $body
 }
+# Oldest first, so a new comment past the first 100 changed since $Since is on a later page. Each page
+# URL keeps its own ETag; a 304 on a page is "unchanged". Any page failing throws, so it is never a wake.
+function Get-Comments([string]$since) {
+  $all = @()
+  for ($page = 1; ; $page++) {
+    $items = @(Get-Api "repos/$repo/issues/comments?since=$since&per_page=100&page=$page")
+    $all += $items
+    if ($items.Count -lt 100) { break }
+  }
+  $all
+}
+function Invoke-Retry([scriptblock]$Do) {
+  for ($i = 1; ; $i++) {
+    try { return (& $Do) } catch {
+      if ($i -ge 3) { throw }
+      Write-Host "start-up read failed (retrying): $($_.Exception.Message)"; Start-Sleep -Seconds 5
+    }
+  }
+}
 function Test-Tagged([string]$body) {
   $b = $body.ToLower()
   [bool]@($tags | ? { $b.Contains($_) }).Count
@@ -51,12 +70,23 @@ function Get-CiState([string]$sha) {
 
 # Wake on CI only when it goes from running to finished, never just because it is already finished.
 $heads = @{}; $running = @{}
-foreach ($p in $Prs) { $heads[$p] = (Get-PrState $p).sha; $running[$p] = (Get-CiState $heads[$p]).pending }
+"watching comments since $Since"
+# A transient error here must not exit the script (that wakes the session): retry, then treat CI as not running.
+foreach ($p in $Prs) {
+  try {
+    $heads[$p] = (Invoke-Retry { Get-PrState $p }).sha
+    $running[$p] = (Invoke-Retry { Get-CiState $heads[$p] }).pending
+  } catch {
+    Write-Host "start-up read for #$p failed (continuing, CI treated as not running): $($_.Exception.Message)"
+    if (-not $heads[$p]) { $heads[$p] = $null }
+    $running[$p] = $false
+  }
+}
 $deadline = (Get-Date).AddMinutes($MaxMinutes)
 $nextCi = Get-Date
 while ((Get-Date) -lt $deadline) {
   try {
-    $hits = @(Get-Api "repos/$repo/issues/comments?since=$Since&per_page=100" | ? {
+    $hits = @(Get-Comments $Since | ? {
         $_.body -and $_.id -notin $IgnoreIds -and (Test-Tagged $_.body) })
     if ($hits.Count) { $hits | % { "WAKE comment $($_.html_url) by $($_.user.login) at $($_.updated_at)" }; exit 0 }
     if ($Prs.Count -and (Get-Date) -ge $nextCi) {
@@ -64,6 +94,7 @@ while ((Get-Date) -lt $deadline) {
       foreach ($p in $Prs) {
         $ps = Get-PrState $p
         if ($ps.state -ne 'OPEN') { "WAKE pr #$p is $($ps.state)"; exit 0 }
+        if (-not $heads[$p]) { $heads[$p] = $ps.sha }
         if ($ps.sha -ne $heads[$p]) { "WAKE pr #$p head moved $($heads[$p].Substring(0,8)) -> $($ps.sha.Substring(0,8))"; exit 0 }
         $st = Get-CiState $ps.sha
         if ($running[$p] -and -not $st.pending) {
