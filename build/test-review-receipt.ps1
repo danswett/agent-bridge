@@ -128,7 +128,7 @@ function Reset([string]$text = $events) {
     # the fixture's diff base.
     $global:RrSince = $global:RrMergeBase
     $global:RrPolicy = "version: 1`nbase: main`n`n# Who may post the receipt.`nindependent_review:`n  context: independent-review`n  # synthetic logins`n  posters: [a-poster, `"another-poster`"]`n`nsecurity_labels: [security]`n"
-    $global:RrSinceStatuses = @(@{ state = 'success'; creator = 'a-poster'; created_at = '2025-06-01T09:00:00Z' })
+    $global:RrSinceStatuses = @(@{ state = 'success'; creator = 'a-poster'; created_at = '2025-06-01T09:00:00Z'; description = 'sec-929 CLEAN: FULL into main, code-review, claude-opus-5.5' })
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
     New-Item -ItemType Directory -Force $scratch | Out-Null
     [IO.File]::WriteAllText($log, $text, [Text.UTF8Encoding]::new($false))
@@ -454,7 +454,7 @@ Check 'Pending CI is refused' {
 Check 'DELTA from a CLEAN receipt by an account in main''s posters prints a receipt, the login matched in any case' {
     Reset
     $global:RrSinceStatuses = @(
-        @{ state = 'success'; creator = 'A-Poster'; created_at = '2025-06-01T09:00:00Z' },
+        @{ state = 'success'; creator = 'A-Poster'; created_at = '2025-06-01T09:00:00Z'; description = 'sec-930 CLEAN: DELTA into main, security-review, claude-opus-5.5' },
         @{ state = 'failure'; creator = 'a-poster'; created_at = '2025-06-01T08:00:00Z' })
     $receipt = Invoke-Receipt -Scope DELTA -Since $global:RrSince
     Assert ($receipt.StartsWith('<!-- agent-bridge review-receipt v1 -->')) "receipt: $receipt"
@@ -480,6 +480,28 @@ Check 'DELTA refuses a latest receipt status that isn''t an authorized success, 
     Reset
     $global:RrSinceStatuses = @()
     Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) '*has no independent-review status to be a delta from*'
+}
+
+Check 'DELTA refuses a latest CLEAN receipt that doesn''t say it was into main, never falling back to an older one that does' {
+    $into = '*doesn''t say it''s a CLEAN receipt into main*get a new FULL or ENTIRE receipt for the pull request into main instead of a DELTA*'
+    foreach ($description in @($null, '', 'sec-929 CLEAN: FULL, code-review, claude-opus-5.5', 'sec-929 CLEAN: FULL into stage, code-review, claude-opus-5.5',
+            'sec-929 CLEAN: FULL into Main, code-review, claude-opus-5.5', 'sec-929 CLEAN: FULL into main-old, code-review, claude-opus-5.5',
+            'sec-929 CLEAN: FULL into main', 'sec-929 CLEAN: PARTIAL into main, code-review, claude-opus-5.5', 'sec-929 CLEAN: DELTA, code-review into main, x',
+            'note: sec-929 CLEAN: FULL into main, code-review, claude-opus-5.5')) {
+        Reset
+        $global:RrSinceStatuses = @(@{ state = 'success'; creator = 'a-poster'; created_at = '2025-06-01T09:00:00Z'; description = $description })
+        Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) $into
+        Assert (-not ($global:RrCalls | Where-Object { $_ -like '*compare/*' })) "compared after refusing '$description': $($global:RrCalls)"
+    }
+    # The pull request into main now, its -Since receipt into stage.
+    Reset
+    $global:RrSinceStatuses = @(@{ state = 'success'; creator = 'a-poster'; created_at = '2025-06-01T09:00:00Z'; description = 'sec-929 CLEAN: FULL into stage, code-review, claude-opus-5.5' })
+    Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) '*doesn''t say it''s a CLEAN receipt into main (''sec-929 CLEAN: FULL into stage,*'
+    Reset
+    $global:RrSinceStatuses = @(
+        @{ state = 'success'; creator = 'a-poster'; created_at = '2025-06-01T09:00:00Z'; description = 'sec-929 CLEAN: FULL, code-review, claude-opus-5.5' },
+        @{ state = 'success'; creator = 'a-poster'; created_at = '2025-06-01T08:00:00Z'; description = 'sec-929 CLEAN: FULL into main, code-review, claude-opus-5.5' })
+    Assert-Refused (Get-Refusal -Scope DELTA -Since $global:RrSince) $into
 }
 
 Check 'DELTA refuses when main''s merge rule names no posters it understands, or can''t be read' {

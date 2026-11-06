@@ -70,7 +70,11 @@
 #                   never the pull request's own base; the diff is `git diff <their merge base> <head>`.
 #  DELTA            the files changed since -Since, whose latest independent-review status must
 #                   be a success posted by an account in independent_review.posters as main's
-#                   quality/merge-rule.yml has it (any case); the diff is `git diff <since> <head>`.
+#                   quality/merge-rule.yml has it (any case), with the description this script
+#                   posts for a pull request into that base, `sec-<n> CLEAN: <FULL|ENTIRE|DELTA>
+#                   into <base>, ...` (the base exactly, in its case); an older receipt, or one
+#                   into another branch, needs a new FULL or ENTIRE receipt instead. The diff is
+#                   `git diff <since> <head>`.
 # The diff read is a successful powershell tool call of the reviewer, exit code 0, with output,
 # whose command runs git diff with both full SHAs (A B, A..B or A...B). Its output may be cut
 # short by the CLI, so the receipt proves the command, not that every line of it was read.
@@ -532,9 +536,11 @@ if ($live.GreenAt -gt $captureAt) {
 if ($Scope -eq 'DELTA') {
     # -Since must carry a CLEAN receipt: its latest independent-review status a success, posted by
     # an account main's merge rule lets post one. The latest alone is judged; an older status never
-    # stands in for it.
+    # stands in for it. It must also be a receipt for a pull request into $targetBase, as its
+    # description says: one for a pull request into another branch never read what that branch
+    # left out, so it can't be carried to one into $targetBase.
     $posters = @(Get-ReceiptPosters $policyLines)
-    $sinceStatuses = @(Invoke-Gh api "repos/$Repository/commits/$Since/statuses?per_page=100" --paginate --jq ".[] | select(.context == `"$receiptContext`") | {state, creator: .creator.login, created_at}" |
+    $sinceStatuses = @(Invoke-Gh api "repos/$Repository/commits/$Since/statuses?per_page=100" --paginate --jq ".[] | select(.context == `"$receiptContext`") | {state, creator: .creator.login, created_at, description}" |
             Where-Object { $_ } | ForEach-Object { ConvertFrom-GhJson $_ "a $receiptContext status on $Since" })
     if ($sinceStatuses.Count -eq 0) { Stop-Receipt "$Since has no $receiptContext status to be a delta from" }
     $latestAt = $null
@@ -551,6 +557,10 @@ if ($Scope -eq 'DELTA') {
         Stop-Receipt "the latest $receiptContext status on $Since was posted by $sinceCreator, who isn't in independent_review.posters on main"
     }
     if ((Get-Field $latest[0] 'state') -cne 'success') { Stop-Receipt "the latest $receiptContext status on $Since is $(Get-Field $latest[0] 'state'), not success: no CLEAN receipt to be a delta from" }
+    $sinceDescription = Get-Field $latest[0] 'description'
+    if ($sinceDescription -isnot [string] -or $sinceDescription -cnotmatch ('^sec-[0-9]+ CLEAN: (FULL|ENTIRE|DELTA) into ' + [regex]::Escape($targetBase) + ', ')) {
+        Stop-Receipt "the latest $receiptContext status on $Since doesn't say it's a CLEAN receipt into $targetBase ('$sinceDescription'): get a new FULL or ENTIRE receipt for the pull request into $targetBase instead of a DELTA"
+    }
     $compareFrom = $Since
 } else {
     # Against the base branch main's merge rule names, never the pull request's own base: what
