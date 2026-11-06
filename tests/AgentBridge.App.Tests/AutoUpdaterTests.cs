@@ -967,6 +967,30 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.StartsWith("Needs you: the update to 0.2.0", auto.State.Waiting);
         Assert.EndsWith(AutoUpdater.CannotTellQuestions, auto.State.Waiting);
     }
+    // Engineering on eae43827 (6674983849): only this machine's sessions hold an install between
+    // turns. Another machine's turns and questions are its own host's: an update here restarts
+    // only this one.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Set_to_install_between_turns_another_machines_busy_sessions_do_not_hold_the_install()
+    {
+        InstallBetweenTurns();
+        await using var other = new FakeHost();
+        other.Sessions.Add(Make.Session("o1", SessionStatus.Working));
+        other.Sessions.Add(Make.Session("o2") with { Status = SessionStatus.Idle, Question = Make.Approval() });
+        other.Start();
+        await using var otherLink = other.Connect(new LockedDispatcher(), start: false);
+        otherLink.Start();
+        await Wait.UntilAsync(() => otherLink.Sessions.All.Count == 2 && otherLink.Sessions.Complete, "the other machine's sessions");
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await Wait.UntilAsync(() => updater.Applied, "the install between turns", TimeSpan.FromSeconds(5));
+
+        Assert.Empty(other.Sent(HostOps.Stop));
+        Assert.Contains(otherLink.Sessions.All, s => s.Status == SessionStatus.Working);
+    }
     // The host back from a failed install is a gap: without a pause, every gap stopped it again.
     [Fact]
     [Trait("Category", "Network")]
