@@ -15,6 +15,8 @@ import { renderMarkdown } from '../markdown.js';
 // the machine confirmed it) stays, apart from the count, until its outcome has shown: a delivered
 // one for its check, any other for long enough to read, and never past the answer's give-up (the
 // answer service's 9 minutes). Dropped with its question, the ring went and the outcome never came.
+// The outcome can also come first, the machine's update clearing the question after it: the entry
+// then stays for what is left of that same time, as it would the other way round (outcomeUntil).
 const LINGER_READ_MS = 5000;
 const LINGER_MAX_MS = 9 * 60 * 1000;
 const inFlight = (entry) => entry?.state === 'sending' || entry?.state === 'waiting';
@@ -210,10 +212,21 @@ export class NeedsYouLane {
     if (view.lingerOver) { return false; }
     if (view.lingering) { return true; }
     const x = view.entry;
-    if (!view.service || !inFlight(view.service.get(x.hostId, x.sessionId, x.questionId))) { return false; }
+    if (!view.service) { return false; }
+    const current = view.service.get(x.hostId, x.sessionId, x.questionId);
+    const now = Date.now();
+    if (inFlight(current)) {
+      view.lingerCap = setTimeout(() => this.#endLinger(view), LINGER_MAX_MS);
+    } else if (current && view.outcomeUntil > now) {
+      // Its outcome came before its question went: shown for what is left of its time.
+      view.lingerEnd = setTimeout(() => this.#endLinger(view), view.outcomeUntil - now);
+    } else {
+      return false;
+    }
     view.lingering = true;
     view.el.dataset.lingering = 'true';
-    view.lingerCap = setTimeout(() => this.#endLinger(view), LINGER_MAX_MS);
+    view.els.approve.disabled = view.els.deny.disabled = true;
+    view.els.resend.hidden = true;
     return true;
   }
 
@@ -235,17 +248,25 @@ export class NeedsYouLane {
   #show(view, entry) {
     const { els } = view;
     clearTimeout(view.pause);
-    if (view.lingering && !inFlight(entry)) {
-      // Its outcome is in: shown for its check, or long enough to read, then the entry goes.
-      clearTimeout(view.lingerEnd);
-      const delivered = entry?.state === 'done' && entry.outcome === 'delivered';
-      view.lingerEnd = setTimeout(() => this.#endLinger(view), !entry ? 0 : delivered ? ReceiptTiming.sendCheckHoldMs : LINGER_READ_MS);
-    }
     const { again, pause } = answerControls(entry);
     view.el.dataset.answer = answerState(entry);
     // Held on this device for a machine that isn't connected: the ring on its button stands still.
     view.el.classList.toggle('still', entry?.state === 'waiting' && entry.reason === 'not connected');
     view.receipt.show(entry);
+    // Its outcome, come in while this entry watched it go: shown for its check, or long enough to
+    // read, whichever of it and its question going comes first.
+    const now = Date.now();
+    if (!entry || inFlight(entry)) {
+      view.outcomeUntil = 0;
+    } else if (view.wasInFlight) {
+      const delivered = entry.state === 'done' && entry.outcome === 'delivered';
+      view.outcomeUntil = delivered ? view.receipt.checkUntil ?? now + ReceiptTiming.sendCheckHoldMs : now + LINGER_READ_MS;
+    }
+    view.wasInFlight = inFlight(entry);
+    if (view.lingering && !inFlight(entry)) {
+      clearTimeout(view.lingerEnd);
+      view.lingerEnd = setTimeout(() => this.#endLinger(view), Math.max(0, view.outcomeUntil - now));
+    }
     // Its question gone, nothing in it can be pressed or tried again.
     els.approve.disabled = els.deny.disabled = !again || pause || view.lingering;
     els.resend.hidden = entry?.state !== 'failed' || view.lingering;

@@ -170,6 +170,54 @@ test.describe('on a phone', () => {
     await expect(entryFor(page, LAND)).toHaveCount(0);
   });
 
+  // The machine's result can reach the phone before its update taking the question away: the entry
+  // ends as it does the other way round. The demo host's question-clearing upsert is held back here
+  // until the result is in.
+  const resultFirst = (page) => page.evaluate(() => {
+    const h = window.agentBridgeDemo.host;
+    const upsert = h.upsert.bind(h);
+    const held = [];
+    h.upsert = (s) => { if (s.question === null) { held.push(s); } else { upsert(s); } };
+    window.__questionGoes = () => { h.upsert = upsert; for (const s of held) { upsert(s); } };
+  });
+
+  test('a delivered result before its question goes keeps the entry for the rest of its check', async ({ page }) => {
+    await openDemo(page);
+    const e = await ask(page, LAND, permission());
+    await resultFirst(page);
+    // When the check went on, and when the entry went: a second apart, as when the question goes
+    // first. The question goes the moment the check is on, however slowly the test runs.
+    await e.evaluate((el) => {
+      const approve = el.querySelector('.needs-approve');
+      const at = window.__entry = {};
+      new MutationObserver(() => {
+        if (at.checked === undefined && approve.classList.contains('checked')) { at.checked = performance.now(); setTimeout(() => window.__questionGoes()); }
+        if (at.gone === undefined && !el.isConnected) { at.gone = performance.now(); }
+      }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+    });
+    await e.getByRole('button', { name: /^Approve once/ }).tap();
+    await expect(entryFor(page, LAND)).toHaveCount(0);
+    const at = await page.evaluate(() => window.__entry);
+    expect(at.gone - at.checked).toBeGreaterThanOrEqual(900);
+  });
+
+  test('an unconfirmed result before its question goes keeps the entry, saying why, long enough to read', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'unconfirmed');
+    const e = await ask(page, LAND, permission());
+    await resultFirst(page);
+    await e.getByRole('button', { name: /^Approve once/ }).tap();
+    await expect(e).toHaveAttribute('data-answer', 'unconfirmed');
+    await page.evaluate(() => window.__questionGoes());
+    await expect(e).toHaveAttribute('data-lingering', 'true');
+    // Past any check's hold: still there, its warning on its line, nothing in it to press.
+    await page.waitForTimeout(1500);
+    await expect(entryFor(page, LAND)).toHaveCount(1);
+    await expect(e.locator('.needs-status')).toContainText('not confirmed');
+    await expect(e.getByRole('button', { name: /^Approve once/ })).toBeDisabled();
+    await expect(entryFor(page, LAND)).toHaveCount(0, { timeout: 10000 });
+  });
+
   test('the lane\'s line keeps its room whatever it says: an entry is as tall on its way as with a busy outcome\'s words', async ({ page }) => {
     await openDemo(page);
     await script(page, 'busy');
