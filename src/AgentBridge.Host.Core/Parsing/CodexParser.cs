@@ -84,7 +84,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                 switch (Json.Str(payload, "type"))
                 {
                     case "task_started":
-                        S.Prompts++;
+                        S.Prompt(Json.Time(e, "timestamp"));
                         break;
                     case "user_message" when Text.NonBlank(Json.Str(payload, "message")) is { } said:
                         Skimmed(said, Json.Time(e, "timestamp"));
@@ -146,7 +146,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         switch (Json.Str(p, "type"))
         {
             case "task_started":
-                S.Prompts++;
+                S.Prompt(at);
                 S.Reasoning = null;
                 S.SetStatus(SessionStatus.Working);
                 S.Activity(at);
