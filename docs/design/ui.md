@@ -738,8 +738,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     place among the tabs shown, the last of the others giving way to it.
   - **A long name** is cut short with "…" at `layout.windows.machineTab` (128 px). A tab's tooltip and
     accessible name are the whole name and the machine's state: "Build server · 3 sessions", with
-    "· View only" for a read-only machine (§6.6), "connecting…" while it connects, and "offline"
-    while it is away ("A machine away").
+    "· View only" for a read-only machine (§6.6), "connecting…" while it connects, "offline"
+    while it is away ("A machine away"), and "bridge isn't running" once its host is gone (§6.14).
   - **Keyboard:** the arrows move through the tabs shown, Tab goes on to More, and Enter or Space
     opens its menu. Touch and the mouse reach More as any button.
   - It holds at the narrowest list (264, §5.2) and in one column. The PWA's tabs still scroll
@@ -1575,6 +1575,8 @@ machine, online ones first, then the account's offline machines (#213):
 - **A machine away (§6.1):** listed once, as offline ("Offline", and "Last seen 2m ago" on line
   2), with Forget, both while its rows are kept and after they have gone. A client whose relay
   keeps no roster lists it so only while its rows are kept.
+- **A machine whose bridge isn't running (§6.14, proposed):** still "Offline" on line 1, and
+  line 2 says "Bridge isn't running · since *time*" in place of "Last seen…".
 
 ### 6.7 Collaborators (#519)
 
@@ -2366,6 +2368,110 @@ never adds a count to it; the count, and for Home Assistant the sessions' names,
   "Not responding", "Not authorised", "Rate limited", "Agent error"). Its sign-in notice follows
   the pattern above: the plain title, and "*n* sessions: *A*, *B*" as its message. Never the code
   or URL, and no Sign in.
+
+### 6.14 A machine whose bridge isn't running (#970)
+
+**Proposed, for Creative's words and Product's confirmation; not built.** When a machine's host
+has stopped, nothing on it can tell the person: pushes, toasts and Home Assistant notices all
+come from the host. The relay outlives it, so the relay decides when a host is gone, and both
+clients say so from the relay's presence (`presence.known[].offline.gone`,
+[host-gone.md](../protocol/host-gone.md)). The design is Product's
+([#800 6676984805](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6676984805)).
+
+**When it shows.** Only once the relay sets `gone`: the host went without announcing it, with
+evidence that the bridge stopped while the machine is up, and it hasn't come back within
+5 minutes, which leaves time for #805 to restart it first. So:
+
+| The machine | What the clients show |
+|---|---|
+| Its host went less than 5 minutes ago | What §6.1's "A machine away" shows now: "Reconnecting…", then "Offline · last seen…" |
+| Its host announced the departure: an update, a restart, a stop, sleep, shut down, a reboot, sign-out (#805) | #805's planned state, never this |
+| It went silent (switched off, asleep, off the network) and nothing shows the bridge stopped | "Offline", as now |
+| Its host is gone | This section |
+
+It goes as soon as the host is listed online again, and when the machine is forgotten or the
+account changes.
+
+**On the Machines page (§6.6).** The machine's row stays an offline row, with line 2 saying why:
+
+- Line 1: the machine icon, the name, and "Offline", as any offline row.
+- Line 2: "Bridge isn't running · since *time*", in place of "Last seen…". The since time is
+  `gone.since`, when the host first went in this episode, which is earlier than "last seen"
+  when it came back briefly in between. The name isn't repeated: it is on line 1 (every element
+  has a purpose).
+- Inside the row: Forget, as for any offline machine, and nothing else yet. When #801's remote
+  restart exists it adds its one action here and on the banner, in #801's words. Never an
+  instruction to go to the machine, now or later.
+
+**On the machine tab (§6.1).** A banner at the top of the session list, above Needs you, in the
+place and style of §6.13's machine banner: "*machine*'s bridge isn't running · since *time*".
+One per machine; it shows with that machine's tab chosen and with All. Not dismissible while it
+lasts; it goes by itself when the host is back. No button until #801's. The tab's tooltip and
+accessible name, and its entry in the "N more" menu, read "*machine* · bridge isn't running".
+The machine's rows keep §2.2's away treatment ("Offline · last seen…") until §6.1's 15 minutes
+take them; the banner says why, so the rows don't repeat it.
+
+**Never claim an agent state we can't see.** Nothing in the line, the row or the banner says
+what the sessions are doing: the host was the only thing that could see them, and it's gone.
+The agents may well still be running at the machine. Nor does any of it say why the host
+stopped ("crashed", "killed"): the relay can't know.
+
+**Time.** "since *time*" is when the relay saw the host go (`gone.since`), in the viewer's local
+time zone and time format, as every time in the app (§6.4): "since 8:31 AM" today; "since
+yesterday, 11:02 PM"; "since Tue, 11:02 PM" within the last week; "since Nov 3, 11:02 PM"
+before that. No zone is added: it is one instant shown in the viewer's own zone, not another
+machine's clock. The tooltip and accessible name give the full date and time ("since Friday,
+November 6, 8:31 AM").
+
+**Tone.** Plain and calm, a fact rather than an alarm: the machine is named, the state is said,
+and there is no exclamation, no "error" and no blame. The banner is informational, never the
+`failed` colour (§3): nothing went wrong with what the person did.
+
+**The push and the toast.** One notice, only if a session there was working or waiting when
+the host went (the host arms it in advance; the relay sends it, v1-sessions.md
+[Host gone](../protocol/v1-sessions.md#host-gone-970)). A machine that's simply off, with nothing
+in flight, notifies nothing.
+
+| | Title | Body |
+|---|---|---|
+| Push (PWA), toast (Windows app) | "*machine*'s bridge isn't running" | "It stopped while sessions there were working or waiting on you." |
+| When the host is back (push only, silent, replacing the one above) | "*machine*'s bridge is running again" | "You can reach its sessions again." |
+
+- **Tier:** Needs you: it interrupts, with the question sound, sent once per episode (#913).
+  It doesn't count in Needs you's N, its filter or the app badge: N counts questions and
+  approvals only (owner decision, 2026-11-05), and nothing on a session row fixes this.
+- **Once.** One per machine per episode, at most one an hour per machine and three a day per
+  account, shared with #805's no-return notice. A device on screen gets it too: the banner is
+  easy to miss on another tab.
+- **The body** is sealed by the host before it went, so it never carries the time, a count or
+  a session's name (any of them could be stale). The notification's own time says when it came.
+- **Opening it** opens the client on that machine's tab, with the banner.
+- **The Windows app** gets no Web Push: it raises the same toast once from the relay's presence
+  (`gone.alert`), which the relay sets whenever work was in flight, whether or not any browser
+  was subscribed. The app on the machine whose host died alerts the same way, as any other
+  client.
+- **Home Assistant:** nothing new. Its connector runs inside the host, so it can't say this.
+
+**Accessibility (§9.1).** The banner is a polite live region, announced once per machine and
+episode (A6). The row's accessible name reads "*machine*, offline, bridge isn't running since
+*full time*". Every state is told by its words, not its colour.
+
+**Copy**
+
+| Use | Text |
+|---|---|
+| Machines row, line 2 | "Bridge isn't running · since *time*" |
+| Banner | "*machine*'s bridge isn't running · since *time*" |
+| Machine tab tooltip and "N more" entry | "*machine* · bridge isn't running" |
+| Push and toast title | "*machine*'s bridge isn't running" |
+| Push and toast body | "It stopped while sessions there were working or waiting on you." |
+| Push when back (silent) | "*machine*'s bridge is running again"; "You can reach its sessions again." |
+
+**Platforms**
+
+- **Windows app and PWA:** the row on the Machines page, and the banner at the top of the
+  session list (in the list's header in the app), as §6.13's.
+- **Apple (#260):** note only. The same fields; the native form is that track's decision.
 
 ## 7. Platform shells
 
