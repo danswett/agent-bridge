@@ -1,0 +1,133 @@
+// Coming back to the app (#950, ui.md "Coming back to the app"): for 3 s after the app is shown
+// again what was last seen stays as it was; held controls are aria-disabled at once and drawn
+// disabled after 600 ms; a list not whole after 1 s says "Updating…" in the title row's slot; and at
+// 3 s the away states show in place, with a strip if the client's own link is down. The page's
+// clock is the test's, so each point lands where the test puts it.
+import { test, expect } from '@playwright/test';
+import { open } from './nav.mjs';
+
+const LAPTOP = 'demo-laptop';
+const IDLE = 'laptop-copilot-1';
+const ASK = 'laptop-ask-1';
+
+const card = (page, id) => page.locator(`.session[data-host-id="${LAPTOP}"][data-id="${id}"]`);
+const sv = (page, id) => page.locator(`.session-view[data-host-id="${LAPTOP}"][data-id="${id}"]`);
+const setOnline = (page, on) => page.evaluate((on) => window.agentBridgeDemo.setOnline(LAPTOP_ID, on), on);
+const slot = (page) => page.locator('#return-slot');
+
+async function openDemo(page) {
+  await page.addInitScript(() => { window.LAPTOP_ID = 'demo-laptop'; });
+  await page.goto('?demo=1&static=1&machines=2');
+  await page.waitForSelector('html[data-demo-ready]');
+}
+
+// The page's clock held from here, and the app shown again.
+async function comeBack(page) {
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+}
+
+test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
+
+test('a machine that goes away just after a return reads as last seen for 3 s, then shows offline in place', async ({ page }) => {
+  await openDemo(page);
+  await comeBack(page);
+  await setOnline(page, false);
+  await page.clock.runFor(1500);
+  await expect(card(page, IDLE).locator('.row-glyph .glyph')).not.toHaveAttribute('data-glyph', 'failed');
+  await expect(card(page, IDLE).locator('.row-status')).not.toHaveText('Offline');
+  await expect(card(page, IDLE)).not.toHaveAttribute('data-stale', /./);
+  await expect(page.locator('#host-state')).toBeHidden();
+  await page.clock.runFor(1600);
+  await expect(card(page, IDLE)).toHaveAttribute('data-stale', 'offline');
+  await expect(card(page, IDLE).locator('.row-status')).toHaveText('Offline');
+});
+
+test('a reply held for a return is aria-disabled at once, drawn disabled after 600 ms, and a press says Updating… under it', async ({ page }) => {
+  await openDemo(page);
+  await open(page, IDLE, LAPTOP);
+  const v = sv(page, IDLE);
+  await v.locator('.reply-input').fill('Push it when done');
+  await comeBack(page);
+  await setOnline(page, false);
+  await page.clock.runFor(10);
+  const send = v.locator('.reply .send');
+  await expect(send).toHaveAttribute('aria-disabled', 'true');
+  expect(await send.evaluate((b) => b.disabled)).toBe(false);
+  await expect(v.locator('form.reply')).toHaveAttribute('data-hold', 'quiet');
+  await expect(v.locator('.reply-held')).toBeHidden();
+  await send.evaluate((b) => b.click());
+  await expect(v.locator('.reply-updating')).toHaveText('Updating…');
+  expect(await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].replyLog.length)).toBe(0);
+  await page.clock.runFor(600);
+  await expect(v.locator('form.reply')).toHaveAttribute('data-hold', 'drawn');
+  await page.clock.runFor(2500);
+  await expect(v.locator('.reply-held')).toHaveText('Laptop is offline · you can answer once it\'s back');
+  await expect(v.locator('.reply-updating')).toBeHidden();
+});
+
+test('a list not whole 1 s after a return says Updating… in the title row\'s slot, unannounced, and moves no row', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].holdSnapshot());
+  await comeBack(page);
+  await setOnline(page, false);
+  await page.clock.runFor(100);
+  await setOnline(page, true);
+  await page.clock.runFor(700);
+  const top = () => page.locator('#session-list > .session').first().evaluate((c) => c.getBoundingClientRect().top);
+  const before = await top();
+  await expect(slot(page)).toHaveText('');
+  await page.clock.runFor(300);
+  await expect(slot(page)).toHaveText('Updating…');
+  await expect(slot(page)).not.toHaveAttribute('aria-live', /./);
+  await expect(slot(page)).not.toHaveAttribute('role', /./);
+  expect(await top()).toBe(before);
+  expect(await page.locator('#session-list').evaluate((l) => l.previousElementSibling?.matches('#sign-in-banners, #needs-you, #machine-tabs') ?? true)).toBe(true);
+});
+
+test('the relay link down when the grace ends puts a strip in the title row at its height, said once politely', async ({ page }) => {
+  await openDemo(page);
+  const head = page.locator('.sessions-head');
+  const height = (await head.boundingBox()).height;
+  await comeBack(page);
+  await page.evaluate(() => { window.agentBridgeDemo.connection.ready = false; window.agentBridgeDemo.page.refresh(); });
+  await page.clock.runFor(2500);
+  await expect(page.locator('#connection-strip')).toBeHidden();
+  await page.clock.runFor(600);
+  const strip = page.locator('#connection-strip');
+  await expect(strip).toBeVisible();
+  await expect(strip).toHaveAttribute('role', 'status');
+  await expect(strip).toHaveAttribute('aria-live', 'polite');
+  expect((await head.boundingBox()).height).toBe(height);
+});
+
+test('an offline machine\'s line takes the place of the reply box\'s actions and focus on one goes to it', async ({ page }) => {
+  await openDemo(page);
+  await open(page, IDLE, LAPTOP);
+  const v = sv(page, IDLE);
+  await v.locator('.reply-input').fill('Push it when done');
+  await v.locator('.reply .send').focus();
+  await setOnline(page, false);
+  const line = v.locator('.reply-held');
+  await expect(line).toHaveText('Laptop is offline · you can answer once it\'s back');
+  await expect(v.locator('.reply-tools')).toBeHidden();
+  await expect(line).toHaveAttribute('tabindex', '-1');
+  await expect(line).toBeFocused();
+  await expect(page.locator('#host-state')).toBeHidden();
+});
+
+test('a question held through a return keeps its row and Needs you\'s count until the grace ends', async ({ page }) => {
+  await openDemo(page);
+  const entries = page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`);
+  await expect(entries).toHaveCount(1);
+  const head = await page.locator('#needs-you .needs-you-head').textContent();
+  await comeBack(page);
+  await setOnline(page, false);
+  await page.clock.runFor(1500);
+  await expect(entries).toHaveCount(1);
+  await expect(page.locator('#needs-you .needs-you-head')).toHaveText(head);
+  await expect(card(page, ASK)).not.toHaveAttribute('data-stale', /./);
+  await page.clock.runFor(1600);
+  await expect(entries).toHaveCount(0);
+});

@@ -161,10 +161,10 @@ test('a machine that can\'t be reached says so in a line of its own, keeps its c
     laptop.failOpen = 'the handshake timed out';
     laptop.disconnect();
   });
-  const note = page.locator(`#host-state [data-host-id="${LAPTOP}"]`);
-  await expect(note).toHaveText("Couldn't reach Laptop: the handshake timed out. Trying again.");
+  const note = page.locator('#return-slot');
+  await expect(note).toHaveText("Couldn't reach Laptop");
   await expect(page.locator(`.session[data-host-id="${LAPTOP}"]`)).toHaveCount(2);
-  await expect(page.locator('#host-state .host-note')).toHaveCount(1);
+  await expect(page.locator('#host-state')).toBeHidden();
   // The other machine still answers.
   const asked = sv(page, 'demo', '02d9e5d5-6b35-49bd-b083-39572fbff648');
   await expect(asked.locator('.question')).toHaveAttribute('data-answerable', 'true');
@@ -172,7 +172,7 @@ test('a machine that can\'t be reached says so in a line of its own, keeps its c
   // Back: picked again, it is tried at once rather than at the next retry.
   await page.evaluate(() => { window.agentBridgeDemo.machines['demo-laptop'].failOpen = null; });
   await tab(page, 'all').click();
-  await expect(note).toHaveCount(0);
+  await expect(note).not.toContainText("Couldn't reach");
   await expect(page.locator('#host-state')).toBeHidden();
 });
 
@@ -192,7 +192,9 @@ test('a machine that leaves for a moment keeps its rows, offline, beside the oth
   // Still every machine's list, the laptop's tab kept and said to be offline.
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on all machines');
   await expect(tab(page, LAPTOP)).toHaveAccessibleName('Laptop, offline');
-  await expect(page.locator(`#host-state [data-host-id="${LAPTOP}"]`)).toContainText('Laptop is offline');
+  // Machine news is never a sentence over the list (#950): the tab says it, the rows read as stale.
+  await expect(page.locator('#host-state')).toBeHidden();
+  await expect(page.locator('#return-slot')).toHaveText('');
   // Its question is neither listed nor counted while it may have gone.
   await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(0);
 
@@ -227,11 +229,11 @@ test.describe('a machine back from offline', () => {
     await setOnline(page, false);
     await expect(v.locator('.reply .send')).toBeDisabled();
     await expect(v.locator('.reply .attach')).toBeDisabled();
-    await expect(v.locator('.reply-held')).toHaveText('Laptop is offline. This can\'t be replied to from here until it is back.');
+    await expect(v.locator('.reply-held')).toHaveText('Laptop is offline · you can answer once it\'s back');
     await expect(v.locator('.reply-input')).toHaveValue('Push it when done');
     await expect(v.locator('.end-button')).toBeDisabled();
     await expect(asked.locator('.question .choice').first()).toBeDisabled();
-    await expect(asked.locator('.question .answer-held')).toHaveText('Laptop is offline. This can\'t be answered from here until it is back.');
+    await expect(asked.locator('.question .answer-held')).toHaveText('Laptop is offline · you can answer once it\'s back');
     await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(0);
     // Launch keeps the laptop picked, held.
     await go(page, 'launch');
@@ -456,7 +458,7 @@ test('a machine remembered from a demo with more machines says it is offline, an
   await tab(page, LAPTOP).click();
   await page.goto('?demo=1&static=1');
   await page.waitForSelector('html[data-demo-ready]');
-  await expect(page.locator('#host-state')).toContainText('is offline');
+  await expect(page.locator('#host-state')).toBeHidden();
   // Still chosen while it is away, and said to be.
   await expect(tab(page, LAPTOP)).toHaveAttribute('aria-selected', 'true');
   await expect(tab(page, LAPTOP)).toHaveAccessibleName(/, offline$/);
@@ -481,7 +483,7 @@ test('a launch resent when its machine comes back does not take the picker from 
     laptop.failOpen = 'the handshake timed out';
     laptop.disconnect();
   });
-  await expect(page.locator(`#host-state [data-host-id="${LAPTOP}"]`)).toBeAttached();
+  await expect(page.locator('#return-slot')).toContainText("Couldn't reach Laptop");
   await expect(panel).toHaveAttribute('data-launch', 'waiting');
   await expect(panel.getByRole('button', { name: 'Launch' })).toBeDisabled();
   await which.selectOption('demo');

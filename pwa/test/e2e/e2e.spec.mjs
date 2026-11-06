@@ -79,7 +79,7 @@ async function signIn(page) {
   // Every machine is shown at first: settled once each has said what it is, so a tap on the
   // list that follows lands on the list it was aimed at.
   await expect(page.locator('[data-device-name="fixture-host"] .machine-status')).toContainText('0.0.0-fixture', { timeout: 30000 });
-  await expect(page.locator('#host-state')).toContainText('demo-host:', { timeout: 30000 });
+  await expect(page.locator('#return-slot')).toContainText('demo-host:', { timeout: 30000 });
 }
 
 // A session's view (#179); page.locator('.session') is its row.
@@ -152,7 +152,7 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
   await signIn(page);
   await page.click('#machine-tabs [data-device-name="demo-host"]');
-  await expect(page.locator('#host-state')).toContainText(`${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
+  await expect(page.locator('#return-slot')).toContainText(`${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
   await expect(page.locator('.session')).toHaveCount(0);
   await page.close();
 
@@ -191,7 +191,7 @@ test('with every machine shown, a machine\'s sessions come over its own channel,
   await expect(page.locator('.session').first()).toBeVisible({ timeout: 30000 });
   await expect(page.locator(`.session[data-host-id="${host.deviceId}"]`).first().locator('.machine-label')).toHaveText('fixture-host');
   // The S4 demo host predates the sessions protocol: it says so, and the fixture host's sessions stay.
-  await expect(page.locator('#host-state')).toContainText(`demo-host: This machine ${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
+  await expect(page.locator('#return-slot')).toContainText(`demo-host: This machine ${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
   await expect(page.locator(`.session:not([data-host-id="${host.deviceId}"])`)).toHaveCount(0);
 });
 
