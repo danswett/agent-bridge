@@ -301,7 +301,7 @@ internal static class ClaudeSessionDiscovery
     // process of its generation that could not be read is a session discovery cannot see, and
     // one that says it is an SDK or print-mode run accounts for its process as nobody's session.
     public static IReadOnlyList<DiscoveredSession> Find(string claudeHome, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript,
-        ICollection<string>? holds = null, ISet<int>? accounted = null, IReadOnlyList<AgentProcess>? unidentified = null)
+        ICollection<string>? holds = null, ISet<int>? accounted = null, IReadOnlyList<AgentProcess>? unidentified = null, IReadOnlyList<string>? probeRoots = null)
     {
         var root = Path.Combine(claudeHome, "sessions");
         unidentified ??= [];
@@ -321,6 +321,14 @@ internal static class ClaudeSessionDiscovery
             var parsed = Parse(file, out var filePid);
             var holder = running.TryGetValue(filePid, out var p) ? p : unread.TryGetValue(filePid, out var u) ? u : null;
             if (holder is null) { continue; }
+            // The host's own /usage probe, known by its exact options alone, is nobody's session
+            // whatever its file holds: caught mid-write, that file held discovery for a pass
+            // (#238 review). One known only with its folder (flattened) is decided below, from it.
+            if (running.ContainsKey(filePid) && CommandLine.IsClaudeUsageProbe(holder.CommandLine))
+            {
+                accounted?.Add(filePid);
+                continue;
+            }
             if (parsed is null)
             {
                 // Unreadable, or not a whole file of its own process: the file's time is all
@@ -342,10 +350,34 @@ internal static class ClaudeSessionDiscovery
                 continue;
             }
             accounted?.Add(filePid);
-            if (!entry.Interactive) { continue; }
+            if (!entry.Interactive || IsUsageProbe(holder, entry, probeRoots ?? [])) { continue; }
             live.Add(new DiscoveredSession(entry.SessionId, AgentKind.Claude, findTranscript(entry.SessionId), null, entry.Pid, ProcessStartedAt: holder.StartedAt));
         }
         return live;
+    }
+
+    // A host's /usage probe (#200), which Claude Code 2.1.316 records as kind interactive (entrypoint
+    // sdk-cli, which nothing promises), so it was listed as a session for the second or two it ran.
+    // Told by what the host controls instead: the probe's exact options, or, where macOS's ps has
+    // flattened an install path with a space in it, options that end so and a folder only a host
+    // runs it in: <profile>/usage-probe under one of probeRoots (the product's own profile folders).
+    // A folder merely named usage-probe is not enough: a flattened prompt that quotes the probe's
+    // options, in a project of that name, is a real session (#238 review).
+    static bool IsUsageProbe(AgentProcess holder, Entry entry, IReadOnlyList<string> probeRoots) =>
+        CommandLine.IsClaudeUsageProbe(holder.CommandLine)
+        || (CommandLine.MayBeClaudeUsageProbe(holder.CommandLine) && entry.Cwd is { } cwd && IsProbeFolder(cwd, probeRoots));
+
+    internal static bool IsProbeFolder(string cwd, IReadOnlyList<string> probeRoots)
+    {
+        static string Plain(string p) => p.Replace('\\', '/').TrimEnd('/');
+        var folder = Plain(cwd);
+        var cut = folder.LastIndexOf('/');
+        if (cut <= 0 || !folder[(cut + 1)..].Equals(AgentBridge.Host.Core.Usage.UsageProbes.FolderName, StringComparison.OrdinalIgnoreCase)) { return false; }
+        var profile = folder[..cut];
+        var parent = profile.LastIndexOf('/');
+        if (parent <= 0 || profile[(parent + 1)..] is "" or "." or "..") { return false; }
+        var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        return probeRoots.Any(r => r.Length > 0 && Plain(r).Equals(profile[..parent], comparison));
     }
 
     static DateTimeOffset? Written(string path)
@@ -354,7 +386,7 @@ internal static class ClaudeSessionDiscovery
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
-    internal sealed record Entry(int Pid, string SessionId, DateTimeOffset? StartedAt, DateTimeOffset? UpdatedAt, bool Interactive = true);
+    internal sealed record Entry(int Pid, string SessionId, DateTimeOffset? StartedAt, DateTimeOffset? UpdatedAt, bool Interactive = true, string? Cwd = null);
 
     internal static Entry? Parse(string path) => Parse(path, out _) is { Interactive: true } entry ? entry : null;
 
@@ -379,7 +411,7 @@ internal static class ClaudeSessionDiscovery
             // Only a CLI at a console can be typed into; an SDK or print-mode run is not
             // a session a person drives.
             var interactive = Json.Str(e, "kind") is not { } kind || kind == "interactive";
-            return new Entry(pid, id, Millis(e, "startedAt"), Millis(e, "updatedAt"), interactive);
+            return new Entry(pid, id, Millis(e, "startedAt"), Millis(e, "updatedAt"), interactive, Json.Str(e, "cwd"));
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { pid = 0; return null; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }

@@ -23,6 +23,11 @@ public sealed class SessionSourceOptions
     // The same for Codex, which also keeps <id>.approval.json markers there.
     public IReadOnlyList<string> CodexRegistrationRoots { get; init; } = [];
 
+    // The folders profile folders live in (Identity.DefaultRoot, and a serving host's own parent):
+    // a host's usage probe runs in <root>/<profile>/usage-probe, which is how one is told from a
+    // session where ps has flattened its command line (#200). None: only its exact options tell.
+    public IReadOnlyList<string> UsageProbeRoots { get; init; } = [];
+
     // The polling fallback. FileSystemWatcher only shortens the wait; every change is
     // still found by polling, because watchers drop events (buffer overflow, network
     // drives, inotify limits) without saying so.

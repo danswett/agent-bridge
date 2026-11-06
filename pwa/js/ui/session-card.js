@@ -39,13 +39,23 @@ import { EndSession } from './stop-view.js';
 import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.js';
-import { aloud, backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
+import { aloud, backgroundCounts, delegateEvents, delegateFold, eventParts, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
+// Each session's delegate events as the person left them (ui.md §6.4): its fold (D3) open or
+// closed, and the shared lines opened to name everyone. By machine and session, so a card drawn
+// again (a machine back online, a list sent again) keeps them, for as long as the page is open.
+const EVENT_STATE = new Map();
+// Puts nodes in a parent in this order, moving none that are already so: a node moved loses focus.
+function place(parent, nodes) {
+  const now = [...parent.children];
+  if (now.length === nodes.length && now.every((n, i) => n === nodes[i])) { return; }
+  parent.replaceChildren(...nodes);
+}
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
 const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
 // How long a question's controls ignore a pointer's click once the question appears or is
@@ -458,6 +468,9 @@ export class SessionCard {
   // began (null where unknown).
   #prompts = new PromptMemory();
   #promptOpen = false;
+  // The keys of the delegate event lines drawn, or null before the first: only a line arriving
+  // after that fades in.
+  #eventKeys = null;
   #promptAt = null;
 
   // hostId: the machine the session is on, which everything the view sends goes to.
@@ -473,7 +486,7 @@ export class SessionCard {
     Object.assign(this, { hostId, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
     this.#stale = stale;
     const n = ++seq;
-    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt` };
+    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt`, events: `s${n}-events` };
     this.#buildRow();
     this.#buildView();
     this.update(session);
@@ -579,9 +592,22 @@ export class SessionCard {
     e.toolSummary = h('span', { class: 'tool-summary' });
     e.toolGlyph = glyph('working', { size: 12 });
     e.tool = h('p', { class: 'tool-line', hidden: true }, e.toolGlyph, e.toolName, e.toolSummary);
-    // Its own delegates starting and reporting back (§6.4): one meta line each, the name opening
-    // it; after its words and before what it is running now.
+    // Its own delegates starting and reporting back (§6.4, #661): one meta line per delegate, the
+    // name opening it; after its words and before what it is running now. More than three lines
+    // fold into one (D3): its button, the chevron ending it, then a link of its own to the
+    // earliest delegate still working.
     e.events = h('ol', { class: 'delegate-events', 'aria-label': 'Delegates started and finished', hidden: true });
+    e.foldText = h('span', { class: 'delegate-fold-label' });
+    // The button's name is the whole summary (aria-label); the chevron only shows which way it is.
+    e.foldToggle = h('button', { type: 'button', class: 'delegate-fold-toggle', 'aria-expanded': 'false', 'aria-controls': this.ids.events, onclick: () => this.#toggleEventFold() },
+      e.foldText, h('span', { class: 'delegate-fold-chevron', 'aria-hidden': 'true' }, designIcon('chevron', { size: 16 })));
+    e.foldWorking = h('button', { type: 'button', class: 'delegate-link delegate-fold-working', hidden: true, onclick: () => this.openDelegate(e.foldWorking.dataset.id) });
+    e.foldLines = h('ol', { class: 'delegate-fold-lines', id: this.ids.events, hidden: true });
+    e.fold = h('li', { class: 'delegate-fold' },
+      h('div', { class: 'delegate-fold-line' },
+        h('span', { class: 'delegate-event-mark' }, designIcon('delegate', { size: 16 })),
+        h('span', { class: 'delegate-fold-text' }, e.foldToggle, e.foldWorking)),
+      e.foldLines);
     e.agentBlock = h('div', { class: 'agent-block' }, e.speaker, e.reasoning, e.truncated, e.dropped, e.response, e.events, e.tool);
     e.question = h('div', { class: 'question-slot' });
     this.#guardQuestion(e.question);
@@ -803,20 +829,109 @@ export class SessionCard {
     if (pushed) { pane.setAttribute('role', 'tabpanel'); } else { pane.removeAttribute('role'); }
   }
 
+  #eventState() {
+    const key = `${this.hostId ?? ''}|${this.#s?.id ?? ''}`;
+    if (!EVENT_STATE.has(key)) { EVENT_STATE.set(key, { open: false, more: new Set() }); }
+    return EVENT_STATE.get(key);
+  }
+
+  // The fold opened or closed (Disclosure, ui.md §5.3): its space opens at once and app.css
+  // settles its lines in; focus stays on its button.
+  #toggleEventFold() {
+    const st = this.#eventState();
+    st.open = !st.open;
+    this.#renderEvents(this.#s);
+  }
+
+  // Drawn again as they change and as their ages move on, line by line by key (D2): a line that
+  // changes is the same line, its words changed at once and its glyph cross-faded (setGlyph), and
+  // only a line arriving fades in, so nothing beside it slides. A control with keyboard focus
+  // keeps it, or gives it to where its line went.
   #renderEvents(s, now = Date.now()) {
     const e = this.els;
-    const events = delegateEvents(s, now);
-    if (!this.#changed('events', events)) { return; }
-    // Rebuilt as their ages move on: a name with keyboard focus keeps it, in its new line.
-    const focused = e.events.contains(document.activeElement) ? document.activeElement.closest('.delegate-event')?.dataset.key : null;
-    e.events.replaceChildren(...events.map((ev) => h('li', { class: 'delegate-event', dataset: { kind: ev.kind, key: ev.key } },
-      glyph(ev.glyph ?? 'delegating', { size: 12 }),
-      h('span', { class: 'delegate-event-text' },
-        ev.before ? `${ev.before}${ev.name ? ' ' : ''}` : '',
-        ev.name ? h('button', { type: 'button', class: 'delegate-link', dataset: { id: ev.id }, onclick: () => this.openDelegate(ev.id) }, ev.name) : null,
-        ev.after ? ` ${ev.after}` : ''))));
-    e.events.hidden = events.length === 0;
-    if (focused) { [...e.events.children].find((li) => li.dataset.key === focused)?.querySelector('.delegate-link')?.focus({ preventScroll: true }); }
+    const lines = delegateEvents(s, now);
+    const fold = delegateFold(lines);
+    const st = this.#eventState();
+    if (!this.#changed('events', [lines, fold, st.open, [...st.more]])) { return; }
+    const had = e.events.contains(document.activeElement) ? document.activeElement : null;
+    const where = had && { key: had.closest('.delegate-event')?.dataset.key ?? null, id: had.dataset.id ?? null, more: had.classList.contains('delegate-more') };
+    const old = new Map([...e.events.querySelectorAll('li.delegate-event')].map((li) => [li.dataset.key, li]));
+    const drawn = this.#eventKeys;
+    const keys = new Set(lines.map((l) => l.key));
+    // A line keyed anew (a start another joined) is the same line, its old key no longer drawn.
+    const was = (line) => (line.was && !keys.has(line.was) ? line.was : null);
+    const items = lines.map((line) => this.#eventLine(old.get(line.key) ?? old.get(was(line)), line, st));
+    this.#eventKeys = keys;
+    if (fold) {
+      e.foldText.textContent = fold.button;
+      e.foldToggle.setAttribute('aria-label', fold.label);
+      e.foldToggle.setAttribute('aria-expanded', String(st.open));
+      e.foldWorking.hidden = !fold.link;
+      e.foldWorking.textContent = fold.link ?? '';
+      e.foldWorking.dataset.id = fold.workingId ?? '';
+      e.fold.toggleAttribute('data-open', st.open);
+      e.foldLines.hidden = !st.open;
+      place(e.foldLines, items);
+      place(e.events, [e.fold]);
+    } else {
+      place(e.events, items);
+      e.foldLines.replaceChildren();
+    }
+    e.events.hidden = lines.length === 0;
+    if (drawn) { items.forEach((li, i) => { if (!drawn.has(lines[i].key) && !drawn.has(was(lines[i]))) { enter(li, 'listItem'); } }); }
+    // A control no longer drawn has lost focus, whatever activeElement says (WebKit keeps a
+    // hidden one there).
+    if (!had || (document.activeElement === had && had.isConnected && !had.hidden && had.getClientRects().length)) { return; }
+    // Its line went into a closed fold: to the fold's button. Its name still drawn, in its line or
+    // one of its own it moved to: to its name there. Else to what its line has left. The fold
+    // gone from under its button or link: to the working delegate's name the link named, else
+    // to the first line's.
+    const key = (where.key && lines.find((l) => was(l) === where.key)?.key) ?? where.key;
+    const li = key ? [...e.events.querySelectorAll('li.delegate-event')].find((x) => x.dataset.key === key) : null;
+    const byId = (root) => (where.id ? [...root.querySelectorAll('li.delegate-event .delegate-link')].find((b) => b.dataset.id === where.id) : null);
+    const target = had === e.foldToggle || had === e.foldWorking ? (fold ? e.foldToggle : byId(e.events) ?? e.events.querySelector('li.delegate-event .delegate-link'))
+      : (fold && !st.open) ? e.foldToggle
+        : (li && byId(li)) ?? byId(e.events) ?? (li && ((where.more ? li.querySelector('.delegate-more') : null) ?? li.querySelector('.delegate-link')));
+    target?.focus({ preventScroll: true });
+  }
+
+  // One line: the delegate icon for a start, the outcome's glyph once it reported back; its words
+  // with each name a link, and its absolute time (the viewer's own) as its tooltip and in its name.
+  #eventLine(li, line, st) {
+    if (!li) { li = h('li', { class: 'delegate-event' }, h('span', { class: 'delegate-event-mark' }), h('span', { class: 'delegate-event-text' })); }
+    li.dataset.kind = line.kind;
+    li.dataset.key = line.key;
+    li.title = line.tip;
+    const mark = li.firstChild;
+    const was = mark.firstChild;
+    if (line.glyph && was?.classList.contains('glyph')) {
+      setGlyph(was, line.glyph, { size: 12 });
+    } else if (line.glyph) {
+      const g = glyph(line.glyph, { size: 12 });
+      if (was) { leave(was, 'glyph'); }
+      mark.replaceChildren(g);
+      if (was) { enter(g, 'glyph'); }
+    } else if (was?.dataset.icon !== 'delegate') {
+      mark.replaceChildren(designIcon('delegate', { size: 16 }));
+    }
+    const expanded = st.more.has(line.key);
+    const parts = eventParts(line, { expanded });
+    const said = JSON.stringify([parts, line.tip]);
+    if (li.dataset.said === said) { return li; }
+    li.dataset.said = said;
+    li.lastChild.replaceChildren(...parts.map((p) => {
+      if (typeof p === 'string') { return p; }
+      if (p.more) {
+        return h('button', { type: 'button', class: 'delegate-link delegate-more', onclick: () => {
+          st.more.add(line.key);
+          this.#renderEvents(this.#s);
+          // To the first name it brought.
+          li.querySelectorAll('.delegate-link')[2]?.focus();
+        } }, `${p.more} more`);
+      }
+      return h('button', { type: 'button', class: 'delegate-link', dataset: { id: p.id }, onclick: () => this.openDelegate(p.id) }, p.name);
+    }), h('span', { class: 'sr-only' }, ` (${line.tip})`));
+    return li;
   }
 
   // A delegate opened from the strip, the list, a nested list or the conversation: in the

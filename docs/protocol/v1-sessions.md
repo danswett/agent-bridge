@@ -26,7 +26,7 @@ the channel go through the relay's blob store (`sessions.attach.blob`, in
   bytes of text. Clients must read both forms.
 * **Clients ignore fields and enum values they don't know.** An unknown value reads as:
   `agent` → `unknown` (shown generically), `status` → `idle`, tool `status` → `done`,
-  question `kind` → `form`, field `type` → `text`, `driver` → `person`. Hosts never remove or rename a field
+  question `kind` → `form`, field `type` → `text`, `driver` → `person`; an unknown `class` reads as absent. Hosts never remove or rename a field
   within a protocol version.
 * Times are UTC with milliseconds and a `Z`, always in this exact form:
   `2026-10-28T04:22:43.182Z`. Clients can compare them as strings.
@@ -550,10 +550,10 @@ Home Assistant status line did). An agent is held when:
 |---|---|
 | Its processes could not be listed at all | `the copilot processes could not be listed` |
 | The runtime (`node`, `bun`) a live session ran in could not be read this time, by pid and start time; or a Copilot lock or a registration names a runtime that could not be read and was written by it, not by an earlier process with its pid | `a copilot process that could not be read (pid 4120)` |
-| An agent process no session or registration accounts for, for its first 2 minutes. A registration accounts only for the process that wrote it, not a later one given its pid. A session registers within seconds, so one still unaccounted for after that is not a session: the host carries on without it and logs that once. One whose start time cannot be read is never carried on without, since a new session given its pid could not be told from it. A process that only starts the agent's own executable and waits on it is counted as that executable, not as one more, while the executable runs: npm's node loader (`npm-loader.js`, `codex.js`), and VS Code's copilot shim (which Agency runs), known by its program's folder, `copilot-shim\copilot.exe`, when its child is the real CLI, given the same arguments, and the shim started no later than that child. A real CLI that starts another is never taken for a launcher. Scout's embedded `copilot --headless` and Codex's `app-server` are nobody's session and never hold | `an unrecognised copilot process (pid 4120)` |
+| An agent process no session or registration accounts for, for its first 2 minutes. A registration accounts only for the process that wrote it, not a later one given its pid. A session registers within seconds, so one still unaccounted for after that is not a session: the host carries on without it and logs that once. One whose start time cannot be read is never carried on without, since a new session given its pid could not be told from it. A process that only starts the agent's own executable and waits on it is counted as that executable, not as one more, while the executable runs: npm's node loader (`npm-loader.js`, `codex.js`), and VS Code's copilot shim (which Agency runs), known by its program's folder, `copilot-shim\copilot.exe`, when its child is the real CLI, given the same arguments, and the shim started no later than that child. A real CLI that starts another is never taken for a launcher. Scout's embedded `copilot --headless`, Codex's `app-server`, a host's Claude usage probe, and the `claude auth status` this host started before one ([v1-usage.md](v1-usage.md)) are nobody's session and never hold | `an unrecognised copilot process (pid 4120)` |
 | A registration (Claude, Codex) that cannot be read (its details included), is a link, is not named for its own session, names no process, or changed while it was read | `a claude registration changed while it was read` |
 | An unended Codex registration that names no process (its hooks fired before they could tell which Codex was theirs) holds for 2 minutes after its `Updated` (the file's write time when it has none) and while the Codex processes cannot be listed. Past that, it holds only while a Codex process nothing accounts for could be its session and have written it, and for at most an hour after its `Updated`. Such a process is an interactive one by its subcommand (none, a prompt, `resume` or `fork`; a server's name as a prompt or an option's value does not count, nor does a node or bun preload named codex; under npx or bunx the first argument named codex or naming `@openai/codex` at any version is Codex, as is the command in npx's `-c`), or one whose command line could not be read, never a server (`app-server`, `mcp-server`) or `exec` run; it is no launcher (npx, bunx, `pnpm dlx`, a version manager's shim: a `codex` whose own folder is `shims`, or Volta's `bin`; not a Codex that started another through its shell tool) of an interactive Codex executable it started, which is the session if any is and is counted itself (what started what is read up the executable's ancestry only as far as each process started no later than the one below it, so a reused parent pid ends it, and a process whose start time cannot be read launched nothing); and it started no later than one second after the registration's `Updated` (the slack the host allows elsewhere for start times the OS rounds; a wall clock stepped back by more than that between the Codex starting and its hook firing can let the grace end while it still waits), or its start time cannot be read. The reason then names that process, and the host logs once that it holds for it. Past both, no running Codex is taken for its session (one that exited before its `SessionEnd` left it behind): the host carries on without it and logs that once. A session left waiting on its hooks-trust question for more than the hour is carried on without too. A Claude registration that names no process holds as above | `a codex registration names no process`, or past the grace `a codex registration names no process (codex pid 960 could have written it)` |
-| Claude Code's own `sessions/<pid>.json` for a running Claude process (of its generation) that cannot be read whole. One that says the run is not interactive (SDK, print mode) accounts for its process as nobody's session | `a claude session file could not be read (pid 4120)` |
+| Claude Code's own `sessions/<pid>.json` for a running Claude process (of its generation) that cannot be read whole, unless that process is a host's usage probe known by its exact options, which is set aside before its file is read. One that says the run is not interactive (SDK, print mode), or whose process is a host's usage probe (which Claude Code 2.1.316 records as interactive), accounts for its process as nobody's session | `a claude session file could not be read (pid 4120)` |
 | A session discovery found running whose transcript could not be read when it was first found, until it can | `a claude session that could not be read` |
 | A session, registration or Codex thread-lock folder that is there but cannot be read or listed, or is a link (a thread lock only while a Codex terminal runs). Only the OS saying a folder is not there is absence | `copilot's session folders could not be listed` |
 
@@ -1131,6 +1131,106 @@ A host with `push` notifies every subscribed device when one of its sessions nee
 person or has something to say, whether or not the app is open, the same moments
 agent-ha-bridge notifies a phone through Home Assistant.
 
+### Notification class (#913)
+
+**New (#913).** One notification policy for every client: the host decides which tier each
+session is in, and the Windows app, the PWA and Home Assistant follow it rather than rules of
+their own (#253, #610, #754 and #764 were each one client's). The session carries its tier in
+`class`, and each push the tier of what it says in `data.class` ([The payload](#the-payload)).
+
+| `class` | Tier | The host sets it when (first match wins) |
+|---|---|---|
+| `fyi` | | `status` is `ending`: the person asked for the session to end |
+| `needsYou` | Needs you: interrupts | a `question` is pending, the session's own or a delegate's (`waitingOn`), a form or an approval alike, one marked `answerAtMachine` included; or `attention` is present: `signInNeeded`, `error` (an errored turn) or `notResponding` |
+| `done` | Done: waits | `status` is `idle` with a non-empty response of the main agent's own: `own.response` while `source.response` names a delegate, `response` otherwise (the same text a `finished` push quotes). Delegates still running in the `background` do not change it, as they do not hold back a `finished` push |
+| `fyi` | FYI: never notifies | anything else: working, or idle (delegating or not) with nothing of the main agent's own said |
+
+The wire names are the owner's tier names from #913 in this protocol's camelCase, as
+`signInNeeded` is, so the spec, the code and ui.md say each tier with one word. They are short
+because every session carries one.
+
+`classSince` says when the session entered its present tier, the start of the episode, for the
+reminder to count from; no client shows it. While `class` stays the same, `classSince` stays
+what the host last sent, whatever changes under it: a delegate's question arriving beside the
+session's own, one question answered as the next is asked, working and idle within `fyi`. It is
+never worked out again per question, so a new question while the session is already `needsYou`
+does not restart the reminder. When `class` changes, or the host sends a session for the first
+time (after the host starts, or when it finds the session), it is taken from the fields that
+put the session in the tier: for `needsYou` the earliest of `question.askedAt` and
+`attention.since` that are present, the oldest thing waiting on the person; for `done` and
+`fyi` it is `statusSince` (for `ending`, when the end was asked for). A snapshot, a list or a
+resumed subscription carries the same `classSince` the host last sent; only a restart of the
+host can start the episode again from those fields.
+
+* **A state, not an event.** `class` says which tier the session is in now. A client alerts
+  for a change it sees live: a session entering `needsYou`, or a new reason within it (another
+  question `id`, another `attention.kind`), and entering `done` with a new `turnCount`. What a
+  snapshot, a list or a resumed subscription gives it is not news, as a session already idle
+  when the host starts is not. A push is decided by the host's rules below (once per question,
+  once per finished turn, the 10-minute collapse) and carries its tier in `data.class`.
+* **Delegates roll up.** A delegate never has a class of its own and never notifies on its own.
+  Its question is its parent session's (`question` with `agent`, and `waitingOn`), so the parent
+  is `needsYou`, and its notice keeps the session's tag and is titled
+  "Delegate *name* asks · *title*", as now. A delegate's progress, its words, its error and its
+  finishing never change the parent's class: only the main agent's own answer makes a session
+  `done`, and an error in the parent's own turn makes it `needsYou`.
+* **One notification per session, replaced in place, withdrawn when answered.** Every notice
+  about a session shares its tag, `<machine id>:<session id>`
+  ([Replacing and collapsing](#replacing-and-collapsing)), so a device shows at most one per
+  session, the newer replacing the older, never stacked. When a session leaves `needsYou`
+  because its question was answered (on any device, or at the machine) or its attention went, a
+  client withdraws that session's notification. For a push, the host sends `resolved` to the
+  devices that were shown the question, which replaces it silently ("no longer waiting"): Web
+  Push must show something. A session ended with its question pending is `fyi`, and its
+  question's notice is withdrawn the same way, with "· session ended".
+* **The class is not the delivery rules.** Watch and Mute, the device in use, grouping a burst,
+  the reminder after 15 minutes and agent-driven turns (#489's `userMessageFrom`, and `driver`)
+  decide who is alerted for a tier, and how (ui.md §7.0). They never change the tier: a Muted
+  session's question is still `needsYou`, and a turn an agent drove is still `done` (only its
+  push is stopped). Mute still lets every approval and sign-in through, an approval marked
+  `answerAtMachine` included: the person has to act, and its notice keeps "waiting at the
+  machine". Their protocol is later #913 work.
+* **Done is silent everywhere** (the owner's answer B), older clients and Home Assistant
+  included. The host sends every `finished` push with `silent: true`, and a client also keeps a
+  `done` notice silent whatever `silent` says, as a second safeguard. A Done notice still shows
+  (on the lock screen, for a Watched session); it never interrupts.
+* **The reminder** (ui.md §7.0 rule 5) is the clients': once per session, 15 minutes after its
+  `needsYou` alert, counted from `classSince`, and never repeated. A new question while the
+  session is already `needsYou` replaces its notification in place and does not restart the
+  reminder; answering everything ends the episode and cancels it.
+* **Additive and optional.** An older client ignores `class`, `classSince` and `data.class`, as
+  any field it does not know. A newer client reading a session or a push without them (an older
+  host) keeps today's behaviour: the rules in [When a host notifies](#when-a-host-notifies), and
+  its own. A `class` value it does not know, or one of the wrong type, reads as absent, so it
+  keeps today's behaviour then too: read as `needsYou`, a newer host could interrupt people with
+  something an older client can't explain. `class` changes only with the fields it comes from, and `classSince` only with `class`, so
+  they never move `updatedAt` or send an upsert on their own, and the
+  [session budget](#session-budget) never trims them.
+
+**What a host classes today:** every session it sends, and its `question`, `finished` and
+`signIn` pushes, and a `restored` push after a crash. Not by the host:
+* **A machine offline unexpectedly (#805)**, which its host cannot say. Each client classes it
+  `needsYou` from the relay's presence, once #269's grace period has passed, so a short drop
+  never is. #805 owns the threshold.
+* **A session restored after a crash (#780)**: the machine's `restored` notice after a crash is
+  `needsYou`. Hosts set a restored session's `restored` field, but in this version its `class`
+  does not follow `restored`: it comes from `status`, `question` and `attention` like any other
+  session's (it is restored idle, so `done` if its last turn left an answer of the main agent's
+  own, else `fyi`). Whether `restored` after a crash should make the session itself `needsYou`
+  is an open Product decision, tracked on #780.
+
+`signInNeeded` pushes as the `signIn` notice of #800, at most once an hour per machine, agent
+and account (ui.md §6.13). The rest of `attention` has no push of its own yet. Being `needsYou`,
+it will push: an errored turn once per turn, its body's first line "`<machine>` · stopped: *reason*", a rate limit
+or quota included. `notResponding` alerts **once per episode**: an episode is a stretch in which
+the session is `needsYou`, beginning at `classSince`. If the session recovers and stops
+responding again within 2 minutes, that is the same episode: its notification is replaced
+silently, not alerted again. A recurrence after more than 2 minutes is a new episode and may
+alert. Each episode gets the one reminder at 15 minutes, never repeated. Telling episodes apart,
+and the reminder, are the clients' to time; the host only sends `attention` and `classSince`.
+Home Assistant's notifications are to follow `class` too, `done` only for a Watched session, and
+silently (ui.md §7.0; later #913 work).
+
 ### When a host notifies
 
 | `kind` | When | Once per |
@@ -1204,10 +1304,11 @@ service worker shows from the same fields everywhere else:
 | `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. `signIn`: "*Agent* on *machine* needs sign-in" (ui.md §6.13). At most 120 bytes |
 | `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". `signIn`: "*n* sessions affected" ("1 session affected"); the title names the machine. Never the account, a code, a URL or any of the agent's words. Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
 | `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. `signIn`: `host` and `signin=<agent>` only, never `session` or `question` (#800 6646515428): an older client, which reads the kind as `question`, opens the machine and no question view or answer controls. A client opens that machine and session, and the question ready to answer |
-| `silent` | `true` for `resolved`, which replaces a question without alerting again. Absent for `signIn`, which has the question sound (owner, 2026-11-04, ui.md §6.13) |
+| `silent` | `true` for `resolved`, which replaces a question without alerting again, and for `finished`: Done never alerts (#913), so a client that predates `data.class`, and Safari's Declarative Web Push, which shows without the service worker, play nothing for it. Absent for `signIn`, which has the question sound (owner, 2026-11-04, ui.md §6.13) |
 | `data.kind` | `question`, `finished`, `resolved`, `signIn` or `restored`. A client reads a kind it doesn't know as `question`. A `restored` notice is titled `<machine> restarted` (a reboot) or `<machine> · the host stopped`, its body counts the sessions that went and names those mid-turn or with a question lost; its `navigate` has only `host` (the subscription's `app` with any `host`, `session` and `question` it carried replaced, not appended to; the rest of its query kept), its tag is `<machine id>:~restore`, and its `data.session` is empty and `data.question` absent, so an app that reads it as a question (one from before `restored`, whose service worker adds no actions) shows these words and opens the machine, with nothing to answer |
 | `data.machine`, `data.session`, `data.question` | The machine's device id, the session's `id`, the question's `id` (not for `finished`). Neither `session` nor `question` for `signIn`, which is about the machine |
 | `data.agent`, `data.sessions` | `signIn` only: whose sign-in it is (`copilot`, `claude`, `codex`), and how many of the machine's sessions need it |
+| `data.class` | **New (#913).** The notice's [notification class](#notification-class-913): `needsYou` for `question` and `signIn`, and for `restored` after a crash; `done` for `finished`, never `needsYou` (a turn that ends with a question pending sends that question as its own `question` notice). Absent on `resolved`, which withdraws a notice rather than being one, on a `restored` after a reboot or a restart of the host, and from an older host, whose push a client handles as today. Unknown reads as absent |
 | `data.at` | When the host sent it |
 
 The JSON as encrypted is at most **3 KiB**: under RFC 8291's one 4096-byte record (3993
@@ -1264,9 +1365,11 @@ is for disposable evaluation, not production service enrollment.
 | `driverPrincipal` | string? | With `driver` `agent`, which agent, when the host knows: at most 128 bytes, plain text, shown as secondary detail only. Absent otherwise |
 | `subagents` | [Subagent](#subagent)[]? | The sub-agents the session started, at any depth ([design/subagents.md](../design/subagents.md)): running ones (`working`, `waiting`) first, newest start first, then the most recently finished. At most 20, and fewer if the [session budget](#session-budget) trims them. Absent when there are none. Finished ones stay until the session ends. Only Copilot sends them so far |
 | `subagentsMore` | number? | Entries left out of `subagents`, by the host's limit or the budget. Absent when none are |
-| `restored` | object? | Set on a session its host restored, idle, after a reboot or a crash (#780), once its window has been seen ready (never on one that may be asking whether to trust its folder), for that run of the host and at most 24 hours: `at`, `cause`, `midTurn` (it went while working, and no prompt has arrived since the restore), `questionLost` (a question was waiting in it) and, with `midTurn` only, `continue`: the words a client offers to send as an ordinary `session.reply` when a person presses Continue, with no more trust than any reply. No host sends it. `midTurn` and `continue` go once a prompt arrives after the restore. A question the interrupted run left waiting is not shown as `question` (`questionLost` says it went) |
+| `restored` | object? | Set on a session its host restored, idle, after a reboot or a crash (#780), once its window has been seen ready (never on one that may be asking whether to trust its folder), for that run of the host and at most 24 hours: `at`, `cause`, `midTurn` (it went while working, and no prompt has arrived since the restore), `questionLost` (a question was waiting in it) and, with `midTurn` only, `continue`: the words a client offers to send as an ordinary `session.reply` when a person presses Continue, with no more trust than any reply; the host never sends that reply itself. Hosts set `restored` on each session they restore ([What went](#hello)); it does not change the session's `class` ([Notification class](#notification-class-913)). `midTurn` and `continue` go once a prompt arrives after the restore. A question the interrupted run left waiting is not shown as `question` (`questionLost` says it went) |
 | `waitingOn` | string? | Status precedence rule 2: the id of the sub-agent whose question is `question`, while the session has none of its own. Absent otherwise |
 | `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
+| `class` | `"needsYou"` \| `"done"` \| `"fyi"`? | **New (#913).** The session's notification tier, which every client follows instead of its own rules: [Notification class](#notification-class-913). Absent from an older host; a client then keeps today's behaviour. A client that does not know a value reads it as absent |
+| `classSince` | time? | **New (#913).** When the session entered its present tier, the episode's start, which the 15-minute reminder counts from. Kept while `class` is unchanged (a further question does not move it); on a change of `class`, for `needsYou` the earliest of `question.askedAt` and `attention.since`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
 
 **Status precedence** with sub-agents (first match wins): the session's own question
 (`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn

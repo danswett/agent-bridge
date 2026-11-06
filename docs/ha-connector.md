@@ -827,7 +827,14 @@ device.
   newest release again, downloads it (`downloading` with `update_percentage`), records the
   attempt in the connector's state file (an attempt that cannot be recorded is not handed
   over: the host that came back could not say how it ended), shows `restarting` and hands the
-  release to Velopack,
+  release to Velopack. Before that, still showing `downloading`, it makes sure nothing the update
+  ends is mid-refresh (#238): this host's own usage probes are held and a standalone Codex
+  app-server it started is waited for, at most 11 minutes; another profile's host running from the
+  package refuses the install, since its probes cannot be held from this host (its pipe takes
+  management only from the app; install from the app there, which holds them all), asked again
+  once this host's wait is over. When it cannot confirm, the
+  install fails to start and `stage_detail` and the notification say why. The release goes to
+  Velopack,
   which applies it once the host has exited; the host then stops as on Ctrl+C. Velopack
   force-stops everything else running from the package folder (the app, and every other
   profile's host, with their sessions' delivery), starts the app again in the background for the

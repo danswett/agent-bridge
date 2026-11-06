@@ -965,6 +965,8 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         const string First = "71111111-1111-4111-8111-111111111111", Second = "72222222-2222-4222-8222-222222222222";
         locator.Installed["codex"] = @"C:\fake\codex.cmd";
         starter.Registers = false;
+        // The first's wait spans both launches and the second's registration: 5 s ran out on a slow runner (main, e50ec8e7).
+        Serve(Config(), wait: Patience * 6);
         var ch = await OpenAsync();
         var first = LaunchAsync(ch, new { agent = "codex", prompt = "one" });
         await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1));
