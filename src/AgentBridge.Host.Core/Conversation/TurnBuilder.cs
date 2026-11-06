@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 
@@ -128,7 +129,7 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
     public void Asked(Question question, DateTimeOffset at)
     {
         if (_questions.ContainsKey(question.Id)) { return; }
-        Add(Blank(HistoryPartKind.Question, at) with { Question = question, Outcome = QuestionOutcome.Unknown });
+        Add(Blank(HistoryPartKind.Question, at) with { Question = Shallow(question), Outcome = QuestionOutcome.Unknown });
         _questions[question.Id] = _parts.Count - 1;
         if (question.Agent is { } agent)
         {
@@ -136,6 +137,27 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
             asked.Add(_parts.Count - 1);
         }
         else { _unansweredMain.Add(_parts.Count - 1); }
+    }
+
+    // How deep a field's default may nest. A record is read up to 256 levels deep, but a message is
+    // written at most 64 deep (ProtocolJson), and a default sits about ten levels into a page: one
+    // nested 80 deep threw as its turn was measured and failed the whole page, so no older turn
+    // could be reached (Engineering's second-family review of #686).
+    const int DefaultDepth = 32;
+
+    // A field whose default nests past DefaultDepth loses it: the question is cut, and answered at
+    // the machine, since no other device can show the box as it opens.
+    static Question Shallow(Question q)
+    {
+        if (!q.Fields.Any(TooDeep)) { return q; }
+        return q with
+        {
+            Fields = [.. q.Fields.Select(f => TooDeep(f) ? f with { Default = null } : f)],
+            Truncated = true,
+            AnswerAtMachine = true,
+        };
+
+        static bool TooDeep(Field f) => f.Default is { } d && Json.NestsDeeper(d, DefaultDepth);
     }
 
     // How a question ended. Only the first outcome counts: an approval's tool call starting after
@@ -237,7 +259,10 @@ internal sealed class TurnBuilder(string id, DateTimeOffset at, HistoryPrompt? p
             Truncated = truncated ? true : null,
             Unreadable = Unreadable ? true : null,
         };
-        return HistoryBudget.Fit(turn);
+        // A backstop: a turn that still can't be written (one nested past what a message carries) is
+        // unreadable in its place, never the page's failure (Engineering's review of #686).
+        try { return HistoryBudget.Fit(turn); }
+        catch (Exception e) when (e is InvalidOperationException or JsonException) { return new HistoryTurn { Id = Id, At = At, Unreadable = true }; }
     }
 
     static HistoryPart Cut(HistoryPart p, (string? Text, bool Truncated) cut) =>

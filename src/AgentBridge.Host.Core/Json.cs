@@ -99,4 +99,24 @@ internal static class Json
 
     // An element that outlives its document, for Field.Default.
     public static JsonElement Detach(JsonElement e) => e.Clone();
+
+    // Whether e nests more than levels deep: a scalar nests 0, [] and {} 1, [[]] 2.
+    public static bool NestsDeeper(JsonElement e, int levels)
+    {
+        if (e.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array)) { return false; }
+        if (levels <= 0) { return true; }
+        if (e.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in e.EnumerateArray())
+            {
+                if (NestsDeeper(item, levels - 1)) { return true; }
+            }
+            return false;
+        }
+        foreach (var property in e.EnumerateObject())
+        {
+            if (NestsDeeper(property.Value, levels - 1)) { return true; }
+        }
+        return false;
+    }
 }

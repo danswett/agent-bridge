@@ -244,6 +244,11 @@ Never trimmed: ids, times, `from`, `label`, `outcome`, flags. A turn's budget is
 budget's, so a turn never carries more of any one text than `activity` carries of it, except
 the prompt (8 KiB here, 2 KiB in `activity.userMessage`; [Security](#security-and-authorization)).
 
+A question field's `default` nested more than 32 levels deep is left out before its turn is
+measured, `question.truncated` and `answerAtMachine` set: a record is read up to 256 levels deep,
+but a message is written at most 64 deep, and a default sits about ten levels into a page. A turn
+that still could not be written would be `unreadable` in its place, never the page's failure.
+
 **Reading is bounded too**, so a request costs a host a bounded amount whatever a transcript
 holds. A host reads at most 256 MiB of transcript backwards per request, finding the end of the
 last whole line included (a line still being written that is longer than that leaves nothing to

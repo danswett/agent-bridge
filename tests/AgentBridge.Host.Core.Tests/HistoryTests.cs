@@ -1718,6 +1718,39 @@ public class HistoryTests
         return new HistoryReader(new HistoryBudgets(), new byte[32]).Read(Id, AgentKind.Copilot, path, null, HistoryLimits.DefaultTurns, seed, remoteApproval: false, cancellationToken);
     }
 
+    // Found in Engineering's second-family review of #686: a record is parsed up to 256 levels deep
+    // but a turn is measured with a writer that stops at 64, so an ask_user whose default nested 80
+    // deep threw while its turn was fitted and failed the whole page: every older turn unreachable.
+    [Fact]
+    public void A_question_default_nested_deeper_than_a_message_can_carry_is_cut_and_the_page_still_served()
+    {
+        using var f = new Fixture();
+        static string Ask(string id, int depth, int s) => Copilot.ToolStart(id, "ask_user", new
+        {
+            message = "Pick",
+            requestedSchema = new { properties = new { x = new { type = "string", @default = "DEEP" } } },
+        }, s).Replace("\"DEEP\"", new string('[', depth) + new string(']', depth), StringComparison.Ordinal);
+
+        var page = ReadAlone(f, [
+            Copilot.User("first", 1),
+            Ask("q0", 8, 2),
+            Copilot.User("deep", 3),
+            Ask("q1", 80, 4),
+            Copilot.User("last", 5),
+            Copilot.Assistant("done", 6),
+        ]);
+
+        Assert.Equal(["first", "deep", "last"], page.Turns!.Select(Prompt));
+        var shallow = page.Turns![0].Parts.Single(p => p.Question is not null).Question!;
+        Assert.Equal(JsonValueKind.Array, shallow.Fields.Single().Default!.Value.ValueKind);
+        var deep = page.Turns![1];
+        var question = deep.Parts.Single(p => p.Question is not null).Question!;
+        Assert.Null(question.Fields.Single().Default);
+        Assert.Equal((true, true, true, true), (question.Truncated, question.AnswerAtMachine, deep.Truncated, page.Partial));
+        Assert.Null(deep.Unreadable);
+        Assert.True(ProtocolJson.ByteCount(page) > 0);
+    }
+
     // Found in Engineering's second-family review of #686: each historical ask_user had its own
     // 250 ms for its patterns, so 12 records of ^(a+)+$ against a×40! took 3.18 s and a thousand could
     // hold a history worker for minutes within the byte budget. One budget is the whole request's.
