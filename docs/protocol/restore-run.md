@@ -1,6 +1,6 @@
 # Restoring offered sessions from a client (#948)
 
-**PROPOSED, not built.** Design first: nothing here is implemented until Product, Creative,
+**PROPOSED, mostly not built.** Slice 1a (#948) adds the C# records only (`RestoreRunRequest`, `RestoreRunResult`, `RestoreRunSession`, `RestoreRunProgress`, `offered[].loop`, the capability names); the op, the capability and the record changes are not built, and the vectors come with the op. Design first: nothing here is implemented until Product, Creative,
 Trust and Engineering accept it on its PR. Field and op names are the proposal's, not a shipped
 contract. Folder trust is out of scope (#947): this op never answers it.
 
