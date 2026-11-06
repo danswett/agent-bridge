@@ -899,6 +899,47 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.IsType<OperationCanceledException>(ended);
     }
 
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_start_asked_for_after_a_stop_runs_only_once_that_stop_is_done()
+    {
+        // No host answers. What happens, in order: a look at the pipe by the Stop (its marker is
+        // there) or by the Start (it cleared the marker first), and a launcher started.
+        var happened = new List<string>();
+        var m = new HostManager(manager.Layout, tasks, processes, _ =>
+        {
+            lock (happened) { happened.Add(File.Exists(StopMarker) ? "stop" : "start"); }
+            throw new IOException("not listening");
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(2),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Elevated = () => false,
+        };
+        processes.OnStart = () => { lock (happened) { happened.Add("launcher"); } };
+        // A Start asked for on another thread just after the Stop has taken the place of the token
+        // that cancels Starts: before the Stop had queued, it went first (Copilot 4487576706).
+        Task? start = null;
+        m.StopTokenReplaced = () =>
+        {
+            var asking = Task.Run(() => start = m.StartAsync());
+            asking.Wait(TimeSpan.FromMilliseconds(300));
+        };
+
+        await m.StopAsync();
+        m.StopTokenReplaced = null;
+        await Wait.UntilAsync(() => Volatile.Read(ref start) is not null, "the Start to be asked for", TimeSpan.FromSeconds(30));
+        await Record.ExceptionAsync(() => start!.WaitAsync(TimeSpan.FromSeconds(30)));
+
+        string[] order;
+        lock (happened) { order = [.. happened]; }
+        Assert.Contains("stop", order);
+        Assert.Contains("launcher", order);
+        // The Stop ran first, then the Start, which started a launcher: the later one wins.
+        Assert.True(Array.IndexOf(order, "stop") < Array.IndexOf(order, "launcher"), string.Join(", ", order));
+    }
+
     [Theory]
     [Trait("Category", "Network")]
     // The launcher Start starts at once, or the fresh one once a launcher it took on has ended.

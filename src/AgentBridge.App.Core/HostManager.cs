@@ -279,15 +279,26 @@ public sealed class HostManager
     // still enabled, and Program's callers are separate again. Otherwise a Start waiting on a
     // launcher the Stop then ended started a fresh one, which cleared the Stop's marker as older
     // than itself and started the host after Stop had said it was stopped (#478 review). A Start
-    // asked for after a Stop waits for it, then runs: the later one wins either way.
+    // asked for after a Stop waits for it, then runs: the later one wins either way. Each takes
+    // its place in the queue under the same lock as the Stop's token, and SemaphoreSlim serves
+    // waiters in the order they queued: a Stop that let go of the lock before it queued let a
+    // Start asked for after it go first, report the host started, and then be stopped (#478
+    // review, Copilot 4487576706).
     public async Task StartAsync(CancellationToken ct = default)
     {
         CancellationToken stop;
-        lock (lifecycle) { stop = stopping.Token; }
-        using var both = CancellationTokenSource.CreateLinkedTokenSource(ct, stop);
+        CancellationTokenSource both;
+        Task turn;
+        lock (lifecycle)
+        {
+            stop = stopping.Token;
+            both = CancellationTokenSource.CreateLinkedTokenSource(ct, stop);
+            turn = lifecycle.WaitAsync(both.Token);
+        }
+        using var linked = both;
         try
         {
-            await lifecycle.WaitAsync(both.Token);
+            await turn;
             try { await StartNowAsync(both.Token); }
             finally { lifecycle.Release(); }
         }
@@ -558,13 +569,23 @@ public sealed class HostManager
     public async Task StopAsync(CancellationToken ct = default)
     {
         CancellationTokenSource starts;
-        lock (lifecycle) { (starts, stopping) = (stopping, new CancellationTokenSource()); }
+        Task turn;
+        lock (lifecycle)
+        {
+            (starts, stopping) = (stopping, new CancellationTokenSource());
+            StopTokenReplaced?.Invoke();
+            turn = lifecycle.WaitAsync(ct);
+        }
         // Outside the lock: cancelling runs a Start's continuations here.
         starts.Cancel();
-        await lifecycle.WaitAsync(ct);
+        await turn;
         try { await StopNowAsync(ct); }
         finally { lifecycle.Release(); }
     }
+
+    // For a test alone: a Start asked for on another thread just after a Stop has replaced the
+    // token that cancels Starts. Nothing in the app sets it.
+    internal Action? StopTokenReplaced { get; set; }
 
     async Task StopNowAsync(CancellationToken ct)
     {

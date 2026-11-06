@@ -36,6 +36,13 @@ public sealed class HostLauncherProcessTests : IDisposable
         return p;
     }
 
+    static bool TryReadPid(string path, out int pid)
+    {
+        pid = 0;
+        try { return int.TryParse(File.ReadAllText(path).Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out pid); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+    }
+
     [Fact]
     public async Task A_host_in_the_launchers_job_ends_with_the_launcher_and_an_agent_it_started_runs_on()
     {
@@ -52,9 +59,11 @@ public sealed class HostLauncherProcessTests : IDisposable
                 $"$a = Start-Process -FilePath '{System32("PING.EXE")}' -ArgumentList '-n','300','127.0.0.1' -WindowStyle Hidden -PassThru; " +
                 $"Set-Content -Path '{agentPid}.part' -Value $a.Id; Move-Item -LiteralPath '{agentPid}.part' -Destination '{agentPid}'; Start-Sleep -Seconds 300"],
                 new Dictionary<string, string> { [HostLauncherContract.Variable] = "1" }, folder);
-            // Written aside and moved into place, so it is never read half written or still held.
-            await Wait.UntilAsync(() => File.Exists(agentPid), "the host to start its agent", TimeSpan.FromSeconds(60));
-            var agentId = int.Parse(File.ReadAllText(agentPid).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            // Written aside and moved into place, so it is never read half written; and read again
+            // until it can be, as something else (a scanner) may still have it open just after the
+            // move: once, in a run with the whole class, the first read failed.
+            var agentId = 0;
+            await Wait.UntilAsync(() => TryReadPid(agentPid, out agentId), "the host to start its agent", TimeSpan.FromSeconds(60));
             // Held by its handle from now, before the job is closed: if the agent ends with the
             // host (what this catches), its pid can be given to another process, which a look-up
             // by pid would then judge alive, or kill (#478 review, Copilot 4486726235).
