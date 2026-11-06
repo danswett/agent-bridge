@@ -61,15 +61,19 @@ public sealed class HostStartGateTests : IDisposable
         Assert.Equal("run1", RestoreFiles.Read(Record).File!.Instance);
     }
 
+    // The race at its worst, every run: the restore's resume is already under way when Stop is pressed,
+    // not left to the scheduler to start before or after it. Without the hold, the agent is resumed.
     [Fact]
     public async Task A_Stop_pressed_while_the_host_is_starting_resumes_no_agent_and_leaves_the_session_offered()
     {
         var restore = Recorder();
+        var resuming = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await Supervised(async h =>
         {
-            var gate = new HostStartGate(h, profile);
+            var gate = new HostStartGate(h, profile) { Resuming = () => resuming.TrySetResult() };
             Assert.True(gate.StartRestore(restore, resumer));
+            await resuming.Task.WaitAsync(TimeSpan.FromSeconds(30));
             // Before the pipe opens: only the look Program takes with it open sees this, and stops.
             PressStop();
             Assert.True(h.StoppedFromTheApp(profile));

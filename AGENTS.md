@@ -82,8 +82,9 @@ Keep a PR a draft while you iterate (from #459 on, drafts run only a fast subset
 
 Every merge to `main` whose CI builds the app (any change the app's jobs select) publishes a
 release-build pre-release of the Windows app
-(`v0.1.<run>`, Velopack, with deltas), and installed apps update themselves once the host
-is idle. A red `main` CI therefore blocks publishing: fix it quickly. PR builds are dev
+(`v0.1.<run>`, Velopack, with deltas), and installed apps download it in the background and
+install it when the person chooses Restart to update (#516). A red `main` CI therefore blocks
+publishing: fix it quickly. PR builds are dev
 builds, and guard G6 limits their HA connector to a disposable HA.
 
 ## Relay deploys

@@ -1019,6 +1019,7 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
         Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
         Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+        Assert.DoesNotContain("at the machine", deliveries.Get("k")!.Reason);
         Assert.Single(host.Sent(Ops.SessionReply));
     }
 
@@ -1073,6 +1074,7 @@ public sealed class ConnectionTests : IAsyncLifetime
         gate.SetResult();
         Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
         Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+        Assert.DoesNotContain("at the machine", deliveries.Get("k")!.Reason);
     }
 
     [Fact]
@@ -1175,6 +1177,7 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => deliveries.Get("k")!.State == DeliveryState.Done, "the give-up");
         Assert.Equal("unconfirmed", deliveries.Get("k")!.Outcome);
         Assert.StartsWith("too long has passed since it was first sent", deliveries.Get("k")!.Reason);
+        Assert.DoesNotContain("at the machine", deliveries.Get("k")!.Reason);
     }
 
     [Fact]

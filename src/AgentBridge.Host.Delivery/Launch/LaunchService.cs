@@ -1429,7 +1429,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 log($"launch {Short(p.Key)}: folder trust for {by}: {Math.Abs(steps)} {(steps > 0 ? "down" : "up")} -> {moved.Status} {moved.Detail}");
                 if (moved.Status == InjectionStatus.NothingTyped)
                 {
-                    return Stopped(device) is not null ? TrustRefused(Refusal(device)) : TrustRefused($"its window changed before anything was typed ({moved.Detail}); answer at the machine");
+                    return Stopped(device) is not null ? TrustRefused(Refusal(device)) : TrustRefused(NothingTyped(moved.Detail));
                 }
                 if (moved.Status != InjectionStatus.Typed) { return TrustUnconfirmed("the highlight may have moved, but whether it did is not known"); }
                 var asked = screen;
@@ -1452,7 +1452,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 var stopped = Stopped(device);
                 return before
                     ? TrustUnconfirmed(stopped is not null ? $"the highlight was moved, but Enter was not pressed: {stopped}" : "the highlight was moved, but its window changed before Enter, so Enter was not pressed")
-                    : stopped is not null ? TrustRefused(Refusal(device)) : TrustRefused($"its window changed before anything was typed ({typed.Detail}); answer at the machine");
+                    : stopped is not null ? TrustRefused(Refusal(device)) : TrustRefused(NothingTyped(typed.Detail));
             }
             // Esc that closed the agent can end the worker's attach before it says it is done
             // (interrupted): whether Quit worked is then what the agent did, which is looked for.
@@ -1473,6 +1473,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     }
 
     const int TrustKeyPauseMs = 300;
+
+    // A folder-trust key that never went. A worker that did not start says so in Creative's
+    // words (#995), the exception in the host's log only (#802), not as a window that changed.
+    static string NothingTyped(string detail) => detail == Windows.WorkerInjector.NotStarted
+        ? $"{DeliveryReasons.CouldNotDeliver}; answer at the machine"
+        : $"its window changed before anything was typed ({detail}); answer at the machine";
 
     // Whether the window still shows the question that id named when it was shown: one value, read
     // once, so an id is never checked against another read's words.
