@@ -378,4 +378,6 @@ more (`ReplyOptions.LateWatch`, every 5 s), and logs a `late:` line: when it was
 all, or `not recorded within 300 s more`. `ops/tools/reply-confirm-delays.ps1` reads these lines
 from the host's log, read-only, into the delay from `typed` to `recorded` per agent and state. It
 counts a reply as never recorded only once its late watch is known to be over (its `not recorded`
-line, or a log line 300 s after it); the rest, still watched or not observable, are reported apart.
+line, or a log line 300 s after it with no host `stopped` or start line in between); the rest, still
+watched or not observable (transcript unreadable, host stopped or started within the watch), are
+reported apart.

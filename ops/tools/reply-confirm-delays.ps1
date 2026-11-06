@@ -19,12 +19,14 @@
 
   A reply is counted NeverRecorded only once its late watch is known to be over: its `late: not
   recorded within` line is there, or the same log has a line stamped at least 300 s after the
-  reply's confirm line (the watch is five minutes). A reply whose watch may still be running (the
-  log ends sooner), whose transcript could not be read, or whose host stopped and restarted
-  before its watch ended (the later activity is then a restart's: look at those by hand if the
-  host was restarted) is not counted as never recorded. It goes in PendingOrNotObservable, so the
-  never-recorded count is only what was watched to the end. Read a live log again later and
-  pending replies move to their bucket.
+  reply's confirm line (the watch is five minutes) and the host did not stop or start between the
+  two. The host logs `stopped` as it stops and `watching N live session(s) as ...` once as it
+  starts, and a reply with either of those within 300 s after its confirm line had its watch cut
+  short (the host's stop ends the watch), so what came after says nothing of it. A reply whose
+  watch may still be running (the log ends sooner), whose transcript could not be read, or whose
+  host stopped or started within its watch is not counted as never recorded. It goes in
+  PendingOrNotObservable, so the never-recorded count is only what was watched to the end. Read a
+  live log again later and pending replies move to their bucket; those cut short stay there.
 
   It only reads the log files it is given, by default the host's host.log and host.log.1 under
   every profile in %LOCALAPPDATA%\AgentBridge (~/.agent-bridge elsewhere). The lines hold ids,
@@ -59,17 +61,22 @@ $late = [regex]'reply (?<id>[0-9a-f]{8}) late: (?:recorded (?<recorded>~?\d+)|no
 $stamp = [regex]'^(?<at>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) '
 # The host's late watch (ReplyOptions.LateWatch, set in Program.cs).
 $watchSeconds = 300
+# The host's own lines for its stop (Program.cs "stopped") and its start ("watching N live session(s) as").
+$hostMark = [regex]'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d (?:stopped$|watching \d+ live session\(s\) as )'
 
 $replies = [ordered]@{}
 $lates = @{}
 $logEnd = @{}
+$marks = @{}
 foreach ($file in $Path) {
     $logEnd[$file] = $null
+    $marks[$file] = [System.Collections.Generic.List[datetime]]::new()
     foreach ($line in [IO.File]::ReadLines((Resolve-Path $file))) {
         $stampedAt = $null
         if (($s = $stamp.Match($line)).Success) {
             $stampedAt = [datetime]::ParseExact($s.Groups['at'].Value, 'yyyy-MM-dd HH:mm:ss', [cultureinfo]::InvariantCulture)
             if ($null -eq $logEnd[$file] -or $stampedAt -gt $logEnd[$file]) { $logEnd[$file] = $stampedAt }
+            if ($hostMark.IsMatch($line)) { $marks[$file].Add($stampedAt) }
         }
         if (($m = $confirm.Match($line)).Success) {
             $replies[$m.Groups['id'].Value] = [pscustomobject]@{
@@ -109,7 +116,10 @@ $rows = foreach ($group in ($replies.GetEnumerator() | ForEach-Object Value | Gr
         $wasLate = $false
         if ($at -eq 'never') {
             $at = $lates[$entry.Key] ?? 'pending'
-            if ($at -eq 'pending' -and $null -ne $r.At -and $null -ne $logEnd[$r.File] -and $logEnd[$r.File] -ge $r.At.AddSeconds($watchSeconds)) { $at = 'never' }
+            if ($at -eq 'pending' -and $null -ne $r.At -and $null -ne $logEnd[$r.File] -and $logEnd[$r.File] -ge $r.At.AddSeconds($watchSeconds)) {
+                $cut = $r.At.AddSeconds($watchSeconds)
+                if (-not @($marks[$r.File] | Where-Object { $_ -ge $r.At -and $_ -le $cut }).Count) { $at = 'never' }
+            }
             $wasLate = $at -notin 'never', 'pending', 'unobservable'
         }
         if ($at -in 'never', 'pending', 'unobservable') {
@@ -142,5 +152,5 @@ $rows = foreach ($group in ($replies.GetEnumerator() | ForEach-Object Value | Gr
 if ($AsJson) { $rows | ConvertTo-Json -Depth 3 }
 else {
     $rows | Format-Table -AutoSize
-    Write-Host "NeverRecorded counts only replies whose $watchSeconds s late watch is known to be over; PendingOrNotObservable are replies still watched (or not observable: transcript unreadable), so they are in neither NeverRecorded nor the delays."
+    Write-Host "NeverRecorded counts only replies whose $watchSeconds s late watch is known to be over; PendingOrNotObservable are replies still watched, or not observable (transcript unreadable, or the host stopped or started within the watch), so they are in neither NeverRecorded nor the delays."
 }
