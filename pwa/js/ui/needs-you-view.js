@@ -57,7 +57,8 @@ export class NeedsYouLane {
       },
       nameOf: (hostId) => this.machine(hostId).name,
       labelled: this.labelled(),
-      current: (hostId) => !this.answering(hostId)?.stale,
+      // During the grace on a return (#950) a held question keeps its place, and the N, as last seen.
+      current: (hostId) => { const stale = this.answering(hostId)?.stale; return !stale || stale.grace === true; },
     });
     const live = new Set();
     const want = [];
