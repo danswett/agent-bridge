@@ -1453,7 +1453,7 @@ action lives on the machine, not on each row. The field names follow Connection'
 | Where in §2.2 | When | Glyph | Status text | Action |
 |---|---|---|---|---|
 | After rule 1 | `attention.kind: signInNeeded` with `recovery: pending` (signed in; the host hasn't seen the model answer yet) | `idle` | "Signed in · waiting for the session to confirm" | None. A session that died mid-turn is to get a Continue like §6.12's (planned, #780); not built yet |
-| After the row above | `attention.kind: signInNeeded` with any other `recovery` (or none) | `needs` | "Needs sign-in", with the machine as line 2's second fact (§2.2); the agent and "@*account*" are in the banner, Needs you and Details | **Sign in**, only with the `sessions.signin` capability and a `signIn` value the client knows; no button otherwise (A7) |
+| After the row above | `attention.kind: signInNeeded` with any other `recovery` (or none) | `needs` | "Needs sign-in", with the machine as line 2's second fact (§2.2); the agent and "@*account*" are in the banner, Needs you and Details | **Sign in**, only with the `sessions.signin` capability and `signIn: phone`; no button otherwise (A7) |
 | Refines rule 3 | `working` with `attention.kind: notResponding` | `failed` | "Not responding", with the machine as line 2's second fact; the trailing age says since when, and Details gives the time | None; there is nothing safe to press yet |
 | Before rule 4 | Main agent idle, and `attention.kind: error` | `failed` | "Not authorised", "Rate limited" or "Agent error", from `attention.errorClass` `auth`, `rate` or `other` (an unknown class reads as "Agent error"; a new class gets its words here first), plus "· N delegates still running" when background agents survive the turn | None on the row; Details gives the host's sentence for it (`attention.message`) |
 
@@ -1489,8 +1489,9 @@ that survives a failed turn never hides the error behind "Delegating".
 - Title: "*Agent* on *machine* needs sign-in" plus "· @*account*" when known. Line 2: "*n*
   sessions affected", with the affected sessions' titles from the client's own records (never
   from text in the record).
-- One button, **Sign in**, only with the capability. Without it there is no button and no
-  instruction: a missing capability doesn't prove the agent can't sign in from a device.
+- One button, **Sign in**, only with the capability and `signIn: phone`. Without the capability
+  there is no button and no instruction: a missing capability doesn't prove the agent can't sign
+  in from a device.
 - "Sign in at the machine · *reason*" shows only when the host itself says the provider has no
   device sign-in (`signIn: machine`, with its reason). This is the one line that sends the person
   to the machine, so it says why, in a reason from the host's set. `attention` has no field for
@@ -1568,7 +1569,8 @@ for it: Copilot, Claude Code or Codex.
 - **The body** is the host's composed sentence (`attention.message`, from
   `AgentErrors.Templates`, #841), never the agent's or the CLI's own words. The titles' verbs
   match those templates, so a push and the session's line read the same. Never the account, the
-  code or the URL.
+  code or the URL. The roll-up (the count and the sessions' titles) rides in the grouped title,
+  so the body needs none.
 - **Tiers** (how each one interrupts) are #913's.
 - **What sends today:** only sign-in pushes from the host (#928): one per (machine, agent,
   account), as soon as the first session needs it and again at most hourly while any still
