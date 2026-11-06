@@ -965,6 +965,7 @@ static partial class SelfTest
                 await Task.Delay(300);
                 var broken = await DrawPages(window, theme.ToString(), outFile, check);
                 check(broken.Count == 0 && root.ActualTheme == theme, $"draws every page with its title in {theme}{(broken.Count > 0 ? $": not {string.Join(", ", broken)}" : "")}");
+                await CheckEscapedSheet(window, check, outFile, theme.ToString().ToLowerInvariant(), notSent: true);
             }
             root.RequestedTheme = ElementTheme.Default;
         }
@@ -1014,6 +1015,7 @@ static partial class SelfTest
             await PictureAgentRows(window, main, outFile, "highcontrast");
             await PictureRowsTheAppCantActOn(window, main, demo, outFile, [ElementTheme.Default]);
             await ProgressGallery(window, main, demo, check, outFile, result, "highcontrast");
+            await CheckEscapedSheet(window, check, outFile, "high-contrast", notSent: true);
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();

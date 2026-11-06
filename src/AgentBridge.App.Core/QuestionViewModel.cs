@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using AgentBridge.Local;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
@@ -52,6 +53,8 @@ public sealed partial class QuestionViewModel : Observable
         this.current = current ?? (() => true);
         at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
         machine = machineName;
+        this.machineName = machineName;
+        this.capabilities = capabilities;
         (Answerable, Why) = Answerability(question, capabilities, agent);
         Fields = [.. question.Fields.Select(f => new FieldViewModel(f, question.Kind == QuestionKind.Approval))];
         Tap = question.Fields.Count == 1 && question.Fields[0].Type == FieldType.Choice;
@@ -120,6 +123,121 @@ public sealed partial class QuestionViewModel : Observable
     }
 
     bool detached;
+    readonly string? machineName;
+    readonly IReadOnlyList<string> capabilities;
+
+    // ---- an approval the host escaped anything in (#803, ui.md §6.4, "Escaped approvals") ----
+
+    // Signs its confirmation for this machine, (session, question, shown, request), or returns null
+    // when it cannot now; null on a machine reached through this machine's pipe, which never takes
+    // one. The card's session title, for the sheet's second line.
+    // (session, question, shown, request, pressed): signed as of when the sheet's button was pressed.
+    public Func<string, string, string, string, DateTimeOffset, SignedCommand?>? SignEscaped { get; init; }
+    public string? SessionTitle { get; init; }
+    public string? MachineName => machineName;
+
+    // How Approve is given for it from here: null for a question with nothing escaped, "confirm"
+    // (the sheet), "device" (this app is not a device the machine approved), "many" (too many
+    // escapes for the question to mark, so Approve is the machine's) or "machine" (the
+    // machine takes it only there).
+    public string? EscapedMode => !Approval || Question.Escaped is not { } e ? null
+        // Marks that do not each cover exactly one escape are not the host's: the sheet could not
+        // draw what it approves exactly, so Approve is the machine's (#836 review).
+        : e.Approve == EscapedApproval.TooMany ? "many"
+        : e.Approve != EscapedApproval.Confirm || !EscapedApprovalView.MarksExact(Question.Message, e.Marks) ? "machine"
+        : capabilities.Contains(EscapedApproval.Capability) && SignEscaped is not null ? "confirm"
+        : "device";
+
+    // Where Approve once was, why it is not offered here.
+    public string? EscapedWhy => EscapedMode switch
+    {
+        "machine" => $"{machineName ?? "The machine"} takes this approval only at the machine.",
+        "many" => $"Too many hidden characters to show here. Approve this at {machineName ?? "the machine"}.",
+        "device" => $"Approve this at {machineName ?? "the machine"}, or from a device approved there.",
+        _ => null,
+    };
+
+    public const string EscapedHelp = "At the machine, open this app's Settings, turn on answering folder-trust questions from devices, and approve the device: a device approved for those can approve these too while that is on, unless the machine lists its own (permissions.escapedApprovalDevices in its config.json).";
+
+    // Asked by the card when "Approve once…" is pressed: the view opens the sheet.
+    public event Action? EscapedConfirmRequested;
+
+    public void RequestEscapedConfirm()
+    {
+        if (EscapedMode == "confirm" && Answerable && CanAnswer) { EscapedConfirmRequested?.Invoke(); }
+    }
+
+    // The sheet's own button: Approve once, with a confirmation signed now for the answer's request,
+    // the question, and the digest of the message as this app has it. Null once sent; else why not.
+    public string? ConfirmEscaped()
+    {
+        if (EscapedMode != "confirm" || !Answerable || !CanAnswer) { return "This can't be approved from here now."; }
+        if (Question.Escaped is not { } e || EscapedApproval.Shown(Question.Message) != e.Shown || !EscapedApprovalView.MarksExact(Question.Message, e.Marks))
+        {
+            return "This approval didn't arrive as the machine sent it. Close this and read it again.";
+        }
+        var field = Fields[0];
+        // The confirmation is the person's at this moment: it is signed as of now, whenever the key
+        // to sign it with is there, and lasts EscapedApproval.MaxLifetime from now (#836).
+        var pressed = deliveries.Time.GetUtcNow();
+        var answer = new AnswerRequest
+        {
+            Id = sessionId, Question = Question.Id, Request = "00000000-0000-4000-8000-000000000000",
+            Fields = new Dictionary<string, JsonElement> { [field.Name] = JsonSerializer.SerializeToElement("approve") },
+        };
+        var data = EscapedData(answer, e.Shown, pressed);
+        // Held (the machine gone since CanAnswer was read): nothing is sent or kept, so the sheet must
+        // not close as if it went. It stays open saying so, its button the Try again (#836 review
+        // 5780082443).
+        // Waited for, while it never went, only for its lifetime from the press: then it fails as
+        // Expired and the press is asked for again, rather than reading unconfirmed once the give-up
+        // has passed (#850).
+        // The words chosen, as for any answer (Delivery.Chosen, #600): its receipt says "You answered · Approve once".
+        if (deliveries.Submit(Key, Ops.SessionAnswer, data, outcome => outcome is not ("busy" or "refused"), payload: answer,
+                chosen: ReceiptWords.AnsweredValue(Question, answer), lapse: (pressed + EscapedApproval.MaxLifetime, Expired)) is { Outcome: Deliveries.Held } held)
+        {
+            return $"Not sent: {held.Reason}. Press again once it's back.";
+        }
+        escapedAnswer = data;
+        field.SelectOnly("approve");
+        field.OtherChosen = false;
+        return null;
+    }
+
+    Func<string, object>? escapedAnswer;
+
+    // Why a confirmation never signed in its lifetime failed: nothing went, so Approve once… is
+    // offered again rather than a Try again that could only fail the same way.
+    internal const string Expired = "the confirmation expired before the machine was back, so nothing was sent; press Approve once… again";
+    static bool ExpiredUnsent(Delivery e) => e.State == DeliveryState.Failed && e.Reason == Expired;
+
+    // The answer for a request, its confirmation signed once for that request: a resend of the same
+    // request carries the same confirmation. Signed as each attempt is made, which can be while the
+    // machine's link is down (Deliveries evaluates the data before the call checks the connection),
+    // when there is no key to sign for: no confirmation then is never kept or sent. The attempt goes
+    // as not connected, so it waits for the link and signs once it is back. Kept, the null was sent
+    // on every resend of that request, and the host refused the Approve (#836 review 5780340459).
+    // Signed as of the press, never of the link's return: once MaxLifetime has passed since the
+    // press with nothing signed, nothing has gone, and nothing will. It fails as Expired, and the
+    // card asks for the press again (Trust's review of 07388e7e). Once signed, it may have gone, so
+    // a resend still goes: the host gives the first copy's outcome, or refuses it as expired.
+    Func<string, object> EscapedData(AnswerRequest answer, string shown, DateTimeOffset pressed)
+    {
+        string? signedFor = null;
+        SignedCommand? signed = null;
+        return request =>
+        {
+            if (signedFor != request || signed is null)
+            {
+                if (deliveries.Time.GetUtcNow() - pressed >= EscapedApproval.MaxLifetime) { throw new HostErrorException(Expired); }
+                signed = SignEscaped?.Invoke(sessionId, Question.Id, shown, request, pressed);
+                signedFor = signed is null ? null : request;
+            }
+            return signed is null
+                ? throw new HostNotRunningException("not connected to the machine, so its confirmation could not be signed yet")
+                : answer with { Request = request, Confirm = signed };
+        };
+    }
 
     public Question Question { get; }
     public string Id => Question.Id;
@@ -183,7 +301,7 @@ public sealed partial class QuestionViewModel : Observable
 
     // Nothing of the person's is on its way, or what went was not taken, or what failed to go was an
     // answer to what the question said before (Reworded).
-    bool Unsent(Delivery? e) => e is null || (e.State == DeliveryState.Done && e.Outcome is "busy" or "refused") || (e.State == DeliveryState.Failed && e.Request == earlier);
+    bool Unsent(Delivery? e) => e is null || (e.State == DeliveryState.Done && e.Outcome is "busy" or "refused") || (e.State == DeliveryState.Failed && e.Request == earlier) || ExpiredUnsent(e);
 
     // The request of an answer that failed to go, or was still going, while the question said
     // something else.
@@ -200,7 +318,7 @@ public sealed partial class QuestionViewModel : Observable
 
     // A tap question has no Send until Other is opened.
     public bool ShowSend => !Tap || OtherOpen;
-    public bool ShowResend => !detached && current() && deliveries.Get(Key) is { State: DeliveryState.Failed } e && e.Request != earlier;
+    public bool ShowResend => !detached && current() && deliveries.Get(Key) is { State: DeliveryState.Failed } e && e.Request != earlier && !ExpiredUnsent(e);
     // The answer is on its way (ui.md §5.3, Send and Answer): the button that sent it shows a
     // progress ring, which stops with the request.
     public bool InFlight => deliveries.Get(Key)?.State is DeliveryState.Sending or DeliveryState.Waiting;
@@ -238,6 +356,10 @@ public sealed partial class QuestionViewModel : Observable
         // An answer that failed to go for what the question said before stays one not to send again
         // (Reworded), whatever else the question is rebuilt for.
         earlier = old.earlier;
+        // An escaped approval's confirmation, signed for the request it went as: Try again resends
+        // it with its confirmation, not without, which the host would refuse (#836 review). Only
+        // the same question saying the same (SaysTheSame, Escaped included) is rebuilt with it.
+        escapedAnswer = old.escapedAnswer;
         Refresh();
     }
 
@@ -245,6 +367,8 @@ public sealed partial class QuestionViewModel : Observable
     public void Choose(OptionViewModel option)
     {
         if (!Tap) { return; }
+        // Approve once never goes on a tap for one the host escaped anything in: only the sheet sends it.
+        if (EscapedMode is not null && option.Value == "approve") { RequestEscapedConfirm(); return; }
         var f = Fields[0];
         f.SelectOnly(option.Value);
         f.OtherChosen = false;
@@ -262,7 +386,13 @@ public sealed partial class QuestionViewModel : Observable
             field = problem is null ? null : ProblemField(problem);
         }
         if (problem is not null) { Fail(problem, field); return; }
+        if (EscapedMode is not null && answer.Fields?.Values.Any(v => v.ValueKind == JsonValueKind.String && v.GetString() == "approve") == true)
+        {
+            RequestEscapedConfirm();
+            return;
+        }
         Error = null;
+        escapedAnswer = null;
         // The words chosen, as this question shows them now (Delivery.Chosen).
         var entry = deliveries.Submit(Key, Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer, chosen: ReceiptWords.AnsweredValue(Question, answer));
         // Watched from here, not only from a change seen on its way: a fast delivery can be done
@@ -273,7 +403,7 @@ public sealed partial class QuestionViewModel : Observable
     public void Resend()
     {
         if (!ShowResend) { return; }
-        deliveries.Resend(Key, Ops.SessionAnswer, request => ((AnswerRequest)deliveries.Get(Key)!.Payload!) with { Request = request });
+        deliveries.Resend(Key, Ops.SessionAnswer, escapedAnswer ?? (request => ((AnswerRequest)deliveries.Get(Key)!.Payload!) with { Request = request }));
     }
 
     void Fail(string message, string? field)
@@ -407,7 +537,15 @@ public sealed partial class QuestionViewModel : Observable
     // updated to refuse what it used to offer (#220), or a budget that had to cut it.
     public static bool SaysTheSame(Question a, Question b) =>
         a.Kind == b.Kind && a.Message == b.Message && a.Truncated == b.Truncated && a.AnswerAtMachine == b.AnswerAtMachine && a.Agent == b.Agent
+        && SameEscaped(a.Escaped, b.Escaped)
         && a.Fields.Count == b.Fields.Count && a.Fields.Zip(b.Fields).All(p => SameField(p.First, p.Second));
+
+    // The escaped text, policy, digest and every mark: escaped added after a host update, or its
+    // policy changed, rebuilds the controls, which Approve once would otherwise keep (#836 review).
+    static bool SameEscaped(EscapedText? a, EscapedText? b) =>
+        a is null ? b is null
+        : b is not null && a.Approve == b.Approve && a.Shown == b.Shown
+            && a.Marks.Count == b.Marks.Count && a.Marks.Zip(b.Marks).All(p => p.First.SequenceEqual(p.Second));
 
     static bool SameField(Field a, Field b) =>
         a.Name == b.Name && a.Type == b.Type && a.Title == b.Title && a.Description == b.Description

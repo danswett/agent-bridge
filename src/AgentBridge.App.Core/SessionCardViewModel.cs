@@ -31,6 +31,9 @@ public sealed class CardContext
     // Set by the card's Machine (#269): whether its rows are its host's word now, to be acted on;
     // and what a row says while the machine is away, null while it is not.
     public Func<bool> Current { get; internal set; } = () => true;
+    // Signs an escaped approval's confirmation (session, question, shown, request) for this card's
+    // machine, through the relay (#803); null for this machine's own, reached through its pipe.
+    public Func<string, string, string, string, DateTimeOffset, SignedCommand?>? SignEscaped { get; init; }
     public Func<DateTimeOffset, StatusLine?> Away { get; internal set; } = _ => null;
 }
 
@@ -359,7 +362,7 @@ public sealed partial class SessionCardViewModel : Observable
         }
         if (q is not null && question is null)
         {
-            var next = new QuestionViewModel(q, session.Id, session.Agent, caps, ctx.Deliveries, name, ctx.Current);
+            var next = new QuestionViewModel(q, session.Id, session.Agent, caps, ctx.Deliveries, name, ctx.Current) { SignEscaped = ctx.SignEscaped, SessionTitle = session.Title };
             // Only the same question rebuilt for new capabilities takes its draft along. One that came
             // back saying something else takes nothing chosen for what it said: an option kept by its
             // value could now be "Delete files" where it was "Keep files". What was typed stays on the

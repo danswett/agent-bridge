@@ -260,7 +260,15 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   not stop; 1 from Task Manager; 0xC000013A for Ctrl+C or logging off. A Stop from the app
   also covers the launcher, which no pipe reaches between crash restarts or while the host it
   restarted is still starting: Stop writes a marker (`host.stopped` in the profile's folder)
-  that the launcher checks after every host exit and every wait before starting the host again;
+  that the launcher checks after every host exit and every wait before starting the host again.
+  It is written only once the host's usage probes are done, just before the host is asked to
+  stop (or when no host answers), so a host that crashes during that wait, or while the app
+  quits during it, is still started again; the Stop then says the host ended unexpectedly
+  rather than that nothing was stopped, but only when its process has gone and nothing answers
+  on its pipe (a host whose process is still there but no longer answers is reported as not
+  stopped). Stops run one at a
+  time (Settings' Stop and Restart, an update's), so a second waits for the first and finds the
+  host stopped, rather than clearing the first's marker (#238). The app then
   waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
   the run itself if it is still there after the 20 s start timeout. A host the launcher starts
   also looks for the marker once its pipe is open and, finding it, exits 0 without serving, so
@@ -290,8 +298,24 @@ into one folder with one version. An app update is a host update, so they never 
   `%LOCALAPPDATA%\AgentBridge`: that is the host's data root (device keys, accounts,
   config, logs), and Velopack deletes its install folder on uninstall.
 * `OnBeforeUpdateFastCallback` (the old version, before files are replaced) stops the host
-  over the pipe and waits for its process to exit, so nothing in `current\` is locked;
-  `OnAfterUpdateFastCallback` (the new version) starts it again through its logon task.
+  over the pipe and waits for its process to exit, so nothing in `current\` is locked. Every
+  update the app starts has stopped the host already, after waiting for its usage probes (below),
+  so the hook finds it stopped and begins nothing. One it finds running (an update the app did
+  not start) is stopped only if its usage probes are done within 6 s. Velopack gives this hook
+  15 s and kills it after that, carrying on with the update
+  ([Velopack: App Hooks](https://docs.velopack.io/integrating/hooks)), so the hook waits at most
+  10 s in all and leaves the rest to the app's own start and exit. If the probes are not done, the
+  host is not asked to stop at all, and Velopack ends it with the package, which can cut a Codex
+  app-server it started mid-refresh (#238). The app turns off Velopack's own apply of a downloaded
+  update when the app starts (`SetAutoApplyOnStartup(false)`), so an update is applied only by
+  the app's own install, which waits for the probes, or by a person: `Update.exe` run by hand,
+  a newer setup run over the app, or an uninstall. If one of those comes while a Codex usage probe
+  is running (up to about 10 minutes for one that is slow to answer, usually under a minute) and
+  Codex happens to be refreshing its sign-in, the person may have to sign in to Codex again.
+  Keeping the probe alive across those is #974. The same holds for uninstall, whose hook has
+  30 s, and which then goes on;
+  `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon
+  task, waiting at most 10 s.
   The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
   launch if it is not running.
 * `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
@@ -347,6 +371,21 @@ into one folder with one version. An app update is a host update, so they never 
   and every session change, and since its sessions were last read in full (a reconnect starts
   the wait again), or six hours after it first found one, whatever the sessions are
   doing (though still only once they are read in full, so not in the middle of a reconnect).
+  Before the host is stopped, for this or anything else (Settings' Stop, Restart and Update and
+  restart), the app asks it to hold its usage probes (`host.probes.hold`) and waits until no
+  Codex app-server it started to read Codex's allowance is still answering or in its grace
+  (#238): the app-server's input goes with the host, and cutting it mid-refresh can sign Codex
+  out. A host that cannot say, or is still busy after 11 minutes, is neither stopped nor ended;
+  the stop fails and says why. An install that is due waits a tick at a time for that, the
+  six-hour one too (and is checked again once the host has answered: the switch, the sessions and
+  the release as of then), and the host
+  starts no new probe meanwhile. Before an update (Settings' or automatic), every other profile's
+  host running from the package is held and waited for the same way, since Velopack ends them
+  too, each held again every round and once more just before the hand-over, with the package
+  looked at again once they are done (a host started meanwhile is held too); one that cannot
+  confirm, or a host of the package no pipe reaches, stops the update before anything is stopped.
+  Quitting gives up those waits, never a probe, so a host already stopped for the update is
+  started again within Quit's 25 s.
   The path is that of "Update and restart": the host stopped over the pipe, then
   `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
   host again. The new version's first start shows a toast: the version it came from, and the

@@ -846,21 +846,69 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .delegate-summary[aria-current="true"] .delegate-name { color: var(--ab-bridge); }
 
 /* ---- delegates starting and reporting back, in the conversation (§6.4) ---- */
-.delegate-events { list-style: none; margin: var(--ab-space-2) 0 0; padding: 0; display: grid; gap: var(--ab-space-1); }
-.delegate-event {
-  display: grid; grid-template-columns: 12px minmax(0, 1fr); column-gap: var(--ab-space-2); align-items: start;
+/* Past tense (#661): the delegate icon for a start, the outcome's glyph once it reported back,
+   centred in a 16 column; never the working glyph. */
+.delegate-events, .delegate-fold-lines { list-style: none; margin: var(--ab-space-2) 0 0; padding: 0; display: grid; gap: var(--ab-space-1); }
+.delegate-events[hidden], .delegate-fold-lines[hidden] { display: none; }
+.delegate-event, .delegate-fold-line {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: var(--ab-space-2); align-items: start;
   font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); font-variant-numeric: tabular-nums;
 }
-.delegate-event > .glyph { margin-top: calc((var(--type-meta-line) - 12px) / 2); }
-/* A start is history, not something happening now: its glyph stands still. */
-.delegate-event .glyph-orbit { animation: none; }
+.delegate-event-mark { display: flex; align-items: center; justify-content: center; width: 16px; height: var(--type-meta-line); color: var(--ab-text2); }
 .delegate-event-text { min-width: 0; overflow-wrap: anywhere; }
+/* A run of more than three (D3): one line, its button, the chevron ending it inside its target
+   and focus ring, then the "still working" link after a 12 gap, each a target of its own
+   (ui.md §9.1 A11). Too long for one line (a phone), the link wraps under the summary's words,
+   and the icon stays on their first line: each target pads its first line to the target's
+   middle, and the icon's cell is a target high. Open, its lines are indented under a rule from
+   the icon's centre. */
+.delegate-fold-line { --fold-target: 32px; }
+@media (pointer: coarse) { .delegate-fold-line { --fold-target: var(--tap); } }
+.delegate-fold-line > .delegate-event-mark { height: var(--fold-target); }
+.delegate-fold-text { min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: var(--ab-space-3); }
+.delegate-fold-toggle {
+  display: inline-flex; align-items: flex-start; gap: var(--ab-space-1); min-width: 0; max-width: 100%; min-height: var(--fold-target);
+  padding: calc((var(--fold-target) - var(--type-meta-line)) / 2) 0; margin: 0; border: 0; background: none; font: inherit; color: var(--ab-text2); text-align: start; cursor: pointer;
+}
+.delegate-fold-label { min-width: 0; overflow-wrap: anywhere; }
+.delegate-link.delegate-fold-working { display: inline-block; min-height: var(--fold-target); padding: calc((var(--fold-target) - var(--type-meta-line)) / 2) 0; overflow-wrap: anywhere; }
+.delegate-link.delegate-fold-working[hidden] { display: none; }
+.delegate-fold-chevron { display: flex; flex: none; align-items: center; height: var(--type-meta-line); color: var(--ab-text2); }
+.delegate-fold-chevron .ab-icon { transition: transform var(--ab-motion-disclosure-exit-duration) var(--ab-motion-disclosure-exit-ease); }
+.delegate-fold[data-open] .delegate-fold-chevron .ab-icon { transform: rotate(90deg); transition-duration: var(--ab-motion-disclosure-duration); transition-timing-function: var(--ab-motion-disclosure-ease); }
+.delegate-fold-lines {
+  margin: var(--ab-space-2) 0 0 7px; padding-inline-start: var(--ab-space-4); border-inline-start: 1px solid var(--ab-stroke2); gap: var(--ab-space-2);
+  animation: prompt-settle var(--ab-motion-disclosure-duration) var(--ab-motion-disclosure-ease);
+}
 .delegate-link {
   display: inline; padding: 0; margin: 0; font: inherit; font-style: italic; color: var(--ab-bridge);
   background: none; border: 0; cursor: pointer; text-align: start; text-decoration: underline; text-underline-offset: 2px;
 }
 .delegate-link:hover { text-decoration-thickness: 2px; }
 @media (forced-colors: active) { .delegate-link { color: LinkText; } }
+/* "N more" is a whole 44 target (§9.1) with its words as small as the line's: padded to a tap
+   each way, it makes the row of words it is on a tap high, as the fold's line is, so it reaches
+   into no row or line beside it. Wherever it falls when its line wraps (a phone), the glyph keeps
+   to the first row's words: the line lines up their first baselines, and a zero-width character
+   gives the glyph's cell the baseline of a row of words. */
+.delegate-link.delegate-more {
+  display: inline-block; min-width: var(--tap); min-height: var(--tap); white-space: nowrap; text-align: center;
+  padding: calc((var(--tap) - var(--type-meta-line)) / 2) 0;
+}
+.delegate-event:has(.delegate-more) { align-items: first baseline; }
+.delegate-event:has(.delegate-more) > .delegate-event-mark::before { content: '\200b'; content: '\200b' / ''; }
+/* On touch every line's rows are tap-high line boxes, one row or wrapped, and each name and
+   "N more" fills its row (a button, so a box of its own, a line high): a whole 44 target over no
+   other name. The lines sit 8 apart, more than a line's own rows, so a line that wraps still reads
+   as one (§9.1 A11). The glyph keeps to the first row, as above. With a pointer, the meta line's
+   own leading. */
+@media (pointer: coarse) {
+  .delegate-events { gap: var(--ab-space-2); }
+  .delegate-event { align-items: first baseline; }
+  .delegate-event > .delegate-event-mark::before { content: '\200b'; content: '\200b' / ''; }
+  .delegate-event > .delegate-event-text { line-height: var(--tap); }
+  .delegate-event .delegate-link.delegate-more { padding-block: 0; }
+}
 
 /* ---- the conversation (ui.md §6.4) ---- */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -1349,3 +1397,38 @@ form.reply, form.answer { container: receipt / inline-size; }
     background-color: var(--ab-selected); color: color-mix(in srgb, var(--ab-bridge) 85%, var(--ab-text));
   }
 }
+/* An approval the host escaped anything in (#803, ui.md §6.4, "Escaped approvals"). A host escape is
+   boxed: the code face and size, a 1 px outline in the Danger role, a 2 px radius, 2 px side padding,
+   no fill. Text the agent typed itself, "\u202E" included, is never boxed. */
+.escape-token { font: inherit; font-family: var(--ab-font-mono); border: 1px solid var(--ab-danger); border-radius: 2px; padding: 0 2px; background: none; }
+@media (forced-colors: active) { .escape-token { border-color: Highlight; forced-color-adjust: none; } }
+.escaped-why { margin: 8px 0 0; }
+.escaped-why p { margin: 0; }
+.escaped-help { margin-top: 4px; }
+.escaped-help summary { cursor: pointer; color: var(--ab-bridge); min-height: 44px; display: flex; align-items: center; }
+.escaped-sheet {
+  width: 100%; max-width: 100%; height: 100%; max-height: 100%; margin: 0; padding: 12px 16px max(16px, var(--safe-bottom, 0px));
+  border: none; background: var(--ab-shell); color: var(--ab-text); display: none; flex-direction: column; gap: 8px;
+}
+.escaped-sheet[open] { display: flex; }
+.escaped-sheet::backdrop { background: var(--ab-shell); opacity: .85; }
+/* Wide, a dialog as tall as what it holds, up to 90% of the window: a short command left an empty
+   panel under it (the creative director's review of #836). Fit-content, since a modal dialog is
+   fixed to every edge, where auto stretches it to the window. */
+@media (min-width: 720px) { .escaped-sheet { max-width: 720px; height: fit-content; max-height: 90vh; margin: auto; border-radius: var(--ab-radius-card); border: 1px solid var(--ab-stroke2); } }
+.sheet-head { display: flex; align-items: flex-start; gap: 12px; }
+.sheet-title { flex: 1; margin: 0; font-size: 1.1rem; }
+.sheet-cancel { min-height: 44px; }
+.sheet-where { margin: 0; color: var(--ab-text2); }
+.sheet-warning { margin: 0; }
+.sheet-warning-line { margin: 0 0 4px; }
+.sheet-hint { margin: 0; color: var(--ab-text2); font-size: .92rem; }
+/* As tall as the command and its confirm, scrolling only past the sheet's height, so "Not sent"
+   (.sheet-error, after it) sits directly under the confirm rather than at the sheet's foot. */
+.sheet-command { flex: 0 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--ab-stroke2); border-radius: 8px; padding: 8px 12px; background: var(--ab-card); }
+.sheet-command:focus-visible { outline: 2px solid var(--ab-bridge); outline-offset: 2px; }
+.escaped-text { margin: 0 0 16px; font: .86rem var(--ab-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; direction: ltr; unicode-bidi: plaintext; tab-size: 4; }
+/* Filled, as the card's Approve once: its words on --ab-bridge-on, never --ab-bridge on --ab-bridge. */
+.sheet-confirm { min-height: 56px; width: 100%; }
+/* Held, in forced colours: the system's disabled cue, never a dimmer accent fill. */
+@media (forced-colors: active) { .sheet-confirm:disabled { background: Canvas; color: GrayText; border-color: GrayText; opacity: 1; } }

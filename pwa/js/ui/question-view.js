@@ -10,6 +10,8 @@
 import { h } from './dom.js';
 import { renderMarkdown } from '../markdown.js';
 import { ReceiptClock, answeredValue, describeInFlight, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
+import { openConfirmSheet } from './escaped-sheet.js';
+import { COMMAND_LIFETIME_S } from '../transfer.js';
 import {
   Limits, draftText, initialState, isRecommended, optionTone, orderOptions, prepareAnswer,
   tapToAnswer, utf8Bytes,
@@ -217,11 +219,15 @@ export class QuestionPanel {
   #receipt = null;
 
   // answering: { service, hostId, sessionId }. state: what a previous panel for the same
-  // question held, so a re-render loses nothing.
-  constructor(q, { machineName, answering, state = null, asker = null }) {
+  // question held, so a re-render loses nothing. escaped: for an approval the host escaped anything
+  // in (#803), { mode, sign, title }: mode 'confirm' opens the confirmation sheet, whose button
+  // alone calls sign({ session, question, shown, request }); 'device' or 'machine' offer Deny only,
+  // saying why. Null for any other question.
+  constructor(q, { machineName, answering, state = null, asker = null, escaped = null }) {
     this.q = q;
     this.machineName = machineName;
     this.answering = answering;
+    this.escaped = escaped;
     this.questionId = q.id;
     this.idBase = `q${++seq}`;
     this.tap = tapToAnswer(q);
@@ -315,9 +321,21 @@ export class QuestionPanel {
     const headed = !approval || field.title !== null;
     const titleId = headed ? `${id}-f0-t` : `${id}-h`;
     const group = h('div', { class: `choices${approval ? ' approval' : ''}`, role: 'group', 'aria-labelledby': titleId });
+    const escaped = approval ? this.escaped : null;
     for (const o of orderOptions(field.options)) {
       const tone = approval ? optionTone(o) : 'neutral';
       const isDefault = field.default === o.value;
+      if (escaped && o.value === 'approve') {
+        // Approve once never goes on a tap for one the host escaped anything in: it opens the sheet,
+        // or is not offered here at all (one verb per state).
+        if (escaped.mode === 'confirm') {
+          group.append(h('button', {
+            type: 'button', class: 'choice tone-allow escaped-approve', dataset: { value: o.value, escaped: 'confirm' },
+            'aria-haspopup': 'dialog', onclick: () => this.#confirmEscaped(),
+          }, h('span', { class: 'label' }, 'Approve once…')));
+        }
+        continue;
+      }
       const b = h('button', {
         type: 'button',
         class: `choice tone-${tone}${isRecommended(o) ? ' recommended' : ''}${isDefault ? ' default' : ''}`,
@@ -334,6 +352,7 @@ export class QuestionPanel {
     const parts = headed ? [h('div', { class: 'field-head' }, headParts(field, titleId))] : [];
     if (field.description) { parts.push(h('p', { class: 'field-desc' }, field.description)); }
     parts.push(group);
+    if (escaped && escaped.mode !== 'confirm') { parts.push(this.#escapedWhy(escaped.mode)); }
     if (field.allowOther) {
       const boxId = `${id}-other`;
       e.otherToggle = h('button', {
@@ -350,6 +369,60 @@ export class QuestionPanel {
     }
     e.controls.append(h('div', { class: `field field-choice tap${approval ? ' approval' : ''}`, dataset: { field: field.name, type: field.type } }, parts));
   }
+
+  // Where Approve once was, why it is not offered here (ui.md §6.4, "Escaped approvals").
+  #escapedWhy(mode) {
+    const machine = this.machineName ?? 'the machine';
+    if (mode === 'machine') {
+      return h('p', { class: 'note escaped-why', role: 'note', dataset: { escaped: 'machine' } }, `${machine} takes this approval only at the machine.`);
+    }
+    if (mode === 'many') {
+      return h('p', { class: 'note escaped-why', role: 'note', dataset: { escaped: 'many' } }, `Too many hidden characters to show here. Approve this at ${machine}.`);
+    }
+    return h('div', { class: 'note escaped-why', role: 'note', dataset: { escaped: 'device' } },
+      h('p', {}, `Approve this at ${machine}, or from a device approved there.`),
+      h('details', { class: 'escaped-help' },
+        h('summary', {}, 'How to approve a device'),
+        h('p', {}, `At ${machine}, open the Windows app's Settings, turn on answering folder-trust questions from devices, and approve this device: `
+          + 'a device approved for those can approve these too while that is on, unless the machine lists its own (permissions.escapedApprovalDevices in its config.json).')));
+  }
+
+  // The sheet, and Approve once only from its own button: signed for the answer's request when it is
+  // pressed, then sent as any answer is, so a resend carries the same confirmation.
+  #confirmEscaped() {
+    if (this.#held || this.#sheetOpen) { return; }
+    const entry = this.entry;
+    if (entry && (entry.state === 'sending' || entry.state === 'waiting')) { return; }
+    const q = this.q;
+    const { service, hostId, sessionId } = this.answering;
+    this.#sheetOpen = true;
+    openConfirmSheet(q, {
+      title: this.escaped.title, machineName: this.machineName,
+      sign: async ({ shown, pressed, cancelled = () => false }) => {
+        // Signed as of the press, so it lasts COMMAND_LIFETIME_S from then, as the host holds it to;
+        // one already that old (a tab suspended after the press) is not signed or sent at all. No
+        // press time, no confirmation: a default here would be the signing time again.
+        if (!Number.isFinite(pressed)) { throw new Error('It could not be signed: the time it was pressed is unknown. Press again'); }
+        const stale = () => Date.now() - pressed >= COMMAND_LIFETIME_S * 1000;
+        const expired = () => new Error(`Not sent: this confirmation is more than ${COMMAND_LIFETIME_S / 60} minutes old. Press again`);
+        if (stale()) { throw expired(); }
+        const request = globalThis.crypto.randomUUID();
+        const confirm = await this.escaped.sign({ session: sessionId, question: q.id, shown, request, now: pressed });
+        // Closed while it was signed: the confirmation is dropped, and nothing is sent (#836 review).
+        if (cancelled()) { return false; }
+        if (stale()) { throw expired(); }
+        // The machine's route gone while it was signed (#269's gate): nothing is queued, so the sheet
+        // must not close as if it went. It stays open saying so, its button the Try again, which
+        // signs afresh once the machine is back (#836 review 5780082443).
+        const entry = service.submit({ hostId, sessionId, questionId: q.id, answer: { fields: { [q.fields[0].name]: 'approve' }, confirm }, request });
+        if (!entry) { throw new Error(`Not sent: ${this.machineName ?? 'the machine'} isn't connected now. Press again once it's back`); }
+        this.state[q.fields[0].name].selected = 'approve';
+        this.state[q.fields[0].name].otherChosen = false;
+      },
+    }).finally(() => { this.#sheetOpen = false; });
+  }
+
+  #sheetOpen = false;
 
   #toggleOther() {
     const e = this.els;

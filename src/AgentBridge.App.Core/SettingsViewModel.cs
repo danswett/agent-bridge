@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
@@ -238,6 +239,20 @@ public sealed class SettingsViewModel : Observable
     public IReadOnlyList<TrustDevice> TrustDevices { get; private set; } = [];
     public bool ShowTrustDevices => RemoteFolderTrust && TrustDevices.Count > 0;
 
+    // Who may approve an approval with hidden characters from a device (#803), and why, shown either
+    // way: devices listed in config.json are otherwise invisible here, and ones inherited from
+    // folder trust approve only while it is on. Empty for a host from before it.
+    public string EscapedApprovalText => Status?.Settings is not { EscapedApproval: { } policy } s ? ""
+        : policy != EscapedApproval.Confirm
+            ? "Approvals with hidden characters: Approve only at this machine (permissions.escapedApproval). Deny goes from anywhere."
+        : s.EscapedApprovalDevices is { } listed
+            ? listed.Count == 0
+                ? "Approvals with hidden characters: no device may approve them (permissions.escapedApprovalDevices is empty in config.json), so Approve only at this machine. Deny goes from anywhere."
+                : $"Approvals with hidden characters: approved after a second confirmation from {listed.Count} device(s) listed in config.json (permissions.escapedApprovalDevices): {string.Join(", ", listed.Select(id => id[..Math.Min(8, id.Length)]))}. Remove one there."
+        : RemoteFolderTrust
+            ? "Approvals with hidden characters: approved after a second confirmation from the devices approved above for folder-trust questions."
+            : "Approvals with hidden characters: Approve only at this machine while folder-trust questions are answered only here. Deny goes from anywhere.";
+
     Fleet? fleet;
 
     // The account's devices come from the relay link, made after this page.
@@ -278,6 +293,7 @@ public sealed class SettingsViewModel : Observable
             Raise(nameof(TrustDevices));
         }
         Raise(nameof(ShowTrustDevices));
+        Raise(nameof(EscapedApprovalText));
     }
 
     // Boxes with a change of their own on its way, by device id.

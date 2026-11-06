@@ -322,6 +322,9 @@ sealed class FakeProcesses : IProcesses
     public int Start(string path, IReadOnlyList<string> arguments) { Started.Add((path, arguments)); OnStart?.Invoke(); return 99; }
     public bool IsRunning(int pid) => Alive.Contains(pid);
     public void Kill(int pid) => Killed.Add(pid);
+    // When each started, where the test says.
+    public Dictionary<int, DateTimeOffset> StartTimes { get; } = [];
+    public DateTimeOffset? StartedAt(int pid) => StartTimes.TryGetValue(pid, out var at) ? at : null;
 }
 
 // The test's UI thread, as a dispatcher: actions run one at a time on it.

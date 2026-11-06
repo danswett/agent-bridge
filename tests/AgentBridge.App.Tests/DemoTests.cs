@@ -120,11 +120,27 @@ public sealed class HeavyDemoTests
 
         Assert.True(DemoHost.Examples().Count + sessions.Count > 15);
         Assert.True(items >= 200, $"{items} items");
-        Assert.True(System.Text.Encoding.UTF8.GetByteCount(heavy.Activity.Response!) <= Limits.Response);
         Assert.Equal(Limits.History, heavy.Activity.History!.Count);
         Assert.InRange(heavy.Subagents!.Count, 9, Limits.Subagents);
         Assert.Same(heavy, SessionBudget.Fit(heavy));
         Assert.DoesNotContain(sessions.Select(s => s.Id), DemoHost.Examples().Select(s => s.Id).Contains);
+    }
+
+    // The heavy response is close to the protocol's limit (16,076 of 16,384 bytes in #748). Over
+    // it, the app cuts it on receipt keeping its end (ReceivedLimits.Fit), so every block moves up
+    // and the resize pass's blocks at fixed places (HeavyMiddle, HeavyTall) are other blocks: its
+    // checks fail with "setup: ..." in the self-test, far from the cause. This fails here first (#946).
+    [Fact]
+    public void The_heavy_response_fits_the_protocols_limit_so_the_app_draws_it_uncut()
+    {
+        var heavy = DemoHost.Heavy(Make.T0).Single(s => s.Id == DemoHost.HeavyId);
+        var bytes = System.Text.Encoding.UTF8.GetByteCount(heavy.Activity.Response!);
+
+        Assert.True(bytes <= Limits.Response,
+            $"DemoHost.HeavyResponse() is {bytes} bytes, over Limits.Response ({Limits.Response}). The app would cut its start on receipt and "
+            + "move every block the self-test's resize pass finds by index (HeavyMiddle, HeavyTall). Shorten its text rather than adding to it, "
+            + "and keep the blocks' count and order so those indices hold.");
+        Assert.Same(heavy, ReceivedLimits.Fit(heavy));
     }
 
     [Fact]
