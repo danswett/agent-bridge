@@ -450,7 +450,9 @@ public sealed partial class DemoHost : IAsyncDisposable
     // The person entered the code at github.com (or didn't): signin.done to the flow's channels.
     // Signed in doesn't clear the sessions: under #800's clear gate the host only marks them pending
     // (signed in, waiting for the session to confirm) until the model answers (ConfirmSignInAsync).
-    public async Task FinishSignInAsync(string outcome, string? reason = null)
+    // Signed in with pendingFirst false sends signin.done before the host's pending, which
+    // SignedInPendingAsync then sends: the order a slow host may give.
+    public async Task FinishSignInAsync(string outcome, string? reason = null, bool pendingFirst = true)
     {
         List<(string Flow, List<IProtocolChannel> Channels)> done;
         lock (gate)
@@ -459,7 +461,7 @@ public sealed partial class DemoHost : IAsyncDisposable
             flows.Clear();
         }
         IReadOnlyList<string> resumed = outcome == "signedIn" ? SignInSessions : [];
-        if (outcome == "signedIn") { await MarkSignInAsync("pending"); }
+        if (outcome == "signedIn" && pendingFirst) { await MarkSignInAsync("pending"); }
         foreach (var (flow, chans) in done)
         {
             foreach (var ch in chans.Where(c => c.IsOpen))
@@ -470,11 +472,31 @@ public sealed partial class DemoHost : IAsyncDisposable
         }
     }
 
+    public Task SignedInPendingAsync() => MarkSignInAsync("pending");
+
     // The model answered after the sign-in: the clear gate passes and the host clears the sessions.
     public Task ConfirmSignInAsync() => ClearSignInAsync();
 
     // The next turn failed sign-in again: back to needing it, with a new since.
     public Task FailSignInAgainAsync() => MarkSignInAsync("failed", again: true);
+
+    // A sign-in under way from another device (recovery signingIn): the banner offers Show code. Off,
+    // the sessions just need sign-in again.
+    public async Task SignInUnderWayAsync(bool on)
+    {
+        if (on) { await MarkSignInAsync("signingIn"); return; }
+        foreach (var id in SignInSessions)
+        {
+            Session? s;
+            lock (gate)
+            {
+                if (!attention.TryGetValue(id, out var a)) { continue; }
+                a.Remove("recovery");
+                s = sessions.GetValueOrDefault(id);
+            }
+            if (s is not null) { await Change(s with { UpdatedAt = DateTimeOffset.UtcNow }); }
+        }
+    }
 
     async Task MarkSignInAsync(string recovery, bool again = false)
     {
@@ -610,6 +632,10 @@ public sealed partial class DemoHost : IAsyncDisposable
         return result;
     }
 
+    // A session as a host would send it next, for the self-test: a schedule's or an agent's prompt
+    // arriving (#489), which nothing in the demo sends on its own.
+    public Task Upsert(Session next) => Change(next);
+
     // finishes: a turn started here ends a moment later, as an agent's would; not a session that has
     // stopped answering (#800).
     async Task Change(Session next, bool finishes = true)
@@ -628,8 +654,9 @@ public sealed partial class DemoHost : IAsyncDisposable
         {
             await Task.Delay(3000);
             var done = DateTimeOffset.UtcNow;
-            // The main agent wrote last: the top-level text is its own again.
-            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } });
+            // The main agent wrote last: the top-level text is its own again. A few short blocks, so a
+            // conversation's pictures show the space between them (#765).
+            await Change(next with { Status = SessionStatus.Idle, StatusSince = done, UpdatedAt = done, Activity = next.Activity with { Response = "Done: that's taken care of.\n\nThe branch is pushed.\n\n- the suite passes\n- nothing else is open", TurnCount = (next.Activity.TurnCount ?? 0) + 1, Reasoning = null, Source = null, Own = null } });
         }
     }
 

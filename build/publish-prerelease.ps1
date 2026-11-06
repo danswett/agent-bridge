@@ -34,6 +34,9 @@ $semver = [semver]$Version
 $ReleasesDir = @($ReleasesDir | ForEach-Object { [IO.Path]::GetFullPath($_) })
 $work = Join-Path (Split-Path $ReleasesDir[0]) 'publish-work'
 $mode = if ($DryRun) { 'dry run: ' } else { '' }
+$haltsPath = Join-Path $PSScriptRoot '..' 'ops' 'halts.json'
+. (Join-Path $PSScriptRoot 'validate-halt-list.ps1')
+Assert-ReleaseHaltList $haltsPath
 
 function Invoke-Gh {
     # gh reports a failure on stderr and a nonzero exit; unchecked, it would read as no releases.
@@ -246,6 +249,9 @@ if ($publishing) {
         $draft = @(Get-Release | Where-Object { $_.draft -and $_.tag_name -eq $tag })
         if ($draft.Count -ne 1) { throw "expected one draft $tag after the upload, found $($draft.Count)" }
         foreach ($b in $builds) { Invoke-Gh release upload $tag $b.AssetsFile -R $Repository --clobber | Out-Null }
+        # The same reviewed policy for every channel; upload before exposing the draft.
+        # Clients verify GitHub's asset digest and never treat a missing policy as empty.
+        Invoke-Gh release upload $tag $haltsPath -R $Repository --clobber | Out-Null
         $run = if ($env:GITHUB_RUN_ID) { " (CI run $env:GITHUB_SERVER_URL/$Repository/actions/runs/$env:GITHUB_RUN_ID)" } else { '' }
         $hasDelta = [bool]($builds | Where-Object { Test-Path $_.DeltaPath })
         $installers = @($builds | ForEach-Object { "$($_.Expected.Installer) on $(if ($_.Machine -eq 'x64') { 'an x64 PC' } else { 'a Windows on Arm PC' })" })

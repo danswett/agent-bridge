@@ -1184,7 +1184,7 @@ export function demoSignIn(host, base = Date.now()) {
   host.sessions.set('stalled', {
     id: 'stalled', agent: 'codex', title: 'Re-run the flaky suite', driver: 'agent', driverPrincipal: 'homeassistant:demo', status: 'working', statusSince: at(900000), updatedAt: at(900000),
     activity: { response: 'Running the suite again.', turnCount: 1 },
-    attention: { kind: 'notResponding', since: at(600000), agent: 'codex', lastEventAt: at(600000) },
+    attention: { kind: 'notResponding', since: at(480000), agent: 'codex', lastEventAt: at(600000) },
   });
   return ids;
 }

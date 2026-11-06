@@ -219,11 +219,11 @@ public sealed class AgentReadinessTests : IDisposable
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
             return new CommandResult(true, false, 0, "1.2.3");
         };
-        await using var service = Service();
+        await using var service = Service(timeout: TimeSpan.FromMinutes(1));
         using var cancel = new CancellationTokenSource();
 
         var pending = service.RefreshAsync(cancel.Token);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
         cancel.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
         Assert.Null(service.Snapshot);
@@ -292,7 +292,9 @@ public sealed class AgentReadinessTests : IDisposable
         await using var service = Service(timeout: TimeSpan.FromMilliseconds(50));
         try
         {
-            var agent = Agent(await service.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(5)), "claude");
+            // The probe still times out at 50 ms, then has two seconds to clean up. This
+            // outer bound catches a hang, not a loaded runner's scheduling delay (#664).
+            var agent = Agent(await service.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(30)), "claude");
             Assert.Equal(ReadinessState.Failed, agent.VersionCheck.State);
             Assert.Contains("timed out", agent.VersionCheck.Detail);
             Assert.Contains("without confirming cleanup", agent.VersionCheck.Detail);
@@ -379,14 +381,14 @@ public sealed class AgentReadinessTests : IDisposable
             if (Agent(report, "copilot").LastHookHandledAt is not null) { hookHeard.TrySetResult(); }
         };
         service.Start();
-        await initiallyChecked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await initiallyChecked.Task.WaitAsync(TimeSpan.FromSeconds(30));
         locator.Installed["copilot"] = "copilot.exe";
         f.Time.Advance(TimeSpan.FromMinutes(10));
-        await laterInstalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await laterInstalled.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         SpoolContract.Write(f.Runtime, "copilot", "agent_stop", "{}"u8, [], f.Time.GetUtcNow(), 1);
         Assert.Equal(1, intake.Pass());
-        await hookHeard.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await hookHeard.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         var copilot = Agent(service.Snapshot!, "copilot");
         Assert.Equal(f.Time.GetUtcNow(), copilot.LastHookHandledAt);

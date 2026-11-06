@@ -142,6 +142,20 @@ function foregroundTask(s) {
   return list.find((a) => a.kind === 'task' && RUNNING.has(a.status) && a.name && foreground(a)) ?? null;
 }
 
+// Since when a Not responding session (rule 12) has been silent: when the host last heard from the
+// agent (attention.lastEventAt), else since it said so (attention.since); null for any other row
+// (#878, ui.md §6.13).
+export function silentSince(s) {
+  const at = s.attention;
+  return sessionStatus(s).rule === 12 ? (at.lastEventAt ?? at.since ?? null) : null;
+}
+
+// When the row's trailing age counts from: for Not responding, since it went silent, so the age
+// says since when; otherwise the session's last update.
+export function rowAt(s) {
+  return silentSince(s) ?? s.updatedAt;
+}
+
 // The glyph's accessible name (ui.md §9): "Plan Migration to Windows App, delegating to 3
 // agents, DEV-VM1", with the driver said in words, since the badge is only a shape.
 export function statusLabel(status, { title, machine = null } = {}) {

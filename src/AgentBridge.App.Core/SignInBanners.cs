@@ -24,7 +24,7 @@ public static class SignInBanners
     // that started it, so a result that comes back after a Cancel or a later press isn't applied.
     // Joined: a flow another device started, which this one joined (busy). Cancel here only closes
     // the sheet: signin.cancel would end the other device's sign-in too.
-    public sealed record Flow(string State, string? Id = null, DeviceCode? Code = null, string? Outcome = null, string? Reason = null, string? AtMachine = null, string? Problem = null, string? Attempt = null, IReadOnlyList<string>? Orphans = null, bool Joined = false)
+    public sealed record Flow(string State, string? Id = null, DeviceCode? Code = null, string? Outcome = null, string? Reason = null, string? Problem = null, string? Attempt = null, IReadOnlyList<string>? Orphans = null, bool Joined = false)
     {
         public bool Active => State is "starting" or "pending";
     }
@@ -36,7 +36,7 @@ public static class SignInBanners
     // State: needed, confirming (every session signed in and waiting to confirm), signedIn or
     // recovered. Code: the flow's, while it may be shown (not expired).
     public sealed record Banner(string Key, string MachineKey, AgentKind Agent, string Machine, string? Account, string State,
-        IReadOnlyList<(string Id, string Title)> Sessions, bool AtMachine, string? AtMachineReason, string? Recovery, bool CanSignIn,
+        IReadOnlyList<(string Id, string Title)> Sessions, bool AtMachine, string? Recovery, bool CanSignIn,
         Flow? Flow, DeviceCode? Code, bool Expired, int Count)
     {
         public string AgentName => AuthState.AgentName(Agent);
@@ -90,25 +90,24 @@ public static class SignInBanners
                 var flow = flows.GetValueOrDefault(key);
                 var code = flow?.Code is { Refused: false } c && !AuthState.Expired(c, now) ? c : flow?.Code is { Refused: true } r ? r : null;
                 var expired = flow?.Code is { Refused: false } && code is null || flow?.Outcome == "expired";
-                // A machine-only result with no reason is still one: its presence says so, not its text.
-                var atMachine = g.SignIn == "machine" || flow?.AtMachine is not null;
+                var atMachine = g.SignIn == "machine";
                 var waiting = g.Needed.Count == 0 && g.Confirming.Count > 0 && flow?.Active != true;
                 var shown = g.Needed.Count > 0 ? g.Needed : g.Confirming;
                 banners.Add(new Banner(
                     key, m.MachineKey, g.Agent, string.IsNullOrEmpty(m.Name) ? "this machine" : m.Name, g.Account, waiting ? "confirming" : "needed",
                     [.. shown.Select(s => (s.Id, string.IsNullOrEmpty(s.Title) ? "Untitled session" : s.Title!))],
-                    atMachine, flow?.AtMachine is { Length: > 0 } why ? why : null, g.Recovery,
+                    atMachine, g.Recovery,
                     // Sign in only where the host says a person's device can (signIn phone): a value this
                     // app doesn't know, or none, makes no claim, so no button either (6648000166). Only a
                     // provider the host says has no device flow is signed in at the machine (#696).
-                    !waiting && m.CanSignIn && g.SignIn == "phone" && flow?.AtMachine is null,
+                    !waiting && m.CanSignIn && g.SignIn == "phone",
                     flow, code, expired, shown.Count));
             }
         }
         foreach (var (key, r) in resolved)
         {
             if (live.Contains(key) || now - r.At >= AuthState.ResolvedShown) { continue; }
-            banners.Add(new Banner(key, r.MachineKey, r.Agent, string.IsNullOrEmpty(r.Name) ? "this machine" : r.Name, r.Account, r.Kind, [], false, null, null, false, null, null, false, r.Count));
+            banners.Add(new Banner(key, r.MachineKey, r.Agent, string.IsNullOrEmpty(r.Name) ? "this machine" : r.Name, r.Account, r.Kind, [], false, null, false, null, null, false, r.Count));
         }
         return banners;
     }
@@ -132,7 +131,7 @@ public static class SignInBanners
         }
         var f = b.Flow;
         var line =
-            b.AtMachine ? (b.AtMachineReason is { } why ? $"Sign in at the machine \u00b7 {why}" : "Sign in at the machine")
+            b.AtMachine ? "Sign in at the machine"
             : f?.Outcome == "failed" ? (f.Reason is { } failed ? $"Sign-in failed \u00b7 {failed}" : "Sign-in failed")
             : f?.Outcome == "refused" ? (f.Reason is { } refused ? $"Sign-in refused \u00b7 {refused}" : "Sign-in refused")
             : b.Expired ? "Code expired"

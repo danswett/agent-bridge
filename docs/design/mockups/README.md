@@ -3,7 +3,9 @@
 Every board from the design canvas except the `Proposal-*` ones, first rendered on 2026-11-01.
 The list boards, the Windows and PWA desktop boards, the design language and the status rules
 were redrawn on 2026-11-02 for #253 (Needs you · N is a filter, and a waiting session is an
-ordinary row). The proposal boards render apart, into
+ordinary row). The design language and the Windows and PWA desktop boards, which show the
+product's name, were re-rendered on 2026-11-05 for Slipgates (#539), and so also show Slipgates
+Mono (#557). The proposal boards render apart, into
 [proposals/253-attention](../proposals/253-attention). **These are reference, not spec:**
 [ui.md](../ui.md) is the spec, and it wins wherever an image disagrees with it.
 

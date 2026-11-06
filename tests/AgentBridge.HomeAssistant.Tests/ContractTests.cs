@@ -188,6 +188,78 @@ public class ContractTests
         Contract.AssertJson(Contract.At("statusAttributes.shell"), HaPayloads.StatusAttributes(shell, name, Machine, DateTimeOffset.Now));
     }
 
+    static Attention SignIn(RecoveryState? recovery = null) => new()
+    {
+        Kind = AttentionKind.SignInNeeded, Since = FakeSessions.T0, Agent = AgentKind.Copilot, Provider = "github", Account = "octocat",
+        Message = "Copilot needs you to sign in again (401).", SignIn = SignInWhere.Phone, Recovery = recovery,
+    };
+
+    [Fact]
+    public void A_session_that_needs_sign_in_has_failed_or_stopped_answering_never_reads_idle_or_working()
+    {
+        var idle = FakeSessions.Copilot(SessionId, status: SessionStatus.Idle, response: "The previous turn's answer");
+        var working = FakeSessions.Copilot(SessionId, status: SessionStatus.Working);
+        Assert.Equal("idle", HaPayloads.Status(idle));
+
+        // The words and order of the clients' status rules (StatusRules, AuthState.ErrorWords).
+        Assert.Equal("Needs sign-in", HaPayloads.Status(idle with { Attention = SignIn() }));
+        Assert.Equal("Needs sign-in", HaPayloads.Status(working with { Attention = SignIn() }));
+        Assert.Equal("Signed in · waiting for the session to confirm", HaPayloads.Status(idle with { Attention = SignIn(RecoveryState.Pending) }));
+        Assert.Equal("Needs sign-in", HaPayloads.Status(idle with { Attention = SignIn(RecoveryState.Failed) }));
+        var error = new Attention { Kind = AttentionKind.Error, Since = FakeSessions.T0, ErrorClass = ErrorClass.Other, Message = "Copilot stopped with an error." };
+        Assert.Equal("Agent error", HaPayloads.Status(idle with { Attention = error }));
+        Assert.Equal("Agent error", HaPayloads.Status(idle with { Attention = error with { ErrorClass = null } }));
+        Assert.Equal("Agent error", HaPayloads.Status(idle with { Attention = error with { ErrorClass = ErrorClass.Quota } }));
+        Assert.Equal("Not authorised", HaPayloads.Status(idle with { Attention = error with { ErrorClass = ErrorClass.Auth } }));
+        Assert.Equal("Rate limited", HaPayloads.Status(idle with { Attention = error with { ErrorClass = ErrorClass.Rate } }));
+        // Background work that outlived the failed turn never hides it.
+        Assert.Equal("Agent error", HaPayloads.Status(idle with { Attention = error, Activity = new Activity { Background = Background.Of(2, 1) } }));
+        var stalled = new Attention { Kind = AttentionKind.NotResponding, Since = FakeSessions.T0, LastEventAt = FakeSessions.T0 };
+        Assert.Equal("Not responding", HaPayloads.Status(working with { Attention = stalled }));
+        // A kind this connector does not know is an error, as the protocol reads it.
+        Assert.Equal("Agent error", HaPayloads.Status(idle with { Attention = error with { Kind = (AttentionKind)99 } }));
+
+        // The session's own question still asks first; a delegate's comes after sign-in, before an error.
+        var asked = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Which?", AskedAt = FakeSessions.T0 };
+        var waiting = FakeSessions.Copilot(SessionId, status: SessionStatus.Waiting) with { Question = asked };
+        Assert.Equal("waiting", HaPayloads.Status(waiting with { Attention = SignIn() }));
+        var delegated = waiting with { WaitingOn = "agent-1", Question = asked with { Agent = "agent-1" } };
+        Assert.Equal("Needs sign-in", HaPayloads.Status(delegated with { Attention = SignIn() }));
+        Assert.Equal("waiting", HaPayloads.Status(delegated with { Attention = error }));
+        Assert.Equal("ending", HaPayloads.Status(FakeSessions.Copilot(SessionId, status: SessionStatus.Ending) with { Attention = SignIn() }));
+    }
+
+    [Fact]
+    public void The_status_carries_attention_with_the_hosts_sentence_and_never_the_account()
+    {
+        var name = Contract.Text("session.sessionName");
+        var s = FakeSessions.Copilot(SessionId) with { Attention = SignIn() };
+        var attention = HaPayloads.StatusAttributes(s, name, Machine, DateTimeOffset.Now)["attention"]!.AsObject();
+        Assert.Equal(["kind", "provider", "message", "since"], attention.Select(x => x.Key));
+        Assert.Equal("sign_in_needed", attention["kind"]!.GetValue<string>());
+        Assert.Equal("github", attention["provider"]!.GetValue<string>());
+        Assert.Equal("Copilot needs you to sign in again (401).", attention["message"]!.GetValue<string>());
+        Assert.Equal(HaPayloads.Stamp(FakeSessions.T0), attention["since"]!.GetValue<string>());
+        Assert.DoesNotContain("octocat", HaContract.Serialize(HaPayloads.StatusAttributes(s, name, Machine, DateTimeOffset.Now)), StringComparison.Ordinal);
+
+        var error = new Attention { Kind = AttentionKind.Error, Since = FakeSessions.T0, ErrorClass = ErrorClass.Rate, Provider = "github", Message = "Copilot hit a rate limit (429)." };
+        attention = HaPayloads.Attention(error)!;
+        Assert.Equal("error", attention["kind"]!.GetValue<string>());
+        Assert.Equal("rate", attention["error_class"]!.GetValue<string>());
+        Assert.False(attention.ContainsKey("provider"));
+        // Unknown values make no claim: an unknown kind is an error of class other, a provider not
+        // one of the three is left out, and template markup in the sentence is inert.
+        attention = HaPayloads.Attention(error with { Kind = (AttentionKind)99, ErrorClass = (ErrorClass)99 })!;
+        Assert.Equal("error", attention["kind"]!.GetValue<string>());
+        Assert.Equal("other", attention["error_class"]!.GetValue<string>());
+        Assert.False(HaPayloads.Attention(SignIn() with { Provider = "example.com" })!.ContainsKey("provider"));
+        Assert.Equal("{\u200B{ states('x') }}", HaPayloads.Attention(error with { Message = "{{ states('x') }}" })!["message"]!.GetValue<string>());
+        Assert.Equal("not_responding", HaPayloads.Attention(new Attention { Kind = AttentionKind.NotResponding, Since = FakeSessions.T0 })!["kind"]!.GetValue<string>());
+
+        // Without attention, the daemon's attributes exactly.
+        Assert.False(HaPayloads.StatusAttributes(FakeSessions.Copilot(SessionId), name, Machine, DateTimeOffset.Now).ContainsKey("attention"));
+    }
+
     [Fact]
     public void The_cards_text_is_laid_out_as_agent_ha_bridge_lays_it_out()
     {

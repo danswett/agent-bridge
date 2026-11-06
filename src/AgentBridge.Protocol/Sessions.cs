@@ -555,6 +555,9 @@ public sealed record Field
     public bool? AllowOther { get; init; }
     public JsonElement? Default { get; init; }
     public bool? Required { get; init; }
+    // What the agent's schema allows (#766). Not strict: a client that cannot read them checks
+    // less before sending, and the host checks them again before it types.
+    public FieldConstraints? Constraints { get; init; }
 }
 
 public sealed record Option([property: Strict(Strictness.Security)] string Value, [property: Strict(Strictness.Security)] string? Label = null);

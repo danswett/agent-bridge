@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Protocol;
@@ -9,7 +8,6 @@ using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
 
@@ -80,7 +78,7 @@ static partial class SelfTest
             Check(Message(form) is { Approval: false }, "draws a question that is not an approval as written");
             var withResponse = main.AllCards.FirstOrDefault(c => c.HasResponse);
             var responding = withResponse is null ? null : await Choose(window, main, withResponse.Id, "Response");
-            Check(responding is not null && await Until(() => ById<FrameworkElement>(responding, "Response") is MarkdownView { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");
+            Check(responding is not null && await Until(() => ById<MarkdownView>(responding, "ResponseBlock") is { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");
             // Status is a glyph and words (docs/design/ui.md §2.2), the glyph drawn from the generated
             // styles and named as its row reads (§9).
             var glyphs = rows.Select(r => (r.Card, Glyph: ById<StatusGlyphView>(r, "StatusGlyph"))).ToList();
@@ -139,8 +137,24 @@ static partial class SelfTest
                 bool InSession() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is DependencyObject f && Above<FrameworkElement>(f, e => e == window.Sessions.SessionPaneView) is not null;
                 var focused = await Until(() => main.Selected is { WantsFocus: false } && InSession(), TimeSpan.FromSeconds(5));
                 Check(focused, "takes keyboard focus into the session a Needs you entry opens");
+                // On the question's heading, never an answer (#484): a stray Enter or Space there
+                // would answer the question unread.
+                Check(OnHeading(), $"puts keyboard focus on the opened question's heading, not an answer ({FocusedName(window)})");
             }
             else { Check(false, "finds the form question's Needs you entry"); }
+            // The same for a permission prompt, whose first control is Approve once.
+            var approvalEntry = Entries().FirstOrDefault(g => main.NeedsYou.ElementAtOrDefault(Entries().IndexOf(g))?.Card.Id == "demo-approval");
+            if (approvalEntry is not null && ById<HyperlinkButton>(approvalEntry, "NeedsYouOpen") is { } openApproval)
+            {
+                main.Selected = null;
+                ((IInvokeProvider)new HyperlinkButtonAutomationPeer(openApproval).GetPattern(PatternInterface.Invoke)).Invoke();
+                var onHeading = await Until(() => main.Selected is { Id: "demo-approval", WantsFocus: false } && OnHeading(), TimeSpan.FromSeconds(5));
+                Check(onHeading, $"puts keyboard focus on a permission prompt's heading when Needs you opens it, not on Approve once ({FocusedName(window)})");
+            }
+            else { Check(false, "finds the permission prompt's Needs you entry"); }
+            bool OnHeading() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is FrameworkElement f
+                && f is not Microsoft.UI.Xaml.Controls.Primitives.ButtonBase && AutomationProperties.GetAutomationId(f) == "QuestionHeading"
+                && Above<FrameworkElement>(f, e => e == window.Sessions.SessionPaneView) is not null;
             // Alt+Down and Alt+Up on a row (§9, #164): the row moves, perhaps drawn by another
             // control, and its list item has focus again, so the next move is the same row's. A row
             // other than the open one, as from its menu: the session open stays open.
@@ -289,6 +303,7 @@ static partial class SelfTest
             else { Check(false, "finds the Launch button"); }
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launched.png"));
             await CheckYourMessages(window, main, Check, outFile, launchedPrompt);
+            await CheckPrompts(window, main, demo, Check, outFile);
             Resize(window, 1000, 900);
 
             // Codex on the other machine starts only on a first message: nothing is sent without one.
@@ -349,11 +364,13 @@ static partial class SelfTest
             // The theme passes draw the Sessions page with a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);
             await CheckPagesInEveryTheme(window, Check, outFile);
+            AppLog.Write("self-test: sign-in");
             await CheckSignIn(window, main, remote, Check, outFile);
+            await CaptureSignIn(window, main, remote, Check, outFile);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");
-            await CheckHighContrast(window, Check, outFile, result);
+            await CheckHighContrast(window, main, remote, Check, outFile, result);
             // Last, as it adds sessions every check above counts without (#765).
             await Write(outFile, result, checks, failures, "live resize");
             await MeasureResize(window, main, demo, Check, outFile, result);
@@ -897,7 +914,7 @@ static partial class SelfTest
     // setting, not a window's: on CI the self-test turns it on for the pass and back off after.
     static readonly (string Tag, string Pane)[] Pages = [("sessions", "SessionsPage"), ("machines", "MachinesPane"), ("launch", "LaunchPane"), ("usage", "UsagePane"), ("settings", "SettingsPane")];
 
-    static async Task<List<string>> DrawPages(MainWindow window, string theme, string outFile)
+    static async Task<List<string>> DrawPages(MainWindow window, string theme, string outFile, Action<bool, string> check)
     {
         var root = window.RootElement;
         var broken = new List<string>();
@@ -919,7 +936,9 @@ static partial class SelfTest
                 if (!layout.ShowInspector && layout.Mode == PaneMode.Three) { broken.Add("three panes without the inspector"); }
                 await DrawDelegates(window, page, layout, broken, theme, outFile);
             }
-            await Picture(root, Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png"));
+            var picture = Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png");
+            await Picture(root, picture);
+            if (theme == nameof(ElementTheme.Dark)) { await CheckDarkPagePicture(window, picture, check); }
         }
         return broken;
     }
@@ -933,7 +952,7 @@ static partial class SelfTest
             {
                 root.RequestedTheme = theme;
                 await Task.Delay(300);
-                var broken = await DrawPages(window, theme.ToString(), outFile);
+                var broken = await DrawPages(window, theme.ToString(), outFile, check);
                 check(broken.Count == 0 && root.ActualTheme == theme, $"draws every page with its title in {theme}{(broken.Count > 0 ? $": not {string.Join(", ", broken)}" : "")}");
             }
             root.RequestedTheme = ElementTheme.Default;
@@ -944,7 +963,7 @@ static partial class SelfTest
     // setting is changed off the UI thread: SystemParametersInfo sends WM_SETTINGCHANGE to every
     // window, this app's included, and from the UI thread that message would re-enter XAML in the
     // middle of this method.
-    static async Task CheckHighContrast(MainWindow window, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    static async Task CheckHighContrast(MainWindow window, MainViewModel main, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
         var contrast = await HighContrastPass.BeginAsync();
         result["highContrast"] = contrast.How;
@@ -960,14 +979,17 @@ static partial class SelfTest
             var on = await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));
             await Task.Delay(1500);
             check(on, "sees Windows' high contrast turned on");
-            var hcBroken = await DrawPages(window, "HighContrast", outFile);
+            var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
+            await PictureYoursInHighContrast(window, check, outFile);
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();
             check(system.Count > 0 && own.Count == 0, $"uses a system colour for every role and surface in high contrast{(own.Count > 0 ? $": not {string.Join(", ", own)}" : "")}");
             var systemCaptions = await Until(() => window.AppWindow.TitleBar.ButtonForegroundColor is null, TimeSpan.FromSeconds(10));
             check(systemCaptions, $"leaves the caption buttons in the system's colours in high contrast ({window.AppWindow.TitleBar.ButtonForegroundColor?.ToString() ?? "system"})");
+            // The sign-in banner and sheet in high contrast (#800, Creative 6655285995).
+            await CaptureSignIn(window, main, remote, check, outFile, contrast: true);
             window.ShowPage("sessions");
         }
         finally
@@ -1161,17 +1183,30 @@ static partial class SelfTest
     static T? ById<T>(DependencyObject root, string id) where T : FrameworkElement =>
         Find<T>(root).FirstOrDefault(e => AutomationProperties.GetAutomationId(e) == id);
 
-    static async Task Picture(UIElement element, string file)
+    // On a backdrop, an element whose own fill is see-through (Dark's are) is drawn on what it sits
+    // on in the window, not on the viewer's white.
+    static async Task Picture(UIElement element, string file, Windows.UI.Color? backdrop = null)
     {
         try
         {
-            var bitmap = new RenderTargetBitmap();
-            await bitmap.RenderAsync(element);
-            var pixels = await bitmap.GetPixelsAsync();
+            var picture = await PicturePixels(element);
+            if (backdrop is { } under)
+            {
+                // Premultiplied: each colour gets the backdrop's share that the pixel lets through.
+                var p = picture.Pixels;
+                for (var i = 0; i < p.Length; i += 4)
+                {
+                    var through = 255 - p[i + 3];
+                    p[i] = (byte)(p[i] + under.B * through / 255);
+                    p[i + 1] = (byte)(p[i + 1] + under.G * through / 255);
+                    p[i + 2] = (byte)(p[i + 2] + under.R * through / 255);
+                    p[i + 3] = 255;
+                }
+            }
             using var stream = new InMemoryRandomAccessStream();
             var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
             var dpi = 96.0;
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, (uint)bitmap.PixelWidth, (uint)bitmap.PixelHeight, dpi, dpi, pixels.ToArray());
+            encoder.SetPixelData(BitmapPixelFormat.Bgra8, picture.Alpha, picture.Width, picture.Height, dpi, dpi, picture.Pixels);
             await encoder.FlushAsync();
             var bytes = new byte[stream.Size];
             using var reader = new DataReader(stream.GetInputStreamAt(0));
@@ -1181,6 +1216,7 @@ static partial class SelfTest
         }
         catch (Exception e) when (e is System.Runtime.InteropServices.COMException or ArgumentException)
         {
+            if (element is FrameworkElement root && ReferenceEquals(root.XamlRoot?.Content, root)) { throw; }
             AppLog.Write($"self-test picture not saved: {e.Message}");
         }
     }
