@@ -231,7 +231,7 @@ renamed over the last, so a power cut leaves the record before or the record aft
 goes stays in it for 60 s more, because a shutting-down machine ends its agents before its host. A
 record that cannot be read (or one from a newer host) is set aside as `restore.json.unreadable`,
 offers nothing, and keeps every worktree, on that start and every later one, until a person
-removes that file: what was owed is unknown, and unknown is never read as nothing owed. One that
+removes that file: what was owed is unknown, and unknown is never read as nothing owed. So is one holding a field longer than the host ever writes, by the protocol's own limits: an id or a launch setting past 256 bytes, a title past 240, a model past 256, or a folder past Windows' longest path (32,767 characters); the host cuts the title and model it writes to the same limits. And one whose owed entry lacks its `entry`, `cause`, `at` or `decided`. One that
 cannot be moved aside is left as it is and never written over: the record does not start that run.
 
 **At start**, after discovery's first pass, each session the last run saw live is judged:
