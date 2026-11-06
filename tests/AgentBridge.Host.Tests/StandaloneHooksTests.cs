@@ -590,6 +590,130 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.Equal(original, File.ReadAllText(Path.Combine(Profile, "hooks", "backups", "claude-settings.json")));
     }
 
+    [Theory]
+    [InlineData("{\"model\":\"user-model\",\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"user-hook\"}]}]}}", false)]
+    [InlineData("{\r\n    // the person's note\r\n    \"model\": \"user-model\",\r\n    \"permissions\": { \"allow\": [ \"Bash(git status)\", ], },\r\n}\r\n", false)]
+    [InlineData("{\n\t\"env\": {\"A\": \"1\"}\n}\n", true)]
+    public async Task Claude_removal_restores_unchanged_original_settings_byte_for_byte(string original, bool bom)
+    {
+        byte[] bytes = [.. bom ? new byte[] { 0xEF, 0xBB, 0xBF } : Array.Empty<byte>(), .. Encoding.UTF8.GetBytes(original)];
+        Directory.CreateDirectory(Homes.Claude);
+        File.WriteAllBytes(Registration("claude"), bytes);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.NotEqual(bytes, File.ReadAllBytes(Registration("claude")));
+
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        Assert.Equal(bytes, File.ReadAllBytes(Registration("claude")));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
+    [Fact]
+    public async Task Claude_removal_keeps_empty_settings_whose_backup_is_missing()
+    {
+        Write(Registration("claude"), "{}");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        File.Delete(Path.Combine(Profile, "hooks", "backups", "claude-settings.json"));
+
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        Assert.Empty(Read(Registration("claude")));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
+    [Fact]
+    public async Task Claude_removal_after_later_edits_keeps_them_and_leaves_the_backup_untouched()
+    {
+        var original = "{\r\n  // the person's note\r\n  \"model\": \"user-model\",\r\n}\r\n";
+        var backup = Path.Combine(Profile, "hooks", "backups", "claude-settings.json");
+        Write(Registration("claude"), original);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var settings = Read(Registration("claude"));
+        settings["theme"] = "dark";
+        Write(Registration("claude"), settings.ToJsonString());
+
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        var remaining = Read(Registration("claude"));
+        Assert.Equal("user-model", (string?)remaining["model"]);
+        Assert.Equal("dark", (string?)remaining["theme"]);
+        Assert.Null(remaining["hooks"]);
+        Assert.Equal(original, File.ReadAllText(backup));
+    }
+
+    [Theory]
+    [InlineData("{broken")]
+    [InlineData("[]")]
+    [InlineData("{\"model\":\"user-model\",\"model\":\"user-model\"}")]
+    public async Task Claude_removal_warns_about_an_unreadable_backup_and_still_removes_only_owned_hooks(string damaged)
+    {
+        var backup = Path.Combine(Profile, "hooks", "backups", "claude-settings.json");
+        Write(Registration("claude"), """{"model":"user-model"}""");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        File.WriteAllText(backup, damaged);
+        var output = new StringWriter();
+
+        await Setup.RemoveAsync("claude", false, output);
+
+        Assert.Contains($"Warning: {backup} is unreadable", output.ToString());
+        var remaining = Read(Registration("claude"));
+        Assert.Equal("user-model", (string?)remaining["model"]);
+        Assert.Null(remaining["hooks"]);
+        Assert.Equal(damaged, File.ReadAllText(backup));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
+    [Fact]
+    public async Task Claude_removal_warns_about_a_backup_that_became_a_directory_and_still_removes_only_owned_hooks()
+    {
+        var backup = Path.Combine(Profile, "hooks", "backups", "claude-settings.json");
+        Write(Registration("claude"), """{"model":"user-model"}""");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        File.Delete(backup);
+        Directory.CreateDirectory(backup);
+        var output = new StringWriter();
+
+        await Setup.RemoveAsync("claude", false, output);
+
+        Assert.Contains($"Warning: {backup} is unreadable", output.ToString());
+        var remaining = Read(Registration("claude"));
+        Assert.Equal("user-model", (string?)remaining["model"]);
+        Assert.Null(remaining["hooks"]);
+        Assert.True(Directory.Exists(backup));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
+    sealed class WindowsLockFactAttribute : FactAttribute
+    {
+        public WindowsLockFactAttribute()
+        {
+            if (!OperatingSystem.IsWindows()) { Skip = "Windows share modes make a held file unreadable"; }
+        }
+    }
+
+    [WindowsLockFact]
+    public async Task Claude_removal_warns_about_a_locked_backup_and_still_removes_only_owned_hooks()
+    {
+        var backup = Path.Combine(Profile, "hooks", "backups", "claude-settings.json");
+        Write(Registration("claude"), """{"model":"user-model"}""");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var before = File.ReadAllBytes(backup);
+        var output = new StringWriter();
+
+        using (new FileStream(backup, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            await Setup.RemoveAsync("claude", false, output);
+        }
+
+        Assert.Contains($"Warning: {backup} is unreadable", output.ToString());
+        var remaining = Read(Registration("claude"));
+        Assert.Equal("user-model", (string?)remaining["model"]);
+        Assert.Null(remaining["hooks"]);
+        Assert.Equal(before, File.ReadAllBytes(backup));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
     [Fact]
     public async Task Claude_removal_recognizes_a_differently_cased_Windows_profile_without_orphaning_hooks()
     {
