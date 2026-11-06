@@ -522,6 +522,60 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(Timeout.InfiniteTimeSpan, await notifier.PumpAsync());
     }
 
+    // #945: the relay came back a second before the hourly repeat was due, and the push it was
+    // waiting for was still in flight when that hour passed. Refused, it left nothing to wake
+    // the notifier, and an idle signed-out machine sent no more reminders.
+    [Fact]
+    public async Task A_sign_in_repeat_that_comes_due_while_a_push_in_flight_is_dropped_still_goes()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        await After(TimeSpan.FromMinutes(59) + TimeSpan.FromSeconds(59));
+        sender.Connected = true;
+        sender.Respond = _ =>
+        {
+            time.Advance(TimeSpan.FromSeconds(2));
+            return new PushResult(400, "bad request");
+        };
+
+        var wait = await notifier.PumpAsync();
+        Assert.Equal(0, SignInsSent());
+        Assert.InRange(wait, TimeSpan.FromMilliseconds(1), TimeSpan.FromSeconds(1));
+
+        sender.Respond = null;
+        await After(wait);
+        Assert.Equal(1, SignInsSent());
+    }
+
+    // ...and one that did reach the device counts the next hour from then (v1-sessions.md, Push signIn).
+    [Fact]
+    public async Task A_sign_in_push_delivered_after_its_repeat_came_due_counts_the_next_hour_from_its_delivery()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut });
+        await After(TimeSpan.Zero);
+        await After(TimeSpan.FromMinutes(59) + TimeSpan.FromSeconds(59));
+        sender.Connected = true;
+        sender.Respond = _ =>
+        {
+            time.Advance(TimeSpan.FromSeconds(2));
+            return new PushResult(201, null);
+        };
+
+        await notifier.PumpAsync();
+        Assert.Equal(1, SignInsSent());
+        sender.Respond = null;
+        await After(TimeSpan.FromMinutes(59) + TimeSpan.FromSeconds(59));
+        Assert.Equal(1, SignInsSent());
+        await After(TimeSpan.FromSeconds(1));
+        Assert.Equal(2, SignInsSent());
+    }
+
     // D (#800 P0): Daily's own session at 09:52:24 PT on 2026-11-05, captured read-only from its
     // events.jsonl and redacted (tests/fixtures/copilot/signin-401.jsonl). The CLI wrote turn_end,
     // then session.error 9 ms later, and read between the two the session was idle with the previous

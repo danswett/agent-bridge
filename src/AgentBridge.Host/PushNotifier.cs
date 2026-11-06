@@ -632,9 +632,13 @@ public sealed class PushNotifier : IAsyncDisposable
     {
         var times = new List<DateTimeOffset>();
         times.AddRange(sessions.Values.Where(t => t.Due is not null).Select(t => t.Due!.At));
-        // Not one already past (no device to tell; SignIns made nothing), which woke the loop at
-        // once, again and again.
-        times.AddRange(signInSent.Values.Select(sent => sent + options.SignInRepeat).Where(due => due > now));
+        // Not one already past with no device to tell (SignIns made nothing), which woke the loop at
+        // once, again and again. But one that came due while a push was in flight (#945) is only
+        // made by the next pump: dropped, that push left nothing else to wake it, so the machine
+        // went quiet until something unrelated did. With a device to tell, SignIns makes it or
+        // forgets it, so waking for it cannot spin.
+        var anyDevice = store.All.Any(MayNotify);
+        times.AddRange(signInSent.Values.Select(sent => sent + options.SignInRepeat).Where(due => due > now || anyDevice));
         if (sender is { Connected: true } s && s != broken)
         {
             // A notice held back by the rate limit is ready only once the window has room:
