@@ -82,7 +82,7 @@ const ROWS = [
   { name: 'Not confirmed', proto: 'result: unconfirmed, or timeout', send: 'rest', text: 'Sent, but not confirmed.', sub: ' Check at ULTRA…', tone: 'warn', answer: 'Today’s: “Sent, but not confirmed. Check at the machine.” Final, never resent (#467)', role: 'Needs you text', sr: '“Reply sent, but not confirmed. Check at ULTRA …”', hc: 'CanvasText; the words carry it.', when: 'Host: reply 60 s, answer 15 s; client 9 min' },
   { name: 'Busy, stale', proto: 'result: busy | stale', send: 'rest', text: 'Not sent:', sub: ' another reply is being delivered', tone: 'warn', answer: 'Today’s copy', role: 'Needs you text', sr: 'The words, once.', hc: 'CanvasText.', when: 'Outcome, at once' },
   { name: 'Refused, failed', proto: 'result: refused | error', send: 'rest', text: 'The machine refused this reply:', sub: ' the reason', tone: 'bad', answer: 'Today’s copy', role: 'Danger text', sr: 'The words, once.', hc: 'CanvasText.', when: 'Outcome, at once' },
-  { name: 'Older host', proto: 'no sessions.progress', send: 'ring', text: 'Still sending…', sub: ' (past 3 s only)', answer: 'Send answer’s ring → You answered · value', role: 'As above', sr: 'The outcome only; no stages', hc: 'As above.', when: 'Still sending… at 3 s; check at Delivered' },
+  { name: 'Older host', proto: 'no sessions.progress', send: 'ring', text: 'Still sending…', sub: ' (past 3 s only)', answer: 'Send answer’s ring → You answered · value', role: 'As above', sr: 'Older hosts: the outcome, plus Still sending… and the waiting words when they appear, each announced as it appears; no stage announcements.', hc: 'As above.', when: 'Still sending… at 3 s; check at Delivered' },
 ];
 class Component extends DCLogic {
   renderVals() {

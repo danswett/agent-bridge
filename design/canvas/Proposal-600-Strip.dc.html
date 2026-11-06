@@ -65,7 +65,7 @@ const BOARDS = {
   },
   older: {
     title: 'Older hosts: no stages reported, the same quiet path and exceptions',
-    sub: 'A host without sessions.progress reports only the outcome. Send’s ring is all that shows, then “Still sending…” at 3 s, and Delivered is the same check on Send. Nothing says Sent, Passed to the agent or Up next, not even to a screen reader, since nobody reported them.',
+    sub: 'A host without sessions.progress reports only the outcome. Send’s ring is all that shows, then “Still sending…” at 3 s, and Delivered is the same check on Send. Nothing says Sent, Passed to the agent or Up next, since nobody reported them. Older hosts: the outcome, plus Still sending… and the waiting words when they appear, each announced as it appears; no stage announcements.',
     w: 2284, h: 960,
     frames: [
       { at: '0.4 s', label: 'Sending', session: 'working', sending: true, r: QUIET,

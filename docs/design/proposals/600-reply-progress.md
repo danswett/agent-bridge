@@ -23,7 +23,8 @@
 >
 > **Revised on #617's review (2026-11-05).** Decided, not yet built (#600; builds in #616,
 > #625): today both clients show Sending…, Sending again… and "Delivered. The session has
-> your reply." A question card answers only with Send answer (#773, #774): nothing sends on a
+> your reply." for a reply, and "Delivered. The session has your answer." for a question
+> card's answer. A question card answers only with Send answer (#773, #774): nothing sends on a
 > tap, and Send answer, never an option, carries the ring and the check. An answer that is
 > not confirmed keeps today's words, "Sent, but not confirmed. Check at the machine.": it is
 > final and never resent, so nothing invites a second answer. "Check at the machine" is the
