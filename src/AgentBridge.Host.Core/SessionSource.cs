@@ -31,6 +31,7 @@ public sealed class SessionSource : ISessionSource
     readonly Dictionary<string, CodexLockHolding> _codexLockHolders = new(StringComparer.OrdinalIgnoreCase);
     // Sessions the host is ending, and since when. Under _gate.
     readonly Dictionary<string, DateTimeOffset> _ending = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (DateTimeOffset ErrorAt, string Generation, RecoveryState State)> _recovery = new(StringComparer.Ordinal);
     // Who drives each session (Session.Driver), shared with the Home Assistant connector; null for
     // a source that does not say.
     readonly SessionDrivers? _drivers;
@@ -89,6 +90,9 @@ public sealed class SessionSource : ISessionSource
         // emitted (null when none waits): what a resumed subscription and its watermark go by.
         public long Committed;
         public long? Pending;
+        // What the last commit was made from: Commit made again from the same is the same.
+        public Session? CommittedFull;
+        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt) CommittedWith;
     }
 
     public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null)
@@ -160,6 +164,14 @@ public sealed class SessionSource : ISessionSource
     }
 
     public event EventHandler<string>? UnbudgetedChanged;
+
+    // Tests: how many times a session was fitted and serialised (Commit), and built (its tracker).
+    internal int Commits { get; private set; }
+
+    internal int Builds
+    {
+        get { lock (_gate) { return _entries.Values.Sum(e => e.Tracker.Builds); } }
+    }
 
     // Read between passes, as a pass is what changes a tracker's state.
     public async Task<Subagent?> GetAgentAsync(string id, string agent, CancellationToken cancellationToken = default)
@@ -800,6 +812,26 @@ public sealed class SessionSource : ISessionSource
     // it is something a client shows.
     void OnDriverChanged(string id) => _ = RecommitDriverAsync(id);
 
+    public async Task SetSignInRecoveryAsync(string id, DateTimeOffset errorAt, string generation, RecoveryState state, bool begin = false, CancellationToken cancellationToken = default)
+    {
+        await _pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Entry? entry;
+            lock (_gate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!_entries.TryGetValue(id, out entry)
+                    || entry.Full.Attention is not { Kind: AttentionKind.SignInNeeded } attention || attention.Since != errorAt) { return; }
+                if (!begin && (!_recovery.TryGetValue(id, out var previous) || previous.Generation != generation || previous.ErrorAt != errorAt)) { return; }
+                _recovery[id] = (errorAt, generation, state);
+                entry.Touched = _time.GetUtcNow();
+            }
+            Commit(entry, entry.Full);
+        }
+        finally { _pass.Release(); }
+    }
+
     async Task RecommitDriverAsync(string id)
     {
         try
@@ -830,21 +862,56 @@ public sealed class SessionSource : ISessionSource
         entry.Full = full;
         DateTimeOffset? endingSince;
         lock (_gate) { endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null; }
-        var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
-        if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
+        (DriverKind? Kind, string? Principal) driver = (null, null);
+        var agentsPrompt = false;
         if (_drivers is not null)
         {
             // From what the transcript says, not the ending override: a new turn decides who drives it.
+            // Every pass, changed or not: an arm runs out with time.
             _drivers.For(full.Id).Observe(full, _time.GetUtcNow(), _drivers.Arm, entry.Tracker.PromptKey, entry.Tracker.Prompts);
-            var (driver, principal) = _drivers.Shown(full.Id);
-            shown = shown with { Driver = driver, DriverPrincipal = principal };
+            driver = _drivers.Shown(full.Id);
+            agentsPrompt = _drivers.For(full.Id).PromptIsAgents;
+        }
+        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt);
+        // The tracker hands back the very session it built last when nothing it reads changed.
+        // Fitting and serialising it again (about 37 MB/min, #608) found the same JSON every time.
+        // Never while a sign-in recovery overlay is held (#800): each step of it (Checking, then
+        // Pending), and the clearing of one gone stale, is decided below and nowhere else, often
+        // with the same session and the same time (#634 review, H2). It is held only while a
+        // sign-in is under way.
+        if (ReferenceEquals(full, entry.CommittedFull) && inputs == entry.CommittedWith)
+        {
+            lock (_gate)
+            {
+                if (_entries.TryGetValue(full.Id, out var current) && current == entry && !_recovery.ContainsKey(full.Id)) { return; }
+            }
+        }
+        var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
+        lock (_gate)
+        {
+            if (_recovery.TryGetValue(full.Id, out var recovery))
+            {
+                if (shown.Attention is { Kind: AttentionKind.SignInNeeded } attention && attention.Since == recovery.ErrorAt)
+                {
+                    shown = shown with { Attention = attention with { Recovery = recovery.State } };
+                }
+                else { _recovery.Remove(full.Id); }
+            }
+        }
+        if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
+        if (_drivers is not null)
+        {
+            shown = shown with { Driver = driver.Kind, DriverPrincipal = driver.Principal };
             // A prompt an agent sent through the host carries no mark of it in the transcript:
             // the host knows it from the turn the agent's reply or launch started (#489).
-            if (shown.Activity is { UserMessage: not null, UserMessageFrom: null } activity && _drivers.For(full.Id).PromptIsAgents)
+            if (shown.Activity is { UserMessage: not null, UserMessageFrom: null } activity && agentsPrompt)
             {
                 shown = shown with { Activity = activity with { UserMessageFrom = UserMessageFrom.Agent } };
             }
         }
+        Commits++;
+        entry.CommittedFull = full;
+        entry.CommittedWith = inputs;
         var getForm = SessionBudget.Fit(shown);
         var listForm = SessionBudget.Fit(shown.WithoutHistory());
         var json = JsonSerializer.Serialize(getForm, ProtocolJson.Options);
@@ -928,6 +995,7 @@ public sealed class SessionSource : ISessionSource
         {
             if (!_entries.Remove(id, out var entry)) { return; }
             _ending.Remove(id);
+            _recovery.Remove(id);
             _drivers?.Forget(id);
             entry.Timer?.Dispose();
             entry.Timer = null;

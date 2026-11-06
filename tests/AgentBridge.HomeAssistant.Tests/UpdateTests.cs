@@ -36,14 +36,14 @@ public sealed class UpdateTests : IDisposable
     // No updater at all: what serve passes for a read-only host.
     bool noUpdater;
 
-    HaConnector Connector(bool check = true, IHostUpdates? updater = null) => new(new HaConnectorOptions
+    HaConnector Connector(bool check = true, IHostUpdates? updater = null, Action<string>? onLog = null) => new(new HaConnectorOptions
     {
         MachineName = Machine,
         Version = "0.0.9-host",
         StateFile = StateFile,
         CheckForUpdates = check,
         AgentUserIds = [AgentUser],
-    }, ha, sessions, () => daemon, log: m => { lock (log) { log.Add(m); } }, time: time, updates: noUpdater ? null : updater ?? updates);
+    }, ha, sessions, () => daemon, log: m => { lock (log) { log.Add(m); } onLog?.Invoke(m); }, time: time, updates: noUpdater ? null : updater ?? updates);
 
     async Task Pass(HaConnector c, double seconds = 1)
     {
@@ -52,9 +52,9 @@ public sealed class UpdateTests : IDisposable
     }
 
     // Started, the buttons pinned onto the dashboard's ids, and the first check taken.
-    async Task<HaConnector> Ready(bool check = true)
+    async Task<HaConnector> Ready(bool check = true, Action<string>? onLog = null)
     {
-        var c = Connector(check);
+        var c = Connector(check, onLog: onLog);
         await Pass(c);
         await Pass(c, 2);
         await Pass(c, 6);
@@ -79,8 +79,6 @@ public sealed class UpdateTests : IDisposable
         Assert.True(until(), "the update beside the passes did not get there");
         await Pass(c, 0.01);
     }
-
-    bool Logged(string part) { lock (log) { return log.Any(m => m.Contains(part, StringComparison.Ordinal)); } }
 
     // Passes until what the passes publish shows the update beside them has got there.
     async Task PassUntil(HaConnector c, Func<bool> until)
@@ -556,23 +554,62 @@ public sealed class UpdateTests : IDisposable
         await Settle(c, () => updates.Applied.Count == 1);
     }
 
-    [Fact]
-    public async Task A_failure_notice_Home_Assistant_did_not_take_is_tried_again_until_it_does()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failure_notice_Home_Assistant_did_not_take_is_tried_again_until_it_does(bool delayedRefusal)
     {
         updates.Newer = Release();
         updates.DownloadFails = new IOException("disk full");
-        ha.NotifyFailsFor = s => s == "persistent_notification.create";
-        await using var c = await Ready();
+        var sending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var response = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var refused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = 0;
+        ha.BeforeNotify = (service, ct) =>
+        {
+            if (service != "persistent_notification.create") { return Task.CompletedTask; }
+            sending.TrySetResult();
+            return delayedRefusal ? response.Task.WaitAsync(ct) : Task.CompletedTask;
+        };
+        ha.NotifyFailsFor = service => service == "persistent_notification.create" && Interlocked.Increment(ref attempts) > 0;
+        await using var c = await Ready(onLog: message =>
+        {
+            // SendNoticeAsync records nextNoticeTry before logging the refusal. A service-call
+            // signal alone is too early: the test could move the clock before the retry is due.
+            if (message.Contains($"could not send \"Bridge update failed on {Machine}\"", StringComparison.Ordinal))
+            {
+                refused.TrySetResult();
+            }
+        });
         await Press(c, "install_update");
-        // Until its notice has been tried and refused, not only until the entity says failed, which
-        // is published first. Under load the install's thread could stop between the two while this
-        // went on: the passes below then ran before the notice was waiting (and sent nothing), or its
-        // refusal came after the clock had moved on 16 s and put its retry past the next pass, or it
-        // was first tried once Home Assistant took notices again, and the retry went untested (#466).
-        await Settle(c, () => Stage == "failed" && Logged($"could not send \"Bridge update failed on {Machine}\""));
+        try
+        {
+            await sending.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal("failed", Stage);
+            if (delayedRefusal)
+            {
+                Assert.False(refused.Task.IsCompleted);
+                // Force the ordering that an entity-only settle missed (#466/#888): failure is
+                // already published, but HA has not refused the notice or scheduled its retry.
+                time.Advance(TimeSpan.FromSeconds(16));
+                response.SetResult();
+            }
+            await refused.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally { response.TrySetResult(); }
+        Assert.Equal(1, Volatile.Read(ref attempts));
         Assert.Empty(ha.NotifiedNow());
+
+        await Pass(c, 14);
+        Assert.Equal(1, Volatile.Read(ref attempts));
+        await Pass(c, 2);
+        Assert.Equal(2, Volatile.Read(ref attempts));
+        Assert.Empty(ha.NotifiedNow());
+
         ha.NotifyFailsFor = null;
-        await Pass(c, 16);
+        await Pass(c, 14);
+        Assert.Empty(ha.NotifiedNow());
+        await Pass(c, 2);
         var (_, data) = Assert.Single(ha.NotifiedNow());
         Assert.Equal("The bridge update did not start: disk full", data["message"]!.GetValue<string>());
         await Pass(c, 16);

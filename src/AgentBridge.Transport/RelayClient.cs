@@ -12,6 +12,14 @@ public sealed record PresenceEntry(string Id, string Name, string Kind, DateTime
 // (docs/protocol/roster.md).
 public sealed record KnownMachine(string Id, string Name, string Kind, DateTimeOffset LastSeen);
 
+// One presence message's lists, published together (#206), never mixed across messages.
+public sealed record PresenceSnapshot(IReadOnlyList<PresenceEntry> Presence, IReadOnlyList<KnownMachine>? Known)
+{
+    // Exactly one preceding wire message, not a poll: older relays can omit a host transiently.
+    // Its own Previous is null, so the latest snapshot does not retain an unbounded history.
+    public PresenceSnapshot? Previous { get; init; }
+}
+
 public sealed record PushResult(int Status, string? Error);
 
 public sealed class RelayRefusedException(WebSocketCloseStatus? status, string? reason)
@@ -48,10 +56,14 @@ public sealed class RelayClient : IAsyncDisposable
     // The largest blob (stored bytes) the relay's blob store takes, or 0 when it has none.
     public long BlobMaxBytes { get; private set; }
     public string Login { get; private set; } = "";
-    public IReadOnlyList<PresenceEntry> Presence { get; private set; } = [];
+    PresenceSnapshot snapshot = new([], null);
+    // Both lists from the same presence message: read this, not Presence then Known, wherever the
+    // two must agree (who the account's machines are).
+    public PresenceSnapshot Snapshot => Volatile.Read(ref snapshot);
+    public IReadOnlyList<PresenceEntry> Presence => Snapshot.Presence;
     // The account's machines that are offline, most recently seen first; null while the relay
     // keeps no roster (an older relay, or one with it off), so nothing can be forgotten either.
-    public IReadOnlyList<KnownMachine>? Known { get; private set; }
+    public IReadOnlyList<KnownMachine>? Known => Snapshot.Known;
 
     // Called in order, one frame at a time, so frames from one sender are handled in the
     // order they were sent, which Noise transport messages require. Set once.
@@ -375,15 +387,17 @@ public sealed class RelayClient : IAsyncDisposable
 
     void ApplyPresence(JsonElement j)
     {
-        Presence = [.. j.GetProperty("devices").EnumerateArray().Select(d => new PresenceEntry(
+        IReadOnlyList<PresenceEntry> presence = [.. j.GetProperty("devices").EnumerateArray().Select(d => new PresenceEntry(
             d.GetProperty("id").GetString()!, d.GetProperty("name").GetString()!,
             d.GetProperty("kind").GetString()!, d.GetProperty("since").GetDateTimeOffset()))];
-        Known = j.TryGetProperty("known", out var known) && known.ValueKind == JsonValueKind.Array
-            ? [.. known.EnumerateArray().Select(d => new KnownMachine(
+        IReadOnlyList<KnownMachine>? known = j.TryGetProperty("known", out var k) && k.ValueKind == JsonValueKind.Array
+            ? [.. k.EnumerateArray().Select(d => new KnownMachine(
                 d.GetProperty("id").GetString()!, d.GetProperty("name").GetString()!,
                 d.GetProperty("kind").GetString()!, d.GetProperty("lastSeen").GetDateTimeOffset()))]
             : null;
-        PresenceChanged?.Invoke(Presence);
+        var previous = Snapshot with { Previous = null };
+        Volatile.Write(ref snapshot, new PresenceSnapshot(presence, known) { Previous = previous });
+        PresenceChanged?.Invoke(presence);
     }
 
     public async Task<PresenceEntry> WaitForPeerAsync(Func<PresenceEntry, bool> match, TimeSpan timeout)

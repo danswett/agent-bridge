@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Updates;
 using Microsoft.Win32;
 using Velopack;
 using Velopack.Sources;
@@ -13,11 +14,16 @@ namespace AgentBridge.App;
 sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile) : IUpdater
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
+    // Shared with every profile's app and host through the app's folder (#530).
+    readonly ReleaseDiscovery discovery = new(Paths.AppData);
     UpdateManager? manager;
     UpdateInfo? pending;
     string? source;
 
     public static string FeedFile => Path.Combine(Paths.AppData, "feed.txt");
+
+    // A feed.txt source is read whole at every check; only GitHub's list is shared and may be older.
+    public DateTimeOffset? DiscoveredAt => source is { } key && key.StartsWith('|') ? discovery.FetchedAt : null;
 
     public string? InstalledVersion
     {
@@ -34,7 +40,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         var key = $"{feed}|{prereleases()}";
         if (manager is not null && source == key) { return manager; }
         IUpdateSource from = feed.Length == 0
-            ? new GithubSource(Repository, null, prereleases(), null)
+            ? new DiscoveredGithubSource(Repository, prereleases(), discovery)
             : Uri.TryCreate(feed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https"
                 ? new SimpleWebSource(feed)
                 : new SimpleFileSource(new DirectoryInfo(feed));
@@ -49,6 +55,8 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     public async Task<string?> CheckAsync()
     {
         var from = Manager();
+        // GitHub's limit (#800) comes as ReleaseDiscovery's Limited, with the reset GitHub sent:
+        // AutoUpdater holds its checks off until then.
         var found = await from.CheckForUpdatesAsync();
         // The feed or the pre-release choice changed while this check ran (one by Settings, one
         // automatic, may overlap): its answer is the old source's, and must not undo the change by
@@ -89,6 +97,22 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     {
         if (Ready is null || pending is null) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
         Manager().ApplyUpdatesAndRestart(pending.TargetFullRelease, ["--background", "--profile", profile]);
+    }
+}
+
+// Velopack's GithubSource with its release list from the machine's shared ReleaseDiscovery
+// (#530), as the host's (DiscoveredGithubSource in AgentBridge.Host's HostUpdates.cs): one request
+// to the API per interval for every app and host here, rather than one per check. Each release's
+// feed and the packages come from their browser download URLs, which the API's limit does not count.
+sealed class DiscoveredGithubSource(string repository, bool prereleases, ReleaseDiscovery discovery) : GithubSource(repository, null, prereleases)
+{
+    protected override async Task<GithubRelease[]> GetReleases(bool includePrereleases)
+    {
+        // Read through discovery, so a list this can't read is its failure, backed off, never kept.
+        var releases = await discovery.ReleasesAsync(ReleaseDiscovery.ReleasesUrl(RepoUri.ToString()),
+            json => System.Text.Json.JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None);
+        // As GithubSource orders and filters its own.
+        return [.. releases.OfType<GithubRelease>().OrderByDescending(r => r.PublishedAt).Where(r => includePrereleases || !r.Prerelease)];
     }
 }
 

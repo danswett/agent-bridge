@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Host.Core.Parsing;
 
 namespace AgentBridge.Host.Delivery.Copilot;
 
@@ -49,7 +50,7 @@ public static class CopilotVerifier
         {
             Expected.Option o => CopilotForm.SameScalar(o.Raw, v),
             Expected.Words w => v.ValueKind == JsonValueKind.String && Same(v.GetString()!, w.Text),
-            Expected.Number n => CopilotForm.SameScalar(n.Raw, v) || (v.ValueKind == JsonValueKind.String && Same(v.GetString()!, n.Raw.GetRawText())),
+            Expected.Number n => CopilotForm.SameScalar(n.Raw, v) || (v.ValueKind == JsonValueKind.String && SameNumberText(n.Raw, v.GetString()!)),
             Expected.Flag f => v.ValueKind == (f.Value ? JsonValueKind.True : JsonValueKind.False),
             Expected.Set s => v.ValueKind == JsonValueKind.Array && SameSet(s.Raws, [.. v.EnumerateArray()]),
             _ => false,
@@ -89,5 +90,11 @@ public static class CopilotVerifier
         }
         return Same(trimmed["User responded: ".Length..], plan.Text) ? (true, "") : (false, "the session recorded different words");
     }
+
+    // A number recorded as text: the same exact value only, written as a plain JSON number (`100000`
+    // or `1e5` for 1e5). Padding, hex, words or another value are not it.
+    static bool SameNumberText(JsonElement expected, string recorded) =>
+        CopilotFieldSchema.ExactNumber(recorded) is { } given && given == CopilotFieldSchema.ExactNumber(expected.GetRawText());
+
     static bool Same(string recorded, string typed) => InjectableText.Flatten(recorded) == InjectableText.Flatten(typed);
 }

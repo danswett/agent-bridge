@@ -46,8 +46,10 @@ export class SessionListView {
   // views go (the session pane). layout() -> { inspector }: whether the inspector is a pane now.
   // viewing() -> whether the selected session's view is on screen (on a phone, only once pushed).
   // stale(hostId) -> why a machine's sessions can't be acted on now ({ reason, since }), or null.
-  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null } = {}) {
-    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale });
+  // heading() -> the list's heading, where focus goes when a session that had it ends with no
+  // row left to take it.
+  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null, heading = () => null } = {}) {
+    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale, heading });
     this.views = views ?? h('div');
     sessions.onChange((change) => {
       this.order.observe(change);
@@ -112,6 +114,10 @@ export class SessionListView {
     // session updates in Most recent: the text box being typed in keeps focus and the caret.
     const focused = this.container.contains(document.activeElement) ? document.activeElement : null;
     const caret = focused && typeof focused.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd] : null;
+    // The rows as they were, for where focus goes if the session that had it ends (below).
+    const active = document.activeElement;
+    const rowsWere = [...this.container.querySelectorAll('.session')];
+    let goneAt = null;
     const want = [];
     // Search only hides a card: one it leaves out keeps its card, with an unsent reply, files
     // attached or a question half answered, kept current for when search lets it back in.
@@ -181,6 +187,7 @@ export class SessionListView {
     while (prev ? prev.nextSibling : this.container.firstChild) { (prev ? prev.nextSibling : this.container.firstChild).remove(); }
     for (const [key, card] of this.#cards) {
       if (!live.has(key)) {
+        if (active && (card.element.contains(active) || card.view.contains(active))) { goneAt = rowsWere.indexOf(card.element); }
         card.dispose();
         card.element.remove();
         card.view.remove();
@@ -192,6 +199,7 @@ export class SessionListView {
       focused.focus({ preventScroll: true });
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
+    if (goneAt !== null) { this.#refocus(rowsWere, goneAt); }
     for (const key of arrived) {
       const el = this.#cards.get(key)?.element;
       if (el?.isConnected) { enter(el, 'listItem'); }
@@ -202,6 +210,30 @@ export class SessionListView {
     this.onRender?.(entries.length);
     // A save that failed while drawing (storage full) turned the list to Most recent: draw it so.
     if (this.order.sort !== sort) { this.schedule(); }
+  }
+
+  // A session that had focus (its row, or its view: End session pressed twice) has ended, and its
+  // focus went with it to the page, so the next Tab began at the top (§9.1 A4, #369). It goes to
+  // the row that takes its place, or the one before it if it was last, or else the list's
+  // heading. Only to one in sight: on a phone the list is under the session's view, and going
+  // back to it (sessions-page.js) gives focus back there.
+  #refocus(rowsWere, at) {
+    const doc = this.container.ownerDocument;
+    // Unless focus went somewhere real meanwhile. The list's own ancestors don't count: WebKit
+    // can give lost focus to the Sessions section.
+    const now = doc.activeElement;
+    if (now && now !== doc.body && now.isConnected && !now.contains(this.container)) { return; }
+    const shown = (r) => this.container.contains(r) && r.getClientRects().length > 0;
+    const next = rowsWere.slice(at + 1).find(shown) ?? rowsWere.slice(0, Math.max(at, 0)).reverse().find(shown);
+    let to = next?.querySelector('.row-main');
+    if (!to) {
+      const heading = this.heading();
+      if (!heading?.getClientRects().length) { return; }
+      if (!heading.hasAttribute('tabindex')) { heading.tabIndex = -1; }
+      to = heading;
+    }
+    to.focus({ preventScroll: true });
+    to.scrollIntoView?.({ block: 'nearest' });
   }
 
   #head(id, text) {

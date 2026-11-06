@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Copilot;
@@ -55,12 +56,22 @@ public static class CopilotPlanner
         var given = answer.Fields ?? new Dictionary<string, JsonElement>();
         var sends = new List<KeySend>();
         var expected = new List<(string, Expected)>();
+        var patterns = new PatternBudget();
         foreach (var field in form.Fields)
         {
             var has = given.TryGetValue(field.Name, out var value) && value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
             List<string> keys;
             Expected record;
-            if (!has)
+            if (field.Prefill is { } prefill)
+            {
+                // The field opens with its default typed in, and nothing here is known to clear
+                // it, so a key typed into it is added to it (#662). Only the default itself can be
+                // given: by typing nothing, and letting the field's Enter keep what is there. Any
+                // other answer, or none, is refused whole, before a key goes.
+                if (!has || !CopilotForm.Keeps(field, value)) { return (null, Prefilled(field.Name)); }
+                (keys, record) = ([""], Kept(field, prefill));
+            }
+            else if (!has)
             {
                 // A text box left empty is skipped by Enter. An option list cannot be: Enter
                 // commits whatever its caret is on, which is an answer nobody gave.
@@ -72,7 +83,7 @@ public static class CopilotPlanner
             }
             else
             {
-                var (k, r, problem) = Field(form, field, value);
+                var (k, r, problem) = Field(form, field, value, patterns);
                 if (problem is not null) { return (null, $"\"{field.Name}\": {problem}"); }
                 if (k is null) { return Other(field, value); }
                 (keys, record) = (k, r!);
@@ -87,19 +98,58 @@ public static class CopilotPlanner
         return (new CopilotPlan(new KeyPlan(sends), null, expected), null);
     }
 
+    // Why an answer to a field that opens with its default typed in cannot be typed. The
+    // parenthesis is what a client shows of it.
+    static string Prefilled(string name) =>
+        $"\"{name}\" opens with a value already filled in, which the host cannot clear, so anything it typed would be added to it; answer at the machine (this field has a pre-filled default)";
+
+    // What the session records for a field left as it opened: the default it opened with, not
+    // the answer's own spelling of it (3.0 given for a 3 is recorded as the 3), and a number
+    // field's string default as the number the CLI turns it into ("3" is recorded as 3).
+    // The longest number typed into a number box, as plain decimal.
+    const int MaxNumberLength = 40;
+
+    static string? Recorded(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Number ? CopilotFieldSchema.HeldExactly(value.GetRawText()) : null;
+
+    static Expected Kept(CopilotField field, JsonElement prefill)
+    {
+        if (field.Kind == CopilotFieldKind.Number) { return new Expected.Number(CopilotForm.Recorded(prefill)!.Value); }
+        var words = prefill.ValueKind == JsonValueKind.String ? prefill.GetString()! : CopilotForm.Scalar(prefill);
+        return string.IsNullOrWhiteSpace(words) ? new Expected.Omitted() : new Expected.Words(words);
+    }
+
     // The keys that answer one field, each its own send; null keys mean the words go
     // through Other, which is a plan of its own.
-    static (List<string>? Keys, Expected? Record, string? Problem) Field(CopilotForm form, CopilotField field, JsonElement value)
+    static (List<string>? Keys, Expected? Record, string? Problem) Field(CopilotForm form, CopilotField field, JsonElement value, PatternBudget patterns)
     {
         switch (field.Kind)
         {
             case CopilotFieldKind.Text:
                 {
                     var words = InjectableText.Collapse(value.GetString() ?? "");
+                    // Checked as typed, line breaks flattened, which is what Copilot records (#766).
+                    // Whitespace too: Copilot 1.0.105 records "   " as typed (`Fxn`, then the accept
+                    // step in `Uxn`), so spaces were let through a minLength of 5 (review of #844).
+                    // Only nothing typed is nothing recorded.
+                    if (words.Length > 0 && field.Constraints?.TextProblem(words, patterns) is { } outside) { return (null, null, outside); }
                     return ([words], string.IsNullOrWhiteSpace(words) ? new Expected.Omitted() : new Expected.Words(words), null);
                 }
             case CopilotFieldKind.Number:
-                return ([value.GetRawText()], new Expected.Number(value.Clone()), null);
+                {
+                    // Typed as plain decimal, and only a number the CLI will hold exactly as
+                    // given: it keeps numbers as doubles, so 9007199254740993 typed would be
+                    // recorded as 9007199254740992, an answer nobody gave (#700).
+                    if (Recorded(value) is not { } exact || CopilotFieldSchema.PlainDecimal(exact, MaxNumberLength) is not { } typed)
+                    {
+                        return (null, null, "Copilot would record a different number than this one, or one too long to type; answer at the machine");
+                    }
+                    // Expected as the text typed, which is what the CLI records, so the verifier
+                    // compares the same canonical number the keys produced.
+                    if (field.Constraints?.NumberProblem(typed) is { } outside) { return (null, null, outside); }
+                    using var emitted = JsonDocument.Parse(typed);
+                    return ([typed], new Expected.Number(emitted.RootElement.Clone()), null);
+                }
             case CopilotFieldKind.Boolean:
                 {
                     var at = value.ValueKind == JsonValueKind.True ? 0 : 1;
@@ -144,6 +194,7 @@ public static class CopilotPlanner
             wanted.Add(at);
         }
         if (wanted.Count == 0 && !field.AllowsEmpty) { return ([], null, "choose at least one option"); }
+        if (field.Constraints?.CountProblem(wanted.Count) is { } outside) { return ([], null, outside); }
         var top = string.Concat(Enumerable.Repeat(KeyPlan.Up, field.Options.Count - 1));
         var keys = new List<string>();
         var cursor = 0;

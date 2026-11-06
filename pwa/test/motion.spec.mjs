@@ -713,8 +713,15 @@ test('the same question redrawn while its wait runs says so on the new drawing, 
     d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: new Date(Date.now() + 60_000 + message.length).toISOString(), question });
   }, message);
   const marked = () => v.locator('.question-slot .question').evaluate((q) => q.hasAttribute('data-arriving'));
+  // The fake clock drives timers and animation frames, not native ResizeObserver delivery.
+  // Let watchMoves read each drawing before running the clock beyond its arrival wait.
+  const laidOut = () => v.locator('.question-slot .question').evaluate((q) => new Promise((resolve) => {
+    const observer = new ResizeObserver(() => { observer.disconnect(); resolve(); });
+    observer.observe(q);
+  }));
   await draw('Which?');
   await page.clock.runFor(20);
+  await laidOut();
   expect(await marked()).toBe(true);
   const first = await v.locator('.question-slot .question').elementHandle();
   const top = await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top);
@@ -723,6 +730,7 @@ test('the same question redrawn while its wait runs says so on the new drawing, 
   await page.clock.runFor(280);
   await draw('Which?');
   await page.clock.runFor(20);
+  await laidOut();
   expect(await first.evaluate((q) => q.isConnected)).toBe(false);
   expect(await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top)).toBe(top);
   expect(await marked()).toBe(true);
@@ -890,7 +898,10 @@ test('the same question drawn again, longer, as the person types in it still tak
 });
 
 test('a receipt above a question whose words grow as the person types below it still holds the question\'s click', async ({ page }) => {
-  await openDemo(page, { width: 390, height: 844 });
+  // A machine from before progress: the receipt's next words are its outcome (stale, as the
+  // question has changed since), which take more lines than "Sending…". With progress the next
+  // would be the shorter "Sent".
+  await openDemo(page, { width: 390, height: 844, hash: '&progress=0' });
   await askCodex(page, choices('q-answered'));
   const v = await open(page, CODEX);
   await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
@@ -1206,17 +1217,24 @@ test('a receipt that goes from above a question that stays moves it up, and a cl
   const before = await answered(page);
   // The second, drawn again as it stays (reworded): the receipt goes and the question moves up
   // into its place, as a click is on its way.
-  const after = await page.evaluate(async () => {
+  // The click lands as soon as the redraw is in the page, before any frame: the guard the redraw
+  // set is looked at then, not at a later frame. That frame can start after the guard's 500 ms
+  // have run out on a slow runner, ahead of the same frame's ResizeObserver setting it again (#864).
+  const after = await page.evaluate(() => new Promise((resolve) => {
     const slot = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot');
     const d = window.agentBridgeDemo;
     const s = d.host.get('019a1b2c-codex-example');
+    const seen = new MutationObserver(() => {
+      if (slot.querySelector('.answer-receipt')) { return; }
+      seen.disconnect();
+      const question = slot.querySelector('.question');
+      const armed = question.hasAttribute('data-arriving');
+      question.querySelector('.choice').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      resolve({ gone: true, same: question.dataset.question, armed });
+    });
+    seen.observe(slot, { childList: true, subtree: true });
     d.upsert({ ...s, question: { ...s.question, message: 'Which, now?' }, updatedAt: new Date(Date.now() + 63_000).toISOString() });
-    for (let i = 0; i < 120 && slot.querySelector('.answer-receipt'); i += 1) { await new Promise((r) => requestAnimationFrame(r)); }
-    const question = slot.querySelector('.question');
-    const armed = question.hasAttribute('data-arriving');
-    question.querySelector('.choice').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
-    return { gone: !slot.querySelector('.answer-receipt'), same: question.dataset.question, armed };
-  });
+  }));
   expect(after).toEqual({ gone: true, same: 'q-second', armed: true });
   await page.waitForTimeout(100);
   expect(await answered(page)).toBe(before);

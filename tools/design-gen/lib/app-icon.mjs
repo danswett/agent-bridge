@@ -237,6 +237,12 @@ export function appIconTargets(spec) {
     'pwa/icons/maskable-192.png': { png: ['maskable', 192] },
     'pwa/icons/maskable-512.png': { png: ['maskable', 512] },
     'pwa/icons/apple-touch-icon.png': { png: ['ios', 180] },
+    // Android's themed icon (manifest purpose monochrome) and a notification's badge, both drawn by
+    // their alpha alone: the maskable icon's mark without its plate, and the status-bar icon
+    // (ic_stat_slipgates's native 24 px cut) at four times, as Chrome asks for a 96 px badge.
+    'pwa/icons/monochrome-192.png': { png: ['maskable', 192, { plate: false, markColour: 'monochrome' }] },
+    'pwa/icons/monochrome-512.png': { png: ['maskable', 512, { plate: false, markColour: 'monochrome' }] },
+    'pwa/icons/badge-96.png': { png: ['glyph24', 96, { plate: false, markColour: '#FFFFFF' }] },
     'src/AgentBridge.App/Assets/AgentBridge.ico': { ico: ICO_SIZES },
     'src/AgentBridge.App/Assets/AgentBridge.png': { png: ['windows', 256] },
     ...appleTargets(),

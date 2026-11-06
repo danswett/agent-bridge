@@ -10,7 +10,7 @@ how the host does it and what it refuses.
 | Agent | Question | Answered |
 |---|---|---|
 | Copilot CLI | `ask_user` with no form: free text | Yes: the words, then Enter |
-| Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`enum`, `oneOf`, `anyOf`), `boolean`, `multi` (`type: array`), `text`, `number`, any number of fields | Yes |
+| Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`type: string` with `enum` or `oneOf`), `boolean`, `multi` (`type: array`, items `anyOf` or `enum`), `text`, `number`, any number of fields | Yes |
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
@@ -20,7 +20,7 @@ how the host does it and what it refuses.
 | Claude Code | Free text in `AskUserQuestion` ("Type something") | Refused: no field offers `allowOther` (below) |
 | Claude Code | More than four questions, a question without options, two questions with the same text | Refused, `answerAtMachine` |
 | Claude Code | Permission prompts | Refused, `answerAtMachine`: agent-ha-bridge's hook reports them and offers only its reply box, best effort |
-| Codex | An approval agent-ha-bridge's hook recorded (`<id>.approval.json`) | Yes: approve or deny, always `unconfirmed` (below) |
+| Codex | An approval its `PermissionRequest` hook recorded (`<id>.approval.json`) | Yes: approve or deny, always `unconfirmed` (below). Its message is the whole command, fenced; a marker holding only the hook's 300-character preview (agent-ha-bridge's hook, an older host) or a command past 16,384 characters is `truncated`, and refused like any truncated question (#209). One whose `tool_input` holds anything but the command and its description (an MCP tool's `host`, a `workdir`), or a network approval (`description` `network-access <target>`), is answered at the machine (#338) |
 | Codex | An approval seen only in the rollout, or one agent-ha-bridge has already typed into | Refused, `answerAtMachine` |
 
 These are what agent-ha-bridge answers, with two deliberate gaps and one deliberate
@@ -53,9 +53,78 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     answer. An empty answer only where `minItems` allows it. That Up stops at the first
     row of a checkbox list, as it does in a single-choice list, is assumed rather than
     seen live: check it on the test VM.
-  * text and number: the words (a number as its JSON text). An optional text field left
+  * text and number: the words (a number as plain decimal, below). An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.
+  * text and number with a schema `default` (#662): Copilot opens the field with the default
+    already typed in, and keys typed there are added to it (`90` typed into a field that
+    opened with `90` was recorded as `9090`). Nothing known here clears it, so an answer
+    that is the default, as the prompt shows it, types nothing and only the field's Enter goes,
+    keeping it; any other answer to the field, or none, is `refused` whole before a key goes:
+    `answer at the machine (this field has a pre-filled default)`. A text field's `null` or
+    empty default fills nothing in, and is typed as before; a number field's `null` default
+    opens reading `null`, so it is refused like any other. Numbers are compared exactly, and
+    one that cannot be (an exponent too large to hold, or no finite value) is refused. Copilot
+    is JavaScript and holds every number as the nearest double, so a default, an answer or a
+    number option it would hold as another number (`9007199254740993` becomes
+    `9007199254740992`, `1e-400` becomes `0`) is refused before a key goes. A number is typed
+    as plain decimal (`1e5` as `100000`): the number box drops a key that leaves its text not
+    a number, and `1e` is not one; one longer than 40 characters is refused. A number
+    field's string default is recorded by the CLI as `Number(text)`, so `"3"` is kept as `3`;
+    only a string that is plainly a JSON number is read so. Seen in a real session for a number field; a text field is
+    assumed to open the same way. Claude's and Codex's prompts take no typed field values, so
+    have no such field.
+  * A field's schema constraints (#766): Copilot CLI 1.0.105 draws `ask_user`'s form with
+    `enforceSchemaConstraints` off, so it checks none of them and records whatever is typed.
+    The host checks the answer before any key, on what it would type (text with its line breaks
+    flattened, a number as the plain decimal typed), and refuses one outside them: a number's
+    `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` and `integer`
+    type, compared exactly; text's `minLength` and `maxLength` in UTF-16 units, `pattern` as
+    JavaScript reads it and `format` `email`, `uri`, `date` and
+    `date-time` with the CLI's own checks (`date-time`'s offset `Z`, `z`, `+HH:MM` or `+HHMM`; dates as real dates, where the CLI's Date.parse rolls `2026-02-30` over); a checkbox list's `minItems` and `maxItems`. A
+    field whose constraints cannot be checked exactly (a bound JavaScript holds as another
+    number, a pattern .NET would read differently, which includes lookbehinds, named groups,
+    back-references, `\b` and `\B`, `^` or `$` followed by a quantifier (no JavaScript pattern at
+    all), a quantified lookahead, a class escape beside a class's hyphen other than one first or last in the class and letter escapes such
+    as `\a`), whose pre-filled default breaks them, or that carries any keyword beyond annotations and those
+    checked for the input the CLI draws (an allow-list: `enum`, `oneOf`, `anyOf`, `allOf`, `not`, `const`,
+    `if`, `dependent*` or an unknown keyword on a number, text or Yes/No field; on a list of choices,
+    or a checkbox list's items, anything but its options, each of their own `type`; on the form, anything
+    but its fields, `required` and `additionalProperties`), is answered at the machine. The CLI draws a
+    number with an `enum` as a box taking any number, and a string with only `anyOf` as a text box. `\d`, `\w`
+    and `\s` are written out as JavaScript's sets, ASCII digits and word characters and Unicode
+    white space. All of one question's patterns share 250 ms, building and matching them alike, so an
+    agent's many slow patterns cannot hold up the reading of every session: once it is spent,
+    every pattern left counts as one that cannot be checked, and the question is answered at the
+    machine (or the answer refused so). Text is checked both as typed and as trimmed
+    (JavaScript's `trim`), and refused if either form breaks a limit: the form passes it on as
+    typed, but a trim where it is recorded is not ruled out, and "  ab" is 4 typed and 2 trimmed.
+    Text of only spaces, tabs or no-break spaces is checked so too, and an empty or blank answer
+    to a required text field is refused, since it records no answer or might. Blank there counts
+    control characters too: the host types them as spaces (`InjectableText.Collapse`), so
+    `"\u0085"` would go as a space that `trim()` empties (`FieldConstraints.BlankOnceTyped`, which
+    the PWA mirrors). A required text field whose default is blank so is therefore answered at
+    the machine: that default is the one answer it can be given from another device, and it is
+    blank. An empty default opens nothing and stays answerable. Whether Copilot trims a text box's words before recording them
+    is not settled: its form passes them on as typed (`Fxn`, and `Uxn`'s accept step), but the
+    native layer after it was not traced, which is why both forms are checked.
+  * An option list whose `default` is present but is not one of its options, `null` included,
+    opens on its Other box (`Dxn` in 1.0.105), where the walk from the top row ends a row off;
+    it is refused, and shown to be answered at the machine. So are a checkbox list with no
+    options (no `items` object, or one naming none) and one whose default does not name its
+    options.
+  * A Yes / No field whose `default` is not `true`, `false` or `null` (#768): ask_user's form
+    is drawn without schema constraints, which gives its Yes / No list (`Oxn`) a third row,
+    Other, and a text default opens on it. Walked from there, Yes recorded No and No reopened
+    Other. It is refused, and shown to be answered at the machine.
+  * Every field is read as Copilot CLI draws it, which is by its `type` alone (`cli-main.js`
+    `tle` in 1.0.105): a `number` or `integer` is a number box even with an `enum` (whose Up
+    and Down add or take one, so walking it as a list recorded a different number), and a
+    `string` with only `anyOf` is a text box. Options come from `oneOf` before `enum`, and a
+    checkbox list's from `items.anyOf` before `items.enum`, each by its `const`. A field the CLI
+    would draw as something its schema does not mean (options with no `type`, a `type` it does
+    not know, an option with no `const`) is never typed into, and the question is shown to be
+    answered at the machine.
 * **Other** (a lone option list): Up × (N−1), Down × N as one burst with no Enter, 400 ms
   for Other to hand over the input, then the words, 300 ms, Enter (agent-ha-bridge #240:
   Down on the last option opens Other at once, and an empty Enter returns to the last

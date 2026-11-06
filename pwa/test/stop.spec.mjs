@@ -45,7 +45,8 @@ async function recordCard(page, id) {
       const now = {
         status: c.dataset.status,
         text: c.querySelector('.status-text')?.textContent ?? null,
-        endDisabled: c.querySelector('.end-session .end-button')?.disabled ?? null,
+        // aria-disabled, not disabled: a disabled button would lose its focus (#369).
+        endDisabled: c.querySelector('.end-session .end-button')?.getAttribute('aria-disabled') === 'true',
       };
       const last = drawn.at(-1);
       if (!last || last.status !== now.status || last.text !== now.text || last.endDisabled !== now.endDisabled) { drawn.push(now); }

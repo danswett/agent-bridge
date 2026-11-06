@@ -85,6 +85,16 @@ async function signIn(page) {
 const card = (page, id) => view(page, id);
 const subscribes = () => host.log.filter((op) => op === 'sessions.subscribe').length;
 
+// Neither a ring on what has focus nor one around the session's header (A12, #373).
+async function expectNoRing(v) {
+  const outline = await v.page().evaluate(() => {
+    const s = getComputedStyle(document.activeElement);
+    return s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 1;
+  });
+  expect(outline, 'a ring on what has focus').toBe(false);
+  expect(await v.locator('.session-header').evaluate((e) => getComputedStyle(e).boxShadow), 'a ring around the header').toBe('none');
+}
+
 test('a signed-in phone sees a machine\'s live sessions over an end-to-end channel', async ({ page, context }) => {
   const violations = [];
   await page.exposeFunction('cspViolation', (v) => violations.push(v));
@@ -205,7 +215,7 @@ test('a phone answers a question through the relay, and an answer in flight when
   await open(page, 'ask-1');
   await expect(q1.locator('.choice[data-value]').first()).toHaveText('B (Recommended)');
   await q1.locator('.choice[data-value="a"]').click();
-  await expect(card(page, 'ask-1').locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 15000 });
+  await expect(card(page, 'ask-1').locator('.answer-receipt')).toHaveText('You answered · A', { timeout: 15000 });
   await expect(q1).toHaveCount(0);
   expect(sentFor('ask-1')).toEqual([{ id: 'ask-1', question: 'q1', request: expect.stringMatching(UUID), fields: { answer: 'a' } }]);
   expect(typedFor('ask-1')).toHaveLength(1);
@@ -220,7 +230,7 @@ test('a phone answers a question through the relay, and an answer in flight when
   await q2.locator('.choice[data-value="b"]').click();
   await expect.poll(() => sentFor('ask-2').length, { timeout: 10000 }).toBe(1);
   for (const ws of sockets.splice(0)) { await ws.close({ code: 4000, reason: 'test drop' }); }
-  await expect(card(page, 'ask-2').locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 30000 });
+  await expect(card(page, 'ask-2').locator('.answer-receipt')).toHaveText('You answered · B (Recommended)', { timeout: 30000 });
   const sent = sentFor('ask-2');
   expect(sent).toHaveLength(2);
   expect(sent[1].request).toBe(sent[0].request);
@@ -254,7 +264,7 @@ test('a phone replies to a session through the relay, and a reply in flight when
   await expect(input).toBeEnabled({ timeout: 30000 });
   await input.fill('Ship it.\nThen tag v0.2 – 🚀');
   await reply.getByRole('button', { name: 'Send' }).click();
-  await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.', { timeout: 15000 });
+  await expect(reply).toHaveAttribute('data-reply', 'delivered', { timeout: 15000 });
   await expect(input).toHaveValue('');
   expect(sentFor('reply-1')).toEqual([{ id: 'reply-1', request: expect.stringMatching(UUID), text: 'Ship it.\nThen tag v0.2 – 🚀' }]);
   expect(typedFor('reply-1').map((r) => r.said)).toEqual(['Ship it. Then tag v0.2 – 🚀']);
@@ -267,7 +277,7 @@ test('a phone replies to a session through the relay, and a reply in flight when
   await reply.getByRole('button', { name: 'Send' }).click();
   await expect.poll(() => sentFor('reply-1').length, { timeout: 10000 }).toBe(2);
   for (const ws of sockets.splice(0)) { await ws.close({ code: 4000, reason: 'test drop' }); }
-  await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.', { timeout: 30000 });
+  await expect(reply).toHaveAttribute('data-reply', 'delivered', { timeout: 30000 });
   const sent = sentFor('reply-1');
   expect(sent).toHaveLength(3);
   expect(sent[2].request).toBe(sent[1].request);
@@ -357,7 +367,8 @@ test.describe('notifications', () => {
 
   test('a notification\'s link opens its machine and session with the question ready, and so does a tap while the app is open', async ({ page }) => {
     const t = new Date().toISOString();
-    // A command in the message gets a Copy button; focus still goes to the answers.
+    // A command in the message gets a Copy button; focus goes to neither it nor an answer, which
+    // Enter or Space would send unread (#484), but to the question's heading.
     const question = (id) => ({ id: `q-${id}`, kind: 'form', message: 'Which one?\n\n```\ngit push\n```', askedAt: t, fields: [{ name: 'answer', type: 'choice', options: [{ value: 'a' }, { value: 'b' }] }] });
     for (const id of ['linked-1', 'linked-2']) {
       await host.upsert({ id, agent: 'copilot', title: id, status: 'waiting', statusSince: t, updatedAt: t, activity: {}, question: question(id) });
@@ -366,8 +377,12 @@ test.describe('notifications', () => {
     await page.goto(`${appUrl}?host=${host.deviceId}&session=linked-1&question=q-linked-1`);
     await expect(card(page, 'linked-1')).toHaveClass(/linked/, { timeout: 30000 });
     await expect(card(page, 'linked-1').locator('.question-message .md-copy')).toHaveCount(1);
-    await expect(card(page, 'linked-1').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
+    await expect(card(page, 'linked-1').locator('.question-slot .question-head')).toBeFocused();
+    expect(await page.evaluate(() => document.activeElement?.closest('button, input, textarea') ?? null)).toBeNull();
     expect(new URL(page.url()).search).toBe('');
+    // Focus is on its question for a screen reader, with no ring drawn on it, or around the
+    // session's header (A12, #373): nothing a key moved.
+    await expectNoRing(card(page, 'linked-1'));
 
     // At two panes, where Tools is a tab: one left on Tools still opens on its question.
     await page.setViewportSize({ width: 900, height: 800 });
@@ -381,8 +396,10 @@ test.describe('notifications', () => {
     await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
       `${appUrl}?host=${host.deviceId}&session=linked-2&question=q-linked-2`);
     await expect(card(page, 'linked-2')).toHaveClass(/linked/);
-    await expect(card(page, 'linked-2').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
+    await expect(card(page, 'linked-2').locator('.question-slot .question-head')).toBeFocused();
     await expect(page.locator('#search')).toHaveValue('');
+    // Though keys were pressed (the search), what the tap brought draws no ring.
+    await expectNoRing(card(page, 'linked-2'));
   });
 
   // A notification's session, opened while its machine's list is not yet whole (#269).
@@ -469,17 +486,47 @@ test.describe('notifications', () => {
     expect(await page.evaluate(() => !!document.activeElement?.closest('.question-slot'))).toBe(false);
   });
 
-  test('a notification\'s question, its list whole, takes no click for a moment as its answer takes focus', async ({ page }) => {
+  test('a notification\'s question, its list whole, takes no click for a moment as it takes focus', async ({ page }) => {
     await host.upsert(asking('held-5', 'q-held-f', 'Approve F?'));
     const release = await heldOpen(page, 'held-5', 'q-held-f');
     // Longer than the wait that opening it began, so what holds a click now began with the focus.
     try { await page.waitForTimeout(700); } finally { release(); }
-    // Read on every frame: the moment an answer has focus, its question is holding clicks back.
+    // Read on every frame: the moment its heading has focus, its question is holding clicks back.
     const at = await page.waitForFunction(() => {
       const a = document.activeElement;
       return a?.closest('.question-slot') ? { arriving: a.closest('.question')?.hasAttribute('data-arriving') ?? false } : null;
     }, null, { polling: 'raf', timeout: 30000 });
     expect(await at.jsonValue()).toEqual({ arriving: true });
+  });
+
+  test('a notification\'s question taller than the pane, opened scrolled midway through it, brings its focused heading into sight', async ({ page }) => {
+    // Scrolled to the nearest edge of the whole question, one taller than the pane did not move,
+    // and the heading that had focus stayed out of sight (#893 review, Copilot 4481392664).
+    const message = ['Which one?', ...Array.from({ length: 150 }, (_, i) => `Line ${i + 1} of what the question says.`)].join('\n');
+    await host.upsert(asking('tall-1', 'q-tall', message));
+    await signIn(page);
+    const v = await open(page, 'tall-1');
+    const head = v.locator('.question-slot .question-head');
+    await expect(head).toBeAttached();
+    // Midway through it: its heading above the pane, its text filling the pane.
+    const tall = await v.locator('.stream-scroll').evaluate((s) => {
+      const q = s.querySelector('.question');
+      s.scrollTop += q.getBoundingClientRect().top - s.getBoundingClientRect().top + 600;
+      return q.getBoundingClientRect().height > s.getBoundingClientRect().height;
+    });
+    expect(tall).toBe(true);
+    await expect(head).not.toBeInViewport();
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
+      `${appUrl}?host=${host.deviceId}&session=tall-1&question=q-tall`);
+    // Read on every frame: the moment its heading has focus, its question holds clicks back.
+    const at = await page.waitForFunction(() => {
+      const a = document.activeElement;
+      return a?.classList.contains('question-head') ? { arriving: a.closest('.question')?.hasAttribute('data-arriving') ?? false } : null;
+    }, null, { polling: 'raf', timeout: 30000 });
+    expect(await at.jsonValue()).toEqual({ arriving: true });
+    await expect(head).toBeFocused();
+    await expect(head).toBeInViewport();
   });
 });
 

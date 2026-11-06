@@ -245,16 +245,79 @@
 
         <Grid x:Name="TabContent" Grid.Row="2">
             <!-- The conversation (§6.4): the main agent only, at the reading measure, centred in the
-                 pane as the PWA's is; the scroll bar stays at the pane's edge. -->
-            <ScrollViewer
-                x:Name="ConversationScroll"
+                 pane as the PWA's is; the scroll bar stays at the pane's edge. A list, so only the
+                 response's blocks near the viewport are realised and a live resize re-wraps those
+                 alone (#765): each block an item a screen reader counts and reaches off screen (#707),
+                 with no item chrome, selection or focus visual of its own. What comes before the
+                 response is the list's header, what comes after it its footer, each the same column. -->
+            <ListView
+                x:Name="ConversationList"
                 AutomationProperties.AutomationId="Conversation"
+                AutomationProperties.Name="Conversation"
+                Padding="0"
+                SelectionMode="None"
+                IsItemClickEnabled="False"
+                IsTabStop="False"
+                ShowsScrollingPlaceholders="False"
+                TabNavigation="Local"
+                ContainerContentChanging="OnBlockShown"
                 Visibility="{x:Bind local:Ui.Show(Layout.ShowConversation), Mode=OneWay}">
+                <ListView.ItemContainerTransitions>
+                    <TransitionCollection />
+                </ListView.ItemContainerTransitions>
+                <ListView.HeaderTransitions>
+                    <TransitionCollection />
+                </ListView.HeaderTransitions>
+                <ListView.FooterTransitions>
+                    <TransitionCollection />
+                </ListView.FooterTransitions>
+                <ListView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <ItemsStackPanel ItemsUpdatingScrollMode="KeepItemsInView" CacheLength="2" />
+                    </ItemsPanelTemplate>
+                </ListView.ItemsPanel>
+                <ListView.ItemContainerStyle>
+                    <!-- No chrome: the block as drawn before, focus on the controls inside it. -->
+                    <Style TargetType="ListViewItem">
+                        <Setter Property="IsTabStop" Value="False" />
+                        <Setter Property="UseSystemFocusVisuals" Value="False" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="MinWidth" Value="0" />
+                        <Setter Property="MinHeight" Value="0" />
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="BorderThickness" Value="0" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="VerticalContentAlignment" Value="Stretch" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListViewItem">
+                                    <ContentPresenter
+                                        Content="{TemplateBinding Content}"
+                                        ContentTemplate="{TemplateBinding ContentTemplate}"
+                                        HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                        VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListView.ItemContainerStyle>
+                <ListView.ItemTemplate>
+                    <!-- A block, 8 below the one before (the response's own spacing), in the column. -->
+                    <DataTemplate x:DataType="core:ConversationBlock">
+                        <local:ReadingColumn MaxWidth="{StaticResource AbLayoutReadingMax}" HorizontalAlignment="Center" Padding="24,8,24,0">
+                            <local:MarkdownView Reading="True" AutomationProperties.AutomationId="ResponseBlock" Block="{x:Bind Block}" />
+                        </local:ReadingColumn>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+                <ListView.Header>
+                <!-- The pane's width, whatever the header's host gives it, so the column centres in the pane. -->
+                <local:ReadingColumn x:Name="ConversationHeader">
                 <local:ReadingColumn
                     x:Name="Conversation"
                     MaxWidth="{StaticResource AbLayoutReadingMax}"
                     HorizontalAlignment="Center"
-                    Padding="24,8,24,24"
+                    Padding="24,8,24,0"
                     Spacing="24">
 
                     <!-- A question, in the stream, in Needs you colours (§6.4). -->
@@ -288,6 +351,124 @@
                         Foreground="{x:Bind local:Ui.ToneBrush(Card.ReceiptTone), Mode=OneWay}"
                         Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
 
+                    <!-- A prompt you didn't type (#489, §6.4): never a bubble, and never at the right, which is
+                         yours. At the column's start: a label line in agent colour (a clock for a schedule,
+                         the driven diamond for an agent), read before the prompt; two lines of it, and Show
+                         prompt, a compact disclosure (its Disclosure motion), opening on all of it inside a thin
+                         agent rule on the leading edge, not a filled card. -->
+                    <StackPanel
+                        x:Name="PromptLine"
+                        Spacing="4"
+                        AutomationProperties.AutomationId="Prompt"
+                        Visibility="{x:Bind local:Ui.Show(Card.HasPrompt), Mode=OneWay}">
+                        <local:FlowPanel Spacing="8" LineSpacing="0" AutomationProperties.AutomationId="PromptLabel">
+                            <Grid Width="16" Height="16" VerticalAlignment="Center">
+                                <ContentControl
+                                    Style="{StaticResource AbIconClock}"
+                                    Width="16"
+                                    Height="16"
+                                    Foreground="{ThemeResource AbAgent}"
+                                    AutomationProperties.AutomationId="PromptClock"
+                                    AutomationProperties.AccessibilityView="Raw"
+                                    Visibility="{x:Bind local:Ui.Show(Card.PromptIsSchedule), Mode=OneWay}" />
+                                <!-- The driven-badge glyph's diamond on its own: its 16 grid scaled about the
+                                     diamond and moved to the middle, as the PWA crops it. -->
+                                <ContentControl
+                                    Style="{StaticResource AbGlyphDrivenBadge}"
+                                    Width="16"
+                                    Height="16"
+                                    Foreground="{ThemeResource AbAgent}"
+                                    Background="Transparent"
+                                    AutomationProperties.AutomationId="PromptDiamond"
+                                    AutomationProperties.AccessibilityView="Raw"
+                                    Visibility="{x:Bind local:Ui.Show(Card.PromptIsDriven), Mode=OneWay}">
+                                    <ContentControl.RenderTransform>
+                                        <CompositeTransform CenterX="13.3" CenterY="13.3" ScaleX="1.7" ScaleY="1.7" TranslateX="-5.3" TranslateY="-5.3" />
+                                    </ContentControl.RenderTransform>
+                                </ContentControl>
+                            </Grid>
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbAgentText}"
+                                TextWrapping="Wrap"
+                                AutomationProperties.AutomationId="PromptLabelText"
+                                Text="{x:Bind Card.PromptLabel, Mode=OneWay}" />
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbText2}"
+                                TextWrapping="Wrap"
+                                AutomationProperties.AutomationId="PromptBy"
+                                Text="{x:Bind Card.PromptBy, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(Card.HasPromptBy), Mode=OneWay}" />
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbText2}"
+                                AutomationProperties.AutomationId="PromptAge"
+                                Text="{x:Bind Card.PromptAgeText, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(Card.HasPromptAge), Mode=OneWay}" />
+                        </local:FlowPanel>
+                        <TextBlock
+                            Style="{StaticResource AbTypeRow}"
+                            Foreground="{ThemeResource AbText2}"
+                            TextWrapping="Wrap"
+                            MaxLines="2"
+                            TextTrimming="CharacterEllipsis"
+                            AutomationProperties.AutomationId="PromptPreview"
+                            Text="{x:Bind Card.PromptPreview, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Show(Card.HasPromptPreview), Mode=OneWay}" />
+                        <!-- Show prompt: a compact disclosure, as the PWA's and as wide as its words; its chevron
+                             leads them, pointing right shut and down open (Motion.Turn), and the words are at the
+                             label's size. Open, all of it settles in (Disclosure) inside the agent rule. -->
+                        <local:DisclosureButton
+                            x:Name="PromptToggle"
+                            HorizontalAlignment="Left"
+                            MinHeight="32"
+                            Margin="-4,0,0,0"
+                            Padding="4,4"
+                            BorderThickness="0"
+                            Background="{ThemeResource SubtleFillColorTransparentBrush}"
+                            Foreground="{ThemeResource AbText}"
+                            CornerRadius="{StaticResource AbRadiusControl}"
+                            AutomationProperties.AutomationId="ShowPrompt"
+                            AutomationProperties.Name="{x:Bind Card.PromptToggleName, Mode=OneWay}"
+                            IsExpanded="{x:Bind Card.PromptOpen, Mode=TwoWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <ContentControl
+                                    x:Name="PromptChevron"
+                                    Style="{StaticResource AbIconChevron}"
+                                    Width="16"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource AbText2}"
+                                    AutomationProperties.AutomationId="PromptChevron"
+                                    AutomationProperties.AccessibilityView="Raw" />
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    Style="{StaticResource AbTypeMeta}"
+                                    AutomationProperties.AutomationId="PromptToggleText"
+                                    Text="{x:Bind Card.PromptToggleText, Mode=OneWay}" />
+                            </StackPanel>
+                        </local:DisclosureButton>
+                        <Border
+                            x:Name="PromptRule"
+                            Margin="0,4,0,0"
+                            Padding="12,0,0,0"
+                            BorderBrush="{ThemeResource AbAgent}"
+                            BorderThickness="2,0,0,0"
+                            AutomationProperties.AutomationId="PromptRule"
+                            Visibility="{x:Bind local:Ui.Show(Card.PromptOpen), Mode=OneWay}">
+                            <TextBlock
+                                Style="{StaticResource AbTypeReading}"
+                                TextWrapping="Wrap"
+                                IsTextSelectionEnabled="True"
+                                AutomationProperties.AutomationId="PromptText"
+                                Text="{x:Bind Card.PromptText, Mode=OneWay}" />
+                        </Border>
+                    </StackPanel>
+
                     <!-- Your message: a bubble at the column's right, at most 85% of it, as in the PWA. -->
                     <Grid Visibility="{x:Bind local:Ui.Show(Card.HasUserMessage), Mode=OneWay}">
                         <Grid.ColumnDefinitions>
@@ -308,8 +489,8 @@
                         </Border>
                     </Grid>
 
-                    <!-- The main agent: a label line ("Main agent" only where the host says whose the words are, else the agent's name), then its words; its reasoning behind a disclosure. -->
-                    <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasVoice), Mode=OneWay}">
+                    <!-- The main agent: a label line ("Main agent" only where the host says whose the words are, else the agent's name), then its words, the list's items; its reasoning behind a disclosure. -->
+                    <StackPanel Spacing="8" AutomationProperties.AutomationId="Response" Visibility="{x:Bind local:Ui.Show(Card.HasVoice), Mode=OneWay}">
                         <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}">
                             <Run Text="{x:Bind Card.Speaker, Mode=OneWay}" FontWeight="SemiBold" Foreground="{ThemeResource AbText}" /><Run Text="  " /><Run Text="{x:Bind Card.ResponseAgeText, Mode=OneWay}" />
                         </TextBlock>
@@ -326,12 +507,20 @@
                             AutomationProperties.AutomationId="ResponseDropped"
                             Text="The main agent's latest response was left out: too long to send with its delegates."
                             Visibility="{x:Bind local:Ui.Show(Card.ResponseDropped), Mode=OneWay}" />
-                        <local:MarkdownView
-                            x:Name="ResponseView"
-                            Reading="True"
-                            AutomationProperties.AutomationId="Response"
-                            Markdown="{x:Bind Card.Response, Mode=OneWay}" />
                     </StackPanel>
+                </local:ReadingColumn>
+                </local:ReadingColumn>
+                </ListView.Header>
+                <ListView.Footer>
+                <local:ReadingColumn x:Name="ConversationFooter">
+                <local:ReadingColumn
+                    MaxWidth="{StaticResource AbLayoutReadingMax}"
+                    HorizontalAlignment="Center"
+                    Padding="24,0,24,24"
+                    Spacing="24">
+                    <!-- Holds the column's spacing above what follows the response, as a child of one
+                         column did; 8 more where the response has no blocks, as its empty view had. -->
+                    <Border x:Name="FooterLead" Height="0" />
                     <Expander
                         Header="Show reasoning"
                         HorizontalAlignment="Stretch"
@@ -392,7 +581,9 @@
                         </TextBlock>
                     </Grid>
                 </local:ReadingColumn>
-            </ScrollViewer>
+                </local:ReadingColumn>
+                </ListView.Footer>
+            </ListView>
 
             <!-- The Delegates tab (§6.3, §5.2): every delegate, nested under its parent, and one opened
                  from it pushed in its place; a host that can't list them (rule 8), its counts. -->

@@ -11,6 +11,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>AgentBridge.Hook</RootNamespace>
     <AssemblyName>agent-bridge-host-hook</AssemblyName>
+    <!-- What Task Manager and the file's properties call it (docs/design/brand.md §3.1, #537). The
+         file's name is an identifier that installers, tasks and the updater find it by, and stays (#539). -->
+    <Product>Slipgates</Product>
+    <AssemblyTitle>Slipgates agent hook</AssemblyTitle>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <InvariantGlobalization>true</InvariantGlobalization>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>

@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {
-  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn,
+  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn, readProgress,
   readQuestion, readSession, readSource, readStopResult, readSubagent, readTool,
 } from '../../js/protocol.js';
 import { checkAnswer } from '../../js/answers.js';
@@ -82,7 +82,7 @@ async function shown(message) {
   const handlers = {};
   const list = [];
   const self = {
-    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); } },
+    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); }, getNotifications: async () => [] },
     clients: { matchAll: async () => [], openWindow: async () => {}, claim() {} },
     addEventListener: (type, fn) => { handlers[type] = fn; },
     skipWaiting() {},
@@ -143,13 +143,15 @@ const READS = {
   ToolCall: { read: readTool },
   Option: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'choice', options: [j] }] }).fields[0].options[0] ?? null },
   Field: { read: (j) => readQuestion({ fields: [j] }).fields[0] ?? null },
+  FieldConstraints: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'number', constraints: j }] }).fields[0].constraints },
   Question: { read: readQuestion },
   Background: { read: readBackground },
   ActivitySource: { read: readSource },
   OwnActivity: { read: readOwn },
   Activity: { read: readActivity },
   Subagent: { read: readSubagent },
-  Session: { read: readSession },
+  // attention (#800) is read from the PWA's own slice of it on; until then the status beside it is shown.
+  Session: { read: readSession, unread: ['attention'] },
   DiscoveryHeld: { read: readDiscoveryHeld },
   // As listAll pages through it: the cursor it reads is the one it sends for the next page.
   SessionList: {
@@ -200,6 +202,10 @@ const READS = {
   SessionPatch: { read: readPatch },
   SubagentsPatch: { read: (j) => readPatch({ id: SESSION_ID, subagents: j })?.subagents ?? null },
   AnswerResult: { read: readAnswerResult },
+  // An answer's or a reply's progress frame and its result's timings, which only a host asked
+  // for progress sends (#600): read as the service gets them.
+  DeliveryProgress: { read: readProgress },
+  DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
   ReplyResult: { read: readAnswerResult },
   StopResult: { read: readStopResult },
   AttachmentState: { read: readAttachmentState },
@@ -231,9 +237,10 @@ const READS = {
   UsageReader: { read: (j) => readUsage({ agents: [{ agent: 'copilot', label: 'Copilot', readBy: j }] }).agents[0].readBy },
   // Every push must show something, or iOS revokes the app's notifications (sw.js): the worker
   // shows a generic notice for whatever it cannot read, and never drops one.
-  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at'], refuses: 'a push is always shown' },
-  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at'], refuses: 'a push is always shown' },
-  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at'], refuses: 'a push is always shown' },
+  // agent and sessions: a signIn notice's (#800), which the worker shows only as its title and body.
+  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at', 'notification.data.agent', 'notification.data.sessions'], refuses: 'a push is always shown' },
+  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at', 'data.agent', 'data.sessions'], refuses: 'a push is always shown' },
+  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at', 'agent', 'sessions'], refuses: 'a push is always shown' },
 };
 
 // Records the PWA sends that it checks first, mirroring the host's check word for word.
@@ -384,9 +391,7 @@ const NOT_REPLAYED = {
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
   UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it',
-  // The PWA asks for progress from #600; until then a host sends neither to it.
-  DeliveryProgress: 'progress frames come only to a client that sends progress: true, which the PWA does not yet',
-  DeliveryTimings: 'timings come only to a client that sends progress: true, which the PWA does not yet',
+  Attention: 'read within Session once the PWA shows attention (#800); until then Session leaves it unread',
 };
 
 // ---- the replay ----

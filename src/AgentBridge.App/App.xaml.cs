@@ -85,7 +85,7 @@ public partial class App : Application
         // does is what the account's other devices are told (#51).
         var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile));
         IAppAtSignIn atSignIn = installed ? new RunKey(Paths.Exe) : new NoRunKey();
-        var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay);
+        var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay) { LogTo = AppLog.Write };
 
         if (installed)
         {
@@ -246,7 +246,8 @@ public partial class App : Application
     {
         if (window is null) { return; }
         window.ShowInFront();
-        if (sessionId is not null) { main?.Open(machine, sessionId); }
+        // Keyboard focus with it, on its question's heading (#484), as Needs you's open does.
+        if (sessionId is not null) { main?.Open(machine, sessionId, focus: true); }
     }
 
     // The account's other machines through the relay: the app's own device key (kept like the

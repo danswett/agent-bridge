@@ -97,6 +97,10 @@ export function checkAnswer(question, answer) {
       if (field.required === true) { return `"${label(field)}" needs an answer`; }
       continue;
     }
+    // Empty text is typed as nothing, which a form records as no answer at all, and text of only
+    // spaces, or of control characters a host types as spaces, might be recorded trimmed to that
+    // (Answers.Check, FieldConstraints.BlankOnceTyped).
+    if (field.required === true && field.type === 'text' && typeof value === 'string' && value.replace(/\p{Cc}/gu, ' ').trim() === '') { return `"${label(field)}" needs an answer`; }
     const problem = valueProblem(field, value);
     if (problem) { return `"${label(field)}": ${problem}`; }
   }
@@ -167,8 +171,24 @@ export function answerability(question, capabilities, agent = null) {
     return { ok: false, why: off ? 'approvalOff' : 'atMachine' };
   }
   if (!capabilities.includes('sessions.answer')) { return { ok: false, why: 'machine' }; }
+  // Before the shape, as the app's card does: a cut approval ends inside its block, and the person is
+  // told that part of it is missing, not only that it is answered at the machine.
   if (question.truncated) { return { ok: false, why: 'truncated' }; }
+  // A Codex approval is answered here only as a host sends it from #209 (wholeCommand). An older
+  // host sent "Needs approval: " and the hook's 300-character preview, cut to 297 and "..." with
+  // nothing marking it truncated, so a card drawing all of it still showed only the start of what
+  // Approve once runs (#209 security review).
+  if (question.kind === 'approval' && agent === 'codex' && !wholeCommand(question.message)) { return { ok: false, why: 'atMachine' }; }
   return { ok: true, why: null };
+}
+
+// A Codex approval as a host sends it from #209 (AgentBridge.Protocol ApprovalShape.IsFencedCommand):
+// "Allow **<name>**?", the name literal, then the whole command in one block whose fence is longer
+// than any run of backticks in it.
+const CODEX_SHAPE = /^Allow \*\*(?:\\[^\n]|[^\\`*_[\]<>&|~^+=!#:\n])+\*\*\?\n\n(`{3,})\n([\s\S]*)\n\1$/;
+export function wholeCommand(message) {
+  const m = CODEX_SHAPE.exec(message ?? '');
+  return !!m && (m[2].match(/`+/g) ?? []).every((run) => run.length < m[1].length);
 }
 
 const RECOMMENDED = /\(recommended\)/i;

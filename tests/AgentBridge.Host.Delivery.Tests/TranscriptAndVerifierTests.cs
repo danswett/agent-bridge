@@ -104,12 +104,56 @@ public class CopilotVerifierTests
 
     const string Form = """
         { "message": "m", "requestedSchema": { "properties": {
-          "pick": { "oneOf": [ { "const": "s4", "title": "S4 (Recommended)" }, { "const": "s6", "title": "S6" } ] },
+          "pick": { "type": "string", "oneOf": [ { "const": "s4", "title": "S4 (Recommended)" }, { "const": "s6", "title": "S6" } ] },
           "go": { "type": "boolean" },
           "many": { "type": "array", "items": { "enum": ["a", "b", "c"] } },
           "notes": { "type": "string" },
           "count": { "type": "number" } } } }
         """;
+
+    [Fact]
+    public void A_default_kept_by_its_Enter_alone_is_confirmed_by_the_default_however_the_answer_spelled_it()
+    {
+        // 3.0 given for a field that opened with 3: only its Enter goes, so the session records
+        // the 3 it opened with, as a number or as the text the box showed (#662).
+        const string Days = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer", "default": 3 } } } }""";
+        var plan = Plan(Days, JsonDocument.Parse("""{ "days": 3.0 }""").RootElement.Clone());
+
+        Assert.True(CopilotVerifier.Check(plan, Human("""{ "days": "3" }""")).Item1);
+        Assert.True(CopilotVerifier.Check(plan, Human("""{ "days": 3 }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human("""{ "days": 33 }""")).Item1);
+    }
+
+    [Fact]
+    public void A_number_fields_string_default_kept_by_its_Enter_is_confirmed_by_the_number_the_CLI_records()
+    {
+        // Copilot's form turns the "3" the box opened with into the number 3 when it is accepted.
+        var plan = Plan(CopilotPlannerTests.Number("\"3\""), new { n = 3 });
+
+        Assert.True(CopilotVerifier.Check(plan, Human("""{ "n": 3 }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human("""{ "n": 33 }""")).Item1);
+    }
+
+    [Theory]
+    // Typed as plain decimal, so recorded as that: the verifier takes the number, or its text,
+    // for exactly that value, and nothing else (#700).
+    [InlineData("1e5", "100000", "100000", "100001")]
+    [InlineData("-1.5e-3", "-0.0015", "-0.0015", "-0.00150001")]
+    [InlineData("1E2", "100", "100", "1000")]
+    public void A_number_typed_as_plain_decimal_is_confirmed_by_the_value_typed_in_either_form(string given, string typed, string recorded, string other)
+    {
+        const string Free = """{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number" } } } }""";
+        var plan = Plan(Free, JsonDocument.Parse($$"""{ "n": {{given}} }""").RootElement.Clone());
+
+        Assert.Equal(typed, plan.Keys.Sends[0].Text);
+        Assert.True(CopilotVerifier.Check(plan, Human($$"""{ "n": {{recorded}} }""")).Item1);
+        Assert.True(CopilotVerifier.Check(plan, Human($$"""{ "n": "{{recorded}}" }""")).Item1);
+        Assert.True(CopilotVerifier.Check(plan, Human($$"""{ "n": "{{given}}" }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human($$"""{ "n": {{other}} }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human($$"""{ "n": "{{other}}" }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human($$"""{ "n": " {{recorded}}" }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human("""{ "n": "Infinity" }""")).Item1);
+    }
 
     [Fact]
     public void A_structured_answer_matching_every_field_is_delivered_in_any_list_order_and_whitespace()
@@ -142,7 +186,7 @@ public class CopilotVerifierTests
     [Fact]
     public void A_matching_structured_answer_beside_a_failed_tool_call_is_not_a_match()
     {
-        var plan = Plan("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a", "b"] } } } }""", new { pick = "a" });
+        var plan = Plan("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] } } } }""", new { pick = "a" });
         var failed = new CopilotAnswerRecord(JsonDocument.Parse("""{ "pick": "a" }""").RootElement.Clone(), true, false, null);
 
         var (matched, reason) = CopilotVerifier.Check(plan, failed);
@@ -154,7 +198,7 @@ public class CopilotVerifierTests
     [Fact]
     public void Words_through_Other_match_only_when_the_words_were_recorded_and_not_an_option()
     {
-        const string Pick = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a", "b"] } } } }""";
+        const string Pick = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] } } } }""";
         var plan = Plan(Pick, new { pick = new { other = "neither, thanks" } });
 
         Assert.True(CopilotVerifier.Check(plan, Human("""{ "pick": "neither, thanks" }""")).Matched);
@@ -177,11 +221,11 @@ public class CopilotVerifierTests
     // a="x", b="y" or a="x, b=y" with b left out.
     [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": { "type": "string" }, "b": { "type": "string" } } } }""", """{ "a": "x", "b": "y" }""", "User responded: a=x, b=y")]
     // Options "x" and "x ": the rendering is trimmed.
-    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["x", "x "] } } } }""", """{ "pick": "x" }""", "User selected: x ")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["x", "x "] } } } }""", """{ "pick": "x" }""", "User selected: x ")]
     // Options "x" and "pick=x": bare or named.
-    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["x", "pick=x"] } } } }""", """{ "pick": "x" }""", "User selected: pick=x")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["x", "pick=x"] } } } }""", """{ "pick": "x" }""", "User selected: pick=x")]
     // Options "a b" and "a  b".
-    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a b", "a  b"] } } } }""", """{ "pick": "a b" }""", "User selected: a  b")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a b", "a  b"] } } } }""", """{ "pick": "a b" }""", "User selected: a  b")]
     public void A_question_with_fields_is_never_confirmed_from_its_rendering_only_from_its_structured_answer(string arguments, string fields, string rendering)
     {
         var plan = Plan(arguments, JsonSerializer.Deserialize<Dictionary<string, string>>(fields));

@@ -9,7 +9,7 @@
 // the same request, until there is an outcome.
 import { h } from './dom.js';
 import { renderMarkdown } from '../markdown.js';
-import { enter } from './motion.js';
+import { ReceiptClock, answeredValue, describeInFlight, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import {
   Limits, draftText, initialState, isRecommended, optionTone, orderOptions, prepareAnswer,
   tapToAnswer, utf8Bytes,
@@ -144,35 +144,44 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
 // ---- answering ----
 
 const OUTCOME_TEXT = {
-  delivered: () => 'Delivered. The session has your answer.',
+  // Said as "You answered · value" (describeAnswer), in text2 with no badge: the button's check said it went.
+  delivered: () => 'You answered',
   unconfirmed: (at) => `Sent, but not confirmed. Check at the machine${at}.`,
   stale: () => 'Already answered or gone: the session is no longer asking this.',
   busy: () => 'Another answer to this session is being delivered. Try again in a moment.',
   refused: () => 'The machine refused this answer.',
 };
 
-// What an answer's progress or outcome says, for the form and for the card once the
-// question has gone. tone: progress | ok | warn | bad.
-export function describeAnswer(entry, machineName) {
+// What an answer's progress or outcome says, for the form, the Needs you lane and the card once
+// the question has gone: the receipt's words (receipt.js; ui.md §6.4 and §6.5, decided on #617).
+// On its way it is only heard (Sending, Sent, Passed to the agent, never Up next and never
+// "answered"), unless it stalls or waits. Confirmed: the card resolves to "You answered · value",
+// in text2 with no badge, where question gives the value (answeredValue). Any other outcome keeps
+// its words. stalled: whether the state it is in has stalled (ReceiptClock). Returns { key, text,
+// more, tone, line, speech }; tone: progress | done | warn | bad, or room for nothing to show.
+export function describeAnswer(entry, machineName, { question = null, stalled = false } = {}) {
   const at = where(machineName);
   switch (entry.state) {
     case 'sending':
-      return { text: entry.attempts > 1 ? 'Sending again…' : 'Sending…', tone: 'progress' };
     case 'waiting':
-      return {
-        text: entry.reason === 'still being delivered'
-          ? 'The machine is still delivering it…'
-          : `Waiting for the connection to the machine${at}. Your answer goes as soon as it is back.`,
-        tone: 'progress',
-      };
-    case 'failed':
-      return { text: `Couldn't send it: ${entry.reason ?? 'the machine said no'}.`, tone: 'bad' };
+      return describeInFlight('answer', entry, { machineName, stalled });
+    case 'failed': {
+      const text = `Couldn't send it: ${entry.reason ?? 'the machine said no'}.`;
+      return { key: 'failed', text, more: null, tone: 'bad', line: true, speech: `Answer: ${text}` };
+    }
     default: {
       const outcome = OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed';
+      if (outcome === 'delivered') {
+        const value = answeredValue(question, entry.answer);
+        return {
+          key: 'delivered', text: 'You answered', more: value, tone: 'done', line: true,
+          speech: value ? `Answer delivered. You answered ${value}` : 'Answer delivered. You answered',
+        };
+      }
       let text = OUTCOME_TEXT[outcome](at);
       if (outcome === 'refused' && entry.reason) { text = `The machine refused this answer: ${entry.reason}.`; }
       if (outcome === 'unconfirmed' && entry.reason) { text += ` (${entry.reason})`; }
-      return { text, tone: outcome === 'delivered' ? 'ok' : outcome === 'refused' ? 'bad' : 'warn' };
+      return { key: outcome, text, more: null, tone: outcome === 'refused' ? 'bad' : 'warn', line: true, speech: `Answer: ${text}` };
     }
   }
 }
@@ -206,6 +215,7 @@ export class QuestionPanel {
   #unwatch = null;
   #busyTimer = null;
   #held = null;
+  #receipt = null;
 
   // answering: { service, hostId, sessionId }. state: what a previous panel for the same
   // question held, so a re-render loses nothing.
@@ -220,12 +230,21 @@ export class QuestionPanel {
     this.otherOpen = this.tap && this.state[q.fields[0].name].otherChosen === true;
     this.element = shell(q, this.idBase, true, asker);
     this.#build();
+    this.#receipt = new ReceiptClock({
+      describe: (entry, { stalled }) => describeAnswer(entry, this.machineName, { question: this.q, stalled }),
+      draw: (d) => drawReceipt(this.els.status, 'answer-status', d),
+      say: (text) => { this.els.live.textContent = text; },
+      heard: () => drawn(this.els.live),
+      // The button that sent it: the option tapped, or Send.
+      delivered: () => holdCheck(this.element.querySelector('.choice[aria-pressed="true"]') ?? this.els.send),
+      follow: (fn) => answering.service.watch(answering.hostId, answering.sessionId, q.id, fn),
+    });
     const { service, hostId, sessionId } = answering;
     this.#unwatch = service.watch(hostId, sessionId, q.id, (e) => this.#show(e));
     this.#show(service.get(hostId, sessionId, q.id));
   }
 
-  destroy() { this.#unwatch?.(); clearTimeout(this.#busyTimer); }
+  destroy() { this.#unwatch?.(); clearTimeout(this.#busyTimer); this.#receipt.destroy(); }
 
   // Why nothing can be sent now (its machine offline, #269), or null: everything entered stays,
   // and the controls take nothing until it is null again.
@@ -240,6 +259,9 @@ export class QuestionPanel {
   }
 
   get entry() { const { service, hostId, sessionId } = this.answering; return service.get(hostId, sessionId, this.q.id); }
+
+  // When the check on the control that sent its delivered answer ends, or null.
+  get checkUntil() { return this.#receipt.checkUntil; }
 
   // Text the person typed that has not gone to the machine, which would be lost if the
   // panel went away silently.
@@ -273,11 +295,15 @@ export class QuestionPanel {
     e.send = h('button', { type: 'submit', class: 'button send' }, q.kind === 'approval' ? 'Send' : 'Send answer');
     e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again');
     e.actions = h('div', { class: 'answer-actions' }, e.send, e.resend);
-    e.status = h('p', { class: 'answer-status', role: 'status', 'aria-live': 'polite' });
+    // The receipt's words, and apart from them the line a screen reader hears it on (receipt.js):
+    // outside the form, which is aria-busy while the answer goes, and a reader may hold back
+    // what a busy region says until it is done.
+    e.status = h('p', { class: 'answer-status' });
+    e.live = receiptLive();
     e.form.append(e.held, e.error, e.actions, e.status);
     // A tap question has no Send until Other is opened.
     e.send.hidden = this.tap && !this.otherOpen;
-    this.element.append(e.form);
+    this.element.append(e.form, e.live);
   }
 
   #buildTap(field) {
@@ -482,18 +508,16 @@ export class QuestionPanel {
   #show(entry) {
     const e = this.els;
     clearTimeout(this.#busyTimer);
-    const shown = entry ? describeAnswer(entry, this.machineName) : { text: '', tone: '' };
     const { again, pause } = answerControls(entry);
     const held = !!this.#held;
     this.element.dataset.answer = answerState(entry);
-    const was = e.status.className;
-    e.status.textContent = shown.text;
-    e.status.className = `answer-status${shown.tone ? ` ${shown.tone}` : ''}`;
-    // Answer acknowledged (ui.md §5.3): each new state of the answer rises into place. The
-    // question and its buttons never move.
-    if (shown.text && e.status.className !== was) { enter(e.status, 'acknowledge', { dy: 1 }); }
-    e.status.hidden = !shown.text;
-    e.form.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
+    // Answer acknowledged (ui.md §5.3): each new state of the answer rises into place (receipt.js).
+    // The question and its buttons never move.
+    this.#receipt.show(entry);
+    e.status.hidden = !entry;
+    e.form.setAttribute('aria-busy', entry?.state === 'sending' || entry?.state === 'waiting' ? 'true' : 'false');
+    // Held on this device for a machine that isn't connected: the ring on its button stands still.
+    e.form.classList.toggle('still', entry?.state === 'waiting' && entry.reason === 'not connected');
     e.controls.disabled = !again || pause || held;
     e.send.disabled = !again || pause || held;
     e.resend.hidden = entry?.state !== 'failed';

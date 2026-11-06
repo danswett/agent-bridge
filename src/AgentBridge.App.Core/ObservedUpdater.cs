@@ -29,6 +29,10 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     // The release the last check found, null when it found nothing newer (or none has finished).
     public string? Found { get; private set; }
     public DateTimeOffset? CheckedAt { get; private set; }
+    // As of when Found is known: the feed's own answer may be older than the check that read it,
+    // from the machine's shared copy (#530), and the devices are told how old it really is.
+    public DateTimeOffset? FoundAsOf { get; private set; }
+    public DateTimeOffset? DiscoveredAt => inner.DiscoveredAt;
     public UpdatePhase Phase => Volatile.Read(ref downloads) > 0 ? UpdatePhase.Downloading : Volatile.Read(ref checks) > 0 ? UpdatePhase.Checking : UpdatePhase.Idle;
     public int? Progress { get; private set; }
 
@@ -45,6 +49,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
             var found = await inner.CheckAsync();
             Found = found;
             CheckedAt = time.GetUtcNow();
+            FoundAsOf = inner.DiscoveredAt is { } at && at < CheckedAt ? at : CheckedAt;
             return found;
         }
         finally

@@ -24,9 +24,11 @@ import { maxPlain } from '../blobs.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
 import { NeedsYouLane } from './needs-you-view.js';
+import { SignInBanners } from './sign-in-view.js';
 import { AppBadge } from '../needs-you.js';
 import { enter, scrollBehavior, watchLane } from './motion.js';
 import { QUESTION_ARRIVAL_GUARD_MS, watchMoves } from './session-card.js';
+import { stopReceipts } from './receipt.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -195,7 +197,7 @@ export class SessionsPage {
     // holds even if one is pressed anyway. What was sent before stays to be resent: the machine
     // checks it against the live question or session.
     const accepts = (hostId) => !!hosts.route(hostId);
-    this.answers = new AnswerService({ current, accepts, ...timing });
+    this.answers = new AnswerService({ current, accepts, ...timing, marks: 'answer' });
     this.replies = new ReplyService({ current, accepts, ...timing, blobs });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
@@ -236,6 +238,7 @@ export class SessionsPage {
       shows: (hostId) => hosts.shows(hostId),
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
       stale: (hostId) => hosts.staleOf(hostId),
+      heading: () => $('sessions-h'),
     });
     this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); this.#delegateStep(); };
     this.view.onSelect = (card) => this.#choose(card);
@@ -251,6 +254,12 @@ export class SessionsPage {
       open: (hostId, id) => this.showSession(id, hostId),
       badge,
     });
+    // An agent that needs sign-in (#800): a banner for each machine, agent and account, above the lane.
+    this.signIns = $('sign-in-banners') ? new SignInBanners($('sign-in-banners'), hosts, {
+      live: $('sign-in-said'),
+      open: (hostId, id) => this.showSession(id, hostId),
+      fallback: () => $('sessions-h'),
+    }) : null;
     // An entry is news, and its mark fades in, as a row is (views.js): once the list was drawn
     // before the change that brought it, and its machine has sent its whole list. Read as the
     // change comes, since the list draws before the lane does. A machine whose list is current
@@ -473,6 +482,8 @@ export class SessionsPage {
     card.setTab('conversation');
     this.#choose(card);
     for (const el of [card.element, card.view]) {
+      // Marked for a moment, and drawn as nothing: a ring around its header or its row looked
+      // like focus the person never moved (A12, #373).
       el.classList.add('linked');
       setTimeout(() => el.classList.remove('linked'), 4000);
     }
@@ -483,6 +494,7 @@ export class SessionsPage {
     if (this.$('list-pane')?.getClientRects().length) { this.#laneGuard?.arm(); }
     card.element.scrollIntoView({ block: 'nearest', behavior });
     card.els.titleText.tabIndex = -1;
+    // Focus lands for a screen reader; js/ui/focus.js draws a ring only if a key brought it (A12).
     card.els.titleText.focus({ preventScroll: true });
     // A question it was opened for is in sight, however far its conversation was scrolled.
     card.revealQuestion(behavior);
@@ -726,10 +738,13 @@ export class SessionsPage {
     this.#unwatchLane = null;
     this.#unwatchNews?.();
     this.#unwatchNews = null;
+    this.signIns?.stop();
+    this.signIns = null;
     this.answers.clear();
     this.replies.clear();
     this.stops.clear();
     this.launches.clear();
+    stopReceipts();
     this.order.clearEnded();
     this.launchPanel.setMachines(null);
     this.launchPanel.setTarget(null);

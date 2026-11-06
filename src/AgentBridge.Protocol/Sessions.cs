@@ -73,6 +73,27 @@ public sealed class TolerantEnumConverterFactory : JsonConverterFactory
     }
 }
 
+// For an optional field whose unknown value must read as absent, not as one of its values
+// (session.class, #913): its absence is the older host's behaviour, which a client knows how to show.
+public sealed class UnknownAsAbsentConverter<T> : JsonConverter<T?> where T : struct, Enum
+{
+    static readonly Dictionary<string, T> ByName = Enum.GetValues<T>().ToDictionary(v => JsonNamingPolicy.CamelCase.ConvertName(v.ToString()), v => v, StringComparer.Ordinal);
+
+    public override T? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String && ByName.TryGetValue(reader.GetString()!, out var v)) { return v; }
+        // Anything else, an object or a list included, is passed over whole.
+        reader.Skip();
+        return null;
+    }
+
+    public override void Write(Utf8JsonWriter writer, T? value, JsonSerializerOptions options)
+    {
+        if (value is { } v) { writer.WriteStringValue(JsonNamingPolicy.CamelCase.ConvertName(v.ToString())); }
+        else { writer.WriteNullValue(); }
+    }
+}
+
 // Limits are UTF-8 bytes of the text. Its JSON form can be larger (escaped quotes and
 // control characters, and 12 bytes for each emoji), which SessionBudget.Fit accounts for.
 public static class Limits
@@ -97,6 +118,8 @@ public static class Limits
     public const int SubagentName = 120;
     public const int SubagentTask = 512;
     public const int SubagentLine = 300;
+    // session.attention.message: the host's own sentence about what went wrong (#800, #841).
+    public const int AttentionMessage = 300;
     // Entries a host lists, running ones first; SessionBudget.Fit may cap them further.
     public const int Subagents = 20;
 
@@ -289,6 +312,35 @@ public enum FieldType { Choice, Multi, Boolean, Text, Number }
 [UnknownAs(Unconfirmed)]
 public enum AnswerOutcome { Delivered, Unconfirmed, Stale, Busy, Refused }
 
+// session.attention.kind (#800). A kind a client does not know is shown as an error: something
+// is wrong, and the agent's own message says what.
+[UnknownAs(Error)]
+public enum AttentionKind { Error, SignInNeeded, NotResponding }
+
+// What sort of error ended the turn, from the agent's structured fields, never its wording.
+[UnknownAs(Other)]
+public enum ErrorClass { Other, Auth, Rate, Quota, Model, Network }
+
+// Where the agent can be signed in again. Machine is sent only when the host knows nothing else
+// is possible. A value a client does not know is Unknown, which claims nothing (#800 ruling): no
+// sign-in from the phone is offered on it, and nor is it said to be the machine's only.
+[UnknownAs(Unknown)]
+public enum SignInWhere { Phone, Machine, Unknown }
+
+// The way back from signInNeeded. Pending: signed in (a sign-in finished, or a still-valid
+// credential was found), waiting for the session to show it: attention stays signInNeeded until
+// the model is seen answering after the latest failure, and a sign-in alone never clears it
+// (#800 ruling). One a client does not know is Failed: a sign-in is then offered where it can
+// be, rather than waited on.
+[UnknownAs(Failed)]
+public enum RecoveryState { Checking, SigningIn, Pending, Failed }
+
+// session.class (#913): which notification tier the session is in now, decided by the host so
+// every client follows one policy instead of its own. A class a client does not know reads as
+// absent (UnknownAsAbsentConverter), so it keeps today's rules: read as NeedsYou, a newer host
+// could interrupt people with something an older client can't explain (Creative, #913 q10).
+public enum NotificationClass { NeedsYou, Done, Fyi }
+
 // Dev: built from a working copy rather than released (docs/protocol/v1-usage.md). Sessions:
 // how many were live when hello was answered. ReadOnly: why this machine takes no answers,
 // replies, stops or launches from other devices now (agent-ha-bridge running for the user,
@@ -332,9 +384,48 @@ public sealed record Session
     // Status precedence rule 2: the sub-agent whose question is pending (Question.Agent),
     // when the session itself has none.
     public string? WaitingOn { get; init; }
+    // What is wrong with the session that its status cannot say (#800): it needs its agent
+    // signed in again, its turn ended on an error, or it stopped answering. Status stays
+    // truthful beside it (idle after an error), so an older client, which ignores this,
+    // reads the session as it always did. Absent when nothing is wrong.
+    public Attention? Attention { get; init; }
+    // The notification tier the session is in (#913): NeedsYou interrupts, Done waits, Fyi never
+    // notifies. The host sets it from the fields above, the parent session carrying its
+    // delegates' questions. Absent from an older host, and a client then keeps its own rules.
+    [JsonConverter(typeof(UnknownAsAbsentConverter<NotificationClass>))]
+    public NotificationClass? Class { get; init; }
+    // When the session's present tier began (#913), which the 15-minute reminder counts from:
+    // the earliest of question.askedAt and attention.since for NeedsYou, else statusSince.
+    // Set with Class, from the same fields, so it never moves updatedAt on its own.
+    public DateTimeOffset? ClassSince { get; init; }
 
     // The list and event form: everything but the tool history.
     public Session WithoutHistory() => Activity.History is null ? this : this with { Activity = Activity with { History = null } };
+}
+
+// session.attention (#800, v1-sessions.md "Attention"). Which fields a kind uses is the spec's;
+// a reader takes whatever is there. Nothing in it is a credential, a sign-in code or a link:
+// message is a sentence the host composes from kind, errorClass, statusCode and provider alone,
+// never the agent's words (#841), shown as text only.
+public sealed record Attention
+{
+    public required AttentionKind Kind { get; init; }
+    // When it began: the error's time, or for NotResponding the last event's.
+    public required DateTimeOffset Since { get; init; }
+    public AgentKind? Agent { get; init; }
+    // SignInNeeded: whose sign-in it is ("github", "anthropic", "openai").
+    public string? Provider { get; init; }
+    // SignInNeeded: the account, when the host knows it from metadata, never from a token.
+    public string? Account { get; init; }
+    // Host-composed from the structured fields, never agent text; within Limits.AttentionMessage.
+    public string? Message { get; init; }
+    public ErrorClass? ErrorClass { get; init; }
+    // Error: when the agent said it can be tried again (a rate limit, a quota).
+    public DateTimeOffset? RetryAt { get; init; }
+    public SignInWhere? SignIn { get; init; }
+    public RecoveryState? Recovery { get; init; }
+    // NotResponding: the transcript's last event.
+    public DateTimeOffset? LastEventAt { get; init; }
 }
 
 public sealed record Activity
@@ -500,6 +591,9 @@ public sealed record Field
     public bool? AllowOther { get; init; }
     public JsonElement? Default { get; init; }
     public bool? Required { get; init; }
+    // What the agent's schema allows (#766). Not strict: a client that cannot read them checks
+    // less before sending, and the host checks them again before it types.
+    public FieldConstraints? Constraints { get; init; }
 }
 
 public sealed record Option([property: Strict(Strictness.Security)] string Value, [property: Strict(Strictness.Security)] string? Label = null);

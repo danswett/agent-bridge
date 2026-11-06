@@ -4,6 +4,7 @@ using AgentBridge.Hooks;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Host.Core.Intake;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -408,6 +409,75 @@ public sealed class IntakeTests : IDisposable
         // Discovery puts the approval on the session as a question a client can answer.
         var found = Assert.Single(RegistrationDiscovery.Find(AgentKind.Codex, [_f.CodexRegistrations], _f.Processes.GetAgentProcesses(AgentKind.Codex), _ => null));
         Assert.Equal(marker.DecisionId, found.Registration!.Approval!.DecisionId);
+    }
+
+    [Fact]
+    public void A_Codex_approvals_marker_carries_the_tool_and_the_whole_command_beside_the_cut_activity_line()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        var command = "echo `date` && " + new string('x', 500);
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell", tool_input = new { command } }, 50, 60);
+        Spooled("0002", "codex", "hook", new { session_id = "x2", hook_event_name = "PermissionRequest", tool_name = "shell", tool_input = new { command = new string('y', HookHandlers.CommandMax + 5) } }, 50, 60);
+        intake.Pass();
+
+        var marker = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x1.json"), "x1");
+        Assert.Equal(ApprovalMarkerState.Present, marker.State);
+        Assert.Equal(("Needs approval: " + command[..297] + "...", "shell", command, false), (marker.Question, marker.Tool, marker.Command, marker.CommandCut));
+        var cut = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x2.json"), "x2");
+        Assert.Equal((HookHandlers.CommandMax, true), (cut.Command!.Length, cut.CommandCut));
+    }
+
+    [Fact]
+    public void A_Codex_approval_whose_tool_input_holds_more_than_the_command_records_none_and_is_held_at_the_machine()
+    {
+        // The hook fires for MCP tools too: `host` decides where the command runs, and a card that
+        // showed only the command offered Approve once for it (#338).
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "mcp__ssh__exec", tool_input = new { host = "prod-db", command = "systemctl restart app" } }, 50, 60);
+        Spooled("0002", "codex", "hook", new { session_id = "x2", hook_event_name = "PermissionRequest", tool_name = "Bash", tool_input = new { command = "make deploy", workdir = "/srv/prod" } }, 50, 60);
+        Spooled("0003", "codex", "hook", new { session_id = "x3", hook_event_name = "PermissionRequest", tool_name = "Bash", tool_input = new { command = "git push", description = "Push the branch" } }, 50, 60);
+        intake.Pass();
+
+        foreach (var (id, tool) in new[] { ("x1", "mcp__ssh__exec"), ("x2", "Bash") })
+        {
+            var marker = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, $"{id}.json"), id);
+            Assert.Equal(ApprovalMarkerState.Present, marker.State);
+            Assert.Equal(($"Needs approval: {tool}", tool, (string?)null), (marker.Question, marker.Tool, marker.Command));
+            var q = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, DateTimeOffset.UnixEpoch, atMachine: false);
+            Assert.True(q.AnswerAtMachine);
+        }
+        // Only the command and the agent's words about it: the command is the whole of what runs.
+        var whole = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x3.json"), "x3");
+        Assert.Equal(("Bash", "git push"), (whole.Tool, whole.Command));
+        Assert.Null(QuestionMapper.CodexApproval(whole.DecisionId, whole.Tool, whole.Command, whole.CommandCut, whole.Question, DateTimeOffset.UnixEpoch, atMachine: false).AnswerAtMachine);
+    }
+
+    [Theory]
+    [InlineData("network-access http://exfil.attacker.example:443")]
+    [InlineData("  Network-Access https://exfil.attacker.example")]
+    [InlineData("network_access exfil.attacker.example")]
+    [InlineData("network access: exfil.attacker.example")]
+    [InlineData("NETWORK-ACCESS")]
+    public void A_Codex_network_access_approval_is_held_at_the_machine_since_its_target_is_what_is_approved(string description)
+    {
+        // Codex asks for network access as Bash with its own description naming the target
+        // (PermissionRequestPayload::bash(cmd, Some("network-access {target}"))): a card showing only
+        // `npm install` offered Approve once for a host nobody saw (#338).
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "Bash", tool_input = new { command = "npm install", description } }, 50, 60);
+        Spooled("0002", "codex", "hook", new { session_id = "x2", hook_event_name = "PermissionRequest", tool_name = "Bash", tool_input = new { command = "npm install", description = "Install the network-access helper's dependencies" } }, 50, 60);
+        intake.Pass();
+
+        var marker = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x1.json"), "x1");
+        Assert.Equal(("Needs approval: Bash", (string?)null), (marker.Question, marker.Command));
+        Assert.True(QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, DateTimeOffset.UnixEpoch, atMachine: false).AnswerAtMachine);
+        // An ordinary description, even one that mentions network access later on, stays answerable.
+        var plain = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x2.json"), "x2");
+        Assert.Equal("npm install", plain.Command);
+        Assert.Null(QuestionMapper.CodexApproval(plain.DecisionId, plain.Tool, plain.Command, plain.CommandCut, plain.Question, DateTimeOffset.UnixEpoch, atMachine: false).AnswerAtMachine);
     }
 
     [Fact]
