@@ -143,14 +143,20 @@ export class LaunchPanel {
       relist: () => this.refresh(),
       loads: () => this.#loads,
       started: (hostId, late) => this.#startedLate(hostId, late),
+      signal: this.#alive.signal,
     });
     // Every machine's: one launched on and then left is still followed.
-    service.onAny?.((entry) => this.#follow.follow(entry?.hostId, entry, (id) => !!this.session(entry.hostId, id)));
+    service.onAny?.((entry) => this.#follow.follow(entry?.hostId, entry, (id) => !!this.session(entry.hostId, id), () => this.sessions(entry.hostId)));
     this.#build();
   }
 
   #follow;
-  // By machine, the launch shown as started since its unconfirmed outcome, by request.
+  // Aborted with the account (clear()): the page's listeners the follow added go with it.
+  #alive = new AbortController();
+  // The jump to a session's card still waiting for it to arrive (#jumpTo).
+  #jumpTimer = null;
+  // By machine, the launch shown as started since its unconfirmed outcome: { request, session },
+  // its session's id when it is known (one whose outcome named none is told by its agent and folder).
   #lateStarted = new Map();
 
   // A session registered or changed on a machine shown.
@@ -159,6 +165,8 @@ export class LaunchPanel {
   // Everything tied to the signed-in account goes with it.
   clear() {
     this.#follow.clear();
+    this.#alive.abort();
+    this.#cancelJump();
     this.#lateStarted.clear();
   }
 
@@ -217,7 +225,7 @@ export class LaunchPanel {
     this.#open = open;
     this.els.body.hidden = !open;
     // Listed again only while it shows: opening it lists it anyway.
-    if (!open) { this.#follow.stop(); }
+    if (!open) { this.#follow.stop(); this.#cancelJump(); }
     // Every time it opens: a workspace approved or a session ended since.
     if (open && this.#target && !this.#loading) { this.refresh(); }
   }
@@ -273,6 +281,7 @@ export class LaunchPanel {
     this.#unwatch?.();
     this.#unwatch = null;
     this.#follow.stop();
+    this.#cancelJump();
     this.#selection++;
     this.#target = target;
     this.#options = null;
@@ -441,7 +450,7 @@ export class LaunchPanel {
       e.form.hidden = true;
       e.reload.hidden = questions.length > 0;
       e.reload.disabled = !!this.#loading;
-      e.busy.hidden = true;
+      this.#busy('');
       e.note.hidden = false;
       e.note.className = 'note launch-note warn';
       e.note.textContent = `Sessions can't be started on ${name} now${this.#target.readOnly ? `: ${sentence(this.#target.readOnly)}` : '.'}`;
@@ -458,7 +467,7 @@ export class LaunchPanel {
       e.note.hidden = false;
       e.note.textContent = this.#target?.held ?? (this.#error ? `Couldn't get the choices from ${name}: ${sentence(this.#error)}` : `Getting the choices from ${name}…`);
       e.note.className = `note launch-note${this.#error || this.#target?.held ? ' warn' : ''}`;
-      e.busy.hidden = true;
+      this.#busy('');
       // An answer pressed here stays in view, with its Try again, while the choices load or
       // fail to: the machine still answers a resend with its first outcome.
       this.#drawTrust();
@@ -500,16 +509,19 @@ export class LaunchPanel {
           ? `This copies the session's whole conversation, with its checkpoints and files, from ${resume.remote.machineName} to ${name}, where it opens as a new session in the workspace picked. It stays on ${resume.remote.machineName} as it was.`
           : resume ? 'A resumed session reopens in its own folder.' : '';
     e.note.hidden = !e.note.textContent;
-    e.busy.textContent = o.busy ? `${name} is busy: ${sentence(o.busy)}` : '';
-    e.busy.hidden = !o.busy;
     // Its machine's channel down, or its list not yet current (#269): nothing goes until it is.
-    if (this.#target?.held) {
-      e.busy.textContent = this.#target.held;
-      e.busy.hidden = false;
-    }
+    this.#busy(this.#target?.held || (o.busy ? `${name} is busy: ${sentence(o.busy)}` : ''));
     this.#drawTrust();
     this.#drawCount();
     this.#show(this.#target ? this.service.get(this.#target.hostId) : null);
+  }
+
+  // Written only when it changes: every listing redraws the panel, and the same words written
+  // again into an element a screen reader is on are read again.
+  #busy(text) {
+    const busy = this.els.busy;
+    if (busy.textContent !== text) { busy.textContent = text; }
+    busy.hidden = !text;
   }
 
   #drawCount() {
@@ -720,17 +732,17 @@ export class LaunchPanel {
       this.#asked.delete(hostId);
       this.#clearPrompt(launched.prompt);
       // That launch's own status says so too, rather than that it was not confirmed.
-      if (this.service.get(hostId)?.request === launched.request) { this.#markStarted(hostId, launched.request); }
+      if (this.service.get(hostId)?.request === launched.request) { this.#markStarted(hostId, launched.request, answer.result?.session); }
     }
     // The launch followed since its unconfirmed outcome, whose question this was.
     if (late && this.service.get(hostId)?.request === late.request) {
       this.#clearPrompt(this.service.get(hostId).answer?.prompt);
-      this.#markStarted(hostId, late.request);
+      this.#markStarted(hostId, late.request, answer.result?.session);
     }
     if (this.#target?.hostId !== hostId) { return; }
     this.#drawTrust();
     if (answer.state !== 'done') { return; }
-    if (answer.result.outcome === 'started' && answer.result.session) { this.#jumpTo(answer.result.session, hostId); }
+    if (answer.result.outcome === 'started' && answer.result.session) { this.#jumpTo(answer.result.session, hostId, this.service.get(hostId)?.request); }
     // The machine's list, and whether it is still busy, have changed.
     this.refresh();
   }
@@ -762,9 +774,16 @@ export class LaunchPanel {
     this.#drawCount();
   }
 
-  #markStarted(hostId, request) {
-    this.#lateStarted.set(hostId, request);
+  #markStarted(hostId, request, session) {
+    this.#lateStarted.set(hostId, { request, session: session ?? null });
     if (this.#target?.hostId === hostId) { this.#show(this.service.get(hostId)); }
+  }
+
+  // A launch's session: the one its outcome named, or the one seen to be it since.
+  #sessionOf(entry) {
+    if (!entry) { return null; }
+    const late = this.#lateStarted.get(entry.hostId);
+    return entry.detail?.session ?? (late?.request === entry.request ? late.session : null);
   }
 
   // A launch followed since its unconfirmed outcome whose session has registered, as a launch
@@ -777,10 +796,10 @@ export class LaunchPanel {
     const by = this.#asked.get(hostId);
     if (late.question && sameQuestion(by?.question, late.question)) { this.#asked.delete(hostId); }
     this.#clearPrompt(entry.answer?.prompt);
-    this.#markStarted(hostId, late.request);
+    this.#markStarted(hostId, late.request, late.session);
     if (this.#open && this.#target?.hostId === hostId) {
       this.#jumped = late.request;
-      this.#jumpTo(late.session, hostId);
+      this.#jumpTo(late.session, hostId, late.request);
     }
   }
 
@@ -800,25 +819,38 @@ export class LaunchPanel {
   // Jumps to the new session's card, which may arrive (session.upsert) after the outcome.
   #openSession(pressed) {
     const entry = this.#target ? this.service.get(this.#target.hostId) : null;
-    const id = entry?.detail?.session;
+    const id = this.#sessionOf(entry);
     if (!id) { return; }
     if (!pressed && this.#jumped === entry.request) { return; }
     this.#jumped = entry.request;
-    this.#jumpTo(id, entry.hostId);
+    this.#jumpTo(id, entry.hostId, entry.request);
   }
 
-  #jumpTo(id, hostId) {
+  // Retried until the card arrives, for 15 seconds at most, and only while it would still be
+  // wanted: this panel open on that machine, with that launch still its last (request, when one
+  // is named). Closing it, another machine, or signing out ends the wait (#cancelJump); a page
+  // hidden meanwhile is not jumped in.
+  #jumpTo(id, hostId, request) {
+    this.#cancelJump();
+    const wanted = () => this.#open && this.#target?.hostId === hostId && (!request || this.service.get(hostId)?.request === request);
     if (this.jump(id, hostId)) { return; }
     const until = Date.now() + 15000;
-    const timer = setInterval(() => {
-      if (this.jump(id, hostId) || Date.now() > until) { clearInterval(timer); }
+    this.#jumpTimer = setInterval(() => {
+      if (!wanted() || Date.now() > until) { this.#cancelJump(); return; }
+      if (globalThis.document?.hidden) { return; }
+      if (this.jump(id, hostId)) { this.#cancelJump(); }
     }, 250);
+  }
+
+  #cancelJump() {
+    if (this.#jumpTimer !== null) { clearInterval(this.#jumpTimer); }
+    this.#jumpTimer = null;
   }
 
   #show(entry) {
     const e = this.els;
     // Unconfirmed when it came, and seen to have started since: said as a start.
-    if (entry?.state === 'done' && entry.outcome === 'unconfirmed' && this.#lateStarted.get(entry.hostId) === entry.request) {
+    if (entry?.state === 'done' && entry.outcome === 'unconfirmed' && this.#lateStarted.get(entry.hostId)?.request === entry.request) {
       entry = { ...entry, outcome: 'started', reason: null };
     }
     const shown = entry ? describeLaunch(entry, { machineName: this.#target?.machineName }) : { text: '', tone: '' };
@@ -830,7 +862,7 @@ export class LaunchPanel {
     this.root.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
     e.resend.hidden = entry?.state !== 'failed';
     e.resend.disabled = !!this.#target?.held;
-    e.open.hidden = !(entry?.state === 'done' && entry.detail?.session);
+    e.open.hidden = !(entry?.state === 'done' && this.#sessionOf(entry));
     this.#lock(entry);
   }
 

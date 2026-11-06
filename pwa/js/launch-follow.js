@@ -5,7 +5,8 @@
 // (docs/protocol/v1-launch.md); the view used to keep saying so until it was opened again, and
 // to keep saying the launch was not confirmed, with its prompt still in the box, after its
 // session had appeared. Both invited a second press and a second session. Nothing new is asked
-// of the machine: its listing, its sessions and the outcome's session id say all of it.
+// of the machine: its listing, its sessions and the outcome (its session's id, or the agent and
+// folder it started in) say all of it.
 //
 // Kept apart from the view, with its clock and timers handed in, so its rules are tested
 // without a page.
@@ -18,6 +19,19 @@ export const BUSY_AT_LEAST_MS = 5000;
 // As long as the machine follows a launch whose agent asks about its folder (the host's
 // TrustFollowFor): a start seen after that is not shown as this one's.
 export const LATE_FOLLOW_FOR_MS = 30 * 60000;
+// A launch that named no session is matched only to one that says it started no earlier than
+// this before the launch was followed: the machine's clock may be behind this one's, but a
+// session resumed there long ago in the same folder is not this launch's.
+export const LATE_START_SLACK_MS = 10 * 60000;
+
+// The kind of session each launcher registers: Agency's are Copilot's.
+const KIND = Object.freeze({ agency: 'copilot', copilot: 'copilot', claude: 'claude', codex: 'codex' });
+
+// The same folder, as a machine may write it: either slash, any case, no slash at the end.
+export function sameFolder(a, b) {
+  const norm = (p) => (typeof p === 'string' ? p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase() : '');
+  return norm(a) !== '' && norm(a) === norm(b);
+}
 
 // The same folder-trust question, though the machine may have asked it again under a new id
 // since (#901): never the folder alone, as another launch into it asks there too.
@@ -47,8 +61,9 @@ export class LaunchFollow {
   // any that came during it.
   #relisting = false;
   #again = false;
-  // By machine, its last launch, reported unconfirmed with its session's id while that session
-  // was not listed there: { request, session, at, question }.
+  // By machine, its last launch, reported unconfirmed while its session was not listed there:
+  // { request, session, at, question, match }. Session is its id, or null when the outcome named
+  // none; match is then how its session is told when it registers: { kind, cwd, known }.
   #late = new Map();
   // By machine, the last outcome looked at, so the same one is never followed twice.
   #seen = new Map();
@@ -61,10 +76,11 @@ export class LaunchFollow {
 
   // showing(hostId): the Launch view is showing that machine. relist(): lists the machine shown
   // again, a promise. loads(): how many listings were asked for so far. started(hostId, late):
-  // a launch followed has started. doc: the page, whose visibility pauses the listing.
-  constructor({ showing, relist, loads, started, now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (t) => clearTimeout(t), doc = globalThis.document }) {
+  // a launch followed has started. doc: the page, whose visibility pauses the listing. signal:
+  // aborted when its owner goes, taking the page's listener with it.
+  constructor({ showing, relist, loads, started, now = () => Date.now(), setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (t) => clearTimeout(t), doc = globalThis.document, signal }) {
     Object.assign(this, { showing, relist, loads, started, now, setTimer, clearTimer, doc });
-    doc?.addEventListener?.('visibilitychange', () => (this.#hidden() ? this.#cancel() : this.#back()));
+    doc?.addEventListener?.('visibilitychange', () => (this.#hidden() ? this.#cancel() : this.#back()), signal ? { signal } : undefined);
   }
 
   #hidden() { return this.doc?.hidden === true; }
@@ -148,17 +164,40 @@ export class LaunchFollow {
   }
 
   // A launch's entry (launch-service.js), on any machine. listed(id): that machine lists that
-  // session now. True when it is followed.
-  follow(hostId, entry, listed) {
+  // session now; ids(): the ids of every session it lists now. True when it is followed.
+  follow(hostId, entry, listed, ids = () => []) {
     if (!hostId || !entry) { return false; }
     // One launch followed per machine: a newer one there, however it goes, replaces it.
     if (this.#late.get(hostId)?.request !== entry.request) { this.#late.delete(hostId); }
     if (entry.state !== 'done' || this.#seen.get(hostId) === entry.request) { return false; }
     this.#seen.set(hostId, entry.request);
-    const session = entry.detail?.session;
-    if (entry.outcome !== 'unconfirmed' || !session || listed(session)) { return false; }
-    this.#late.set(hostId, { request: entry.request, session, at: this.now(), question: entry.detail?.trust ?? null });
+    if (entry.outcome !== 'unconfirmed') { return false; }
+    const session = entry.detail?.session ?? null;
+    if (session && listed(session)) { return false; }
+    const question = entry.detail?.trust ?? null;
+    // An outcome that named no session (a Codex has none until it registers, as the host follows
+    // it by its process): its session is the first new one of its agent, in the folder it was
+    // started in. Never a Copilot's or Agency's, whose registering proves nothing (see session()),
+    // nor a resumed or transferred one, which is not new. Its question, when it met one, still
+    // ties a Trust answered here to it (answered()).
+    const launched = entry.detail?.launched;
+    const kind = KIND[launched?.agent];
+    const match = !session && kind && kind !== 'copilot' && launched.cwd && !launched.resume && !launched.transfer
+      ? { kind, cwd: launched.cwd, known: new Set(ids()) }
+      : null;
+    if (!session && !match && !question) { return false; }
+    this.#late.set(hostId, { request: entry.request, session, at: this.now(), question, match });
     return true;
+  }
+
+  // Whether a session registering is the launch followed: by its id, or, for one that named none,
+  // as new since, of its agent, in its folder, and started since it was launched.
+  #mine(late, s) {
+    if (late.session) { return late.session === s.id; }
+    const m = late.match;
+    if (!m || m.known.has(s.id) || s.agent !== m.kind || !sameFolder(s.cwd, m.cwd)) { return false; }
+    const started = Date.parse(s.startedAt ?? '');
+    return !Number.isFinite(started) || started >= late.at - LATE_START_SLACK_MS;
   }
 
   #current(late) { return this.now() - late.at <= LATE_FOLLOW_FOR_MS; }
@@ -172,10 +211,10 @@ export class LaunchFollow {
     // session has started, unless its agent registers before its window is ready). A Copilot or
     // Agency does, so its appearing proves nothing, and only a Trust answered here that starts it
     // says it started. Nor does one ending, or one seen after LATE_FOLLOW_FOR_MS.
-    if (late && late.session === s.id && s.status !== 'ending') {
+    if (late && s.status !== 'ending' && this.#mine(late, s)) {
       this.#late.delete(hostId);
       if (s.agent !== 'copilot' && this.#current(late)) {
-        this.started(hostId, late);
+        this.started(hostId, { request: late.request, session: s.id, at: late.at, question: late.question });
         // Its question, and the busy it kept, are gone.
         relist = this.showing(hostId);
       }
@@ -200,7 +239,7 @@ export class LaunchFollow {
     if (!late || !sameQuestion(late.question, question) || !this.#current(late)) { return null; }
     if (outcome !== 'started' && outcome !== 'declined') { return null; }
     this.#late.delete(hostId);
-    return outcome === 'started' ? late : null;
+    return outcome === 'started' ? { request: late.request, session: late.session, at: late.at, question: late.question } : null;
   }
 
   #relistBusy(hostId) {

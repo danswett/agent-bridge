@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LaunchFollow, sameQuestion, samePrompt, BUSY_FOR_MS, BUSY_SLACK_MS, BUSY_AT_LEAST_MS, LATE_FOLLOW_FOR_MS } from '../../js/launch-follow.js';
+import { LaunchFollow, sameQuestion, samePrompt, sameFolder, BUSY_FOR_MS, BUSY_SLACK_MS, BUSY_AT_LEAST_MS, LATE_FOLLOW_FOR_MS, LATE_START_SLACK_MS } from '../../js/launch-follow.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const T0 = Date.parse('2026-05-01T12:00:00.000Z');
@@ -236,14 +236,78 @@ test('a Copilot or Agency session registering proves nothing, as it registers be
   assert.equal(t.started.length, 0);
 });
 
-test('an unconfirmed launch is not followed when its session was already listed, it named none, or it is not unconfirmed', () => {
+test('an unconfirmed launch is not followed when its session was already listed, it named none and met no question, or it is not unconfirmed', () => {
   const t = setup();
   assert.equal(t.follow.follow('h1', unconfirmed(), (id) => id === 's9'), false);
-  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r2', detail: { trust: question() } }), () => false), false);
+  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r2', detail: {} }), () => false), false);
   assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r3', outcome: 'busy' }), () => false), false);
   assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r4', state: 'sending' }), () => false), false);
   t.follow.session('h1', { id: 's9', agent: 'claude', status: 'working' });
   assert.equal(t.started.length, 0);
+});
+
+// A Codex launch the machine could not confirm, which names no session: Codex has none until it
+// registers, as the host follows it by its process.
+const codex = (over = {}) => unconfirmed({ detail: { launched: { agent: 'codex', workspace: 'bridge', cwd: 'C:\\repos\\bridge', worktree: false, permissions: 'default' } }, ...over });
+const codexSession = (over = {}) => ({ id: 'c1', agent: 'codex', status: 'working', cwd: 'C:\\repos\\bridge', startedAt: iso(T0), ...over });
+
+test('a launch that named no session has started when a new session of its agent registers in its folder', () => {
+  const t = setup();
+  assert.equal(t.follow.follow('h1', codex(), () => false, () => ['old']), true);
+  t.follow.session('h1', codexSession({ cwd: 'c:/repos/bridge/' }));
+  assert.deepEqual(t.started.map((s) => [s.hostId, s.request, s.session]), [['h1', 'r1', 'c1']]);
+  assert.equal(t.relists, 1);
+});
+
+test('a launch that named no session is not started by another folder, another agent, a session listed before, an old one, or another machine', () => {
+  const t = setup();
+  t.follow.follow('h1', codex(), () => false, () => ['old']);
+  t.follow.session('h1', codexSession({ cwd: 'C:\\repos\\other' }));
+  t.follow.session('h1', codexSession({ agent: 'claude' }));
+  t.follow.session('h1', codexSession({ id: 'old' }));
+  t.follow.session('h1', codexSession({ startedAt: iso(T0 - LATE_START_SLACK_MS - 1) }));
+  t.follow.session('h1', codexSession({ status: 'ending' }));
+  t.follow.session('h2', codexSession());
+  assert.equal(t.started.length, 0);
+  // Still followed: the one that is its own does.
+  t.follow.session('h1', codexSession({ id: 'c2', startedAt: iso(T0 - LATE_START_SLACK_MS) }));
+  assert.deepEqual(t.started.map((s) => s.session), ['c2']);
+});
+
+test('a launch that named no session is told by its folder only for a new Claude or Codex, never a Copilot\'s, a resumed one or a transferred one', () => {
+  const t = setup();
+  const launched = { agent: 'agency', workspace: 'bridge', cwd: 'C:\\repos\\bridge' };
+  assert.equal(t.follow.follow('h1', unconfirmed({ detail: { launched } }), () => false), false);
+  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r2', detail: { launched: { ...launched, agent: 'copilot' } } }), () => false), false);
+  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r3', detail: { launched: { ...launched, agent: 'codex', resume: 'x' } } }), () => false), false);
+  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r4', detail: { launched: { ...launched, agent: 'codex', transfer: { from: 'h2' } } } }), () => false), false);
+  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r5', detail: { launched: { ...launched, agent: 'codex', cwd: null } } }), () => false), false);
+  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r6', detail: { launched: { ...launched, agent: 'claude' } } }), () => false), true);
+});
+
+test('a launch that named no session but met a question is followed for its Trust answered here', () => {
+  const t = setup();
+  assert.equal(t.follow.follow('h1', unconfirmed({ detail: { trust: question(), launched: { agent: 'copilot', cwd: 'C:\\repos\\bridge' } } }), () => false), true);
+  // A Copilot's registering proves nothing, so only the answer here can start it.
+  t.follow.session('h1', { id: 'p1', agent: 'copilot', status: 'working', cwd: 'C:\\repos\\bridge' });
+  assert.equal(t.started.length, 0);
+  assert.deepEqual(t.follow.answered('h1', question(), 'started'), { request: 'r1', session: null, at: T0, question: question() });
+});
+
+test('the same folder is either slash, any case, with or without a slash at the end, and never nothing', () => {
+  assert.equal(sameFolder('C:\\repos\\bridge', 'c:/Repos/Bridge/'), true);
+  assert.equal(sameFolder('C:\\repos\\bridge', 'C:\\repos\\bridge2'), false);
+  assert.equal(sameFolder('', ''), false);
+  assert.equal(sameFolder(null, undefined), false);
+});
+
+test('a page listener goes with its owner\'s signal', () => {
+  const removed = [];
+  const controller = new AbortController();
+  const doc = { hidden: false, addEventListener: (type, fn, options) => { options?.signal?.addEventListener('abort', () => removed.push(type)); } };
+  new LaunchFollow({ doc, signal: controller.signal, showing: () => true, relist: () => {}, loads: () => 0, started: () => {} });
+  controller.abort();
+  assert.deepEqual(removed, ['visibilitychange']);
 });
 
 test('the same outcome seen again is not followed again', () => {

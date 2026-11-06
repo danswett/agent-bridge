@@ -497,7 +497,7 @@ export class DemoHost {
         unconfirmed: "the session started, but it is asking whether to trust its folder; answer that at the machine",
         failed: 'the agent could not be started (The system cannot find the file specified.)',
       };
-      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host', ...(scripted.session ? { session: scripted.session } : {}), ...(scripted.trust ? { trust: this.askTrust(scripted.trust) } : {}) };
+      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host', ...(scripted.session ? { session: scripted.session } : {}), ...(scripted.trust ? { trust: this.askTrust(scripted.trust) } : {}), ...(scripted.outcome === 'unconfirmed' ? this.#launchedFor(data) : {}) };
     }
     const problem = checkLaunch(data);
     if (problem) { return { outcome: 'refused', reason: problem }; }
@@ -526,6 +526,17 @@ export class DemoHost {
     if (resume) { this.launchOptions = { ...o, resumable: o.resumable.filter((r) => r.id !== resume.id) }; }
     const permissions = data.permissions ?? o.defaults.permissions;
     return { outcome: 'started', session: id, launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd, worktree: !!workspace?.isolate, permissions } };
+  }
+
+  // What an unconfirmed launch says it started, as a host's does: the agent and the folder, so a
+  // session-less one (a Codex, until it registers) can be told when it does.
+  #launchedFor(data) {
+    const o = this.launchOptions;
+    const resume = data.resume ? o.resumable.find((r) => r.id === data.resume) : null;
+    const agent = o.agents.find((a) => a.id === (data.agent ?? resume?.launcher ?? o.defaults.agent));
+    const workspace = resume ? null : o.workspaces.find((w) => w.label === (data.workspace ?? o.defaults.workspace));
+    if (!agent || (!resume && !workspace)) { return {}; }
+    return { launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd: resume?.cwd ?? workspace.path, worktree: !!workspace?.isolate, permissions: data.permissions ?? o.defaults.permissions } };
   }
 
   // As the target and the machine the session is on decide between them: the command must be for

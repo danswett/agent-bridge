@@ -859,12 +859,12 @@ test.describe('a launch followed after it was not confirmed', () => {
     await field(page, 'agent').selectOption('codex');
     await field(page, 'prompt').fill('Add pagination.');
     await launchButton(page).tap();
-    await expect(status(page)).toHaveText(/^Launched, but not confirmed/);
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
     await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
 
     await register(page, 'codex');
     await expect(view(page, LATE)).toBeInViewport();
-    await expect(status(page)).toHaveText('Session started.');
+    await expect(status(page)).toHaveText('Session started in a new worktree.');
     await expect(status(page)).toHaveClass(/\bok\b/);
     await expect(panel(page)).toHaveAttribute('data-launch', 'started');
     await expect(field(page, 'prompt')).toHaveValue('');
@@ -875,7 +875,7 @@ test.describe('a launch followed after it was not confirmed', () => {
         .observe(document.querySelector('#launch .launch-status'), { childList: true, characterData: true, subtree: true });
     });
     await page.evaluate(() => window.agentBridgeDemo.launchPanel.refresh());
-    await expect(status(page)).toHaveText('Session started.');
+    await expect(status(page)).toHaveText('Session started in a new worktree.');
     expect(await page.evaluate(() => window.__statusChanges)).toBe(0);
   });
 
@@ -886,7 +886,7 @@ test.describe('a launch followed after it was not confirmed', () => {
     await field(page, 'agent').selectOption('codex');
     await field(page, 'prompt').fill('Add pagination.');
     await launchButton(page).tap();
-    await expect(status(page)).toHaveText(/^Launched, but not confirmed/);
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
     await go(page, 'sessions');
 
     await register(page, 'codex');
@@ -896,7 +896,7 @@ test.describe('a launch followed after it was not confirmed', () => {
     await expect(view(page, LATE)).toBeHidden();
 
     await go(page, 'launch');
-    await expect(status(page)).toHaveText('Session started.');
+    await expect(status(page)).toHaveText('Session started in a new worktree.');
     await expect(field(page, 'prompt')).toHaveValue('');
     await expect(view(page, LATE)).toBeHidden();
   });
@@ -907,13 +907,40 @@ test.describe('a launch followed after it was not confirmed', () => {
     await script(page, unconfirmed);
     await field(page, 'prompt').fill('Add pagination.');
     await launchButton(page).tap();
-    await expect(status(page)).toHaveText(/^Launched, but not confirmed/);
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
 
     await register(page, 'copilot');
     await expect(row(page, LATE)).toHaveCount(1);
-    await expect(status(page)).toHaveText(/^Launched, but not confirmed/);
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
     await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
     await expect(view(page, LATE)).toBeHidden();
+  });
+
+  test('a Codex launch that named no session starts when a new Codex session registers in its folder, and not in another', async ({ page }) => {
+    const OTHER = '7b1d3f5a-9c2e-4a6b-8d0f-1e3a5c7b9d2f';
+    const upsert = (id, cwd) => page.evaluate(({ id: i, cwd: c }) => {
+      const at = new Date().toISOString();
+      window.agentBridgeDemo.upsert({ id: i, agent: 'codex', title: 'Add pagination.', cwd: c, status: 'working', statusSince: at, startedAt: at, updatedAt: at, processId: 4300, activity: { userMessage: 'Add pagination.', turnCount: 1 } });
+    }, { id, cwd });
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'unconfirmed', reason: 'the session started, but it did not confirm it was ready within 60 seconds' });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'workspace').selectOption('agent-bridge');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
+    await expect(panel(page).locator('.launch-open')).toBeHidden();
+
+    await upsert(OTHER, 'C:\\Users\\demo\\notes');
+    await expect(row(page, OTHER)).toHaveCount(1);
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
+    await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
+
+    await upsert(LATE, 'c:/users/demo/repos/agent-bridge');
+    await expect(view(page, LATE)).toBeInViewport();
+    await expect(status(page)).toHaveText('Session started in a new worktree.');
+    await expect(field(page, 'prompt')).toHaveValue('');
   });
 
   test('a busy machine is listed again when a session registers on it, and its busy goes', async ({ page }) => {
