@@ -2059,7 +2059,8 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   machine's `sessions.restoreOnStart` is off (`offered`), the notice still says what died, and
   the "Restored …" line reads instead "*n* sessions can be restored at the machine". It offers no
   button: restoring happens at the machine. Under G5 that stays so; with the setting merely off,
-  a Restore button with a confirmation, from any client, is #948.
+  a Restore button with a confirmation, from any client, is #948 (PROPOSED below: *Restore from
+  a client*).
 - **Dismissal:** per device, as #786's: closing it hides it on this device only, it is not saved
   across app restarts, and it comes back only if the host sends a new notice. Its close button is
   named "Dismiss restore notice on *machine*".
@@ -2175,6 +2176,90 @@ arrives, as a `question`.
 - **Home Assistant:** read only. `sensor.agent_bridge_<machine>_restore` (state: the last restore
   time; attributes: the notice), a `restored` attribute on each session's status sensor, and one
   persistent notification per restore. No Continue in Home Assistant.
+
+**Restore from a client (#948): PROPOSED, for Creative**
+
+**Not built, and not decided.** Design first: the words are placeholders for Creative, and the
+host's side is [restore-run.md](../protocol/restore-run.md) (`restore.run`, capability
+`sessions.restore.run`). Nothing here changes the notice above until it is accepted. Folder trust
+stays a person's at the machine (#947).
+
+- **When the notice offers it:** the notice names sessions in `offered`; its `why` is `off` (and
+  `pending`, if Product says so: restore-run.md P2); the machine's hello offers
+  `sessions.restore.run`; and the machine is not read-only. Otherwise the Offered line stays
+  "*n* sessions can be restored at the machine", with no button: under G5, on a host or a channel
+  that can't act (an older host, a device the host doesn't take as a person's), in Home Assistant,
+  and when the notice names none (all in `offeredMore`).
+- **The line and the button:** the Offered line reads "*n* sessions weren't restored: restoring
+  after a reboot or crash is off on *machine*" (`off`) or "*n* sessions can be restored" (`pending`), and
+  after it a secondary button, "Restore…" (named "Restore sessions on *machine*", A1). Never in a
+  row, a card, a push or a toast.
+- **The confirmation** (a dialog; Platforms below):
+  - Title: "Restore *n* sessions on *machine*?"
+  - Line: "Each opens idle, where it stopped. Nothing is typed into them."
+  - The list: the notice's named sessions in its order, at most 5, one a line, then "and *m*
+    more" for the rest it names. Each title is drawn as a title is everywhere (§6.3: cleaned as a
+    name an agent picks is, #263, with hidden and bidi characters shown as visible escapes), on one
+    line with an ellipsis
+    at the dialog's width; one with no title reads "*Agent* session" ("Copilot session"). After it,
+    in secondary text, what the notice says of it: "· was mid-turn", "· a question was lost", "·
+    stopped again soon after its last restore" (`loop`).
+  - With `offeredMore`: "*k* more aren't listed here. Resume them from Launch."
+  - Buttons: "Restore *n*" (primary) and "Cancel". Focus starts on **Cancel**, since this acts on
+    another machine (restore-run.md C3). Escape and the dialog's close are Cancel.
+- **What Restore sends:** `restore.run` with every id the confirmation listed, the notice's `at` as
+  `offer`, a fresh `request` and `progress: true`. One press, one request; a lost response is sent
+  again with the same `request` after 90 s with no frame; a new press after a `busy` or `refused`
+  takes a new one.
+- **While it runs:** the Offered line reads "Restoring *i* of *n*…", from the progress frames, and
+  the button shows §5.3's ring, disabled and keeping focus (A4). Closing the notice doesn't stop
+  it. As each session leaves the offer the host tells every device (`hello.changed`), so another
+  device's notice shrinks with it; a press there meanwhile is `busy`: "A restore is under way from
+  another device."
+- **After** (each line on this device only, until the notice changes or is dismissed):
+  - **All restored** (`restored`): the Offered line and the button go, and the notice's "Restored
+    *n* sessions" line counts them, with "Can continue: …" for those mid-turn, as at start. The
+    rows get their restored mark from the host as at start.
+  - **Partly** (`partial`): "Restored *a* of *n*", then a line for each that didn't start:
+    "Couldn't be restored: *title* (*reason*)" (`refused`, `failed`), "Not tried: *title*
+    (*reason*)" (`busy`) or "Started, not confirmed: *title*. Check at the machine."
+    (`unconfirmed`). With any still offered, the button comes back as "Try again…", which confirms
+    again with what is left.
+  - **None** (`none`): "Couldn't restore any of the *n* sessions", then the same lines.
+  - **Refused** (the whole request): "Couldn't restore: *reason*", the host's words. The offer is as
+    it was. If the reason is that the machine became read-only, hello takes the capability away
+    and the line goes back to "… can be restored at the machine".
+  - **Busy** (the whole request): "Couldn't restore now: *reason*. Try again in a moment."
+- **Never automatic:** no client presses Restore on start, on reconnect or on a timer.
+
+| State | Offered line | Button |
+|---|---|---|
+| Can act (`sessions.restore.run`, not read-only) | "*n* sessions weren't restored: …" / "*n* sessions can be restored" | "Restore…" |
+| G5, or a client that can't act | "*n* sessions can be restored at the machine" | None |
+| Running | "Restoring *i* of *n*…" | Ring, disabled |
+| All restored | Gone; "Restored *n* sessions" | None |
+| Partly or none | "Restored *a* of *n*" / "Couldn't restore any …", and a line each | "Try again…" while any is offered |
+| Refused or busy | "Couldn't restore: *reason*" / "Couldn't restore now: …" | As before the press |
+
+**Accessibility** (§9.1): the button's name says the machine (A1). The dialog is modal, its title
+its name, focus kept inside it and starting on Cancel; closing it returns focus to the button
+(A3, A4). The notice's live region says "Restoring *n* sessions on *machine*" once when it starts,
+and the outcome once when it ends, never each step (A6). Reduced motion: no animation but the ring's
+own (A10).
+
+**Platforms:** Windows app, a ContentDialog, the button a standard secondary Button in the InfoBar.
+PWA, the app's own confirmation dialog, as End session's. Apple (#260): note only. Home Assistant:
+none, read only as today.
+
+| Use | Text (PROPOSED, for Creative) |
+|---|---|
+| Offered, can act | "*n* sessions weren't restored: restoring after a reboot or crash is off on *machine*" / "*n* sessions can be restored" |
+| Button | "Restore…" (name "Restore sessions on *machine*"); after a partial run "Try again…" |
+| Confirmation | "Restore *n* sessions on *machine*?"; "Each opens idle, where it stopped. Nothing is typed into them."; "and *m* more"; "*k* more aren't listed here. Resume them from Launch." |
+| List facts | "was mid-turn", "a question was lost", "stopped again soon after its last restore" |
+| Confirmation buttons | "Restore *n*", "Cancel" |
+| Running | "Restoring *i* of *n*…"; announced "Restoring *n* sessions on *machine*" |
+| Outcomes | "Restored *a* of *n*"; "Couldn't restore any of the *n* sessions"; "Not tried: *title* (*reason*)"; "Started, not confirmed: *title*. Check at the machine."; "Couldn't restore: *reason*"; "Couldn't restore now: *reason*. Try again in a moment."; "A restore is under way from another device." |
 
 ### 6.13 Sign-in needed, agent errors and Not responding (#800)
 
