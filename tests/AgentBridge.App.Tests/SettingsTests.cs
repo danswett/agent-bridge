@@ -367,7 +367,7 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal("Installed, version 1.2.3", row.Installation);
         Assert.Contains("Explicit hook setup", row.Checks);
         Assert.Contains("Sign-in has not been verified", row.Checks);
-        Assert.Contains("No hook observed", row.HookActivity);
+        Assert.Equal("No hook seen since the bridge started.", row.HookActivity);
 
         host.On(HostOps.AgentsRefresh, _ =>
         {
@@ -408,6 +408,15 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(settings.HasError);
         Assert.True(settings.CanCheckAgents);
         Assert.Contains(true, enabled);
+    }
+
+    [Fact]
+    public async Task A_page_that_cannot_reach_this_machines_bridge_says_to_connect_to_it()
+    {
+        await using var connecting = new HostConnection(_ => new TaskCompletionSource<AgentBridge.Transport.IClientChannel>().Task, ui);
+        var page = new SettingsViewModel(connecting, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+
+        Assert.Equal("Connect to this machine's bridge to check its agents.", page.AgentsState);
     }
 
     [Fact]
@@ -458,7 +467,7 @@ public sealed class SettingsTests : IAsyncLifetime
         await Wait.UntilAsync(() => settings.Agents.SingleOrDefault()?.Installation.Contains("2.3.4") == true && settings.RestartRequired, "the readiness and restart the setup left",
             why: () => $"installation {settings.Agents.SingleOrDefault()?.Installation ?? "none"}, restart required {settings.RestartRequired}");
         Assert.Empty(host.Sent(HostOps.Restart));
-        Assert.Equal("Set up · restart the host, then start a new session to check it", settings.Agents.Single().Status);
+        Assert.Equal("Set up · restart the bridge, then start a new session to check it", settings.Agents.Single().Status);
         Assert.Contains("Trust and a new session have not been verified", settings.Agents.Single().Checks);
         Assert.False(settings.HasError);
     }
@@ -472,7 +481,7 @@ public sealed class SettingsTests : IAsyncLifetime
 
         await settings.SetUpAgentAsync("claude");
 
-        Assert.Equal("Set up · restart the host, then start a new session to check it", settings.Agents.Single().Status);
+        Assert.Equal("Set up · restart the bridge, then start a new session to check it", settings.Agents.Single().Status);
         Assert.Equal("fixture post-setup scan failed", settings.Error);
         Assert.Empty(host.Sent(HostOps.Restart));
     }
@@ -487,7 +496,7 @@ public sealed class SettingsTests : IAsyncLifetime
 
         Assert.Equal("Hook setup incomplete: fixture partial work", settings.Error);
         // The row says why from a known set; the command's own text stays in the page's error and the log.
-        Assert.Equal("Setup failed · the host couldn't finish it", settings.Agents.Single().Status);
+        Assert.Equal("Setup failed · the machine couldn't finish it", settings.Agents.Single().Status);
         Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
         Assert.Empty(host.Sent(HostOps.Restart));
         Assert.False(settings.Busy);
@@ -685,8 +694,8 @@ public sealed class SettingsTests : IAsyncLifetime
     [Theory]
     [InlineData("Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine", "Read-only · this machine's bridge is older")]
     [InlineData("Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "Read-only · another bridge profile owns its hooks")]
-    [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "Read-only · set in this host's settings")]
-    [InlineData("Hook setup is unavailable while this host is read-only: this host's config.json has a problem, so it takes nothing from other devices; answer at the machine", "Read-only · set in this host's settings")]
+    [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "Read-only · set in this bridge's settings")]
+    [InlineData("Hook setup is unavailable while this host is read-only: this host's config.json has a problem, so it takes nothing from other devices; answer at the machine", "Read-only · set in this bridge's settings")]
     public void Hooks_held_back_from_this_app_say_read_only_and_why_with_no_install_or_verb(string detail, string words)
     {
         var row = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Blocked, installation: ReadinessState.Missing, hooksDetail: detail), canManage: true, canInstall: true);
@@ -700,6 +709,28 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal("Not installed · install it on this machine", row.Installation);
         Assert.Contains("Hooks: Not checked", row.Checks);
         Assert.DoesNotContain(words, row.Checks);
+    }
+
+    [Fact]
+    public void A_failed_install_or_setup_blames_the_bridge_only_for_its_state_and_the_machine_for_what_it_could_not_do()
+    {
+        const string readOnly = "CLI installation is unavailable while this host is read-only: answer at the machine";
+
+        Assert.Equal("this bridge is read-only", AgentWords.InstallFailure(readOnly));
+        Assert.Equal("the machine couldn't install it", AgentWords.InstallFailure("something nobody foresaw"));
+        Assert.Equal("Setup failed · this bridge is read-only", AgentWords.SetupFailed(false, null, readOnly));
+        Assert.Equal("Setup failed · the machine couldn't finish it", AgentWords.SetupFailed(false, null, "something nobody foresaw"));
+    }
+
+    [Theory]
+    [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine")]
+    [InlineData("Version command not run while the host is read-only: this host's config.json has a problem, so it takes nothing from other devices; answer at the machine")]
+    public void The_bridges_own_read_only_sentence_is_matched_but_never_shown_as_it_arrives(string wire)
+    {
+        var shown = AgentWords.Plain(wire);
+
+        Assert.DoesNotContain("host", shown, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("this bridge's settings", shown);
     }
 
     [Fact]
@@ -802,7 +833,7 @@ public sealed class SettingsTests : IAsyncLifetime
         outcome = new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true);
         await settings.SetUpAgentAsync("agency");
 
-        Assert.Equal("Setup failed · the host couldn't finish it", Row("agency").Status);
+        Assert.Equal("Setup failed · the machine couldn't finish it", Row("agency").Status);
         await settings.CheckAgentsAsync();
         Assert.Equal("Repair", Row("copilot").SetUpVerb);
         Assert.Equal("Repair", Row("agency").SetUpVerb);
@@ -828,7 +859,7 @@ public sealed class SettingsTests : IAsyncLifetime
 
         Assert.Single(host.Sent(HostOps.AgentsRefresh));
         Assert.Equal("Repair", settings.Agents.Single().SetUpVerb);
-        Assert.Equal("Removal failed · the host couldn't finish it", settings.Agents.Single().Status);
+        Assert.Equal("Removal failed · the machine couldn't finish it", settings.Agents.Single().Status);
         Assert.Equal("Removal incomplete: the Codex plugin is still installed.", settings.Error);
     }
 
@@ -879,15 +910,15 @@ public sealed class SettingsTests : IAsyncLifetime
     public void On_a_host_from_before_hook_setup_a_row_says_it_cant_check_and_offers_nothing_even_after_its_own_setup_failed()
     {
         var failed = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn, setup: HookSetupState.Unknown), canManage: true,
-            note: new("Setup failed · the host couldn't finish it", Tone.Bad));
+            note: new("Setup failed · the machine couldn't finish it", Tone.Bad));
         var quiet = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn, setup: HookSetupState.Unknown), canManage: true);
 
         Assert.Equal((null, false, false), (failed.SetUpVerb, failed.CanSetUp, failed.ShowRemove));
-        Assert.Equal("Setup failed · the host couldn't finish it", failed.Status);
+        Assert.Equal("Setup failed · the machine couldn't finish it", failed.Status);
         Assert.Equal((null, false, false), (quiet.SetUpVerb, quiet.CanSetUp, quiet.ShowRemove));
         Assert.Equal(OlderHost, quiet.Status);
         Assert.Equal(Tone.None, quiet.StatusTone);
-        Assert.False(quiet.Keeps(new("Setup failed · the host couldn't finish it", Tone.Bad)));
+        Assert.False(quiet.Keeps(new("Setup failed · the machine couldn't finish it", Tone.Bad)));
     }
 
     [Fact]
@@ -904,7 +935,7 @@ public sealed class SettingsTests : IAsyncLifetime
         host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
 
         await settings.SetUpAgentAsync("copilot");
-        Assert.Equal("Setup failed · the host couldn't finish it", settings.Agents.Single().Status);
+        Assert.Equal("Setup failed · the machine couldn't finish it", settings.Agents.Single().Status);
         Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
         await settings.CheckAgentsAsync();
 
@@ -996,7 +1027,7 @@ public sealed class SettingsTests : IAsyncLifetime
         }
         finally { release.TrySetResult(); await pending; }
 
-        Assert.Equal("Repaired · restart the host, then start a new session to check it", Row("claude").Status);
+        Assert.Equal("Repaired · restart the bridge, then start a new session to check it", Row("claude").Status);
         Assert.Equal(Tone.Ok, Row("claude").StatusTone);
         Assert.Equal("", Row("copilot").Status);
         Assert.Equal(Tone.None, Row("copilot").StatusTone);

@@ -849,7 +849,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         link.Switch();
 
         await Wait.UntilAsync(() => launch.State == "unconfirmed", "the launch to be unconfirmed");
-        Assert.Equal("Not confirmed: the relay connection to this machine's host changed before it said whether the launch started. Check at this machine before launching again.", launch.StatusText);
+        Assert.Equal("Not confirmed: the relay connection to this machine's bridge changed before it said whether the launch started. Check at this machine before launching again.", launch.StatusText);
         Assert.True(launch.CanLaunch);
         gate.SetResult();
     }
