@@ -36,13 +36,13 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 | Status | Rows |
 |---|---|
 | `Verified` | 49 |
-| `Implemented, untested live` | 47 |
+| `Implemented, untested live` | 53 |
 | `Partial` | 1 |
-| `Missing` | 13 |
-| `Intentionally different` | 18 |
+| `Missing` | 9 |
+| `Intentionally different` | 20 |
 | `N/A` | 12 |
-| `In flight (…)` | 8: Claude/Codex live 8 |
-| **Total** | **148** feature rows in §1–§18 |
+| `In flight (…)` | 6: Claude/Codex live 6 |
+| **Total** | **150** feature rows in §1–§18 |
 
 Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Partial`. Every `Missing` and `Partial` row links an issue labelled
 [`parity`](https://github.com/danswett/agent-bridge/issues?q=label%3Aparity).
