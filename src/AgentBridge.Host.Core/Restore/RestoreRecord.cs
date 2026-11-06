@@ -32,6 +32,11 @@ public sealed record RestoreEntry
     // Restored by this host after a reboot or a crash, and when; kept until it has stayed live
     // RestoreRecorder.LoopWithin, so one that dies sooner is not restored again (crash loop).
     public DateTimeOffset? Restored { get; init; }
+    // When it was last restored, kept for as long as it stays in the record (live, and GoneKept after):
+    // the restore's boundary, re-applied before a later host run first publishes it, so what the
+    // interrupted run left (its turn, its question) is never shown again, as answerable least of all
+    // (RestoreRecorder.HoldBoundaries). Apart from Restored, which goes after LoopWithin.
+    public DateTimeOffset? Boundary { get; init; }
 }
 
 // A session that went with an earlier run of the host, with why, about when (Since: when that run

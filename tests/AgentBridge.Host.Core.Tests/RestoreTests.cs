@@ -1267,6 +1267,47 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal((SessionStatus.Idle, (Question?)null), (after.Status, after.Question));
     }
 
+    // Engineering's second-family review: the restore's boundary is kept in the record apart from the
+    // crash-loop stamp, for as long as the session is, so a later host run can hold it again.
+    [Fact]
+    public async Task A_restored_sessions_boundary_stays_in_the_record_after_its_crash_loop_stamp_goes()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => told.Count == 1);
+        var restoredAt = Time.GetUtcNow();
+        source.Upsert(S("a"));
+
+        Time.Advance(RestoreRecorder.LoopWithin + TimeSpan.FromMinutes(1));
+
+        var a = Assert.Single(Written().Sessions);
+        Assert.Null(a.Restored);
+        Assert.Equal(restoredAt, a.Boundary);
+    }
+
+    // Engineering's second-family review: restore a Claude session, then start only the host again.
+    // Held from the record before the source first reads it, the boundary keeps the interrupted run's
+    // AskUserQuestion from being listed as asked, and answerable from a phone.
+    [Fact]
+    public async Task After_a_host_restart_a_restored_claude_sessions_interrupted_question_is_not_listed_as_asked()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999983";
+        var transcript = f.ClaudeTranscript(Id);
+        Fixture.Append(transcript, Claude.User("plan it", 1), Claude.Assistant(2, "tool_use", Claude.ToolUse("ask1", "AskUserQuestion", Claude.Ask(("Which database?", false, ["PostgreSQL", "SQLite"])))));
+        f.ClaudeSessionFile(704, Id);
+        f.Processes.Run(AgentKind.Claude, 704);
+        Previous(Fixture.T0, false, E(Id, AgentKind.Claude) with { Boundary = Fixture.T0.AddSeconds(20) });
+        await using var real = f.Source();
+
+        RestoreRecorder.HoldBoundaries(Record, real);
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Idle, (Question?)null, (SessionRestored?)null), (after.Status, after.Question, after.Restored));
+    }
+
     // Marked before it registers, and given a whole turn before the source first reads it: that
     // prompt came after the restore, by its own time, so Continue has gone.
     [Fact]

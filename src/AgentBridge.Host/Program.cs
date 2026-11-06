@@ -351,6 +351,9 @@ async Task<int> ServeAsync(HostHandover handover)
     // the agent records what it typed rather than at its next poll.
     var writes = new TranscriptWrites();
     source.TranscriptWritten += writes.Written;
+    // The boundaries of sessions restored by an earlier run, before the first pass publishes them
+    // (#780): what an interrupted run left is never shown again as asked after a host restart.
+    RestoreRecorder.HoldBoundaries(Path.Combine(identity.Folder, RestoreFiles.FileName), source);
     await source.StartAsync(stop.Token);
     // Files over 256 KiB come from the relay's blob store, through whichever connection is up.
     using var relayBlobs = new RelayBlobs();
