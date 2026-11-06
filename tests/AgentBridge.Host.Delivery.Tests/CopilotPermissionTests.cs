@@ -333,6 +333,20 @@ public sealed class CopilotPermissionTests : IDisposable
 
         Assert.Null(problem);
         Assert.Equal("1", choice!.Key);
+
+        // Beside an MCP request whose argument name, nested in a list, holds a frame or hidden
+        // character, as read from the transcript: delivery refuses as the listing holds it (#769).
+        foreach (var name in (string[])["\u256D\u2500", "a\u202Eb", "\u200Bx"])
+        {
+            var tool = Copilot.Prompts["mcp"].DeepClone().AsObject();
+            tool["args"] = new System.Text.Json.Nodes.JsonObject { ["items"] = new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject { [name] = "x" }) };
+            var mcp = AgentBridge.Host.Core.Parsing.CopilotPermission.Describe(System.Text.Json.JsonDocument.Parse(Copilot.Permission("r2", "c2", tool, 2)).RootElement.GetProperty("data"))!;
+            var beside = crowd with { Others = [new CopilotPermissionScreen.Other("MCP tool, request r2", mcp.Drawn, mcp.Dialog)] };
+            Assert.Contains("could be drawn as part of Copilot's own dialog", CopilotPermissionScreen.Locate(screen, approve: true, described.Probes, beside).Problem);
+            // The message shows the arguments with their names, so a hidden or right-to-left one is
+            // one of the host's escapes there too, and the approval carries escaped (#836).
+            if (name != "\u256D\u2500") { Assert.NotEmpty(mcp.Marks); }
+        }
     }
 
     [Fact]

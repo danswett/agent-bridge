@@ -462,6 +462,49 @@ public class CopilotTests
         Assert.Equal((crowded.Id, (bool?)null), (alone.Id, alone.AnswerAtMachine));
     }
 
+    // Copilot's MCP and custom-tool dialogs can draw an argument's name as well as its value, so a
+    // name holding a line-drawing character, a tab, or a control, bidi or other hidden character
+    // is checked as a value is, at any depth, in every waiting request: checked by value alone, a
+    // name could draw part of Copilot's frame, or hide what is drawn, unseen (#769). A plain name
+    // leaves the listed one answerable, so the check is what holds it.
+    [Theory]
+    [InlineData("owner", false)]
+    [InlineData("\u256D\u2500", true)]
+    [InlineData("a\tb", true)]
+    [InlineData("a\u0007b", true)]
+    [InlineData("a\u202Eb", true)]
+    [InlineData("\u200Bx", true)]
+    public async Task A_permission_beside_one_whose_argument_name_holds_an_unsafe_character_is_answered_at_the_machine(string name, bool held)
+    {
+        await using var s = new Session_();
+        var tool = Copilot.Prompts["mcp"].DeepClone().AsObject();
+        tool["args"] = new System.Text.Json.Nodes.JsonObject { ["owner"] = "octo", ["items"] = new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject { [name] = "x" }) };
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2), Copilot.Permission("r2", "c2", tool, 3))).Question!;
+
+        Assert.StartsWith("r1#", crowded.Id);
+        Assert.Equal((held, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+    }
+
+    [Theory]
+    [InlineData("owner", false)]
+    [InlineData("\u256D\u2500", true)]
+    [InlineData("a\u202Eb", true)]
+    [InlineData("\u200Bx", true)]
+    public async Task A_listed_permission_whose_own_property_name_holds_an_unsafe_character_is_answered_at_the_machine_beside_another(string name, bool held)
+    {
+        await using var s = new Session_();
+        var mine = Copilot.Prompts["commands"].DeepClone().AsObject();
+        mine["meta"] = new System.Text.Json.Nodes.JsonObject { ["deep"] = new System.Text.Json.Nodes.JsonObject { [name] = "x" } };
+        var other = Copilot.Prompts["commands"].DeepClone().AsObject();
+        other["fullCommandText"] = "git status";
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", mine, 2), Copilot.Permission("r2", "c2", other, 3))).Question!;
+
+        Assert.StartsWith("r1#", crowded.Id);
+        Assert.Equal((held, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+    }
+
     // Copilot can write permission.requested again for a request it has already asked, with what
     // it now asks. The revision replaces the question it revises: kept, the earlier one was listed
     // first, counted the request twice, and stayed after the request ended (Copilot review of #769).

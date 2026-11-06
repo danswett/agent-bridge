@@ -740,7 +740,7 @@ screen and finds the option by its label, never by its position, under rows show
 prompt is for, and checks the transcript again. While others wait, the screen, not the order
 asked, says which request is shown, identified positively as Copilot CLI 1.0.105 draws it:
 no waiting request holds a line-drawing character, a tab or a character drawn other than as
-it runs; the options are inside one round frame whose top edge is on screen; every row in it
+it runs, in a value or a property name (an argument's name included); the options are inside one round frame whose top edge is on screen; every row in it
 above the options is this request's dialog (its title, the rule, each part of its body, a
 box's lines one to a row exactly as given, and its question) and nothing else; and the
 request is the earliest still waiting, with no other waiting request that would be drawn the

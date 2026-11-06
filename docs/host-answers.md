@@ -194,8 +194,9 @@ earliest, saying how many wait (#690). While others wait, the screen, not the or
 asked, says which is drawn, and it is identified positively, never by a probe (agent-written
 text, which another request's command can end in or its diff hold). The key goes only if:
 * no waiting request holds a line-drawing character (U+2500-U+257F), a tab or a character
-  drawn other than as it runs (`ShownText.Misleads`), so nothing the agent wrote can draw a
-  part of Copilot's frame or hide what it draws;
+  drawn other than as it runs (`ShownText.Misleads`), in any value or any property name at any
+  depth (an MCP or custom tool's dialog can draw an argument's name), so nothing the agent wrote
+  can draw a part of Copilot's frame or hide what it draws;
 * the options are inside one round frame whose top edge is on screen;
 * every row in it above the options is this request's dialog as Copilot CLI 1.0.105 draws
   it (`CopilotDialog`): the title, a rule, each part of the body a blank row apart (a box's

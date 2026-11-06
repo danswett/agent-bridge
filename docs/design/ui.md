@@ -1213,7 +1213,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     (`answerAtMachine`: no controls, Deny included) whenever the host cannot tell it from them
     on the session's screen: Copilot draws another ahead of it (a path request asked before a
     shell one); its kind is not shell or path, whose dialogs the host knows; its own text has a
-    run of spaces that can wrap onto a blank row; any waiting request's text, its own included,
+    run of spaces that can wrap onto a blank row; any waiting request's text, its own included
+    (an argument's name too),
     holds a hidden character, a right-to-left letter, a reference to one, a line-drawing
     character or a tab; another waiting request has nothing drawn to check the screen against;
     or another would be drawn the same. So an escaped approval among others is answered at the

@@ -41,7 +41,7 @@ namespace AgentBridge.Host.Core.Parsing;
 // which (#690): a probe is a piece of agent-written text, and another request's text can hold
 // it. Dialog is then what Copilot's dialog for this prompt must show, row for row, to be taken
 // for it (null for a kind whose dialog the host does not know), and Drawn every piece of text
-// Copilot was given for it, as written.
+// Copilot was given for it, as written, with any property name that is unsafe (CopilotDialogs).
 public sealed record CopilotPermissionPrompt(string RequestId, string? ToolCallId, string Kind, string Message, string Digest, string? AtMachine)
 {
     public IReadOnlyList<string> Probes { get; init; } = [];
@@ -258,7 +258,11 @@ public static partial class CopilotPermission
     }
 
     // Every string in a request, at any depth, but the ones naming its kind or tool call, which
-    // no dialog draws as written: the most a dialog could draw of it.
+    // no dialog draws as written: the most a dialog could draw of it. And every property name, at
+    // any depth, that is unsafe (CopilotDialogs.Unsafe): Copilot's MCP and custom-tool dialogs can
+    // draw an argument's name as well as its value, and read by value alone a name holding a frame
+    // or hidden character went unchecked (#769). Only an unsafe one is kept, so a request with
+    // nothing else drawn still has nothing to check the screen against.
     static List<string> Strings(JsonElement? request)
     {
         var found = new List<string>();
@@ -273,7 +277,11 @@ public static partial class CopilotPermission
                     if (e.GetString() is { Length: > 0 } s) { found.Add(s); }
                     break;
                 case JsonValueKind.Object:
-                    foreach (var p in e.EnumerateObject()) { Walk(p.Value, p.Name); }
+                    foreach (var p in e.EnumerateObject())
+                    {
+                        if (CopilotDialogs.Unsafe(p.Name)) { found.Add(p.Name); }
+                        Walk(p.Value, p.Name);
+                    }
                     break;
                 case JsonValueKind.Array:
                     foreach (var item in e.EnumerateArray()) { Walk(item, name); }

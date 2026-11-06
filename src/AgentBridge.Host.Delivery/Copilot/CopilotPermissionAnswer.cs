@@ -217,7 +217,7 @@ public static class CopilotPermissionScreen
     // the prompt on screen is identified positively, as Copilot CLI 1.0.105 draws it
     // (CopilotDialog), or nothing is typed:
     //   * no waiting request holds a line-drawing character, a tab or anything drawn other than
-    //     as it runs (ShownText.Misleads), so nothing given to the agent can draw a part of
+    //     as it runs (ShownText.Misleads), in a value or a property name (Drawn), so nothing given to the agent can draw a part of
     //     Copilot's frame or hide what it draws;
     //   * the options are inside one round frame, every row from its top edge to the options
     //     inside it, the edge on screen;
