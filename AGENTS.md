@@ -65,7 +65,7 @@ readiness on their PR and yield the merge slot; a ready packet is not a merge gr
 - review your own diff locally with a code-review agent, and fix what it finds;
 - batch every fix for a review round into one push, rather than a push per comment.
 
-Keep a PR a draft while you iterate (from #459 on, drafts run only a fast subset of CI), and mark it ready when it's done. Never push only to re-trigger CI: re-run the failed job with `gh run rerun <run id> --failed`. A failed `publish` on `main` is the exception: re-run its run's `publish-gate` job instead (`gh run rerun <run id> --job <publish-gate job id>`), which re-runs publish after it ([quality/README.md §4.7](quality/README.md#4-choosing-tests-from-what-changed)).
+Keep a PR a draft while you iterate (from #459 on, drafts run only a fast subset of CI), and mark it ready when it's done. Never push only to re-trigger CI: re-run the failed job with `gh run rerun <run id> --failed`.
 
 ## Tests
 

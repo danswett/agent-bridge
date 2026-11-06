@@ -323,8 +323,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, each pinned to the one
    job it follows), and its `if:` is
    `always()`; `publish-gate` needs `quality-gate` and requires its success as a top-level
-   condition, and `publish` needs `publish-gate` with no status function, waiting in
-   `publish-prerelease` only in the attempt `publish-gate` checked (item 7); the plan's suites and
+   condition, and `publish` needs `publish-gate` with no status function, its concurrency exactly
+   group `publish-prerelease`, `cancel-in-progress: false` and `queue: max` (item 7), and no
+   other concurrency setting `queue`; the plan's suites and
    whole-ring reach steps only as `SUITES` and `WHOLE_RING`; and each step that reads the plan's
    suites names suites the catalog has, whose `where:` names that job explicitly, in the one
    condition shape that runs in the whole ring whatever the plan selected, with an
@@ -422,12 +423,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    (a run number says nothing of commit order; behind it publishes nothing, and diverged or
    unreadable stops publishing). So a run publishes even after `main` has moved on (an app
    change followed by a docs-only commit is released by the first's run), and one reaching
-   `publish` after a newer release publishes nothing. A waiting publish is replaced by the
-   next to arrive, so only the attempt `publish-gate` checked joins `publish-prerelease`
-   (its `attempt` output): a re-run passes `publish-gate` only once every newer main push run
-   has finished, and a re-run of only the failed jobs, which doesn't re-run `publish-gate`,
-   fails at `publish` in a group of its own; retry a publish by re-running the `publish-gate`
-   job. The catalog check pins these shapes too. CodeQL, perf and the relay
+   `publish` after a newer release publishes nothing. `publish-prerelease` keeps every waiting
+   publish (`queue: max`: up to 100, and one arriving to a full queue is cancelled, never one
+   already waiting), since by default the next to arrive replaces the one waiting and a re-run
+   of an old run could leave a newer run's app unpublished; GitHub doesn't promise the order
+   waiting publishes start in, so the checks above keep the order. actionlint doesn't know
+   `queue` yet: workflow-lint.yml lets that one finding through there alone (#951). CodeQL,
+   perf and the relay
    workflow run apart and don't hold a release.
 8. **Keeping the selector honest:** a whole-ring run (ring 2, every gated job) also says in its
    summary which jobs ring 1 chose for the same change. For every ring-2

@@ -479,12 +479,11 @@ connector's Install button on a machine the dashboard drives.
   doesn't rest on the order main's CI runs go in (first attempts share
   concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
   its own): a run publishes even after `main` has moved on, and
-  one that reaches `publish` after a newer release publishes nothing. A waiting publish is
-  replaced by the next to arrive, so a re-run gets there only once every newer `main` push run
-  has finished (`publish-gate` fails it otherwise: re-run it later), and a re-run of only the
-  failed jobs, which leaves `publish-gate` as it was, fails at `publish` without joining the
-  group: to retry a failed publish, re-run the `publish-gate` job, which re-runs `publish`
-  after it.
+  one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
+  one already waiting), where by default the next to arrive would replace the one waiting, so a
+  re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
+  start in is not promised, which is why the checks above keep the order.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag

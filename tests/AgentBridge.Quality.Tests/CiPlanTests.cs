@@ -48,25 +48,6 @@ public class CiPlanTests
             if: >-
               !cancelled() && github.event_name == 'push'
               && needs.quality-gate.result == 'success' && needs.quality-gate.outputs.app == 'success'
-            outputs:
-              attempt: ${{ github.run_attempt }}
-            steps:
-              - id: newer-runs
-                if: github.run_attempt != '1'
-        """;
-
-    // publish as the repository has it, after its needs and if:: only the attempt publish-gate
-    // checked waits in publish-prerelease; any other fails at once, apart.
-    const string PublishHeld = """
-            concurrency:
-              group: ${{ needs.publish-gate.outputs.attempt == github.run_attempt && 'publish-prerelease' || format('publish-unchecked-{0}', github.run_id) }}
-              cancel-in-progress: false
-            steps:
-              - if: needs.publish-gate.outputs.attempt != github.run_attempt
-                run: |
-                  echo "publish-gate didn't check this attempt"
-                  exit 1
-              - run: ./build/publish-prerelease.ps1
         """;
 
     const string StepIf = "runner.os == 'Windows' && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))";
@@ -291,38 +272,41 @@ public class CiPlanTests
     [InlineData("[publish-gate]", "github.ref == 'refs/heads/main' || github.event_name == 'push'", IfProblem)]
     public void Publish_runs_only_after_publish_gate_succeeded(string needs, string condition, string? problem)
     {
-        var problems = Check(Wired + $"\n  publish:\n    needs: {needs}\n    if: {condition}\n" + PublishHeld + "\n");
+        var problems = Check(Wired + $"\n  publish:\n    needs: {needs}\n    if: {condition}\n" + PublishQueued + "\n");
 
         Assert.Equal(problem is null ? [] : [problem], problems);
     }
 
     const string IfProblem = "ci.yml publish's if: has a ||, ${{ }} inside or a status function, so it could run without publish-gate succeeding";
 
-    const string Released = Wired + "\n  publish:\n    needs: [publish-gate]\n    if: github.ref == 'refs/heads/main'\n" + PublishHeld + "\n";
-    const string AttemptProblem = "ci.yml publish-gate's output attempt isn't exactly ${{ github.run_attempt }}, so publish can't tell which attempt it checked";
-    const string NewerRunsProblem = "ci.yml publish-gate has no step newer-runs with if: exactly github.run_attempt != '1' and no continue-on-error, so an obsolete re-run's publish could replace a newer run's waiting one";
-    const string GroupProblem = "ci.yml publish's concurrency isn't group ${{ needs.publish-gate.outputs.attempt == github.run_attempt && 'publish-prerelease' || format('publish-unchecked-{0}', github.run_id) }} with cancel-in-progress false, so an attempt publish-gate didn't check could replace a waiting publish";
-    const string UncheckedProblem = "ci.yml publish's first step doesn't fail an attempt publish-gate didn't check (if: exactly needs.publish-gate.outputs.attempt != github.run_attempt, ending in exit 1, no continue-on-error), so it could publish outside publish-prerelease";
+    // publish's concurrency as the repository has it, after its needs and if:.
+    const string PublishQueued = """
+            concurrency:
+              group: publish-prerelease
+              cancel-in-progress: false
+              queue: max
+        """;
+    const string Queued = Wired + "\n  publish:\n    needs: [publish-gate]\n    if: github.ref == 'refs/heads/main'\n" + PublishQueued + "\n";
+    const string QueueProblem = "ci.yml publish's concurrency isn't exactly group publish-prerelease, cancel-in-progress false and queue max, so publishes could run at once or a re-run's could replace a newer run's waiting one";
+    const string HaIf = "if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'";
+    const string RootCancel = "cancel-in-progress: ${{ github.event_name == 'pull_request' }}";
 
-    // A waiting publish is replaced by the next to arrive (#938's review): only the attempt
-    // publish-gate checked, a re-run only once main's newer runs finished, may join
-    // publish-prerelease; any other attempt's publish waits apart and fails before publishing.
+    // By default the next publish to arrive replaces the one waiting, so a re-run of an old run
+    // could leave a newer run's app unpublished (#938's review): publish keeps every waiting one.
+    // Elsewhere the newest is meant to replace the one waiting, as main's push runs do in ci-main.
     [Theory]
-    [InlineData("attempt: ${{ github.run_attempt }}", "attempt: ${{ github.run_number }}", AttemptProblem)]
-    [InlineData("attempt: ${{ github.run_attempt }}", "attempts: ${{ github.run_attempt }}", AttemptProblem)]
-    [InlineData("if: github.run_attempt != '1'", "if: github.run_attempt != '2'", NewerRunsProblem)]
-    [InlineData("- id: newer-runs", "- id: newer-run", NewerRunsProblem)]
-    [InlineData("if: github.run_attempt != '1'", "if: github.run_attempt != '1'\n        continue-on-error: true", NewerRunsProblem)]
-    [InlineData("group: ${{ needs.publish-gate.outputs.attempt == github.run_attempt && 'publish-prerelease' || format('publish-unchecked-{0}', github.run_id) }}", "group: publish-prerelease", GroupProblem)]
-    [InlineData("cancel-in-progress: false", "cancel-in-progress: true", GroupProblem)]
-    [InlineData("- if: needs.publish-gate.outputs.attempt != github.run_attempt", "- if: needs.publish-gate.outputs.attempt == ''", UncheckedProblem)]
-    [InlineData("exit 1", "exit 0", UncheckedProblem)]
-    [InlineData("'publish-prerelease' ||", "'publish-prerelease'   ||", null)]
-    [InlineData("if: github.run_attempt != '1'", "if: ${{ github.run_attempt != '1' }}", null)]
-    public void Only_the_attempt_publish_gate_checked_joins_publish_prerelease(string from, string to, string? problem)
+    [InlineData("queue: max", "queue: single", QueueProblem)]
+    [InlineData("queue: max", "x-queue: max", QueueProblem)]
+    [InlineData("cancel-in-progress: false", "cancel-in-progress: true", QueueProblem)]
+    [InlineData("cancel-in-progress: false", "x-cancel-in-progress: false", QueueProblem)]
+    [InlineData("group: publish-prerelease", "group: publish-prerelease-queued", QueueProblem)]
+    [InlineData(RootCancel, RootCancel + "\n  queue: max", "ci.yml's concurrency sets queue, but only publish's may: in ci-main the newest push run replaces the one waiting")]
+    [InlineData(HaIf, HaIf + "\n    concurrency: { group: ha, queue: max }", "ci.yml job ha-integration's concurrency sets queue, but only publish's may")]
+    [InlineData("group: publish-prerelease", "group: 'publish-prerelease'", null)]
+    public void Only_publish_queues_and_it_keeps_every_waiting_publish(string from, string to, string? problem)
     {
-        Assert.Contains(from, Released, StringComparison.Ordinal);
-        var problems = Check(Released.Replace(from, to, StringComparison.Ordinal));
+        Assert.Contains(from, Queued, StringComparison.Ordinal);
+        var problems = Check(Queued.Replace(from, to, StringComparison.Ordinal));
 
         Assert.Equal(problem is null ? [] : [problem], problems);
     }

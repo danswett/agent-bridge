@@ -52,16 +52,11 @@ static partial class CiPlan
     const string ConcurrencyGroup =
         "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == '1' && 'ci-main' || format('{0}-{1}', github.workflow, github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id) }}";
     const string CancelInProgress = "${{ github.event_name == 'pull_request' }}";
-    // A waiting publish is replaced by the next to arrive, so only an attempt publish-gate checked
-    // reaches the publish-prerelease group (quality/README.md §4.7): its output names that attempt,
-    // and its newer-runs step holds a re-run until main's newer runs have finished. Any other
-    // attempt's publish (a re-run of only the failed jobs) waits apart and fails at its first step.
-    const string GateAttempt = "${{ github.run_attempt }}";
-    const string NewerRuns = "newer-runs";
-    const string NewerRunsIf = "github.run_attempt != '1'";
-    const string PublishGroup =
-        "${{ needs.publish-gate.outputs.attempt == github.run_attempt && 'publish-prerelease' || format('publish-unchecked-{0}', github.run_id) }}";
-    const string UncheckedIf = "needs.publish-gate.outputs.attempt != github.run_attempt";
+    // publish's own group, keeping every waiting publish (queue: max) where the default lets the
+    // next to arrive replace the one waiting: a re-run of an old run could otherwise replace a
+    // newer run's waiting publish (#938's review). Only publish: elsewhere, ci-main's newest run
+    // is meant to replace the one waiting (quality/README.md §4.7).
+    const string PublishGroup = "publish-prerelease";
     // The only shape a suite-gated step's if: may take: guards that hold in the whole ring too
     // (the runner's OS, not cancelled), then a disjunction of exactly the whole-ring bypass and the
     // suite tests. A substring check passed `... || contains(...)) && contains(...)`, which the
@@ -114,6 +109,11 @@ static partial class CiPlan
             || Normalize(Scalar(concurrency, "group") ?? "") != ConcurrencyGroup
             || Normalize(Scalar(concurrency, "cancel-in-progress") ?? "") != CancelInProgress)
             Add($"ci.yml's concurrency isn't group {ConcurrencyGroup} with cancel-in-progress {CancelInProgress}");
+        if (Child(root, "concurrency") is YamlMappingNode rootConcurrency && Child(rootConcurrency, "queue") is not null)
+            Add("ci.yml's concurrency sets queue, but only publish's may: in ci-main the newest push run replaces the one waiting");
+        foreach (var (id, job) in jobs)
+            if (id != "publish" && Child(job, "concurrency") is YamlMappingNode jobConcurrency && Child(jobConcurrency, "queue") is not null)
+                Add($"ci.yml job {id}'s concurrency sets queue, but only publish's may");
 
         // Jobs gated on the plan: an if: that reads the plan's true or false for a job. Exactly one
         // shape, so the whole ring runs it whatever the plan says, and quality-gate can tell from
@@ -225,12 +225,6 @@ static partial class CiPlan
             // has no packages: the gate passing isn't enough to publish.
             else if (!TopLevelConjuncts(publishIf).Any(t => AppBuilt().IsMatch(t)))
                 Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish");
-            var publishGateOutputs = Child(publishGate, "outputs") as YamlMappingNode;
-            if (Normalize((publishGateOutputs is null ? null : Scalar(publishGateOutputs, "attempt")) ?? "") != GateAttempt)
-                Add($"ci.yml {PublishGate}'s output attempt isn't exactly {GateAttempt}, so publish can't tell which attempt it checked");
-            if (Child(publishGate, "continue-on-error") is not null
-                || !Steps(publishGate).Any(s => Scalar(s, "id") == NewerRuns && Expression(Scalar(s, "if") ?? "") == NewerRunsIf && Child(s, "continue-on-error") is null))
-                Add($"ci.yml {PublishGate} has no step {NewerRuns} with if: exactly {NewerRunsIf} and no continue-on-error, so an obsolete re-run's publish could replace a newer run's waiting one");
         }
         if (jobs.TryGetValue("publish", out var publish))
         {
@@ -239,14 +233,13 @@ static partial class CiPlan
             if (publishCondition.Contains("||", StringComparison.Ordinal) || IsTemplate(publishCondition)
                 || StatusFunction().IsMatch(publishCondition))
                 Add($"ci.yml publish's if: has a ||, ${{{{ }}}} inside or a status function, so it could run without {PublishGate} succeeding");
-            if (Child(publish, "concurrency") is not YamlMappingNode publishConcurrency
-                || Normalize(Scalar(publishConcurrency, "group") ?? "") != PublishGroup
-                || Normalize(Scalar(publishConcurrency, "cancel-in-progress") ?? "") != "false")
-                Add($"ci.yml publish's concurrency isn't group {PublishGroup} with cancel-in-progress false, so an attempt {PublishGate} didn't check could replace a waiting publish");
-            var checkedStep = Steps(publish).FirstOrDefault();
-            if (checkedStep is null || Expression(Scalar(checkedStep, "if") ?? "") != UncheckedIf || Child(checkedStep, "continue-on-error") is not null
-                || !(Scalar(checkedStep, "run") ?? "").TrimEnd().EndsWith("exit 1", StringComparison.Ordinal))
-                Add($"ci.yml publish's first step doesn't fail an attempt {PublishGate} didn't check (if: exactly {UncheckedIf}, ending in exit 1, no continue-on-error), so it could publish outside publish-prerelease");
+            // Exactly these three keys: cancel-in-progress false is also the only value queue: max
+            // may be combined with.
+            if (Child(publish, "concurrency") is not YamlMappingNode publishConcurrency || publishConcurrency.Children.Count != 3
+                || Scalar(publishConcurrency, "group") != PublishGroup
+                || Scalar(publishConcurrency, "cancel-in-progress") != "false"
+                || Scalar(publishConcurrency, "queue") != "max")
+                Add($"ci.yml publish's concurrency isn't exactly group {PublishGroup}, cancel-in-progress false and queue max, so publishes could run at once or a re-run's could replace a newer run's waiting one");
         }
 
         // Steps that run when a suite is selected: the suite must exist, say it runs in this job,
