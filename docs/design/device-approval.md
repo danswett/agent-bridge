@@ -163,7 +163,7 @@ bytes.
 | `device.webauthn` | With `presence: webauthn` only: the relying party id, the credential id, the credential's P-256 public key as a SEC1 point (converted from COSE at registration), `attested`: whether the approver verified an attestation statement for it (§3.1), and `backupEligible`: the BE flag of the registration, which every assertion must repeat (§4.6) |
 | `device.kind` | **The bound kind**: `host`, `app`, `pwa`, `phone`. `test` is never rostered |
 | `device.platform` | `windows`, `macos`, `linux`, `ios`, `ipados`, `android`. For a PWA, the system its browser runs on. Shown to people; the approver's client uses it at enrollment to decide which `presence` to record (§4.6), and verifiers never read it for a decision. Like `presence`, it is the enrollee's claim, which the approver sees beside the device it holds |
-| `device.name` | At most 64 Unicode scalar values and 256 UTF-8 bytes. The approver removes every character in the project's hidden-character set before signing: the one `ShownText.HasHidden` tests in `AgentBridge.Protocol` (with `HiddenText.HasHidden`, its twin in `AgentBridge.App.Core`) and `hasHidden` tests in `pwa/js/hidden-text.js`, which a Swift client ports as it is. **Not** the `HIDDEN` pattern in `pwa/js/attribution.js`: that is a different set, made for one-line labels, and a name stripped by it would sign differently. A verifier never alters a signed name: it refuses one over the limits or holding a C0 or C1 control, and shows any other hidden character as a visible escape, one per scalar value (`\uXXXX`, four uppercase hex digits, up to U+FFFF; `\u{X…}` above; an unpaired surrogate as its own `\uXXXX`), as `ShownText.Reveal` and `hidden-text.js`'s `reveal` do. It never refuses those, since unassigned code points differ between platforms' Unicode versions |
+| `device.name` | At most 64 Unicode scalar values and 256 UTF-8 bytes. The approver removes every character in the project's hidden-character set before signing: the one `ShownText.HasHidden` tests in `AgentBridge.Protocol` (with `HiddenText.HasHidden`, its twin in `AgentBridge.App.Core`) and `hasHidden` tests in `pwa/js/hidden-text.js`, which a Swift client ports as it is. **Not** the `HIDDEN` pattern in `pwa/js/attribution.js`: that is a different set, made for one-line labels, and a name stripped by it would sign differently. The approver also removes every C0 and C1 control, the tab and the line breaks included: the hidden-character set keeps `\t` and `\n`, which a verifier refuses in a name, so an approver that removed only that set could sign `"Dan's\tPhone"` and every verifier would refuse its add. A verifier never alters a signed name: it refuses one over the limits or holding a C0 or C1 control, and shows any other hidden character as a visible escape, one per scalar value (`\uXXXX`, four uppercase hex digits, up to U+FFFF; `\u{X…}` above; an unpaired surrogate as its own `\uXXXX`), as `ShownText.Reveal` and `hidden-text.js`'s `reveal` do. It never refuses those, since unassigned code points differ between platforms' Unicode versions |
 | `approval` | Exactly one of these member sets, by `method`: `{ "method": "code", "transcript": T }`; `{ "method": "qr", "transcript": T, "shown": "approver" | "joiner" }`, where `shown` says which device displayed the QR (§4.3) and `T` is computed as in §4.2; `{ "method": "grandfather" }` (§8.2), with no transcript, since there was no exchange; `{ "method": "genesis" }`, on the genesis entry only. `T` is 32 bytes, base64url. Any other member, a missing one, or `grandfather` or `genesis` with a transcript, refuses the entry |
 
 The exact field set per `op`:
@@ -1552,8 +1552,24 @@ and an empty one otherwise. An active device gets the name and kind in the host'
 initiator addressed, so it reveals nothing the relay's routing did not. A person's device with
 roster support does the same toward a peer that is not active in its own copy. R3 changes
 `ReadIntro` so that a peer with roster support accepts an empty intro. In `off` and `observe` the
-intro is as today, so old peers are unaffected until a host enforces, and then they are refused
-anyway.
+intro is as today, so old peers are unaffected until a host enforces, and then they cannot open
+a channel to it at all (§8.4). Emptying message 2 in `observe` too would break every peer not yet updated, whose
+`ReadIntro` throws on an intro without `name`, while `observe` is meant to refuse nothing.
+
+**What message 2 stops saying, an active device's `hello` says.** Today's message 2 also carries
+`deflate` (the host inflates frames, so the opener may send them compressed) and, from a host that
+takes IK, `ik` (the ops it answers from an IK first message). Neither goes in the empty intro,
+which stays exactly `{}`: `ik` least of all, since only hosts send `ik: ["hello"]`, so it would say
+the kind the empty intro hides. But an opener reads
+message 2 for both: `ChannelHub` learns the host's key for IK from it, and forgets the key when
+it holds no `ik` (`Learn`), and sends uncompressed frames when it holds no `deflate`
+(`PeerInflates`). Left there, every XX handshake with a host in `enforce` would leave an enrolled
+device without IK, an extra relay round trip on every open, and without compression. So the
+host's answer to an **active, approved** device's `hello` carries a `transport` member,
+`{ "ik": [<early ops>], "deflate": true }`, holding what its message 2 would have said, and an
+opener with roster support (a host from R3, each client from its own slice), on an approved `hello`, calls `KnownResponders.Learn` with the host's static key from the
+handshake and those ops, and sets the channel's `PeerInflates` from `deflate`. An unrostered
+device's `hello` carries no `transport`.
 
 **Noise IK (#653) carries nothing identifying either.** A device that holds the host's static key
 from an earlier handshake opens with IK instead (`ChannelHub.OpenAsync`). Its first message
@@ -1592,7 +1608,7 @@ in the host's roster, the handshake completes so the device can learn why, and t
 
 | Op | Unrostered device |
 |---|---|
-| `hello` | Answered with `approved: false` and nothing else: no heads, no roster, no session, capability or machine detail |
+| `hello` | Answered with `approved: false` and nothing else: no heads, no roster, no session, capability, machine or `transport` detail |
 | `roster.submit` | Accepted, write-only (below) |
 | Everything else, including the other `roster.*` | Refused with `not-approved` |
 
@@ -1861,7 +1877,7 @@ fingerprint locally (in the app or the CLI) before it holds the roster.
 
 | Combination | Outcome |
 |---|---|
-| Old client, enforcing host | Refused with `not-approved`; the client shows the error text. Windows apps update within 30 minutes, and the PWA on reload |
+| Old client, enforcing host | The handshake fails before any gate runs: the old client's `ReadIntro` requires `name` and `kind`, so it ends the channel on the empty message 2 (XX) or the empty IK reply, never reaching `not-approved`, and shows its usual failure to reach the machine, even if its key is rostered. So a client must be updated before any host it talks to enforces. Every device §8.2 enrolls already has roster support, since joining needs it (§8.3 ships join first); this row is a copy left on an old version, such as a PWA tab not reloaded or an app not yet updated. Windows apps update within 30 minutes, and the PWA on reload |
 | New client, old host | The client sees no heads in `hello`. In `observe` it warns; in `enforce` it refuses to send, saying "update this machine". Old hosts update with their app |
 | New client, old relay | No roster store, so enrollment is unavailable and says why. Devices that hold a roster keep enforcing it and gossip |
 | New host, old relay | The same: a host in `enforce` keeps its roster and syncs from peers. Freshness still works through peers and the pipe |
@@ -1942,8 +1958,13 @@ kinds they get. The Mac host enrolls with the Mac app as in §4.7, or by its CLI
 Each slice adds its own. Together they cover:
 
 **Acceptance (the issue)**
-* A device of the account that is not in the roster is refused every op but `hello` on a host in
-  `enforce`, and learns only that it is pending.
+* A device of the account that is not in the roster is refused every op but `hello` and the
+  write-only `roster.submit` on a host in `enforce`, and learns only that it is pending: `hello`
+  says `approved: false` and nothing else, and `roster.submit` answers only `accepted` or
+  `refused` (§7.1).
+* An old client (no roster support) opening to a host in `enforce` fails the handshake on the
+  empty intro, by XX and by IK alike, whether or not its key is rostered, and shows its usual
+  failure to reach the machine.
 * A device added with the mutual codes on the PWA (or an Apple client, or the Windows app after R4)
   is served by every host, including one that was offline during the approval.
 * A removed device is refused by every host, including one that was offline at the removal.
@@ -1964,6 +1985,11 @@ Each slice adds its own. Together they cover:
   `hello` answered as one sent once open. A device with roster support opening IK to a key not
   active in its own roster sends `{}` and no early request. In `observe`, the reply is as today,
   and the host reports the opening it would have answered with `{}`.
+* **What an active device still learns.** An active device whose only handshake with a host so
+  far was XX in `enforce` (an empty message 2) opens its next channel to that host with IK, and
+  sends it deflated frames: its approved `hello` carried `transport`. An unrostered device's
+  `hello` carries no `transport`, and its message 2 holds no `ik`, so it never learns that the
+  peer is a host.
 
 **Enrollment**
 * A relay that substitutes keys on either leg: code 1 fails at A and code 2 fails at N. A grinding
@@ -2571,6 +2597,9 @@ Each slice adds its own. Together they cover:
   Swift, as the command MAC's vectors do.
 * A name holding a hidden character: removed by the approver before signing; refused by a verifier
   if it is a control; shown escaped otherwise.
+* Shared vectors for a name holding a tab and one holding a line feed (`"Dan's\tPhone"`,
+  `"Dan's\nPhone"`): the approver removes the control before signing (`"Dan'sPhone"`), and a
+  signed name still holding either is refused by every verifier.
 
 ## 11. Owner decisions
 
@@ -2802,7 +2831,7 @@ on below was made on 2026-11-04 (§11), so none is waiting for one.
 |---|---|---|---|
 | R1 | Roster library: strict parser and negative vectors, entries and signing contexts, per-signer presence proofs, the acceptance rule and state (causal seniority over add entries with lineage-independent cosigners, probation holds for grants only on persisted monotonic time, the removal pass, single-target removals that take the target's approval subtree except a keep list, and their ranks, voiding (bars included), the self-removal rule, precedence between removals (rank, yielding by approval subtree, raw chains), key bars, conflicting adds by seniority, caps, per-signer budgets and the evidence rule with subtrees, quarantine and the window, merges that are never void with adoption only by `adopt: true`, the removal-parent choice, `confirm` and the confirmation rule for cosigned removals), the `approval` member sets, `veto`, person commands, head attestations, WebAuthn assertion checks, signing keys (TPM/DPAPI, WebCrypto), shared vectors (C#, JS); protocol spec `docs/protocol/devices.md` | decisions 1, 2, 9 | No |
 | R2 | Relay: store and appends, the account relay mode (`observe` until a person's device switches it, one way; `enforce` at a new account's genesis), approved/pending admission with invite hints, nothing for pending devices, bound kinds in presence, generation rules with hold and veto, bound tokens with `token-exchange` (unbound until every app exchanges, then issue bound and accept both, then enforce last), pending limits, `removed` close code, administration reset for a squatted genesis. Staging; production only with the owner's approval | R1, decision 5 | Only for accounts with a roster |
-| R3 | Host: state (with quarantine), gate in `ChannelHub` (XX and IK replies, early requests included), gossip, `roster.submit` with per-key limits, freshness (monotonic and wall-clock), `selfAttest` and acknowledgements, person commands, modes `off`/`observe`/`enforce`, enrollment over the pipe and `devices join`/`reset`/`sync`/`adopt` with the genesis fingerprint | R1, decision 10 | Only when the mode is changed |
+| R3 | Host: state (with quarantine), gate in `ChannelHub` (XX and IK replies, early requests included), `transport` in an approved `hello` and the opener's use of it, gossip, `roster.submit` with per-key limits, freshness (monotonic and wall-clock), `selfAttest` and acknowledgements, person commands, modes `off`/`observe`/`enforce`, enrollment over the pipe and `devices join`/`reset`/`sync`/`adopt` with the genesis fingerprint | R1, decision 10 | Only when the mode is changed |
 | R4 | Windows app: join (mutual codes, fingerprint), Devices, client rule; **proof** that its presence mechanism (Windows WebAuthn/Hello, or a TPM UI policy) cannot be satisfied by same-user code, including `SendInput`, UI Automation and the project's injector, and the same proof for Windows Hello as browsers reach it, after which its approvers record `webauthn` for device-bound Windows PWA credentials (§4.6). Only after that does it approve or sign person commands | R2, R3, decision 3 | Only after genesis |
 | R5 | PWA: passkey registration (with attestation where offered, and the BE flag recorded so synced passkeys count only as §4.6 allows), join, approve (codes and both QR directions), Devices, confirm after 72 hours, remove, cascade, cosign, person commands, pending screen, client rule | R2, R3, decision 3 | As R4 |
 | R6 | Person-only actions on person commands, with the durable replay store that replaces `CommandMemory`: transfer, folder trust, update, forget/remove; one `RosterKinds.IsPerson`; usage peers and transfer hosts from the roster; docs for #70, #133, #138, #161 and the HA connector note | R3, R5, decisions 7, 8 | In `enforce` |
