@@ -110,6 +110,7 @@ public sealed class AutoUpdater
     DateTimeOffset? checksHeldUntil;
     string? checksHeld;
     int rateLimited;
+    string? lastProbe;
     int busy;
     int again;
     // Presses from other devices being carried out, and whether the install one has been checked
@@ -219,6 +220,9 @@ public sealed class AutoUpdater
         // Never a time already gone: the wait is over, and the next tick installs it.
         var until = at > now ? $"; it installs anyway at {at.ToLocalTime():g}" : "; its wait is over, so it installs at the next look";
         if (lastWhyNot is { } why) { return Overdue(why, now) is { } since ? NeedsYouText(Pending!, since, why) : why; }
+        // Due, but held for a usage probe on the host (#238): without it, devices read an idle
+        // timer, or "installs at the next look", while every look waited on the probe.
+        if (lastProbe is { } probe) { return $"{probe}; it installs once that is done"; }
         return Idle ? $"no session has been busy for {IdleFor.TotalMinutes:0} minutes yet{until}"
             : $"a session on this machine has a turn running or a question waiting{until}";
     }
@@ -442,7 +446,8 @@ public sealed class AutoUpdater
                 }
             }
             if (Refused(why)) { idleSince = null; Changed(); return; }
-            if (Pending is null || !Due(time.GetUtcNow())) { Changed(); return; }
+            // No longer due (a session busy again): what holds it is that, not a probe from before.
+            if (Pending is null || !Due(time.GetUtcNow())) { lastProbe = null; Changed(); return; }
             // Settings shares the updater: a check there, or a change of feed, may have replaced
             // the release downloaded here. Then it is found and downloaded again first.
             if (Stale()) { return; }
@@ -461,6 +466,20 @@ public sealed class AutoUpdater
             // feed): still the release downloaded, or nothing is stopped. Should it change even
             // while the host stops, ApplyAndRestart refuses it and the host is started again.
             if (Stale()) { return; }
+            // And not while a usage probe tied to the host is running or in its grace (#238): the
+            // host would be stopped under it. The host starts no new one while this is asked
+            // every tick; the install goes ahead at the first tick after it is done, still due.
+            if (await ProbeBusyAsync() is { } probe)
+            {
+                if (probe != lastProbe) { log($"auto-update: waiting to install {Pending}: {probe}"); }
+                lastProbe = probe;
+                Changed();
+                return;
+            }
+            lastProbe = null;
+            // Asking took time too (up to its call timeout): the same checks again, as of now.
+            asked = Asked(UpdateAskKind.Install) is not null;
+            if (Refused(WhyNot(asked)) || !Due(time.GetUtcNow()) || Stale()) { return; }
             await InstallAsync(asked ? "another device asked for it and no session is busy"
                 : idleSince is not null ? "no session is busy" : $"it has waited {WaitAtMost.TotalHours:0} hours");
         }
@@ -546,6 +565,23 @@ public sealed class AutoUpdater
             Keep();
         }
         Changed();
+    }
+
+    // Why the host may not be stopped for the install yet, or null. Only an older host's "unknown
+    // op" counts as nothing to wait for: it runs no such probe. A refusal, or a host that does not
+    // answer, is waited for, not stopped under it.
+    async Task<string?> ProbeBusyAsync()
+    {
+        try
+        {
+            var held = await host.CallAsync<ProbeHoldResult>(HostOps.ProbeHold, timeout: TimeSpan.FromSeconds(10));
+            return held.Busy ? held.Why ?? "a usage probe on the host is finishing" : null;
+        }
+        catch (HostErrorException e) when (e.Message.StartsWith($"unknown op {HostOps.ProbeHold}", StringComparison.Ordinal)) { return null; }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            return $"the host could not say whether a usage probe it started is still finishing: {e.Message}";
+        }
     }
 
     async Task<string?> WhyNotNowAsync(bool asked = false)

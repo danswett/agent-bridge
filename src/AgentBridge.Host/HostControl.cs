@@ -32,6 +32,9 @@ public sealed class HostControlOptions
     public required Action<SignInResult, Uri> SignedIn { get; init; }
     public required Action Stop { get; init; }
     public required Action Restart { get; init; }
+    // host.probes.hold: holds the usage probes whose process goes with the host, and says why the
+    // host should not be stopped yet, or null when it may be (#238).
+    public Func<string?> HoldProbes { get; init; } = () => null;
     public TimeProvider Time { get; init; } = TimeProvider.System;
     // Applies launch.remoteFolderTrust to the running host when the app changes it; null where it
     // takes a restart like the rest.
@@ -206,6 +209,8 @@ public sealed class HostControl
                 return new ChannelReply(new { restarting = true }, _ => { options.Restart(); return Task.CompletedTask; });
             case HostOps.UpdateReport when options.Updates is not null:
                 return options.Updates.Report(channel, Read<UpdateReport>(data) ?? throw new ArgumentException($"{HostOps.UpdateReport} needs the updater's state"));
+            case HostOps.ProbeHold:
+                return options.HoldProbes() is { } why ? new ProbeHoldResult(true, why) : new ProbeHoldResult(false);
             default:
                 return null;
         }
