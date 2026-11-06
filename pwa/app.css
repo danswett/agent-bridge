@@ -1470,7 +1470,8 @@ summary {
 
   .session-bar {
     position: absolute; top: 0; left: 0; right: 0; z-index: 1; display: flex; align-items: center; gap: var(--ab-space-1);
-    min-height: 3rem; padding: 0 var(--ab-space-1); pointer-events: none; isolation: isolate;
+    /* Never under 48 px (collapse-header.js BAR), so Smaller text can't leave the tabs showing beneath it. */
+    min-height: max(3rem, 48px); padding: 0 var(--ab-space-1); pointer-events: none; isolation: isolate;
   }
   .session-bar > .icon-button, .session-bar > .row-menu { pointer-events: auto; }
   .session-bar::before {
