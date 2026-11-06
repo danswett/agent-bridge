@@ -1660,6 +1660,23 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_check_GitHub_is_limiting_says_when_the_next_one_is_as_the_status_not_as_an_error_or_up_to_date()
+    {
+        await Connected();
+        var limited = new AgentBridge.Host.Core.Updates.ReleaseDiscoveryException(
+            "GitHub is limiting how often this network can check for updates.", DateTimeOffset.UtcNow + TimeSpan.FromMinutes(5), limited: true);
+        updater.CheckFails = limited;
+
+        await settings.CheckForUpdatesAsync();
+
+        Assert.Null(settings.Error);
+        Assert.StartsWith("GitHub is limiting how often this network can check for updates.", settings.UpdateStatus);
+        // Its times said here, in this machine's local time.
+        Assert.Equal(limited.Message, settings.UpdateStatus);
+        Assert.False(settings.UpdateAvailable);
+    }
+
+    [Fact]
     public async Task An_update_that_cannot_be_applied_starts_the_host_again_and_says_why()
     {
         await Connected();

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.HomeAssistant;
+using AgentBridge.Host.Core.Updates;
 using Velopack;
 using Velopack.Locators;
 using Velopack.Sources;
@@ -17,10 +18,12 @@ namespace AgentBridge.Host;
 // the package (the app, whose update hook stops the host it manages), replaces the version, and
 // starts the app again in the background for this host's profile, which starts this host. So
 // handing the release over is followed by this host stopping, as serve does on Ctrl+C.
-sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, Action<string> log, IVelopackLocator? locator = null) : IHostUpdates
+sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, Action<string> log, IVelopackLocator? locator = null, ReleaseDiscovery? discovery = null) : IHostUpdates
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
     readonly object gate = new();
+    // Shared with the app and every other profile's host through the app's folder (#530).
+    readonly ReleaseDiscovery discovery = discovery ?? new ReleaseDiscovery(Path.Combine(dataRoot, "app"));
     UpdateManager? manager;
     string? source;
 
@@ -82,7 +85,7 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
             var key = $"{feed}|{prereleases}";
             if (manager is not null && source == key) { return manager; }
             IUpdateSource from = feed.Length == 0
-                ? new GithubSource(Repository, null, prereleases, null)
+                ? new DiscoveredGithubSource(Repository, prereleases, discovery)
                 : Uri.TryCreate(feed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https"
                     ? new SimpleWebSource(feed)
                     : new SimpleFileSource(new DirectoryInfo(feed));
@@ -154,5 +157,23 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         found.Manager.WaitExitThenApplyUpdates(found.Info.TargetFullRelease, silent: true, restart: true, RestartArguments(profile));
         log($"updating to {release.Version}: Velopack applies it once this host has exited, and starts the app again, which starts the host");
         stop();
+    }
+}
+
+// Velopack's GithubSource with its release list from the machine's shared ReleaseDiscovery
+// (#530), rather than a request to the API of its own at every check. The rest is Velopack's:
+// each release's releases.<channel>.json, and the packages, from their browser download URLs,
+// which the API's limit does not count. The app has the same (AgentBridge.App's Platform.cs).
+// downloader: Velopack's own unless a test hands in one that serves the releases' feeds.
+sealed class DiscoveredGithubSource(string repository, bool prereleases, ReleaseDiscovery discovery, IFileDownloader? downloader = null)
+    : GithubSource(repository, null, prereleases, downloader)
+{
+    protected override async Task<GithubRelease[]> GetReleases(bool includePrereleases)
+    {
+        // Read through discovery, so a list this can't read is its failure, backed off, never kept.
+        var releases = await discovery.ReleasesAsync(ReleaseDiscovery.ReleasesUrl(RepoUri.ToString()),
+            json => JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None);
+        // As GithubSource orders and filters its own.
+        return [.. releases.OfType<GithubRelease>().OrderByDescending(r => r.PublishedAt).Where(r => includePrereleases || !r.Prerelease)];
     }
 }

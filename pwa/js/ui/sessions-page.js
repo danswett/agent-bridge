@@ -28,6 +28,7 @@ import { SignInBanners } from './sign-in-view.js';
 import { AppBadge } from '../needs-you.js';
 import { enter, scrollBehavior, watchLane } from './motion.js';
 import { QUESTION_ARRIVAL_GUARD_MS, watchMoves } from './session-card.js';
+import { stopReceipts } from './receipt.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -188,7 +189,7 @@ export class SessionsPage {
     // holds even if one is pressed anyway. What was sent before stays to be resent: the machine
     // checks it against the live question or session.
     const accepts = (hostId) => !!hosts.route(hostId);
-    this.answers = new AnswerService({ current, accepts, ...timing });
+    this.answers = new AnswerService({ current, accepts, ...timing, marks: 'answer' });
     this.replies = new ReplyService({ current, accepts, ...timing, blobs });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
@@ -229,6 +230,7 @@ export class SessionsPage {
       shows: (hostId) => hosts.shows(hostId),
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
       stale: (hostId) => hosts.staleOf(hostId),
+      heading: () => $('sessions-h'),
     });
     this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); this.#delegateStep(); };
     this.view.onSelect = (card) => this.#choose(card);
@@ -702,6 +704,7 @@ export class SessionsPage {
     this.replies.clear();
     this.stops.clear();
     this.launches.clear();
+    stopReceipts();
     this.order.clearEnded();
     this.launchPanel.setMachines(null);
     this.launchPanel.setTarget(null);
