@@ -148,7 +148,7 @@ bytes.
 | Field | Rules |
 |---|---|
 | `v` | 1. Any other value is refused; a new version is a deliberate protocol change |
-| `op` | `genesis`, `add`, `remove`, `rename`, `merge`, `confirm` (§3.4). Grants (`set grants` in design.md §5.4) are left for later |
+| `op` | `genesis`, `add`, `remove`, `rename`, `merge`, `confirm` (§3.4). Grants (`set grants` in design.md §5.4) are left for later; §7.7 says what that leaves unspecified for `manage.*` |
 | `account` | The account id. An entry from another account never verifies |
 | `generation` | Chosen at genesis. A reset (§5.5) is a new generation |
 | `seq` | 0 at genesis; otherwise one more than the highest `seq` among its parents |
@@ -1712,6 +1712,7 @@ A host acts only if:
 | Transfer (`SessionTransfers.Unsigner`) | `CommandMac` by a device present as `pwa`/`app`/`phone` | A person command for the source, `to` the target. There is no nonce, since the source never talks to `by`; single use and the 10-minute lifetime stand in. The signer is still neither the asking host nor `to`, and is still in presence |
 | Folder-trust answer (`FolderTrustAnswers`) | `CommandMac` by the peer, kind `pwa`/`app`, plus the allow-list | A person command with the host's nonce, plus the allow-list (§9.2) |
 | Remote update (`UpdateService`) | Peer kind `pwa`/`app` | A person command with the host's nonce |
+| Confirming an approval with escaped characters (`session.approve:escaped`, #836; `EscapedApprovals`) | `SignedCommands.Verify`, a MAC under the app's DH key, plus the presence kind and the `permissions.escapedApprovalDevices` / folder-trust allow-list. Same-user code holding that key can confirm with no person present | A person command, so the presence proof is required. #836's bindings are kept as they are: `request`, session, question and `shown` (what the person read must equal what the host would send now), the 5-minute limit (shorter than the 10 above) and every check at delivery time. The allow-list is pinned to `(device.id, add_entry_hash)` (§9.2) |
 | Forget or Remove a machine (#138) | Relay checks the hello kind | Under decision 7(a), Remove is a roster entry (§6). Under 7(b) the relay requires a person command for `forget` |
 
 `CommandMac` signed commands are retired for these once a host is in `enforce`. Each person-only
@@ -1720,8 +1721,9 @@ and acceptable for actions this rare.
 
 ### 7.3 What stays on channel identity
 
-Session ops (reading, replies, answers, launches, stops) still rest on the channel's device key.
-They are frequent, and a presence check on every reply would be unusable. So malware or a
+Session ops (reading, replies, answers, launches, stops) still rest on the channel's device key,
+with one exception: an **approval with escaped characters** (§7.2) is a person command. Every other
+answer, including an ordinary Approve, stays here. Session ops are frequent, and a presence check on every reply would be unusable. So malware or a
 prompt-injected agent on a machine with the Windows app can, as that app, read and drive
 sessions on the account's other machines, as it already can on its own machine. This is a
 residual, stated plainly here and in design.md §5.6 when it is updated. Presence-proven launches
@@ -1782,6 +1784,32 @@ a way for an app to get its own token, and is enforced last:
 
 Each step is a separate relay configuration change, and production steps are the owner's to
 approve.
+
+### 7.7 Remote management (`manage.*`, #821, #886)
+
+#886 added remote restart and hook repair, and #821 specified more: Stop, config and token
+operations under three grants, `manage.lifecycle`, `manage.config` and `manage.secrets`, with
+command-bound config arguments, a token digest, and a fresh unlock for each, Stop included
+(Q-O10). Grants are deferred (§3.2, `op` row), so **#55 does not deliver any of that**. What it
+does deliver is the seam, and this section says which side of it each operation is on.
+
+| Operation | Before #55 | When the roster is in `enforce` |
+|---|---|---|
+| Restart, hook repair (#886) | `permissions.remoteManage`, **on by default** (owner decision Q-O11, 6689873359), on a self-declared peer kind. Its safeguards stay: the off switch, at most 2 in 6 hours, waiting for quiet, owned hooks only, and the notice to other devices | A person command (§7.2) from an active person's device, with the host's nonce, in place of the declared kind. The default stays on and so do the safeguards. The command adds a presence proof; it does not make the operation opt-in |
+| Stop (Q-O10) | Not remote. Stays at the machine | `needs-roster`: a person command with presence proven for that command, no reuse of an earlier unlock. Not part of #55 |
+| Config (`manage.config`) | Not remote | `needs-roster`: a person command whose `choice` binds the exact key and value, so a command for one setting cannot carry another. Not part of #55 |
+| Token (`manage.secrets`) | Not remote | `needs-roster`: a person command that binds the digest of the token it concerns. Not part of #55 |
+
+Stop, config and token stay `needs-roster` until a named integration slice (not yet opened;
+it depends on R6) gives them: the three grants as roster entries, a person command per operation
+carrying its payload (config key and value, token digest) and a `request` the durable replay
+record (§7.2) refuses a second time, and revocation, meaning a grant ends with the device's
+removal at once and a grant not active in the roster is ignored. Until then no host exposes
+them, and nothing here is a reason to expose them early.
+
+Restart and repair move onto person commands in R6 with the other person-only actions, and only
+in `enforce`. Before that they run as today, on a kind the peer declares. That is the residual
+the owner accepted with the default, and it is not reduced by this design before R6.
 
 ## 8. Migration and rollout
 
@@ -1903,7 +1931,10 @@ not active in the roster is ignored and shown as such, so removal revokes folder
 So is one whose active add is now a different one: a hostile senior that displaces the device
 with a copy of its key (§3.3) keeps the id active under its own signing key, and same-user code
 holding the device's DH key could otherwise answer folder trust under the copy's key, without the
-original device's presence check. The person allows it again at the machine. Settings shows
+original device's presence check. The person allows it again at the machine. `permissions.escapedApprovalDevices` is the same list
+under the same rule: each entry is `(device.id, add_entry_hash)`, one that does not match the
+active add is ignored and shown as such, and escaped-approval confirmation is a person command
+(§7.2), so neither the list nor a key copy substitutes for presence. Settings shows
 each device's roster name, kind, 16 characters of its id, by whom it was added and when this machine first saw it (never the signer's `at`), which
 closes #157 item 4. Items 1 and 2 of #157 (tightening only after a restart, terminal writes past the
 lock) are unaffected and still open.
@@ -2837,7 +2868,7 @@ on below was made on 2026-11-04 (§11), so none is waiting for one.
 | R3 | Host: state (with quarantine), gate in `ChannelHub` (XX and IK replies, early requests included), `transport` in an approved `hello` and the opener's use of it, gossip, `roster.submit` with per-key limits, freshness (monotonic and wall-clock), `selfAttest` and acknowledgements, person commands, modes `off`/`observe`/`enforce`, enrollment over the pipe and `devices join`/`reset`/`sync`/`adopt` with the genesis fingerprint | R1, decision 10 | Only when the mode is changed |
 | R4 | Windows app: join (mutual codes, fingerprint), Devices, client rule; **proof** that its presence mechanism (Windows WebAuthn/Hello, or a TPM UI policy) cannot be satisfied by same-user code, including `SendInput`, UI Automation and the project's injector, and the same proof for Windows Hello as browsers reach it, after which its approvers record `webauthn` for device-bound Windows PWA credentials (§4.6). Only after that does it approve or sign person commands | R2, R3, decision 3 | Only after genesis |
 | R5 | PWA: passkey registration (with attestation where offered, and the BE flag recorded so synced passkeys count only as §4.6 allows), join, approve (codes and both QR directions), Devices, confirm after 72 hours, remove, cascade, cosign, person commands, pending screen, client rule | R2, R3, decision 3 | As R4 |
-| R6 | Person-only actions on person commands, with the durable replay store that replaces `CommandMemory`: transfer, folder trust, update, forget/remove; one `RosterKinds.IsPerson`; usage peers and transfer hosts from the roster; docs for #70, #133, #138, #161 and the HA connector note | R3, R5, decisions 7, 8 | In `enforce` |
+| R6 | Person-only actions on person commands, with the durable replay store that replaces `CommandMemory`: transfer, folder trust, escaped-approval confirmation (with `escapedApprovalDevices` and the folder-trust list pinned to `(device.id, add_entry_hash)`), update, restart and repair (§7.7), forget/remove; one `RosterKinds.IsPerson`; usage peers and transfer hosts from the roster; docs for #70, #133, #138, #161 and the HA connector note | R3, R5, decisions 7, 8 | In `enforce` |
 | R7 | Removal end to end: revocation, offline hosts, removed-device experience, Forget/Remove | R5, R6 | Yes |
 | R8 | Owner cutover: runbook and live checks (the issue's "Validate live"), then `enforce` per host | R1-R7, decision 6 | On the owner's machines, with their go-ahead |
 | R9 | `enforce` by default for new installs | R8 | Yes |
