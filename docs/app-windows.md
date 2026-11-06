@@ -241,8 +241,10 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   Stop, or its host ended on purpose). The app starts a launcher only under that lock, looking
   for a marker first and starting nothing if one is there, so another process's Stop either
   comes first or writes its marker once the launcher exists, which keeps it; without the lock
-  within 2 s it starts nothing and says so in its log. The app
-  runs one Start or Stop at a time: a Stop cancels a Start that is under way or waiting before
+  within 2 s it starts nothing and says so in its log. It runs the logon task the same way,
+  though the launcher that run starts comes later, by Task Scheduler, so a Stop from another
+  process just after the run can still be cleared by it as older. The app runs one Start or
+  Stop at a time: a Stop cancels a Start that is under way or waiting before
   it writes its marker, so the Start pressed at launch never starts a launcher after a Stop
   pressed meanwhile, and a Start asked for after a Stop runs once that Stop is done (#478). A
   launcher looks for the marker again

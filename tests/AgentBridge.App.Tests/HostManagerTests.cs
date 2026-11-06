@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using AgentBridge.App.Core;
 using AgentBridge.Host.Core.Usage;
@@ -918,18 +918,15 @@ public sealed class HostManagerTests : IAsyncLifetime
             Elevated = () => false,
         };
         processes.OnStart = () => { lock (happened) { happened.Add("launcher"); } };
-        // A Start asked for on another thread just after the Stop has taken the place of the token
-        // that cancels Starts: before the Stop had queued, it went first (Copilot 4487576706).
+        // A Start asked for just after the Stop has let go of the lock it replaced the token that
+        // cancels Starts under: a Stop that queued only then had this Start go first (Copilot
+        // 4487576706). Asked for here, on the Stop's thread, StartAsync returns once it has queued
+        // for its turn, or, given it at once, once it is waiting on the launcher it started.
         Task? start = null;
-        m.StopTokenReplaced = () =>
-        {
-            var asking = Task.Run(() => start = m.StartAsync());
-            asking.Wait(TimeSpan.FromMilliseconds(300));
-        };
+        m.StopQueued = () => { m.StopQueued = null; start = m.StartAsync(); };
 
         await m.StopAsync();
-        m.StopTokenReplaced = null;
-        await Wait.UntilAsync(() => Volatile.Read(ref start) is not null, "the Start to be asked for", TimeSpan.FromSeconds(30));
+        Assert.NotNull(start);
         await Record.ExceptionAsync(() => start!.WaitAsync(TimeSpan.FromSeconds(30)));
 
         string[] order;
@@ -1020,6 +1017,36 @@ public sealed class HostManagerTests : IAsyncLifetime
 
         Assert.Empty(processes.Started);
         Assert.Contains(logged, l => l.Contains("was not started", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Starting_through_the_task_does_not_run_it_past_a_stop_from_another_process_since_the_start_began()
+    {
+        manager.SetStartAtSignIn(true);
+        var looks = 0;
+        // Another process's Stop writes its marker, as MarkStopped does, once this Start has
+        // cleared the earlier one and looked at the pipe.
+        var m = new HostManager(manager.Layout, tasks, processes, _ =>
+        {
+            if (++looks == 1)
+            {
+                using var held = HostLauncherContract.LockStopMarker(manager.Layout.ProfileFolder, TimeSpan.FromSeconds(10));
+                File.WriteAllText(StopMarker, "");
+            }
+            throw new IOException("not listening");
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(1),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+        };
+
+        var ended = await Record.ExceptionAsync(() => m.StartAsync());
+
+        Assert.Empty(tasks.Ran);
+        Assert.True(File.Exists(StopMarker));
+        Assert.IsType<OperationCanceledException>(ended);
     }
 
     [Fact]

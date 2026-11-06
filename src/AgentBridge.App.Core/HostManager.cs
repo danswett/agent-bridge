@@ -342,7 +342,10 @@ public sealed class HostManager
     // and nothing starts, or writes once the launcher exists, which keeps it. Held only while the
     // process is created, and let go as Start returns: the launcher waits for it (2 s) to clear an
     // earlier marker. Not had within 2 s, nothing starts.
-    void StartLauncher()
+    void StartLauncher() => UnlessStopped(() => launcher = processes.Start(layout.LauncherExe, layout.ServeArguments));
+
+    // The look for a marker and the start, under the marker's lock, as above.
+    void UnlessStopped(Action start)
     {
         using var held = HostLauncherContract.LockStopMarker(layout.ProfileFolder, StopMarkerLockWait);
         if (held is null)
@@ -351,7 +354,7 @@ public sealed class HostManager
             throw new InvalidOperationException($"the host was not started: {HostLauncherContract.StopMarkerLock} was held by another process for {StopMarkerLockWait.TotalSeconds:0} s; try again");
         }
         if (File.Exists(StopMarker)) { throw new OperationCanceledException(StoppedWhileStarting); }
-        launcher = processes.Start(layout.LauncherExe, layout.ServeArguments);
+        start();
     }
 
     bool LauncherAlive() => CurrentLauncher() is { } pid && processes.IsRunning(pid);
@@ -461,7 +464,11 @@ public sealed class HostManager
         {
             if (!ran && !tasks.IsRunning(TaskName))
             {
-                tasks.Run(TaskName);
+                // As the direct path does (UnlessStopped): a marker there now is another process's
+                // Stop since this Start cleared it, and the task's run is not started past it. The
+                // launcher the run starts comes later, by Task Scheduler, so a Stop just after this
+                // can still be cleared by it as older (#478 review: accepted).
+                UnlessStopped(() => tasks.Run(TaskName));
                 ran = true;
                 deadline = Time.GetUtcNow() + StartTimeout;
             }
@@ -573,9 +580,9 @@ public sealed class HostManager
         lock (lifecycle)
         {
             (starts, stopping) = (stopping, new CancellationTokenSource());
-            StopTokenReplaced?.Invoke();
             turn = lifecycle.WaitAsync(ct);
         }
+        StopQueued?.Invoke();
         // Outside the lock: cancelling runs a Start's continuations here.
         starts.Cancel();
         await turn;
@@ -583,9 +590,10 @@ public sealed class HostManager
         finally { lifecycle.Release(); }
     }
 
-    // For a test alone: a Start asked for on another thread just after a Stop has replaced the
-    // token that cancels Starts. Nothing in the app sets it.
-    internal Action? StopTokenReplaced { get; set; }
+    // For a test alone: a Start asked for just after a Stop has let go of the lock it replaced the
+    // token that cancels Starts under, which is where one queued before the Stop once it queued
+    // only then. Nothing in the app sets it.
+    internal Action? StopQueued { get; set; }
 
     async Task StopNowAsync(CancellationToken ct)
     {
