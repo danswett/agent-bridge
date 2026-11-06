@@ -27,6 +27,12 @@ public static class Ui
         : tone == Tone.Progress ? Brush("AbText2")
         : ToneBrush(tone);
 
+    // The update bar (#719): a failed install is a warning; its button is the accent action at rest,
+    // and the plain one while the restart it started is under way.
+    public static Microsoft.UI.Xaml.Controls.InfoBarSeverity UpdateSeverity(bool failed) =>
+        failed ? Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning : Microsoft.UI.Xaml.Controls.InfoBarSeverity.Informational;
+    public static Style ActionStyle(bool busy) => (Style)Application.Current.Resources[busy ? "DefaultButtonStyle" : "AccentButtonStyle"];
+
     public static Brush ToneBrush(Tone tone) => Brush(ToneKey(tone));
 
     public static string ToneKey(Tone tone) => tone switch

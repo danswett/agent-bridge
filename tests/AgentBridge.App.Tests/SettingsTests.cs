@@ -2112,7 +2112,7 @@ public sealed class SettingsTests : IAsyncLifetime
         await settings.CheckForUpdatesAsync();
         await settings.InstallUpdateAsync();
 
-        Assert.Equal("The update didn't install because no downloaded update to install; check for updates again; choose Restart to update to try again.", settings.Error);
+        Assert.Equal("The update didn't install because nothing has been downloaded yet.", settings.Error);
         Assert.Single(host.Sent(HostOps.Stop));
         Assert.Single(tasks.Ran);
         // Still downloaded, so still offered, for the person to try again (as the banner does).

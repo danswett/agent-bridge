@@ -80,14 +80,40 @@ public sealed class AppUpdateViewModel : Observable
         : problem is { } p ? DidNotInstall(p, Version is not null)
         : Version is { } v ? Ready(v)
         : "";
+    // The bar's state, for its severity and its button (Creative on #719, 6675195544): a failed
+    // install is a warning, and its button is Try again; while restarting, the button shows its
+    // progress ring and says so to a screen reader, ignores presses, and keeps focus.
+    public bool Restarting => restarting;
+    public bool Failed => !restarting && problem is not null;
+    public string ActionLabel => Failed && Version is not null ? "Try again" : "Restart to update";
+    public string ActionStatus => restarting ? "Restarting\u2026" : "";
 
     // The bar's words, and Settings' (ui.md §8: what it is and the next step, nothing to explain).
     public static string Ready(string version) => $"Version {version} is ready. Restart to update.";
 
-    // An install that failed, in one sentence naming the next step: Restart to update again while
-    // the release is still ready, otherwise the background download that offers it again.
+    // An install that failed, in one sentence, its reason a kind, never the machine's detail (a
+    // process id, a path, an error's own text: those are in the log). While the release is still
+    // ready the bar's button, Try again, is the next step; otherwise the background download that
+    // offers it again (Creative on #719, 6675195544).
     public static string DidNotInstall(string why, bool again) =>
-        $"The update didn't install because {why.TrimEnd('.')}; {(again ? "choose Restart to update to try again" : $"{Product.Name} offers it again once it is downloaded")}.";
+        $"The update didn't install because {Reason(why)}{(again ? "" : $"; {Product.Name} offers it again once it is downloaded")}.";
+
+    // What kind of reason the updater gave, as the person is told it.
+    public static string Reason(string why) => why switch
+    {
+        _ when why.Contains("runs from this installation", StringComparison.Ordinal) || why.Contains("runs and cannot be looked at", StringComparison.Ordinal)
+            => "another bridge profile is running from this installation",
+        _ when why.Contains("already being installed", StringComparison.Ordinal) => "another update is already being installed",
+        _ when why.StartsWith("the update downloaded changed", StringComparison.Ordinal) || why.StartsWith("the update downloaded has changed", StringComparison.Ordinal)
+            || why.Contains("is no longer the update downloaded", StringComparison.Ordinal)
+            => "a newer update was downloaded meanwhile",
+        _ when why == AutoUpdater.NotInstalled => "this copy of the app wasn't installed by its updater",
+        _ when why.StartsWith("no update has been downloaded", StringComparison.Ordinal) || why.StartsWith("no downloaded update", StringComparison.Ordinal)
+            => "nothing has been downloaded yet",
+        _ when why.StartsWith("the host's status could not be read", StringComparison.Ordinal) => "the host didn't answer",
+        _ when why.StartsWith("installing ", StringComparison.Ordinal) && why.Contains(" failed: ", StringComparison.Ordinal) => "the installer reported an error",
+        _ => "of an unexpected error",
+    };
 
     // The bar's words changed (ready, restarting, failed): MainWindow raises the bar's polite live
     // region's LiveRegionChanged, once per change (ui.md §9.1 A6).

@@ -1041,6 +1041,40 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.True(updater.Applied);
     }
 
+    // Creative on #719 (6675195544): a failed install's reason is said as a kind, never with a
+    // process id, a path or an error's own words (the log has those); the button carries the
+    // retry, as Try again; and while restarting, the button says so to a screen reader.
+    [Fact]
+    public async Task The_banner_says_a_failed_install_as_a_kind_of_reason_with_Try_again_and_shows_a_restart_under_way()
+    {
+        var held = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var banner = new AppUpdateViewModel(() => "0.2.0", _ => held.Task);
+        Assert.Equal(("Restart to update", "", false), (banner.ActionLabel, banner.ActionStatus, banner.Failed));
+
+        var press = banner.RestartAsync(_ => Task.FromResult(true));
+        Assert.Equal(("Restart to update", "Restarting\u2026", true), (banner.ActionLabel, banner.ActionStatus, banner.Restarting));
+        held.SetResult("another profile's host (pid 77) runs from this installation");
+        await press;
+
+        Assert.Equal("The update didn't install because another bridge profile is running from this installation.", banner.Message);
+        Assert.Equal(("Try again", "", true), (banner.ActionLabel, banner.ActionStatus, banner.Failed));
+    }
+
+    [Theory]
+    [InlineData("another profile's app (pid 4242) runs from this installation", "another bridge profile is running from this installation")]
+    [InlineData("agent-bridge-host (pid 12) runs and cannot be looked at", "another bridge profile is running from this installation")]
+    [InlineData(@"installing 0.2.0 failed: C:\Users\dana\AppData\Local\AgentBridge\Update.exe is missing", "the installer reported an error")]
+    [InlineData("the host's status could not be read: pipe agent-bridge-7 broken", "the host didn't answer")]
+    [InlineData("the update downloaded changed while the host stopped (0.2.0 is no longer the one ready): 0.3.0 is ready now, so choose Restart to update again", "a newer update was downloaded meanwhile")]
+    [InlineData(@"Access to the path 'C:\x\y' is denied (0x80070005)", "of an unexpected error")]
+    [InlineData("0.2.0 is no longer the update downloaded (0.3.0 is); nothing was installed", "a newer update was downloaded meanwhile")]
+    public void A_failed_installs_reason_is_a_kind_with_no_machine_detail(string why, string kind)
+    {
+        var said = AppUpdateViewModel.DidNotInstall(why, again: true);
+        Assert.Equal($"The update didn't install because {kind}.", said);
+        Assert.DoesNotContain(said, char.IsDigit);
+        Assert.DoesNotContain('\\', said);
+    }
     // The host back from a failed install is a gap: without a pause, every gap stopped it again.
     [Fact]
     [Trait("Category", "Network")]
@@ -2900,7 +2934,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.Equal(1, restarts);
         Assert.Equal((true, true), (banner.Shown, banner.CanRestart));
-        Assert.Equal($"The update didn't install because {why}; choose Restart to update to try again.", banner.Message);
+        Assert.Equal("The update didn't install because another bridge profile is running from this installation.", banner.Message);
 
         // Another release ready since: that failure is old news.
         ready = "0.3.0";
@@ -2944,7 +2978,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         banner.Changed();
 
         Assert.Equal(["Version 0.2.0 is ready. Restart to update.", "Restarting to update\u2026", "during: Restarting to update\u2026",
-            $"The update didn't install because {why}; choose Restart to update to try again."], said);
+            "The update didn't install because another bridge profile is running from this installation."], said);
     }
 
     [Fact]

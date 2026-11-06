@@ -71,12 +71,23 @@ static partial class SelfTest
                 if (drawn) { await Looks(look => Picture(bar!, File($"bar-{what}", look), Under(bar!))); }
             }
 
+            Button? Action() => bar is null ? null : ById<Button>(bar, "RestartToUpdate");
+            var accent = (Style)Application.Current.Resources["AccentButtonStyle"];
             await Bar("ready", "Version 0.1.999 is ready. Restart to update.");
+            check(Action() is { } atRest && atRest.Style == accent && AutomationProperties.GetName(atRest) == "Restart to update", $"draws the update bar's Restart to update as the accent action at rest{where}");
             var restarting = update.RestartAsync(_ => Task.FromResult(true));
             await Bar("restarting", "Restarting to update\u2026");
+            // Creative on #719 (6675195544): the button that started it shows its progress ring,
+            // says so, stays focusable, and is not drawn at rest in accent.
+            var busy = Action();
+            check(busy is { IsEnabled: true, IsTabStop: true } && busy.Style != accent && AutomationProperties.GetItemStatus(busy) == "Restarting\u2026"
+                && Find<ProgressRing>(busy).Any(r => r.IsActive && r.Visibility == Visibility.Visible), $"shows the restart under way on its button, which keeps focus{where}");
             held.SetResult(refused);
             await restarting;
-            await Bar("failed", AppUpdateViewModel.DidNotInstall(refused, again: true));
+            // A failed install: a warning, a kind of reason with no machine detail, and Try again.
+            await Bar("failed", "The update didn't install because another bridge profile is running from this installation.");
+            check(bar is { Severity: InfoBarSeverity.Warning } && !bar.Message.Any(char.IsDigit) && Action() is { } retry && AutomationProperties.GetName(retry) == "Try again" && retry.Style == accent,
+                $"draws a failed install as a warning with Try again and no machine detail{where}");
 
             // Settings' update row, over the stand-in release.
             if (settingsBefore is not null)
@@ -93,7 +104,7 @@ static partial class SelfTest
                 check(status is not null && AutomationProperties.GetLiveSetting(status) == AutomationLiveSetting.Polite, $"makes Settings' update line a polite live region{where}");
                 // When an update is ready (#689, 6674007815), drawn with the row: Restart to update unless this machine was set otherwise.
                 var mode = row is null ? null : ById<RadioButtons>(row, "WhenUpdateReady");
-                check(mode is { Header: "When an update is ready", SelectedIndex: var at } && at == page.WhenReadyIndex && mode.Items.Count == 2, $"draws When an update is ready with this machine's choice in Settings' update row{where} ({mode?.SelectedIndex})");
+                check(mode is { SelectedIndex: var at } && AutomationProperties.GetName(mode) == "When an update is ready" && at == page.WhenReadyIndex && mode.Items.Count == 2, $"draws When an update is ready with this machine's choice in Settings' update row{where} ({mode?.SelectedIndex})");
                 if (ready)
                 {
                     row!.StartBringIntoView();

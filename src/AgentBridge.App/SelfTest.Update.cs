@@ -33,7 +33,7 @@ static partial class SelfTest
             check(shown && bar!.Message == "Version 0.1.999 is ready. Restart to update.",
                 $"shows a downloaded update in a banner over the page, with Restart to update ({bar?.Message})");
             var button = bar is null ? null : ById<Button>(bar, "RestartToUpdate");
-            check(button is { Content: "Restart to update" } && AutomationProperties.GetAutomationId(button) == "RestartToUpdate", "names the banner's action Restart to update");
+            check(button is not null && AutomationProperties.GetName(button) == "Restart to update" && AutomationProperties.GetAutomationId(button) == "RestartToUpdate", "names the banner's action Restart to update");
             // ui.md §9.1 A6: the bar's words changing are said, politely (Creative, #719).
             check(bar is not null && AutomationProperties.GetLiveSetting(bar) == AutomationLiveSetting.Polite, "makes the update bar a polite live region");
             if (bar is not null) { await Picture(bar, Path.ChangeExtension(outFile, ".update-ready.png")); }

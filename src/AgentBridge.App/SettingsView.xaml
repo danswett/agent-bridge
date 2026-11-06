@@ -275,10 +275,15 @@
                     <ToggleSwitch Header="Download updates automatically" AutomationProperties.AutomationId="AutoUpdate" IsOn="{x:Bind ViewModel.AutoUpdate, Mode=TwoWay}" />
                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="Checked every half hour, and downloaded in the background." />
                     <!-- Per machine and profile (#689 6674007815; Product's names and hints, 6674016765). -->
+                    <!-- Headed as the toggles above are, a group's gap below them (Creative, 6675195544). -->
                     <RadioButtons
-                        Header="When an update is ready"
+                        Margin="0,12,0,0"
                         AutomationProperties.AutomationId="WhenUpdateReady"
+                        AutomationProperties.Name="When an update is ready"
                         SelectedIndex="{x:Bind ViewModel.WhenReadyIndex, Mode=TwoWay}">
+                        <RadioButtons.Header>
+                            <TextBlock Text="When an update is ready" FontFamily="{StaticResource ContentControlThemeFontFamily}" FontSize="{ThemeResource ControlContentThemeFontSize}" Foreground="{ThemeResource ToggleSwitchHeaderForeground}" />
+                        </RadioButtons.Header>
                         <RadioButton AutomationProperties.AutomationId="RestartToUpdateMode" AutomationProperties.Name="Restart to update" AutomationProperties.HelpText="For a machine you use">
                             <StackPanel>
                                 <TextBlock Text="Restart to update" />

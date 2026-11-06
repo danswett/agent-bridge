@@ -403,8 +403,13 @@ into one folder with one version. An app update is a host update, so they never 
     of their words said once (ready, restarting, failed; a release that became ready while
     Settings was busy, once it is idle), and Settings' own download at most every quarter
     (ui.md §9.1 A6). Errors name the next step in one sentence: "The update didn't download.
-    *Product* will try again at *time*.", or "The update didn't install because *why*; choose
-    Restart to update to try again." A newer release downloaded while
+    *Product* will try again at *time*.", or "The update didn't install because another bridge
+    profile is running from this installation.", its reason a kind (another profile running, the
+    installer's error, a newer update downloaded meanwhile, the host not answering), never a
+    process id, a path or an error's own words, which go to the log. A failed install is a
+    warning bar whose button reads **Try again**; while restarting, the button shows its progress
+    ring, ignores presses, keeps focus and says "Restarting…" to a screen reader, never drawn at
+    rest in accent (Creative on #719, 6675195544). A newer release downloaded while
     one waits takes its place. A release an earlier run downloaded is
     ready from the next start, before any check (`UpdateManager.UpdatePendingRestart`), so it is
     offered offline or while the feed refuses (#530), but only if it came from the feed and
