@@ -343,7 +343,7 @@
 
                     <!-- Words only (ui.md §6.5, "quiet unless something's wrong"): no ring or badge beside them. -->
                     <Grid Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}">
-                        <!-- The room the longest outcome needs, drawn clear and unheard (ReceiptWords.Room). -->
+                        <!-- The room the longest outcome needs, drawn clear and unheard (QuestionViewModel.Room). -->
                         <TextBlock
                             Style="{StaticResource AbTypeRow}"
                             TextWrapping="Wrap"

@@ -82,7 +82,9 @@ public sealed class CopilotInput(string path)
             switch (e.Type)
             {
                 case "tool.execution_start" when CopilotPrompts.Str(data, "toolName") == "ask_user" && CopilotPrompts.Str(data, "toolCallId") is { } id:
-                    stale.Clear();
+                    // The session's own question, shown in place of what a killed CLI left; a
+                    // subagent's is not (it stops only that subagent), so those stay.
+                    if (e.AgentId is null) { stale.Clear(); }
                     asks[id] = e.AgentId;
                     break;
                 case "tool.execution_complete" or "human_response.recorded" when CopilotPrompts.Str(data, "toolCallId") is { } id:
@@ -90,7 +92,7 @@ public sealed class CopilotInput(string path)
                     stale.Remove(id);
                     break;
                 case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
-                    stale.Clear();
+                    if (e.AgentId is null) { stale.Clear(); }
                     permissions.Add(id);
                     break;
                 case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:

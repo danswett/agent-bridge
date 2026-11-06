@@ -271,7 +271,10 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   host stopped, rather than clearing the first's marker (#238). The app then
   waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
   the run itself if it is still there after the 20 s start timeout. A host the launcher starts
-  also looks for the marker once its pipe is open and, finding it, exits 0 without serving, so
+  also looks for the marker once its pipe is open and, finding it, exits 0 without serving (it
+  looks first before it starts restoring what a reboot or a crash took, and exits then having
+  restored nothing; a restore it starts resumes no agent until the look with its pipe open has
+  passed, #986), so
   a host still starting when the launcher was ended, or under a launcher this app did not start
   (one from before the app was last opened), stops too: either the app's Stop reaches its pipe
   or the host sees the marker. A host that refuses the app's connection (one of them elevated)

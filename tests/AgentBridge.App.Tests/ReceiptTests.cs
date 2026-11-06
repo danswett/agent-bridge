@@ -381,15 +381,15 @@ public sealed class ReceiptTests
     }
 
     // #625, Engineering 6676371806: an answer not confirmed said the reply's words, "before sending
-    // it again", though an answer is final and never resent (ui.md §6.5, #617).
+    // it again", though an answer is final and never resent (ui.md §6.5, #617). #967, Creative
+    // 6676422473: it points at the conversation, never at the machine, whatever the machine is called.
     [Fact]
-    public void An_unconfirmed_answer_says_check_at_the_machine_and_never_to_send_it_again_while_a_reply_still_does()
+    public void An_unconfirmed_answer_says_check_the_conversation_and_never_to_send_it_again()
     {
         var unconfirmed = new Delivery { Key = "k", Request = "r", State = DeliveryState.Done, Outcome = "unconfirmed" };
-        Assert.Equal("Sent, but not confirmed. Check at the machine.", QuestionViewModel.Describe(unconfirmed, "ULTRA").Whole);
-        Assert.Equal("Sent, but not confirmed. Check at the machine. (no word from the agent)", QuestionViewModel.Describe(unconfirmed with { Reason = "no word from the agent" }, "ULTRA").Whole);
+        Assert.Equal("Sent, but not confirmed. Check the conversation.", QuestionViewModel.Describe(unconfirmed, "ULTRA").Whole);
+        Assert.Equal("Sent, but not confirmed. Check the conversation. (no word from the agent)", QuestionViewModel.Describe(unconfirmed with { Reason = "no word from the agent" }, "ULTRA").Whole);
         Assert.DoesNotContain("sending it again", QuestionViewModel.Room("ULTRA"), StringComparison.Ordinal);
-        Assert.Equal("Sent, but not confirmed. Check at ULTRA before sending it again.", ReceiptWords.Unconfirmed("ULTRA"));
     }
 
     [Fact]
