@@ -31,7 +31,7 @@ internal sealed class SessionTracker
     // The boundary the hook status was last looked at with, and the interrupted run's hook status
     // time it found, if any.
     DateTimeOffset? _hookFrom;
-    DateTimeOffset? _staleHookAt;
+    (DateTimeOffset At, string? Tool)? _staleHook;
     // The restore boundary the session last built set the interrupted run's questions aside by.
     public DateTimeOffset? BuiltFrom => _builtFrom;
     IReadOnlyList<ClaudeSubagents.Record> _nested = [];
@@ -119,9 +119,15 @@ internal sealed class SessionTracker
         if (_hookFrom != _state.AskedFrom)
         {
             _hookFrom = _state.AskedFrom;
-            // After a host restart, by identity: the stale one is the one an earlier run set aside.
-            _staleHookAt = _state.AskedFrom is { } from && discovered.Registration?.HookStatusAt is { } hook
-                && (_state.Known is { } known ? known.Contains(HookKey(hook)) : hook < from) ? hook : null;
+            // After a host restart, by identity: the stale one is the one an earlier run set aside, by
+            // its tool and its time, so a different approval a clock set back gave the same time is
+            // not taken for it (Engineering, cr2-837h). A record from before kept the time alone.
+            var tool = _state.Tools.Current()?.Id;
+            _staleHook = _state.AskedFrom is { } from && discovered.Registration?.HookStatusAt is { } hook
+                && (_state.Known is { } known
+                    ? (tool is not null && known.Contains(HookKey(hook, tool))) || known.Contains(HookKey(hook, null))
+                    : hook < from)
+                ? (hook, tool) : null;
             changed = true;
         }
         changed |= _builtFrom != _state.AskedFrom;
@@ -203,7 +209,7 @@ internal sealed class SessionTracker
             {
                 case "idle": status = SessionStatus.Idle; hintAt = hookAt; break;
                 case "working": status = SessionStatus.Working; hintAt = hookAt; break;
-                case "waiting" when question is null && hookAt != _staleHookAt && _state.Tools.Current() is { } tool:
+                case "waiting" when question is null && _state.Tools.Current() is { } tool && !(_staleHook is { } stale && stale.At == hookAt && (stale.Tool is null || stale.Tool == tool.Id)):
                     // A permission prompt, which agent-ha-bridge's Notification hook reports
                     // and only mirrors: it offers the reply box at best, never a proven
                     // answer, so it is answered at the machine.
@@ -438,12 +444,25 @@ internal sealed class SessionTracker
         _state.AskedFrom = from;
     }
 
-    // The interrupted run's questions set aside now, by id (SessionState.Interrupted), and a stale hook
-    // approval by its record's time.
-    public IReadOnlyList<string> InterruptedQuestions =>
-        [.. _state.Interrupted.Concat(_staleHookAt is { } h ? [HookKey(h)] : Array.Empty<string>()).Order(StringComparer.Ordinal)];
+    // The interrupted run's questions set aside and still unanswered, by id, oldest first, and a stale
+    // hook approval by its tool and time: the newest RestoreFiles.MaxInterrupted of them. Answered ones
+    // are not kept: with them, a long session went past the bound, and the record then fell back to
+    // telling them by time, which hid a new question a clock set back (Engineering, cr2-837h). Past the
+    // bound, the oldest are let go and so read as new after a restart: shown at the machine, never a
+    // new question hidden.
+    public IReadOnlyList<string> InterruptedQuestions
+    {
+        get
+        {
+            var ids = _state.Pending.Select(q => q.Id).Where(_state.Interrupted.Contains).Distinct(StringComparer.Ordinal).ToList();
+            if (_staleHook is { } h) { ids.Add(HookKey(h.At, h.Tool)); }
+            var max = AgentBridge.Host.Core.Restore.RestoreFiles.MaxInterrupted;
+            return ids.Count > max ? [.. ids.Skip(ids.Count - max)] : ids;
+        }
+    }
 
-    static string HookKey(DateTimeOffset at) => "hook:" + at.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+    static string HookKey(DateTimeOffset at, string? tool) =>
+        "hook:" + (tool is null ? "" : tool + "@") + at.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture);
 
     // session.get { id, agent }: one sub-agent with its own words and tools, or null when the
     // session has none by that id.

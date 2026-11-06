@@ -97,7 +97,7 @@ internal sealed class SessionState
     readonly HashSet<string> knownSeen = new(StringComparer.Ordinal);
 
     // The interrupted run's questions set aside now, by id.
-    public IReadOnlyCollection<string> Interrupted => interrupted;
+    public IReadOnlySet<string> Interrupted => interrupted;
     // The interrupted run's questions, by id, and whether the pass that first reads with the
     // boundary is still reading (what it reads may be from before the restore).
     readonly HashSet<string> interrupted = new(StringComparer.Ordinal);

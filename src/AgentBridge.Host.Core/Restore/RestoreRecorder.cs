@@ -503,10 +503,14 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         else if (b == was && entry.Interrupted is { } same) { interruptedAt.TryAdd(entry.Id, same); }
     }
 
-    // What the record keeps of a boundary's interrupted questions: none past MaxInterrupted, which
-    // are told by time instead.
+    // What the record keeps of a boundary's interrupted questions: the newest MaxInterrupted, each
+    // within MaxName. Never none for being too many: that fell back to telling them by time, and hid a
+    // new question a clock set back (Engineering, cr2-837h). One left out reads as new after a restart,
+    // shown rather than hidden.
     IReadOnlyList<string>? Kept(string id) =>
-        interruptedAt.TryGetValue(id, out var ids) && ids.Count <= RestoreFiles.MaxInterrupted && ids.All(i => System.Text.Encoding.UTF8.GetByteCount(i) <= LaunchProtocol.MaxName) ? ids : null;
+        interruptedAt.TryGetValue(id, out var ids)
+            ? [.. ids.Where(i => System.Text.Encoding.UTF8.GetByteCount(i) <= LaunchProtocol.MaxName).TakeLast(RestoreFiles.MaxInterrupted)]
+            : null;
 
     // Of each session's boundary in the record (Boundaries), the interrupted questions kept with it;
     // none when a later stamp is its boundary (not read with it yet).

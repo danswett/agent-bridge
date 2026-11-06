@@ -1411,6 +1411,90 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal((SessionStatus.Waiting, Fixture.T0.AddSeconds(11)), (after.Status, after.Question?.AskedAt));
     }
 
+    // Engineering, cr2-837h: only the interrupted questions still unanswered are kept, so a long
+    // session's answered ones never take the set past its bound (past it, the record fell back to
+    // telling them by time, and a new question a clock set back was hidden after a restart).
+    [Fact]
+    public async Task Answered_questions_are_not_kept_with_the_boundary_and_a_new_back_dated_question_is_shown_after_a_restart()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999979";
+        var boundary = Fixture.T0.AddSeconds(20);
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        var answered = Enumerable.Range(0, RestoreFiles.MaxInterrupted).SelectMany(i => new[] { Copilot.ToolStart($"a{i:D2}", "ask_user", new { message = "?" }, 2), Copilot.ToolDone($"a{i:D2}", 2) });
+        Fixture.Append(events, [Copilot.User("go", 1), .. answered, Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 3)]);
+        IReadOnlyList<string> interrupted;
+        await using (var first = f.Source())
+        {
+            first.Hold(Id, new SessionRestored { At = boundary, Cause = RestoreCause.Reboot, QuestionLost = true });
+            await first.RefreshAsync();
+            interrupted = first.Interrupted(Id)!;
+        }
+        Assert.Single(interrupted);
+        Fixture.Append(events, Copilot.User("again", 10), Copilot.TurnStart(11), Copilot.ToolStart("q2", "ask_user", new { message = "?" }, 12));
+        Previous(Fixture.T0, false, E(Id) with { Boundary = boundary, Interrupted = interrupted });
+
+        await using var real = f.Source();
+        RestoreRecorder.HoldBoundaries(Record, real);
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Waiting, Fixture.T0.AddSeconds(12)), (after.Status, after.Question?.AskedAt));
+    }
+
+    // Past the bound, the newest are kept, never none: one left out reads as new after a restart, and is
+    // shown rather than a new one hidden.
+    [Fact]
+    public async Task More_interrupted_questions_than_the_record_keeps_keep_the_newest_never_none()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        await using var r = Recorder(resumer: new Resumer());
+        r.Start();
+        await Until(() => told.Count == 1);
+        var ids = Enumerable.Range(0, RestoreFiles.MaxInterrupted + 6).Select(i => $"q{i:D2}").ToList();
+        marks.Asked["a"] = ids;
+        source.Upsert(S("a"));
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        Assert.Equal(ids.Skip(6), Assert.Single(Written().Sessions).Interrupted!);
+    }
+
+    // Engineering, cr2-837h: the interrupted run's stale hook approval is told by its tool as well as its
+    // time, so after a clock set back a different approval the hooks give the same time is shown, in
+    // this run and after a restart.
+    [Fact]
+    public async Task A_different_hook_approval_with_the_interrupted_ones_time_is_shown_before_and_after_a_restart()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999978";
+        var boundary = Fixture.T0.AddSeconds(20);
+        var hookAt = Fixture.T0.AddSeconds(3);
+        var transcript = f.ClaudeTranscript(Id);
+        Fixture.Append(transcript, Claude.User("go", 1), Claude.Assistant(2, "tool_use", Claude.ToolUse("t0", "Bash", new System.Text.Json.Nodes.JsonObject { ["command"] = "deploy.sh" })));
+        f.ClaudeRegistration(Id, 706, transcript, hookStatus: "waiting", hookAt: hookAt);
+        f.Processes.Run(AgentKind.Claude, 706);
+        IReadOnlyList<string> interrupted;
+        await using (var first = f.Source())
+        {
+            first.Hold(Id, new SessionRestored { At = boundary, Cause = RestoreCause.Reboot, QuestionLost = true });
+            await first.RefreshAsync();
+            Assert.Null(first.Get(Id)!.Question);
+
+            // A clock set back: the new run's tool and its approval are dated as the old one was.
+            Fixture.Append(transcript, Claude.ToolResult("t0", 2), Claude.Assistant(2, "tool_use", Claude.ToolUse("t1", "Bash", new System.Text.Json.Nodes.JsonObject { ["command"] = "rm.sh" })));
+            f.ClaudeRegistration(Id, 706, transcript, hookStatus: "waiting", hookAt: hookAt);
+            await first.RefreshAsync();
+            Assert.Equal((SessionStatus.Waiting, "t1"), (first.Get(Id)!.Status, first.Get(Id)!.Question?.Id));
+            interrupted = first.Interrupted(Id)!;
+        }
+        Previous(Fixture.T0, false, E(Id, AgentKind.Claude) with { Boundary = boundary, Interrupted = interrupted });
+
+        await using var real = f.Source();
+        RestoreRecorder.HoldBoundaries(Record, real);
+        await real.RefreshAsync();
+
+        Assert.Equal((SessionStatus.Waiting, "t1"), (real.Get(Id)!.Status, real.Get(Id)!.Question?.Id));
+    }
+
     // Engineering's second-family review: restore a Claude session, then start only the host again.
     // Held from the record before the source first reads it, the boundary keeps the interrupted run's
     // AskUserQuestion from being listed as asked, and answerable from a phone.
