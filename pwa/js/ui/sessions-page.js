@@ -144,6 +144,12 @@ const overDelegate = (id) => Object.freeze({ overList: true, delegate: id });
 // place (ui.md §6.3), and not behind another tab.
 const shownDelegate = (card) => (card?.openDelegateId && card.view.dataset.tab === 'delegates' ? card.openDelegateId : null);
 
+// Where Escape is the field's (search clears and closes on it, a text box ends a composition or
+// its own popup), never a step back.
+const TEXT_FIELD = 'textarea, select, input:not([type="button"], [type="checkbox"], [type="radio"], [type="submit"], [type="reset"], [type="range"], [type="color"], [type="file"], [type="image"])';
+// Open over the screen, each Escape's to close first (ui.md §9.1 A5).
+const POPUP = '[role="menu"], [role="dialog"], [role="alertdialog"], dialog[open], [aria-modal="true"], [aria-haspopup][aria-expanded="true"]';
+
 export class SessionsPage {
   #shownCaps = new Map();
   // The session the address names (#/sessions/<machine>/<session>), until it has arrived.
@@ -171,6 +177,8 @@ export class SessionsPage {
   // While a popstate brings the delegates in line with the entry gone to: their own open and close
   // would otherwise step the history from inside the browser's own step.
   #syncing = false;
+  // From Escape's pop until its popstate lands: a second press then would pop past the list.
+  #escaping = false;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -325,6 +333,8 @@ export class SessionsPage {
         globalThis.addEventListener?.('pageshow', (e) => { if (e.persisted) { back(); } }, { signal: this.#shown.signal });
         // The window's own focus only (an element's doesn't reach a listener here that isn't capturing).
         globalThis.addEventListener?.('focus', back, { signal: this.#shown.signal });
+        // Bubbling, so a menu, search or drag that takes Escape has it first (ui.md §9.1 A5).
+        doc.addEventListener('keydown', (e) => this.#escape(e), { signal: this.#shown.signal });
       }
       this.launchPanel.setOpen(shell.route === 'launch');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
@@ -407,6 +417,34 @@ export class SessionsPage {
   #pushed() { return this.phone.matches && this.#open && this.shell?.route === 'sessions' && this.#overList(); }
 
   #delegateLevel() { return typeof globalThis.history?.state?.delegate === 'string'; }
+
+  // Escape pops one pushed screen on a phone, as the system's Back does (ui.md §5.3, §9.1 A5): a
+  // delegate back to its session, a session back to the list, with focus on the row that pushed
+  // it. Only when nothing nearer takes it: a menu, a popup or a dialog, a drag, search or a text
+  // field (where Escape is the field's, or ends a composition); and only once a pop already on its
+  // way has landed, so a key held down or pressed twice never goes past the list and out of the app.
+  #escape(e) {
+    if (e.key !== 'Escape' || e.defaultPrevented || e.repeat || e.isComposing || e.keyCode === 229) { return; }
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) { return; }
+    if (!this.phone.matches || !this.#open || this.shell?.route !== 'sessions' || this.#escaping || this.#stepping) { return; }
+    const doc = globalThis.document;
+    const at = e.target instanceof Element ? e.target : doc.activeElement;
+    if (at?.closest?.(TEXT_FIELD) || at?.isContentEditable) { return; }
+    if ([...doc.querySelectorAll(POPUP)].some((el) => el.getClientRects().length > 0)) { return; }
+    const card = this.view.selected;
+    if (!card) { return; }
+    e.preventDefault();
+    if (shownDelegate(card)) {
+      // As the delegate's own Back: its row has focus, and its step in the history goes with it.
+      card.closeDelegate({ focus: true });
+      return;
+    }
+    if (this.#overList() && globalThis.history?.length > 1) {
+      this.#escaping = true;
+      globalThis.addEventListener('popstate', () => { this.#escaping = false; }, { once: true });
+    }
+    this.#back();
+  }
 
   // Back one step from a delegate's entry, once: both width queries report one resize, and a
   // second back before the first lands would go past the session to the list.
@@ -535,10 +573,12 @@ export class SessionsPage {
       // On a phone the view that had focus went: focus goes back where it came from in the list,
       // or to the list's heading.
       // Only focus the session took with it: focus already in a field (search, typed into on the
-      // way here) or in the list stays. (WebKit gives a pressed button's focus to the nearest
-      // focusable ancestor, the Sessions section, so that counts as lost too.)
+      // way here) or in the list stays; a field in the session going (a question's choice, left
+      // with Escape) goes with it, so counts as lost. (WebKit gives a pressed button's focus to the
+      // nearest focusable ancestor, the Sessions section, so that counts as lost too.)
       const active = globalThis.document?.activeElement;
-      const lost = !(active?.matches?.('input, textarea, select') || this.$('list-pane')?.contains(active));
+      const field = active?.matches?.('input, textarea, select') && !this.$('session-views')?.contains(active);
+      const lost = !(field || this.$('list-pane')?.contains(active));
       if (was && this.phone.matches && lost) {
         const back = this.#returnTo?.isConnected && this.#returnTo.getClientRects().length ? this.#returnTo : this.$('sessions-h');
         if (back && !back.matches('button, a, [tabindex]')) { back.tabIndex = -1; }

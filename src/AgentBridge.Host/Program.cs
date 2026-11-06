@@ -351,6 +351,9 @@ async Task<int> ServeAsync(HostHandover handover)
     // the agent records what it typed rather than at its next poll.
     var writes = new TranscriptWrites();
     source.TranscriptWritten += writes.Written;
+    // The boundaries of sessions restored by an earlier run, before the first pass publishes them
+    // (#780): what an interrupted run left is never shown again as asked after a host restart.
+    RestoreRecorder.HoldBoundaries(Path.Combine(identity.Folder, RestoreFiles.FileName), source);
     await source.StartAsync(stop.Token);
     // Files over 256 KiB come from the relay's blob store, through whichever connection is up.
     using var relayBlobs = new RelayBlobs();
@@ -380,9 +383,10 @@ async Task<int> ServeAsync(HostHandover handover)
     }
     push?.Start();
     // What a reboot or a crash took (#780, docs/host-launch.md): the sessions live now, written down
-    // as they change, and those an earlier run saw that died with it, offered to resume from Launch.
-    // It starts nothing. After the first discovery pass, so what runs now is known; disposed before
-    // the source, so a clean stop is written while the sessions are still live.
+    // as they change, and those an earlier run saw that died with it, restored idle through the
+    // launcher's resume path (or offered to resume from Launch). Started once the launcher exists,
+    // after the first discovery pass, so what runs now is known; disposed before the source, so a
+    // clean stop is written while the sessions are still live.
     await using var restore = new RestoreRecorder(source, new RestoreOptions
     {
         Path = Path.Combine(identity.Folder, RestoreFiles.FileName),
@@ -393,11 +397,12 @@ async Task<int> ServeAsync(HostHandover handover)
         // it has taken in what the hooks spooled while the host was down, and never while it cannot run.
         EndsSettled = HookIntake.EndingsSettled(migrated: intakeState is not null, intakeProblem, () => runningIntake),
         RestoreOnStart = settings.RestoreOnStart,
+        RestoreKept = settings.RestoreKept,
+        Marks = source,
         ReadOnly = () => ReadOnlyReason() ?? (settings.Launch.Enabled ? null : "launching is turned off (launch.enabled)") ?? g5.Recent(),
         Log = Log,
     });
-    if (push is not null) { restore.NoticeReady += push.NotifyRestore; }
-    restore.Start();
+    if (push is { } notifier) { restore.NoticeReady += n => notifier.NotifyRestore(n, restore.RestoredLosses()); }
     // Each agent's allowance, asked at the pace its sessions set, and never more often than
     // the idle pace while agent-ha-bridge is asking the same vendors for this user; further Copilot
     // accounts at the idle pace. None at all when usage.publish is off: no vendor is asked, and
@@ -439,7 +444,13 @@ async Task<int> ServeAsync(HostHandover handover)
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore);
     launcher.SessionStarted += restore.Launched;
+    launcher.SeenReadyLate += restore.SeenReadyLate;
+    restore.Restore(launcher);
+    restore.Start();
     transfers.Launcher = launcher;
+    // No reply into a session whose launch here has not seen its window ready (a restore at folder
+    // trust above all): Enter would answer the question (#780).
+    if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; }
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
     // Before the connector, which launches from the card through it.

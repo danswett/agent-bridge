@@ -83,6 +83,58 @@ public sealed class CopilotReplyTests : IDisposable
     }
 
     [Fact]
+    public void What_a_killed_cli_left_asking_keeps_a_reply_out_after_a_new_cli_resumes_until_something_settles_it_but_is_no_longer_answerable()
+    {
+        Fixture.Append(events, Copilot.User("go", 1), Ask("q1", 2), Copilot.Event("permission.requested", new { requestId = "r1", permissionRequest = new { kind = "shell" } }, 3));
+        Assert.True(CopilotPrompts.Before(events).Asking);
+        Assert.Equal((1, 1), (CopilotPermissionTranscript.Before(events, "r1").PendingPermissions, CopilotPermissionTranscript.Before(events, "r1").PendingAsks));
+
+        // No shutdown: the CLI was killed. A subagent's resume (none is written) would end nothing.
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, 30, agentId: "helper"));
+        Assert.True(CopilotPrompts.Before(events).Asking);
+        // The new CLI may still show them: a reply waits (Resumed says why), an answer is stale.
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, 31));
+        var resumed = CopilotPrompts.Before(events);
+        Assert.Equal((true, true), (resumed.Asking, resumed.Resumed));
+        var after = CopilotPermissionTranscript.Before(events, "r1");
+        Assert.Null(after.Request);
+        Assert.Equal((0, 0), (after.PendingPermissions, after.PendingAsks));
+
+        // A question asked since is shown in their place; once it is answered, nothing asks.
+        Fixture.Append(events, Ask("q2", 32));
+        Assert.Equal((true, false), (CopilotPrompts.Before(events).Asking, CopilotPrompts.Before(events).Resumed));
+        Fixture.Append(events, Copilot.Answered("q2", 33), Copilot.ToolDone("q2", 34));
+        Assert.False(CopilotPrompts.Before(events).Asking);
+
+        // Left open again and resumed again: a prompt typed at the machine settles it.
+        Fixture.Append(events, Ask("q3", 40), Copilot.Event("session.resume", new { }, 41));
+        Assert.True(CopilotPrompts.Before(events).Resumed);
+        Fixture.Append(events, Copilot.User("typed here", 42));
+        Assert.False(CopilotPrompts.Before(events).Asking);
+
+        // A scheduled prompt is nobody typing; one the person typed with an attachment ("user") is.
+        Fixture.Append(events, Ask("q4", 50), Copilot.Event("session.resume", new { }, 51),
+            Copilot.Event("user.message", new { content = "every hour", source = "schedule-1" }, 52));
+        Assert.True(CopilotPrompts.Before(events).Resumed);
+        Fixture.Append(events, Copilot.Event("user.message", new { content = "look at @notes.txt", source = "user" }, 53));
+        Assert.False(CopilotPrompts.Before(events).Asking);
+    }
+
+    // Copilot on #837: a helper's question the killed CLI left is kept with the helper that asked it,
+    // so that helper's abort after the resume settles it, and another's does not.
+    [Fact]
+    public void A_helpers_question_left_by_a_killed_cli_is_settled_by_that_helpers_abort_after_the_resume()
+    {
+        Fixture.Append(events, Copilot.User("go", 1), Ask("q1", 2, agentId: "helper"), Copilot.Event("session.resume", new { }, 30));
+        Assert.True(CopilotPrompts.Before(events).Resumed);
+
+        Fixture.Append(events, Copilot.Event("abort", new { }, 31, agentId: "other"));
+        Assert.True(CopilotPrompts.Before(events).Asking);
+        Fixture.Append(events, Copilot.Event("abort", new { }, 32, agentId: "helper"));
+        Assert.False(CopilotPrompts.Before(events).Asking);
+    }
+
+    [Fact]
     public void A_transcript_that_cannot_be_read_is_never_taken_to_say_nothing_is_asking()
     {
         var state = CopilotPrompts.Before(events + ".missing");
@@ -123,6 +175,20 @@ public sealed class CopilotReplyTests : IDisposable
         Assert.Equal(offset, since.Prompts[1].Offset);
         Assert.NotEqual(since.Prompts[0].Offset, since.Prompts[1].Offset);
         Assert.False(since.SessionEnded);
+    }
+
+    // Copilot marks a prompt the person sent with an attachment source "user": still theirs, so a
+    // reply with a file is confirmed by it, with the file it carried.
+    [Fact]
+    public void A_prompt_marked_as_the_users_own_counts_with_its_attachment()
+    {
+        var from = CopilotPrompts.Before(events).ScannedTo;
+        Fixture.Append(events, Copilot.Event("user.message",
+            new { content = "look at @C:\\staged\\notes.txt", source = "user", attachments = new[] { new { path = "C:\\staged\\notes.txt" } } }, 2));
+
+        var prompt = Assert.Single(CopilotPrompts.Since(events, from).Prompts);
+
+        Assert.Equal(["C:\\staged\\notes.txt"], prompt.Attachments);
     }
 
     [Fact]

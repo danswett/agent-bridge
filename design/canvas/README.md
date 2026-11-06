@@ -22,8 +22,8 @@ Some boards are shared components or thin wrappers:
 `Proposal-<issue>-*.dc.html` boards belong to a proposal in
 [docs/design/proposals](../../docs/design/proposals). They render beside the proposal, not
 into `docs/design/mockups`. Once the owner has decided, they stay as the record of the
-decision and as the reference for states the platform boards don't draw. #253's are decided,
-and ui.md §10 points to them. #661's draw the decided delegate events and history
+decision and as the reference for states the platform boards don't draw. #253's and #384's are
+decided, and ui.md §10 points to them. #661's draw the decided delegate events and history
 (#292), all from one component, `Proposal-661-Session.dc.html`, by its `form` and `state` props.
 
 Colours and glyph paths inside these files are copies of

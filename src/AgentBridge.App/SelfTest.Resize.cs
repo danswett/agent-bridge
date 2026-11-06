@@ -62,11 +62,17 @@ static partial class SelfTest
         var anchored = list is null ? null : await Anchor(list, outFile);
         await Task.Delay(700);
         var heavyLimit = SweepBudget - lightTook;
+        var (newWidthsBefore, remeasuredBefore) = (FlowPanel.NewWidths, FlowPanel.Remeasured);
         var (heavy, heavyDone) = await Sweep(window, heavyLimit);
+        var (newWidths, remeasured) = (FlowPanel.NewWidths - newWidthsBefore, FlowPanel.Remeasured - remeasuredBefore);
 
         // Back where the drag began, the session still chosen and every pane drawn.
         var settled = await Until(() => layout.Mode == PaneMode.Three && main.Selected == card && layout.ShowInspector, TimeSpan.FromSeconds(5));
         check(settled, "keeps the session chosen, with its inspector, through a live resize across every width class");
+        // The footer's lines (a delegate starting, one reporting back) are laid out at every new width,
+        // off screen too; each piece of one fits its line at every width the drag reaches, so none is
+        // measured again. Each was, at every step under the reading measure, until #765 kept them.
+        check(newWidths > 0 && remeasured == 0, $"lays out every flowing line, the conversation's delegate lines among them, at each new width of a live resize without measuring any piece of one again, each fitting its line ({newWidths} lines at a new width, {remeasured} pieces measured again)");
         await Picture(window.RootElement, Path.ChangeExtension(outFile, ".resize.png"));
         var moved = list is null || anchored is null ? "measured: the response not drawn" : await Anchored(list, anchored, outFile);
         check(moved is null, $"keeps the block at the top of the conversation where it was through a live resize, drawn alike before and after{Not(moved)}");
@@ -103,6 +109,8 @@ static partial class SelfTest
             ["lightFinished"] = lightDone,
             ["heavy"] = heavy.Report(),
             ["heavyFinished"] = heavyDone,
+            ["flowLinesAtNewWidth"] = newWidths,
+            ["flowPiecesMeasuredAgain"] = remeasured,
             ["anchorKept"] = moved is null,
             ["anchorProblem"] = moved,
             ["readerProblem"] = unreachable,

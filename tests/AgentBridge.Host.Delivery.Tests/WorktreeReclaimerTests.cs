@@ -279,8 +279,11 @@ public sealed class WorktreeReclaimerTests : IDisposable
         Assert.True(Directory.Exists(waiting) && Directory.Exists(finished));
         Assert.Contains(logs, l => l.EndsWith("cannot be established (the sessions waiting to be restored cannot be read)", StringComparison.Ordinal));
 
-        // A folder that cannot be resolved may be under any of them.
-        Assert.Equal(0, Reclaim(new RestoreWorktreeUsage(new Pending([Path.Combine(waiting, "src"), Path.Combine(root, "gone")]), nobody)));
+        // A folder whose place cannot be resolved (here a file where a folder was; a link that cannot
+        // be read) may lead under any of them.
+        var notAFolder = Path.Combine(root, "not-a-folder");
+        File.WriteAllText(notAFolder, "");
+        Assert.Equal(0, Reclaim(new RestoreWorktreeUsage(new Pending([Path.Combine(waiting, "src"), Path.Combine(notAFolder, "sub")]), nobody)));
         Assert.True(Directory.Exists(finished));
         Assert.Contains(logs, l => l.EndsWith("cannot be established (the folder of a session waiting to be restored cannot be resolved)", StringComparison.Ordinal));
 
@@ -293,6 +296,21 @@ public sealed class WorktreeReclaimerTests : IDisposable
     sealed class Pending(IReadOnlyList<string>? folders) : AgentBridge.Host.Core.Restore.IRestorePending
     {
         public IReadOnlyList<string>? Folders() => folders;
+    }
+
+    // sec-813: a waiting session's folder deleted since is placed under what is left of its path, so
+    // it keeps the worktree it was in, not every worktree for the week it is offered.
+    [Fact]
+    public void A_waiting_sessions_folder_that_is_gone_keeps_only_the_worktree_it_was_in()
+    {
+        var waiting = Tree();
+        var finished = Tree();
+
+        Assert.Equal(1, Reclaim(new RestoreWorktreeUsage(new Pending([Path.Combine(waiting, "deleted", "deeper")]), nobody)));
+
+        Assert.True(Directory.Exists(waiting));
+        Assert.False(Directory.Exists(finished));
+        Assert.EndsWith("a live session is working in it", Retained(waiting));
     }
 
     [Fact]
