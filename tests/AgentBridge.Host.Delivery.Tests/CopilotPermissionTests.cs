@@ -347,6 +347,16 @@ public sealed class CopilotPermissionTests : IDisposable
             // one of the host's escapes there too, and the approval carries escaped (#836).
             if (name != "\u256D\u2500") { Assert.NotEmpty(mcp.Marks); }
         }
+        // Bidi text under an argument sharing a name the request itself uses: checked as any value
+        // is, never exempted by its name (Engineering's GPT delta of #769).
+        foreach (var name in (string[])["kind", "toolCallId", "accessKind"])
+        {
+            var tool = Copilot.Prompts["mcp"].DeepClone().AsObject();
+            tool["args"] = new System.Text.Json.Nodes.JsonObject { ["filter"] = new System.Text.Json.Nodes.JsonObject { [name] = "a\u202Eb" } };
+            var mcp = AgentBridge.Host.Core.Parsing.CopilotPermission.Describe(System.Text.Json.JsonDocument.Parse(Copilot.Permission("r2", "c2", tool, 2)).RootElement.GetProperty("data"))!;
+            var beside = crowd with { Others = [new CopilotPermissionScreen.Other("MCP tool, request r2", mcp.Drawn, mcp.Dialog)] };
+            Assert.Contains("could be drawn as part of Copilot's own dialog", CopilotPermissionScreen.Locate(screen, approve: true, described.Probes, beside).Problem);
+        }
     }
 
     [Fact]

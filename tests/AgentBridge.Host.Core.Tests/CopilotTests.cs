@@ -505,6 +505,52 @@ public class CopilotTests
         Assert.Equal((held, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
     }
 
+    // Only the request's own kind, tool call id and (on a path request, whose dialog draws fixed
+    // words for it) access kind are left out of what is checked, at the request's top level. An
+    // argument or nested property that happens to share one of those names is the agent's text
+    // like any other: exempted by name at every depth, bidi text under args.accessKind left a
+    // shell request beside it answerable, and delivered (Engineering's GPT delta of #769).
+    [Theory]
+    [InlineData("kind", "a\u202Eb", true)]
+    [InlineData("toolCallId", "a\u202Eb", true)]
+    [InlineData("accessKind", "a\u202Eb", true)]
+    [InlineData("accessKind", "\u256D\u2500", true)]
+    [InlineData("kind", "read", false)]
+    [InlineData("accessKind", "read", false)]
+    public async Task An_argument_sharing_a_request_fields_name_is_checked_like_any_other_beside_the_listed_permission(string name, string value, bool held)
+    {
+        await using var s = new Session_();
+        var tool = Copilot.Prompts["mcp"].DeepClone().AsObject();
+        tool["args"] = new System.Text.Json.Nodes.JsonObject { ["owner"] = "octo", ["filter"] = new System.Text.Json.Nodes.JsonObject { [name] = value } };
+        var mine = Copilot.Prompts["commands"].DeepClone().AsObject();
+        mine["meta"] = new System.Text.Json.Nodes.JsonObject { ["deep"] = new System.Text.Json.Nodes.JsonObject { [name] = value } };
+        var other = Copilot.Prompts["commands"].DeepClone().AsObject();
+        other["fullCommandText"] = "git status";
+
+        var beside = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2), Copilot.Permission("r2", "c2", tool, 3))).Question!;
+        await using var t = new Session_();
+        var own = (await t.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", mine, 2), Copilot.Permission("r2", "c2", other, 3))).Question!;
+
+        Assert.Equal((held, held), (beside.AnswerAtMachine == true, own.AnswerAtMachine == true));
+    }
+
+    // The one field left out by name: a path request's own access kind, which its dialog draws as
+    // fixed words. Anywhere else, even a request's top-level accessKind on another kind, is checked.
+    [Theory]
+    [InlineData("path", false)]
+    [InlineData("mcp", true)]
+    public async Task Only_a_path_requests_own_access_kind_is_left_out_of_what_is_checked(string kind, bool held)
+    {
+        await using var s = new Session_();
+        var waiting = Copilot.Prompts[kind].DeepClone().AsObject();
+        waiting["accessKind"] = "read\u202E";
+
+        var listed = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2), Copilot.Permission("r2", "c2", waiting, 3))).Question!;
+
+        Assert.StartsWith("r1#", listed.Id);
+        Assert.Equal(held, listed.AnswerAtMachine == true);
+    }
+
     // Copilot can write permission.requested again for a request it has already asked, with what
     // it now asks. The revision replaces the question it revises: kept, the earlier one was listed
     // first, counted the request twice, and stayed after the request ended (Copilot review of #769).

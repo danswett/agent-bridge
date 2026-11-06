@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
@@ -656,6 +656,30 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         Assert.True(source.Get(Id)!.Question!.AnswerAtMachine);
         Assert.Equal(new AnswerResult(AnswerOutcome.Refused, AtMachine), result);
         Assert.Empty(injector.Plans);
+    }
+
+    // An MCP request waiting beside the listed shell one, with bidi text in an argument nested
+    // under a name the request itself also uses (kind, toolCallId, accessKind). Exempted by name at
+    // every depth, it was never checked, and the approval was delivered with the shell dialog on
+    // screen (Engineering's GPT delta of #769). A plain value there is delivered, as it should be.
+    [Theory]
+    [InlineData("kind", "a\u202Eb", false)]
+    [InlineData("toolCallId", "a\u202Eb", false)]
+    [InlineData("accessKind", "a\u202Eb", false)]
+    [InlineData("accessKind", "read", true)]
+    public async Task An_argument_sharing_a_request_fields_name_beside_the_listed_permission_is_checked_before_anything_is_typed(string name, string value, bool delivered)
+    {
+        var tool = Copilot.Prompts["mcp"].DeepClone().AsObject();
+        tool["args"] = new JsonObject { ["owner"] = "octo", ["filter"] = new JsonObject { [name] = value } };
+        var question = await Asking(Command("npm test"), tool);
+        Assert.StartsWith("r1#", question);
+        injector.Screen = CopilotScreen.Shell("Run it", "npm test");
+        Completes("approved");
+
+        var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
+
+        Assert.Equal(delivered ? new AnswerResult(AnswerOutcome.Delivered) : new AnswerResult(AnswerOutcome.Refused, AtMachine), result);
+        Assert.Equal(delivered ? 1 : 0, injector.Plans.Count);
     }
 
     // Copilot can write permission.requested again for a request still waiting, with what it asks

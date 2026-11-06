@@ -212,7 +212,7 @@ public static partial class CopilotPermission
             Probes = Probes(kind, p),
             Marks = marks,
             Dialog = prompt is { } drawn ? Dialog(kind, drawn) : null,
-            Drawn = [.. Strings(prompt), .. Strings(permission)],
+            Drawn = [.. Strings(prompt, kind), .. Strings(permission, kind)],
         };
     }
 
@@ -257,34 +257,41 @@ public static partial class CopilotPermission
         }
     }
 
-    // Every string in a request, at any depth, but the ones naming its kind or tool call, which
-    // no dialog draws as written: the most a dialog could draw of it. And every property name, at
-    // any depth, that is unsafe (CopilotDialogs.Unsafe): Copilot's MCP and custom-tool dialogs can
-    // draw an argument's name as well as its value, and read by value alone a name holding a frame
-    // or hidden character went unchecked (#769). Only an unsafe one is kept, so a request with
-    // nothing else drawn still has nothing to check the screen against.
-    static List<string> Strings(JsonElement? request)
+    // Every string in a request, at any depth: the most a dialog could draw of it. Left out are only
+    // the request's own fields no dialog draws as written, where the request itself has them: its
+    // kind and tool call id, and a path request's access kind, which its dialog draws as fixed
+    // words. Left out by name at every depth, an argument named accessKind holding bidi text was
+    // never checked, and an approval beside it was delivered (Engineering's GPT delta of #769).
+    // And every property name, at any depth, that is unsafe (CopilotDialogs.Unsafe): Copilot's MCP
+    // and custom-tool dialogs can draw an argument's name as well as its value, and read by value
+    // alone a name holding a frame or hidden character went unchecked (#769). Only an unsafe one is
+    // kept, so a request with nothing else drawn still has nothing to check the screen against.
+    static List<string> Strings(JsonElement? request, string kind)
     {
         var found = new List<string>();
-        if (request is { } r) { Walk(r, null); }
+        if (request is { } r) { Walk(r, top: true); }
         return found;
 
-        void Walk(JsonElement e, string? name)
+        bool Own(JsonProperty p) => p.Value.ValueKind == JsonValueKind.String
+            && (p.Name is "kind" or "toolCallId" || (p.Name == "accessKind" && kind == "path"));
+
+        void Walk(JsonElement e, bool top)
         {
             switch (e.ValueKind)
             {
-                case JsonValueKind.String when name is not ("kind" or "toolCallId" or "accessKind"):
+                case JsonValueKind.String:
                     if (e.GetString() is { Length: > 0 } s) { found.Add(s); }
                     break;
                 case JsonValueKind.Object:
                     foreach (var p in e.EnumerateObject())
                     {
                         if (CopilotDialogs.Unsafe(p.Name)) { found.Add(p.Name); }
-                        Walk(p.Value, p.Name);
+                        if (top && Own(p)) { continue; }
+                        Walk(p.Value, top: false);
                     }
                     break;
                 case JsonValueKind.Array:
-                    foreach (var item in e.EnumerateArray()) { Walk(item, name); }
+                    foreach (var item in e.EnumerateArray()) { Walk(item, top: false); }
                     break;
             }
         }
