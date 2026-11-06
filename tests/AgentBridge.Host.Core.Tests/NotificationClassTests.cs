@@ -117,6 +117,62 @@ public class NotificationClassTests
         Assert.Equal(T.AddMinutes(5), NotificationClasses.Since(done, NotificationClasses.Of(done)));
     }
 
+    // #913 Q3 is the push's; this is the session's. Through the real parser and SessionSource: one
+    // permission prompt answered as the next is asked, in one commit, is the same needsYou episode,
+    // so the reminder's clock (classSince) does not restart (#975 review).
+    [Fact]
+    public async Task A_question_answered_as_the_next_is_asked_keeps_the_episodes_start()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source();
+
+        Fixture.Append(events, Copilot.User("Ship it", 1), Copilot.TurnStart(2), Copilot.ToolStart("c1", "powershell", new { }, 3),
+            Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 4));
+        await source.RefreshAsync();
+        var first = source.Get(Id)!;
+        Assert.Equal(NotificationClass.NeedsYou, first.Class);
+        var began = first.ClassSince;
+
+        Fixture.Append(events, Copilot.PermissionDone("r1", "c1", "approved", 10), Copilot.ToolDone("c1", 11),
+            Copilot.ToolStart("c2", "powershell", new { }, 13), Copilot.Permission("r2", "c2", Copilot.Prompts["commands"], 14));
+        await source.RefreshAsync();
+        var next = source.Get(Id)!;
+        Assert.Equal(NotificationClass.NeedsYou, next.Class);
+        Assert.NotEqual(first.Question!.Id, next.Question!.Id);
+        Assert.Equal(began, next.ClassSince);
+    }
+
+    // The episode, as the reviews replayed it: a delegate's question arrives while the session's own
+    // is pending, then is answered; a working session goes idle with nothing said, and back.
+    [Fact]
+    public void While_the_tier_is_unchanged_its_start_is_kept_whatever_moves_under_it()
+    {
+        var q1 = S(SessionStatus.Waiting, question: Q() with { AskedAt = T });
+        var sent = Committed(q1, null);
+        Assert.Equal(T, sent.ClassSince);
+
+        var q2 = S(SessionStatus.Waiting, question: Q(QuestionKind.Approval, agent: "agent-1") with { Id = "q2", AskedAt = T.AddMinutes(14) });
+        sent = Committed(q2, sent);
+        Assert.Equal(T, sent.ClassSince);
+        sent = Committed(q1, sent);
+        Assert.Equal(T, sent.ClassSince);
+
+        var working = S(SessionStatus.Working) with { StatusSince = T.AddMinutes(20) };
+        sent = Committed(working, sent);
+        Assert.Equal((NotificationClass.Fyi, T.AddMinutes(20)), (sent.Class, sent.ClassSince));
+        sent = Committed(S(SessionStatus.Idle) with { StatusSince = T.AddMinutes(21) }, sent);
+        sent = Committed(working with { StatusSince = T.AddMinutes(22) }, sent);
+        Assert.Equal((NotificationClass.Fyi, T.AddMinutes(20)), (sent.Class, sent.ClassSince));
+
+        static Session Committed(Session s, Session? previous)
+        {
+            var tier = NotificationClasses.Of(s);
+            return s with { Class = tier, ClassSince = NotificationClasses.Since(s, tier, previous) };
+        }
+    }
+
     // #913 q10: a tier from a newer host is never guessed at, so the client keeps today's rules.
     [Fact]
     public void A_class_a_client_does_not_know_reads_as_absent()

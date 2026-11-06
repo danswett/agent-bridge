@@ -397,9 +397,10 @@ public sealed record Session
     // delegates' questions. Absent from an older host, and a client then keeps its own rules.
     [JsonConverter(typeof(UnknownAsAbsentConverter<NotificationClass>))]
     public NotificationClass? Class { get; init; }
-    // When the session's present tier began (#913), which the 15-minute reminder counts from:
-    // the earliest of question.askedAt and attention.since for NeedsYou, else statusSince.
-    // Set with Class, from the same fields, so it never moves updatedAt on its own.
+    // When the session entered its present tier (#913), the episode's start, which the 15-minute
+    // reminder counts from: kept while Class is unchanged, so a further question never restarts it;
+    // on a change of Class, the earliest of question.askedAt and attention.since for NeedsYou, else
+    // statusSince. It moves only with Class, so never moves updatedAt on its own.
     public DateTimeOffset? ClassSince { get; init; }
     // Restored by the host after a reboot or a crash (#780, RestoreProtocol). Absent otherwise,
     // and from a host that does not restore.

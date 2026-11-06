@@ -23,11 +23,16 @@ public static class NotificationClasses
         return NotificationClass.Fyi;
     }
 
-    // session.classSince: when the tier began, from the fields that put the session in it, so it
-    // needs no memory of earlier commits and moves only when they do. Needs you counts from its
-    // oldest pending reason, which is what the 15-minute reminder waits on (#913 q9).
-    public static DateTimeOffset Since(Session s, NotificationClass c)
+    // session.classSince: when the session entered its present tier, the start of the episode. While
+    // the tier stays the same it keeps the start the host last sent (previous), whatever moves under
+    // it: a delegate's question arriving beside the session's own, one answered as the next is asked,
+    // working and idle within fyi. Each of those once restarted it, and so the 15-minute reminder
+    // (#913 q9), which a new question while already needsYou must not (#975 review). Only a change of
+    // tier, or a session the host has not sent before, takes it from the fields that put the session
+    // there: for needsYou its oldest pending reason, otherwise statusSince.
+    public static DateTimeOffset Since(Session s, NotificationClass c, Session? previous = null)
     {
+        if (previous is { Class: { } was, ClassSince: { } began } && was == c) { return began; }
         if (c != NotificationClass.NeedsYou) { return s.StatusSince; }
         return (s.Question?.AskedAt, s.Attention?.Since) switch
         {

@@ -1086,11 +1086,18 @@ The wire names are the owner's tier names from #913 in this protocol's camelCase
 `signInNeeded` is, so the spec, the code and ui.md say each tier with one word. They are short
 because every session carries one.
 
-`classSince` says when the session's present tier began, for the reminder to count from; no
-client shows it. For `needsYou` it is the earliest of `question.askedAt` and `attention.since`
-that are present: the oldest thing still waiting on the person. For `done` and `fyi` it is
-`statusSince` (for `ending`, when the end was asked for). The host sets it with `class`, from
-the same fields.
+`classSince` says when the session entered its present tier, the start of the episode, for the
+reminder to count from; no client shows it. While `class` stays the same, `classSince` stays
+what the host last sent, whatever changes under it: a delegate's question arriving beside the
+session's own, one question answered as the next is asked, working and idle within `fyi`. It is
+never worked out again per question, so a new question while the session is already `needsYou`
+does not restart the reminder. When `class` changes, or the host sends a session for the first
+time (after the host starts, or when it finds the session), it is taken from the fields that
+put the session in the tier: for `needsYou` the earliest of `question.askedAt` and
+`attention.since` that are present, the oldest thing waiting on the person; for `done` and
+`fyi` it is `statusSince` (for `ending`, when the end was asked for). A snapshot, a list or a
+resumed subscription carries the same `classSince` the host last sent; only a restart of the
+host can start the episode again from those fields.
 
 * **A state, not an event.** `class` says which tier the session is in now. A client alerts
   for a change it sees live: a session entering `needsYou`, or a new reason within it (another
@@ -1133,7 +1140,7 @@ the same fields.
   host) keeps today's behaviour: the rules in [When a host notifies](#when-a-host-notifies), and
   its own. A `class` value it does not know, or one of the wrong type, reads as absent, so it
   keeps today's behaviour then too: read as `needsYou`, a newer host could interrupt people with
-  something an older client can't explain. They change only with the fields they come from, so
+  something an older client can't explain. `class` changes only with the fields it comes from, and `classSince` only with `class`, so
   they never move `updatedAt` or send an upsert on their own, and the
   [session budget](#session-budget) never trims them.
 
@@ -1296,7 +1303,7 @@ is for disposable evaluation, not production service enrollment.
 | `waitingOn` | string? | Status precedence rule 2: the id of the sub-agent whose question is `question`, while the session has none of its own. Absent otherwise |
 | `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
 | `class` | `"needsYou"` \| `"done"` \| `"fyi"`? | **New (#913).** The session's notification tier, which every client follows instead of its own rules: [Notification class](#notification-class-913). Absent from an older host; a client then keeps today's behaviour. A client that does not know a value reads it as absent |
-| `classSince` | time? | **New (#913).** When the session's present tier began, which the 15-minute reminder counts from: for `needsYou` the earliest of `question.askedAt` and `attention.since`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
+| `classSince` | time? | **New (#913).** When the session entered its present tier, the episode's start, which the 15-minute reminder counts from. Kept while `class` is unchanged (a further question does not move it); on a change of `class`, for `needsYou` the earliest of `question.askedAt` and `attention.since`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
 
 **Status precedence** with sub-agents (first match wins): the session's own question
 (`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn
