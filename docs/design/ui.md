@@ -1037,6 +1037,18 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   as each is a node of its own). The limits sit far above what an agent writes: the
   protocol sends at most 16 KiB of response, and a 16 KiB table of 250 rows, each with code, a
   link and bold, is read as a table. The Windows app does this since #440; the PWA's is #439.
+- **A word too long to lay out** (#493): WinUI's text layout fails on about 32,000 characters
+  with nowhere to break after other text on their line ("Done: " and 32,000 `[`), and the app
+  ended. The Windows app guards it twice. **What a machine sends is held to the protocol's limits
+  as it arrives** (v1-sessions.md): a response or a delegate's response longer than 16 KiB keeps
+  its end and shows "Earlier text not shown: the response was longer than the machine sends.",
+  reasoning keeps its last 4 KiB, and a question's message longer than 8 KiB keeps its start and
+  is answered at the machine, as one the machine had to cut. **And prose is never drawn with more
+  than 8,192 characters between places a line may end** (a quarter of the measured limit): past
+  that, a break of no width goes in, just after a space where there is one, never inside a
+  letter and its accents. Nothing is added or lost: every character is drawn as written, and
+  selecting and copying the text gives exactly what was sent. Code blocks, drawn another way,
+  lay out 40,000 such characters and are unchanged.
 
 ### 6.5 Reply box
 
