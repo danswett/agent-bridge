@@ -32,6 +32,100 @@ public sealed class ToastTests
 
     static XElement Xml(ToastNotice n) => XElement.Parse(n.Xml);
 
+    // Toasts about sessions, without the machine's sign-in toast (SignIns).
+    List<ToastNotice> Finished() => [.. sink.Shown.Where(t => !t.Tag.StartsWith("signin:", StringComparison.Ordinal))];
+
+    static Session NeedsSignIn(string id, string account = "octo", string? recovery = null)
+    {
+        var attention = new System.Text.Json.Nodes.JsonObject { ["kind"] = "signInNeeded", ["agent"] = "copilot", ["account"] = account };
+        if (recovery is not null) { attention["recovery"] = recovery; }
+        return AuthState.Attach(Make.Session(id, response: "Done.", turns: 2), JsonDocument.Parse(new System.Text.Json.Nodes.JsonObject { ["attention"] = attention }.ToJsonString()).RootElement);
+    }
+
+    // attention.agent is optional: two agents' sign-ins that leave it out are still two toasts, each
+    // named for its session's agent.
+    [Fact]
+    public void Sign_in_toasts_are_grouped_by_the_sessions_own_agent_when_attention_names_none()
+    {
+        var p = Planner();
+        var attention = JsonSerializer.SerializeToElement(new { attention = new { kind = "signInNeeded", account = "octo" } });
+        p.Upsert(AuthState.Attach(Make.Session("s1") with { Agent = AgentKind.Copilot }, attention));
+        p.Upsert(AuthState.Attach(Make.Session("s2") with { Agent = AgentKind.Claude }, attention));
+        p.Tick();
+
+        Assert.Equal(["Claude on Test PC needs sign-in", "Copilot on Test PC needs sign-in"], sink.Shown.Select(t => Xml(t).Descendants("text").First().Value).Order());
+    }
+
+    // A recount while the window was in front changed nothing on the toast: it is made once the
+    // window is not, quietly, never left saying the old count until the hourly repeat.
+    [Fact]
+    public void A_sign_in_toast_recounted_while_the_window_was_in_front_is_updated_quietly_once_it_is_not()
+    {
+        var front = false;
+        var p = new ToastPlanner(sink, clock) { Capabilities = () => Caps, MachineName = () => "Test PC", WindowActive = () => front, Quiet = () => false };
+        p.Upsert(NeedsSignIn("s1"));
+        p.Tick();
+        front = true;
+        p.Upsert(NeedsSignIn("s2"));
+        p.Tick();
+        Assert.Single(sink.Shown);
+
+        front = false;
+        p.Tick();
+        Assert.Equal((2, "2 sessions affected", true), (sink.Shown.Count, Xml(sink.Shown[^1]).Descendants("text").Last().Value, sink.Shown[^1].Quiet));
+    }
+
+    // #800 P0: a 401 stopped every session on a machine and nothing on the desktop said so. One toast
+    // per agent and account, in ui.md §6.13's words, at once; its count kept up quietly; again only
+    // after an hour while it lasts; withdrawn once every session is signed in again.
+    [Fact]
+    public void Sessions_that_need_sign_in_raise_one_toast_per_agent_and_account_until_they_are_signed_in_again()
+    {
+        var p = Planner();
+        p.Upsert(NeedsSignIn("s1"));
+        p.Tick();
+        var toast = Assert.Single(sink.Shown);
+        Assert.Equal(PushNotice.SignInKey(AgentKind.Copilot, "octo"), toast.Tag);
+        Assert.Equal(["Copilot on Test PC needs sign-in", "1 session affected"], Xml(toast).Descendants("text").Select(t => t.Value));
+        Assert.DoesNotContain("octo", toast.Xml, StringComparison.Ordinal);
+        Assert.False(toast.Quiet);
+
+        p.Upsert(NeedsSignIn("s2"));
+        p.Upsert(Make.Session("s3", status: SessionStatus.Working));
+        p.Tick();
+        Assert.Equal((2, "2 sessions affected", true), (sink.Shown.Count, Xml(sink.Shown[^1]).Descendants("text").Last().Value, sink.Shown[^1].Quiet));
+
+        clock.Advance(TimeSpan.FromMinutes(59));
+        p.Tick();
+        Assert.Equal(2, sink.Shown.Count);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        p.Tick();
+        Assert.Equal((3, false), (sink.Shown.Count, sink.Shown[^1].Quiet));
+
+        // Signed in and waiting for the session to confirm is no longer the person's to do.
+        p.Upsert(NeedsSignIn("s1", recovery: "pending"));
+        p.Upsert(Make.Session("s2"));
+        p.Tick();
+        Assert.Equal([toast.Tag], sink.Withdrawn);
+    }
+
+    // Signed in and stopped again between two ticks is a new incident, seen as the session changes:
+    // its toast is raised at once, never held back as the old one's hourly repeat.
+    [Fact]
+    public void A_session_that_recovers_and_fails_again_between_ticks_raises_a_new_sign_in_toast_at_once()
+    {
+        var p = Planner();
+        p.Upsert(NeedsSignIn("s1"));
+        p.Tick();
+        var toast = Assert.Single(sink.Shown);
+
+        p.Upsert(Make.Session("s1"));
+        Assert.Equal([toast.Tag], sink.Withdrawn);
+        p.Upsert(NeedsSignIn("s1"));
+        p.Tick();
+        Assert.Equal((2, toast.Tag, false), (sink.Shown.Count, sink.Shown[^1].Tag, sink.Shown[^1].Quiet));
+    }
+
     [Fact]
     public void A_question_still_pending_after_two_seconds_raises_one_toast()
     {
@@ -256,7 +350,8 @@ public sealed class ToastTests
         p.Upsert(Stopped("s2", """{"kind":"error","errorClass":"auth"}"""));
         clock.Advance(TimeSpan.FromSeconds(3));
         p.Tick();
-        Assert.Empty(sink.Shown);
+        // The sign-in has a toast of its own, for the machine (SignIns), never the session's.
+        Assert.Empty(Finished());
 
         // The attention comes in the update after the turn ended: the toast due is dropped.
         p.Upsert(Make.Session("s3", status: SessionStatus.Working));
@@ -264,14 +359,14 @@ public sealed class ToastTests
         p.Upsert(Stopped("s3", """{"kind":"error","errorClass":"rate"}"""));
         clock.Advance(TimeSpan.FromSeconds(3));
         p.Tick();
-        Assert.Empty(sink.Shown);
+        Assert.Empty(Finished());
 
         // Already up when it comes: withdrawn.
         p.Upsert(Make.Session("s4", status: SessionStatus.Working));
         p.Upsert(Make.Session("s4", response: "Done.", turns: 2));
         clock.Advance(TimeSpan.FromSeconds(3));
         p.Tick();
-        Assert.Single(sink.Shown);
+        Assert.Single(Finished());
         p.Upsert(Stopped("s4", """{"kind":"signInNeeded","agent":"copilot"}"""));
         Assert.Equal([ToastPlanner.Tag("s4", null)], sink.Withdrawn);
     }
@@ -299,7 +394,8 @@ public sealed class ToastTests
         clock.Advance(TimeSpan.FromSeconds(3));
         p.Tick();
         Assert.Empty(sink.Withdrawn);
-        Assert.Single(sink.Shown);
+        // The machine's sign-in toast is the failure's own notice (SignIns); no other toast is raised.
+        Assert.Single(Finished());
     }
 
     // #878: a failure that replaces the turn's response (the parser's "Turn error" notice) is still
@@ -533,6 +629,7 @@ public sealed class ToastTests
             [nameof(ToastXml.Finished)] = [ToastXml.Finished(Make.Session(response: "All **green**."), "PC", "remote-id"), ToastXml.Finished(Make.Session(), null)],
             [nameof(ToastXml.Updated)] = [ToastXml.Updated("0.1.9", "0.1.8", "- Quieter toasts"), ToastXml.Updated("0.1.9", "0.1.8", null)],
             [nameof(ToastXml.Outcome)] = [ToastXml.Outcome("s1", "A session", "Sent.", "remote-id"), ToastXml.Outcome("s1", "A session", "Sent.")],
+            [nameof(ToastXml.SignIn)] = [ToastXml.SignIn(AgentKind.Copilot, 4, "PC", "remote-id"), ToastXml.SignIn(AgentKind.Claude, 1, null)],
         };
         // A builder added later is held to this too: every public method whose output is a <toast>
         // is listed. Told apart by what it returns, not by name, so a text helper such as Plain or
@@ -555,6 +652,7 @@ public sealed class ToastTests
             var t when t == typeof(IReadOnlyList<string>) => (object)Caps,
             var t when t == typeof(string) => "x",
             var t when t == typeof(int) => 300,
+            var t when t == typeof(AgentKind) => AgentKind.Copilot,
             var t when t == typeof((string, string)[]) => Array.Empty<(string, string)>(),
             var t => throw new Xunit.Sdk.XunitException($"ToastXml.{m.Name} takes a {t}: give this test an example of one, to tell whether it makes a toast."),
         }).ToArray();
