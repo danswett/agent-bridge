@@ -168,7 +168,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // can go too. Never one still being judged: what it is cannot be told, so its worktree is kept.
     public static readonly TimeSpan OwedFor = TimeSpan.FromDays(7);
     // The push waits for every session to be judged and restored, or this long after start,
-    // whichever is first.
+    // whichever is first; restores wait for every session to be judged as long (PumpLocked).
     public static readonly TimeSpan NoticeAfter = TimeSpan.FromMinutes(10);
     // A time in the record more than this ahead of the clock (one set back: a bad RTC, a VM restored
     // from a snapshot, a year corrected) is read as now. Kept, never let go for it, and never left to
@@ -185,6 +185,10 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     public static readonly TimeSpan BusyRetry = TimeSpan.FromSeconds(15);
     // A restore's stamp due to go while its agent's discovery is held is looked at again this often.
     public static readonly TimeSpan HeldRetry = TimeSpan.FromMinutes(1);
+    // While anything is offered, the record is written at least this often, so its Written says when
+    // the host was last seen to within this: a record last written long ago is then time the host did
+    // not see, never days it ran with nothing to write (Engineering, cr2-982).
+    public static readonly TimeSpan SeenEvery = TimeSpan.FromHours(3);
     public const string RestorePrincipal = "host-restore";
     // What the record keeps of launches whose sessions have not been seen (bounded, never growing).
     const int LaunchesKept = 256;
@@ -297,6 +301,9 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     ITimer? judgeTimer;
     bool judgingEvery;
     string? writeProblem;
+    // The wall clock and the monotonic one when the record's times were last looked at (AheadLocked):
+    // a step of the wall clock the monotonic one did not take is a clock set forward, not time lived.
+    (DateTimeOffset Wall, long Stamp)? looked;
 
     // Raised once, with the notice to push, when what died is known (or NoticeAfter has passed).
     public event Action<RestoreNotice>? NoticeReady;
@@ -359,6 +366,16 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             {
                 if (owed.Any(w => w.Entry.Id == id)) { continue; }
                 if (folder is not { Length: > 0 } cwd) { return null; }
+                folders.Add(cwd);
+            }
+            // A restored session still stamped (live, or gone within GoneKept): owed again the moment
+            // it dies, which may fall between this read and the reclaimer's read of live processes, and
+            // then neither kept its folder (Trust on #837; #855). Kept here too, it is in one snapshot.
+            foreach (var (id, e) in live)
+            {
+                if (!(e.Restored is not null || restoredAt.ContainsKey(id)) || requested.ContainsKey(id) || owed.Any(w => w.Entry.Id == id)) { continue; }
+                // Its folder not known: any worktree may be its, as for an owed one (Engineering, cr2-982).
+                if (e.Cwd is not { Length: > 0 } cwd) { return null; }
                 folders.Add(cwd);
             }
             return folders;
@@ -466,12 +483,26 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                     owed.Add(new RestoreOwed(e, cause, previous.Written, now, Decided: false));
                     judgedNow.Add(e.Id);
                 }
+                // A record last written more than OwedFor ago: a clock set forward, or a machine off a
+                // week, which the wall clock cannot tell apart. Counted, every offer went at once with
+                // nobody having seen it (Engineering on #813; #855). That time is not counted against
+                // them, and their folders are kept. Only what the host cannot have seen: an offer is
+                // written at least every SeenEvery, so the host may have run up to that long after the
+                // record's Written, and that is counted. Measured from Written alone, days the host ran
+                // with nothing to write were forgiven too, and a crash after each kept an offer for ever
+                // (Engineering, cr2-982).
+                var away = now - previous.Written > OwedFor ? now - previous.Written - SeenEvery : TimeSpan.Zero;
+                if (away > TimeSpan.Zero && previous.Owed.Any(w => w.Decided))
+                {
+                    log($"restore: the record was last written {(now - previous.Written).TotalDays:0} days ago, more than the {OwedFor.TotalDays:0} days an offer is kept; what it offered keeps the time it had left then, less the {SeenEvery.TotalHours:0} hours the host may have run since");
+                }
                 // Sessions earlier runs left owed. Those offered already are not news, and are not
                 // restored now: a person resumes them from Launch. Those still being judged are, and
                 // are judged as of now: a reboot since makes them died. With sessions.restoreOnStart
                 // off none is kept.
-                foreach (var w in previous.Owed)
+                foreach (var kept in previous.Owed)
                 {
+                    var w = kept.Decided && away > TimeSpan.Zero ? kept with { At = kept.At + away } : kept;
                     if (!Keeps || (w.Decided && now - w.At >= OwedFor) || !seen.Add(w.Entry.Id)) { continue; }
                     // Stamped, and not found running (adopted then): its restore started and it went
                     // again before it had lived, with the host. A loop, never offered as a plain death.
@@ -674,6 +705,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // takes, which stopped the host at every start (Quality, #813).
     void AheadLocked(DateTimeOffset now)
     {
+        ForwardLocked(now);
         for (var i = 0; i < owed.Count; i++)
         {
             if (owed[i].At - now > AheadTolerance) { owed[i] = owed[i] with { At = now }; }
@@ -695,6 +727,26 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             if (u.Stamp - now > AheadTolerance) { unconfirmed[id] = u with { Stamp = now }; }
         }
         if (retryAt - now > BusyRetry + AheadTolerance) { retryAt = now; }
+    }
+
+    // The wall clock set forward past OwedFor while the host runs, beyond the time the monotonic clock
+    // says passed: counted, every offer went at once, nobody having seen it (Engineering on #813;
+    // #855). The step is not counted against them. A smaller one counts, as a machine off for days
+    // does at start.
+    void ForwardLocked(DateTimeOffset now)
+    {
+        var stamp = time.GetTimestamp();
+        if (looked is { } l && (now - l.Wall) - time.GetElapsedTime(l.Stamp, stamp) is var step && step > OwedFor)
+        {
+            for (var i = 0; i < owed.Count; i++)
+            {
+                if (owed[i].Decided) { owed[i] = owed[i] with { At = owed[i].At + step }; }
+            }
+            log($"restore: the clock moved {step.TotalDays:0} days further than the host ran; what is offered keeps the time it had left");
+            // Written down, or a crash before the next write lost it (Engineering, cr2-982).
+            ScheduleWriteLocked(Coalesce);
+        }
+        looked = (now, stamp);
     }
 
     // Never before now, never past LongestWait: what fires early only looks again.
@@ -743,8 +795,10 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         if (stopped || stopping.IsCancellationRequested || !running || resuming || now < retryAt || !CanRestoreLocked()) { return; }
         // Not while any is still being judged (its agent's discovery held, or its hooks' endings not
         // yet taken in): every session is judged before the newest is restored, across agents
-        // (Copilot on #837). The judging timer pumps again once they are.
-        if (owed.Any(w => !w.Decided)) { return; }
+        // (Copilot on #837). The judging timer pumps again once they are. Only until NoticeAfter,
+        // then those decided are restored, newest first: a discovery that stayed held kept every
+        // restore back for as long as it did (Engineering, TKQ_ on #837; #855).
+        if (owed.Any(w => !w.Decided) && time.GetElapsedTime(startedStamp) < NoticeAfter) { return; }
         if (Candidates().OrderByDescending(w => w.Entry.Seen).FirstOrDefault() is not { } next) { return; }
         var entry = next.Entry;
         var undo = StampLocked(entry.Id, now, next.Cause, next.Since ?? next.At, entry.Turn == RestoreTurn.Working, entry.QuestionWaiting);
@@ -1406,6 +1460,9 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         {
             if (options.Marks?.Interrupted(id) is { } found) { interruptedAt[id] = found; }
         }
+        // While anything is offered, written at least every SeenEvery, so the next start knows how long
+        // the host was not there (StartOnce).
+        if (owed.Any(w => w.Decided)) { Next(now + SeenEvery); }
         var file = new RestoreFile
         {
             Boot = boot,

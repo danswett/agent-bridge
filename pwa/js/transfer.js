@@ -38,16 +38,21 @@ export async function macOf(keyBytes, bodyBytes) {
 }
 
 // A signed command for the machine with machinePublic: { body, by, mac }, each base64url. to is
-// the machine that acts on it; omitted, the machine it is signed for.
-export async function signCommand({ key, deviceId, machinePublic, action, session, to, now = Date.now(), request = globalThis.crypto.randomUUID() }) {
+// the machine that acts on it; omitted, the machine it is signed for. question and shown: an
+// escaped approval's confirmation names the question and what was read (#803), in the order the
+// host's CommandTarget writes them, and nothing else does.
+export async function signCommand({ key, deviceId, machinePublic, action, session, to, question, shown, now = Date.now(), request = globalThis.crypto.randomUUID() }) {
   const machine = await deviceIdOf(machinePublic);
   const issuedAt = Math.floor(now / 1000);
+  const target = { machine, session };
+  if (question !== undefined) { target.question = question; }
+  if (shown !== undefined) { target.shown = shown; }
   const body = utf8.encode(JSON.stringify({
     v: 1,
     action,
     request,
     principal: { kind: 'user', device: deviceId },
-    target: { machine, session },
+    target,
     to: to ?? machine,
     issuedAt,
     expiresAt: issuedAt + COMMAND_LIFETIME_S,
@@ -65,6 +70,14 @@ export function signTransfer({ session, to, ...rest }) {
 // it (docs/protocol/v1-launch.md, "Folder trust").
 export function signTrust({ question, choice, ...rest }) {
   return signCommand({ ...rest, action: trustAction(choice), session: question });
+}
+
+// The confirmation of an approval with escaped characters (#803, docs/protocol/v1-sessions.md,
+// "Escaped approvals"): signed when its button is pressed, for this session, this question and the
+// digest of the message as this device has it, with the answer's own request.
+export const ESCAPED_ACTION = 'session.approve:escaped';
+export function signEscapedApproval({ session, question, shown, request, ...rest }) {
+  return signCommand({ ...rest, action: ESCAPED_ACTION, session, question, shown, request });
 }
 
 // The sessions the account's other machines offer for a transfer to target, each with its

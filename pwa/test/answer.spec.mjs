@@ -409,20 +409,20 @@ test.describe('outcomes', () => {
     // Past any check's hold: the panel is there to stay, not on its way out.
     await page.waitForTimeout(1500);
     await expect(q).toHaveCount(1);
-    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check at the machine on Demo machine. (the session stopped answering)');
+    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check the conversation. (the session stopped answering)');
     await expect(q.locator('.choice[data-value="pg"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(q.locator('.choice[data-value="sqlite"]')).toBeDisabled();
     await expect(card(page, CODEX).locator('.answer-receipt')).toHaveCount(0);
   });
 
-  test('unconfirmed says to check at the machine, keeps the option that went pressed and the rest disabled, and nothing offers to send it again', async ({ page }) => {
+  test('unconfirmed says to check the conversation, keeps the option that went pressed and the rest disabled, and nothing offers to send it again', async ({ page }) => {
     await openDemo(page);
     await script(page, 'unconfirmed');
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
     // The host typed it and took the question away, but it may not have gone in: one attempt per
     // prompt (ui.md §6.5), so the question stays as it went, saying so.
-    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check at the machine on Demo machine. (the session stopped answering)');
+    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check the conversation. (the session stopped answering)');
     await expect(q).toHaveAttribute('data-answer', 'unconfirmed');
     await expect(q.locator('.choice[data-value="pg"]')).toHaveAttribute('aria-pressed', 'true');
     expect(await q.locator('.choice[data-value="pg"]').evaluate((b) => getComputedStyle(b).opacity)).toBe('1');
@@ -437,7 +437,7 @@ test.describe('outcomes', () => {
     await script(page, { outcome: 'queued', reason: 'a newer host' });
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
-    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check at the machine on Demo machine. (a newer host)');
+    await expect(q.locator('.answer-status')).toHaveText('Sent, but not confirmed. Check the conversation. (a newer host)');
   });
 
   test('stale says it was already answered or is gone, and holds the form', async ({ page }) => {

@@ -1187,9 +1187,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **An approval is drawn as it runs,** since Approve once allows all of it: exactly as
     written, in the code face, never read as Markdown, with its hidden characters,
     right-to-left letters and bare carriage returns escaped and the code notes beside it, and
-    no Copy ("An approval's card", below, #220). Approve once stays offered whatever it holds,
-    the owner's "escape and allow" (#253). It wraps and is never cut, so a long command or a
-    diff keeps Approve once.
+    no Copy ("An approval's card", below, #220). It wraps and is never cut, so a long command or a
+    diff keeps Approve once. One the host escaped anything in is approved only through the
+    confirmation sheet ("Escaped approvals", below, #803), which replaced the one-tap Approve
+    once of the owner's "escape and allow" (#253).
   - **A host sends an approval's hidden characters and right-to-left letters as escapes**
     (`\u202E`, `\u05D0`, #220). The card's notes, and Needs you, which never offers such a
     prompt inline (§6.1), count a host's escape as the character it stands for.
@@ -1336,6 +1337,53 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   hook's 300-character preview cut short with nothing marking it truncated, so a card draws that
   exactly as written and answers it at the machine. Other questions and the conversation keep
   their Markdown.
+- **Escaped approvals** (#803; copy and layout by the creative director, the token signed off by
+  the owner): an approval with `escaped` (v1-sessions.md, "Escaped approvals").
+  - **The card** (PWA and app): Approve becomes **"Approve once…"**; the ellipsis says it opens
+    the sheet. Deny stays one tap. The notes stay above the buttons. Without
+    `sessions.approveEscaped` there is no disabled button: Approve is not shown (one verb per
+    state), and its place says why. Not an approved device: "Approve this at *machine*, or from a
+    device approved there.", with **How to approve a device** opening the help text. A machine
+    whose `approve` is `machine`: "*machine* takes this approval only at the machine." One whose
+    `approve` is `tooMany` (more escapes than a question marks): "Too many hidden characters to
+    show here. Approve this at *machine*." Deny stays.
+  - **The confirm sheet** (full screen on a phone, a dialog on a wide PWA as tall as what it holds
+    up to 90% of the window, a ContentDialog in the app). Title "Approve a command with hidden characters?"; line 2 "*session title* on
+    *machine*". The warning, in the warning role, each sentence only where it applies, then the
+    last always: "Boxed codes like `\u000D` are characters that run but aren't drawn." /
+    "Boxed codes like `\u202E` and right-to-left letters can reorder what you see." /
+    "Approving runs everything below, boxed characters included." Then the command, in full,
+    never cut, in the code face at body size, left to right (`unicode-bidi: plaintext`), wrapped,
+    in a scrollable read-only region that is focusable and scrolls from the keyboard (Page Down,
+    End). **The confirm sits at the end of the command, inside the scrolled content,** so it
+    cannot be reached without the end shown and never sits under the opener's tap point; it
+    stays disabled for 1 s after it first comes into view, which stops a double tap (held, in forced
+    colours, it is the system's disabled cue: `GrayText` text and border, no fill). Its label
+    is "I've read it. Approve once", its accessible name "Approve once: I've read the escaped
+    command". "Scroll to the end to approve." shows until the end is in view; when the confirm
+    becomes available, a polite announcement says "Approve is now available". **Cancel** is pinned
+    in the header (the app's Close button): the default action, the Escape action, and where
+    focus starts. Back or Cancel sends nothing. The sheet traps focus; under reduced motion it
+    appears without travel. The command is signed when the confirm is pressed, never on opening,
+    and lasts five minutes from that press, however late the machine's link returns. Pressed
+    while the machine is out of reach, the sheet stays open saying "Not sent" directly under the
+    confirm, which is the Try again. One that could not be sent within its five minutes is never sent: the card says it
+    expired and offers **Approve once…** again.
+  - **Escape tokens** (owner sign-off, outline only): each host mark (`marks`) is its `\uXXXX`
+    text in the code face and size with a 1 px outline in the Danger role (`Highlight` in forced
+    colours), a 2 px radius, 2 px side padding and no fill. Text the agent typed itself, `\u202E`
+    included, is never boxed. A token's accessible name is "hidden character, *Unicode name*"
+    ("right-to-left override"), or "right-to-left letter, …". The warning's own codes are boxed
+    the same way. Contrast: AA for text, 3:1 for the outline, in light, dark and forced colours.
+  - **Windows app Settings**, under the folder-trust devices, says who may approve these and why,
+    whether folder trust is on or off: the folder-trust devices (only while folder trust is on),
+    the devices `config.json` lists by short id, or only at the machine.
+  - **Home Assistant:** Deny only, under the line "Approve from the *app* or at the machine.", or
+    "Approve at the machine." when `approve` is `machine` or `tooMany`. It has no device key, and its users include agents.
+  - **Needs you, toasts, pushes:** no special case. Never an inline Approve (#202); a tap opens
+    the card.
+  - The Mac, iPhone and iPad app does not have the sheet yet: its Approve on one is refused by the
+    host with the reason, and Deny goes (a known difference, #832).
 - **Markdown the parser can't take** (#440): an agent's text that the Markdown parser fails on,
   or could read only slowly, is drawn as written: one paragraph of plain prose, its line breaks
   kept, never dropped and never read as Markdown. Since an agent can send text here on purpose,
@@ -2019,7 +2067,7 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   again after a failure with no outcome, reuse the same `request`, so the host types it at most
   once and returns the first outcome. Only Try again after a `busy` or `refused` outcome sends a
   **new** `request`, because the host remembers each outcome for ten minutes and would only
-  repeat it. `unconfirmed` is never retried: the receipt says to check at the machine, as §6.5's
+  repeat it. `unconfirmed` is never retried: the receipt says to check the conversation, as §6.5's
   does. While it is in
   flight the button is disabled and keeps focus (A4).
 - **In the conversation:** shown as the person's own message, exactly as a typed reply is. It is
@@ -2151,7 +2199,9 @@ that survives a failed turn never hides the error behind "Delegating".
   "· *reason*", the reason is the host's categorised reason in plain words, from a known set.
   Raw text from the machine or the CLI is never shown, verbatim or trimmed: it belongs in
   diagnostics (#802). A line with no reason from that set reads without one ("Sign-in
-  refused").
+  refused"). The set for a refused start, by the host's reason: "too many requests, try again
+  later", "another sign-in is under way", "too many sign-ins waiting on this machine" and "not
+  available from this device".
 
 **Machine banner** (one per machine, agent and account, rolled up from the sessions' `attention`)
 
@@ -2161,7 +2211,10 @@ that survives a failed turn never hides the error behind "Delegating".
 - Title: "*Agent* on *machine* needs sign-in" plus "· @*account*" when known. Line 2: "*n*
   sessions affected: *A*, *B*" ("1 session affected: *A*" for one). Each title is a link that
   opens that session; there is no separate line of titles. The titles come from the client's own
-  records (never from text in the record).
+  records (never from text in the record), each drawn as a host's sentence is: revealed (a hidden
+  or right-to-left character as its escape) and at most 120 characters. A link keeps its comma,
+  so no line starts with one, and each is a target at least 32px tall with a pointer and 44px on
+  touch, the height of its line box (§9.1 A11).
 - One button, **Sign in**, only with the capability and `signIn: phone`. Without the capability
   there is no button and no instruction: a missing capability doesn't prove the agent can't sign
   in from a device.

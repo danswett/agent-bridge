@@ -21,19 +21,32 @@ internal static class QuestionMapper
     // visible escape, and Approve once is still offered (#220; the owner's #253 decision 3): what
     // a reader is shown is then what runs. A client that cannot draw it exactly as written holds
     // it at the machine itself.
-    public static Question Approval(string id, string message, DateTimeOffset askedAt, bool atMachine = false)
+    //
+    // An approval the host escaped anything in carries Escaped (#803): where its escapes are, the
+    // digest of the message as sent, and approve, the machine's permissions.escapedApproval, which
+    // says whether Approve may come as a confirmation from an approved device or only at the machine.
+    // marks: given when message is already shown so (CopilotPermissionPrompt), and then not escaped
+    // again.
+    public static Question Approval(string id, string message, DateTimeOffset askedAt, bool atMachine = false,
+        string approve = EscapedApproval.Confirm, IReadOnlyList<(int Start, int Length)>? marks = null)
     {
         // Escaped from no more than it can carry (RevealWithin): still cut, and said to be, if it is over.
-        var shown = ShownText.RevealWithin(message, Limits.QuestionMessage, rightToLeft: true);
+        var (shown, escapes) = marks is null ? ShownText.RevealWithinMarked(message, Limits.QuestionMessage, rightToLeft: true) : (message, marks);
+        var cut = Cut(shown);
+        // More escapes than a question describes is a message not described exactly: Approve is the
+        // machine's (TooMany), never confirmed. Not truncated, which would refuse Deny too: the whole
+        // message came, and denying it is safe from anywhere (#836 review).
+        var many = escapes.Count > EscapedApproval.MaxMarks;
         return new()
         {
             Id = id,
             Kind = QuestionKind.Approval,
-            Message = Cut(shown),
+            Message = cut,
             Truncated = IsCut(shown),
             Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = ApprovalOptions, Required = true }],
             AskedAt = askedAt,
             AnswerAtMachine = atMachine ? true : null,
+            Escaped = escapes.Count == 0 ? null : EscapedApproval.For(cut, escapes.Take(EscapedApproval.MaxMarks), many ? EscapedApproval.TooMany : approve),
         };
     }
 
@@ -46,25 +59,28 @@ internal static class QuestionMapper
     //
     // Its id is the marker's DecisionId and a digest of what is shown (CodexApprovalId, #958),
     // worked out from the content alone; atMachine (agent-ha-bridge already typed into it) is
-    // laid on after, so it holds the approval without changing which one it is.
-    public static Question CodexApproval(string decisionId, string? tool, string? command, bool cut, string preview, DateTimeOffset askedAt, bool atMachine)
+    // laid on after, so it holds the approval without changing which one it is. approve is the
+    // machine's permissions.escapedApproval, carried in Escaped for one the host escaped
+    // anything in (#803); a confirmation names this id, so it too approves only what was shown.
+    public static Question CodexApproval(string decisionId, string? tool, string? command, bool cut, string preview, DateTimeOffset askedAt, bool atMachine,
+        string approve = EscapedApproval.Confirm)
     {
-        var shown = CodexApprovalShown(tool, command, cut, preview, askedAt);
+        var shown = CodexApprovalShown(tool, command, cut, preview, askedAt, approve);
         var q = shown with { Id = CodexApprovalId.For(decisionId, tool, command, cut, preview, shown) };
         return atMachine ? q with { AnswerAtMachine = true } : q;
     }
 
-    static Question CodexApprovalShown(string? tool, string? command, bool cut, string preview, DateTimeOffset askedAt)
+    static Question CodexApprovalShown(string? tool, string? command, bool cut, string preview, DateTimeOffset askedAt, string approve)
     {
         const string id = "";
         var who = $"Allow **{CopilotPermission.Plain(string.IsNullOrWhiteSpace(tool) ? "Codex" : tool)}**?";
         if (command is not { Length: > 0 })
         {
             var legacy = preview.StartsWith("Needs approval: ", StringComparison.Ordinal) ? preview["Needs approval: ".Length..] : preview;
-            var held = Approval(id, legacy.Length > 0 ? $"{who}\n\n{CopilotPermission.Fence(legacy)}" : who, askedAt);
+            var held = Approval(id, legacy.Length > 0 ? $"{who}\n\n{CopilotPermission.Fence(legacy)}" : who, askedAt, approve: approve);
             return tool is null && command is null ? held with { Truncated = true } : held with { AnswerAtMachine = true };
         }
-        var q = Approval(id, $"{who}\n\n{CopilotPermission.Fence(command)}", askedAt);
+        var q = Approval(id, $"{who}\n\n{CopilotPermission.Fence(command)}", askedAt, approve: approve);
         if (cut) { q = q with { Truncated = true }; }
         // Whatever the command, what is sent is that shape, which every client checks before it
         // offers Approve; one that is not would be answered nowhere else, so it is held here. One

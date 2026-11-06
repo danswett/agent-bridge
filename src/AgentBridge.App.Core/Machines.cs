@@ -158,6 +158,10 @@ public interface IFleetLink : IAsyncDisposable
     // machine asking (machinePublic, whose device id is machine), for exactly that question, choice
     // and request. Null when it cannot be signed now. None in a stand-in.
     SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request) => null;
+    // An escaped approval's confirmation (#803), signed as for SignTrust, for that session, question,
+    // what was read (EscapedText.Shown) and the answer's request, as of when its button was pressed.
+    // Null when it cannot be signed now.
+    SignedCommand? SignEscapedApproval(byte[]? machinePublic, string machine, string session, string question, string shown, string request, DateTimeOffset pressed) => null;
     // This app's own device id on the relay, which a machine approves to answer folder-trust
     // questions from; and the people's devices (the PWA, this app elsewhere) the relay lists now.
     string? DeviceId => null;
@@ -740,6 +744,11 @@ public sealed class RelayFleetLink : IFleetLink
     public SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request) =>
         machinePublic is { } k && Wire.DeviceId(k) == machine
             ? Transfers.SignCommand(key, k, TrustProtocol.Action(choice), question, machine, DateTimeOffset.UtcNow, request)
+            : null;
+
+    public SignedCommand? SignEscapedApproval(byte[]? machinePublic, string machine, string session, string question, string shown, string request, DateTimeOffset pressed) =>
+        machinePublic is { } k && Wire.DeviceId(k) == machine
+            ? Transfers.SignCommand(key, k, EscapedApproval.Action, session, machine, pressed, request, question, shown)
             : null;
 
     public async ValueTask DisposeAsync()

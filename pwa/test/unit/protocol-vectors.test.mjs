@@ -137,6 +137,7 @@ function holds(read, wire, unread = [], at = '') {
 // it drops the record. unread: the parts it has no use for. refuses: false, with why, when it
 // cannot drop one it fails to read.
 const SESSION_ID = '4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b';
+const ESCAPED_MESSAGE = () => records.get('Question').valid.find((v) => v.name === 'an-escaped-approval').json.message;
 const READS = {
   MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine },
   HelloResult: { read: readHello },
@@ -145,6 +146,9 @@ const READS = {
   Field: { read: (j) => readQuestion({ fields: [j] }).fields[0] ?? null },
   FieldConstraints: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'number', constraints: j }] }).fields[0].constraints },
   Question: { read: readQuestion },
+  // One the PWA cannot read is dropped for a hold at the machine that keeps nothing of it (no shown).
+  // Its marks are checked against the message they are of: the escaped approval's own.
+  EscapedText: { read: (j) => { const e = readQuestion({ kind: 'approval', message: ESCAPED_MESSAGE(), escaped: j }).escaped; return e?.shown === null ? null : e; } },
   Background: { read: readBackground },
   ActivitySource: { read: readSource },
   OwnActivity: { read: readOwn },
@@ -535,7 +539,8 @@ for (const v of signed.valid) {
     const [signer, machine] = await Promise.all([pair(signed.keys.signer), pair(signed.keys.machine)]);
     const command = await signCommand({
       key: signer, deviceId: signed.keys.signer.device, machinePublic: machine.public,
-      action: v.body.action, session: v.body.target.session, to: v.body.to, now: v.body.issuedAt * 1000, request: v.body.request,
+      action: v.body.action, session: v.body.target.session, question: v.body.target.question, shown: v.body.target.shown,
+      to: v.body.to, now: v.body.issuedAt * 1000, request: v.body.request,
     });
     assert.deepEqual(JSON.parse(fromUtf8.decode(fromBase64url(command.body))), v.body);
     assert.deepEqual(command, v.command);
