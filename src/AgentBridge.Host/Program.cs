@@ -571,6 +571,11 @@ async Task<int> ServeAsync(HostHandover handover)
         }, stop.Token);
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
+    // host.restart's one way out, also the committed-departure watchdog's (#805 N1): probes
+    // settled first (#238), and a stop asked for meanwhile is never turned into a restart.
+    var restart = new SettledRestart(usageMonitor is null ? null : (t, ct) => usageMonitor.SettleProbesAsync(t, ct), handover.Request, stop.Cancel, stop.Token);
+    void RestartHost() => _ = Task.Run(restart.RunAsync);
+    using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -601,7 +606,7 @@ async Task<int> ServeAsync(HostHandover handover)
         Agents = agentReadiness,
         AgentSetup = agentSetup,
         AgentInstall = agentInstall,
-        Lifecycle = new LifecycleCoordinator(deliveryGate, new DepartureConditions()),
+        Lifecycle = new LifecycleCoordinator(deliveryGate, new DepartureConditions(), watchdog: departureWatchdog),
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -621,14 +626,7 @@ async Task<int> ServeAsync(HostHandover handover)
             wake.Release();
         },
         Stop = () => stop.Cancel(),
-        // Done with any usage probe tied to this host before it stops, so a standalone Codex probe
-        // is not cut mid-refresh (#238); the replacement starts once it has (HostHandover).
-        Restart = () => _ = Task.Run(async () =>
-        {
-            if (usageMonitor is not null) { await usageMonitor.SettleProbesAsync(TimeSpan.FromSeconds(90)); }
-            handover.Request();
-            stop.Cancel();
-        }),
+        Restart = RestartHost,
         HoldProbes = () => usageMonitor?.HoldProbes(TimeSpan.FromMinutes(15)) == true
             ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null,
     }, Log);

@@ -67,7 +67,7 @@ public sealed class LifecycleCoordinatorTests
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => coordinator.TryAcquireQuiet(TimeSpan.FromSeconds(11), DeparturePurpose.RemoteRestart));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => coordinator.TryAcquireQuiet(TimeSpan.Zero, (DeparturePurpose)int.MaxValue));
         Assert.Equal(["DeliveryInFlight", "Typing", "AnnounceUnacked", "JournalUncertain", "AppRunning",
-            "OtherHostRunning", "ChannelChanged", "TransferInFlight", "ConditionFault"], Enum.GetNames<DepartureBlocker>());
+            "OtherHostRunning", "ChannelChanged", "TransferInFlight", "ConditionFault", "LeaseExpired"], Enum.GetNames<DepartureBlocker>());
     }
 
     [Fact]
@@ -210,11 +210,47 @@ public sealed class LifecycleCoordinatorTests
     }
 
     [Fact]
-    public void An_unknown_condition_kind_is_refused_at_composition()
+    public void An_unknown_condition_kind_or_LeaseExpired_is_refused_at_composition()
     {
         var conditions = new DepartureConditions();
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             conditions.Register(DeparturePurpose.Update, new Condition((DepartureBlocker)999, () => false)));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            conditions.Register(DeparturePurpose.Update, new Condition(DepartureBlocker.LeaseExpired, () => false)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_commit_after_the_lease_expires_aborts_as_LeaseExpired_not_ConditionFault(bool notified)
+    {
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), time: time);
+        using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
+        Assert.True((await coordinator.AnnouncePlanned(lease)).Succeeded);
+        time.Advance(LifecycleCoordinator.LeaseLifetime);
+        // Either before or after the gate's asynchronous expiry notification has released it.
+        if (notified) { await lease.Cancellation.WaitAsync(Bound); }
+        Assert.Equal(DepartureBlocker.LeaseExpired, coordinator.CommitDeparture(lease).Kind);
+        using var admitted = gate.TryEnterDelivery();
+        Assert.NotNull(admitted);
+    }
+
+    [Fact]
+    public async Task A_commit_just_before_expiry_still_commits_and_a_released_lease_stays_ConditionFault()
+    {
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), time: time);
+        using var released = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
+        released.Dispose();
+        time.Advance(LifecycleCoordinator.LeaseLifetime);
+        Assert.Equal(DepartureBlocker.ConditionFault, coordinator.CommitDeparture(released).Kind);
+        using var lease = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Value!;
+        Assert.True((await coordinator.AnnouncePlanned(lease)).Succeeded);
+        time.Advance(LifecycleCoordinator.LeaseLifetime - TimeSpan.FromTicks(1));
+        Assert.True(coordinator.CommitDeparture(lease).Committed);
     }
 
     [Fact]
