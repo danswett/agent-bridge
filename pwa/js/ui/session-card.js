@@ -39,9 +39,11 @@ import { EndSession } from './stop-view.js';
 import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegateDetail, DelegatesBlock, DelegateStrip } from './delegates-view.js';
-import { aloud, backgroundCounts, delegateEvents, delegateFold, eventParts, mainVoice } from '../attribution.js';
+import { aloud, backgroundCounts, delegateEvents, delegateFold, delegateList, eventParts, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
+import { CollapsingHeader, PHONE } from './collapse-header.js';
+import { CollapsingFoot } from './collapse-foot.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 
@@ -472,7 +474,10 @@ export class SessionCard {
   // after that fades in.
   #eventKeys = null;
   #promptAt = null;
-
+  // The Delegates tab's count on a phone (#629): what the last update counted, and the width that shows it.
+  #tabCounts = { running: 0, asking: 0 };
+  #phone = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(PHONE) : null;
+  #onPhone = () => this.#renderTabCount();
   // hostId: the machine the session is on, which everything the view sends goes to.
   // fetchDetail(id) -> Promise<Session|null>, for the tool history (session.get).
   // answering() -> { service, replies, stops, hostId, capabilities } | null: who answers
@@ -528,8 +533,14 @@ export class SessionCard {
     e.detailsButton = h('button', { type: 'button', class: 'icon-button details-button', 'aria-pressed': 'false', 'aria-controls': this.ids.details, 'aria-label': 'Details', title: 'Details', onclick: () => this.showDetails() }, designIcon('inspector', { cls: 'ab-icon-20' }));
     e.inspectorButton = h('button', { type: 'button', class: 'icon-button inspector-button', 'aria-label': 'Hide inspector', title: 'Hide inspector', onclick: () => this.onInspector?.() }, designIcon('sidebar', { cls: 'ab-icon-20' }));
     e.more = h('button', { type: 'button', class: 'icon-button more', 'aria-haspopup': 'menu', 'aria-label': 'More', title: 'More', onclick: () => this.#openMore() }, designIcon('more', { cls: 'ab-icon-20' }));
-    e.actions = h('div', { class: 'header-actions' }, e.pin, e.detailsButton, e.inspectorButton, e.more);
-    e.header = h('header', { class: 'session-header' }, e.back, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
+    e.actions = h('div', { class: 'header-actions' }, e.pin, e.detailsButton, e.inspectorButton);
+    e.header = h('header', { class: 'session-header' }, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
+    // The pinned bar of a phone's collapsing header (ui.md §6.2): Back and More are the bar's, always
+    // in reach and first in the tab order. Its glyph and title are drawn, not read: the status is
+    // read from the meta line, and the h2 is the one heading. From 760 the bar is not shown.
+    e.barGlyph = glyph('idle', { size: 16 });
+    e.barTitle = h('span', { class: 'bar-title-text' });
+    e.bar = h('div', { class: 'session-bar' }, e.back, h('div', { class: 'bar-title', 'aria-hidden': 'true' }, e.barGlyph, e.barTitle), e.more);
     // The delegate strip (§6.3): at three panes under the header; on a phone a chip row.
     // Its item pressed again lets the delegate go, if it is on screen. Out of sight, it shows it:
     // the inspector hidden, or (with no inspector pane) another tab chosen over it, which a tab
@@ -545,15 +556,22 @@ export class SessionCard {
     // Conversation / Delegates / Tools, where the inspector isn't a pane of its own (ui.md §6.3).
     // Delegates is there only while the host lists any.
     e.tabC = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabC, 'aria-controls': this.ids.conversation, onclick: () => this.setTab('conversation') }, 'Conversation');
-    e.tabD = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabD, 'aria-controls': this.ids.delegates, hidden: true, onclick: () => this.setTab('delegates') }, 'Delegates');
+    // On a phone, with no strip, the tab carries what the strip did (#629): "Delegates 2" while two
+    // run, led by the needs glyph while one asks, and named for both. In place: never a new height.
+    e.tabNeeds = glyph('needs', { size: 16 });
+    e.tabNeeds.setAttribute('hidden', '');
+    e.tabCount = h('span', { class: 'tab-count', 'aria-hidden': 'true' });
+    e.tabD = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabD, 'aria-controls': this.ids.delegates, hidden: true, onclick: () => this.setTab('delegates') }, e.tabNeeds, 'Delegates', e.tabCount);
     e.tabT = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabT, 'aria-controls': this.ids.tools, onclick: () => this.setTab('tools') }, 'Tools');
     e.tabs = h('div', { class: 'view-tabs', role: 'tablist', 'aria-label': 'Session' }, e.tabC, e.tabD, e.tabT);
     e.tabs.addEventListener('keydown', (ev) => {
-      if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') { return; }
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) { return; }
       ev.preventDefault();
       const tabs = [['conversation', e.tabC], ['delegates', e.tabD], ['tools', e.tabT]].filter(([, el]) => !el.hidden);
       const i = Math.max(0, tabs.findIndex(([t]) => t === this.#tab));
-      const [next, el] = tabs[(i + (ev.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
+      // Left and Right wrap; Home and End go to the first and last (ui.md §6.2, #629).
+      const to = ev.key === 'Home' ? 0 : ev.key === 'End' ? tabs.length - 1 : (i + (ev.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+      const [next, el] = tabs[to];
       this.setTab(next);
       el.focus();
     });
@@ -613,10 +631,14 @@ export class SessionCard {
     this.#guardQuestion(e.question);
     e.stream = h('div', { class: 'stream' }, e.user, e.prompt, e.agentBlock, e.question);
     e.reply = h('div', { class: 'reply-slot' });
+    // A phone's compact reply area (CollapsingFoot, ui.md §6.5): a pinned bar holding a copy of the
+    // box, drawn, not read, and no tab stop; a tap on it brings the box back, focused.
+    e.replyCopy = h('div', { class: 'reply-copy', 'aria-hidden': 'true' }, h('span'));
+    e.replyBar = h('div', { class: 'reply-bar' }, e.replyCopy);
     e.scroll = h('div', { class: 'stream-scroll' }, e.stream);
     this.#watchHold(e.scroll);
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
-      e.scroll, e.reply);
+      e.scroll, e.reply, e.replyBar);
 
     // The inspector: Details, then Tools.
     e.facts = h('dl', { class: 'facts' });
@@ -645,8 +667,16 @@ export class SessionCard {
     // The delegate's pane is in the document only while one is open.
     e.inspector = h('aside', { class: 'inspector', 'aria-label': 'Inspector' }, e.details, e.delegates, e.tools);
 
+    // The header floats over the conversation on a phone (CollapsingHeader); the bar first, so Back and
+    // More come before the tabs.
+    e.top = h('div', { class: 'session-top' }, e.header, this.strip.element, e.tabs);
+    e.head = h('div', { class: 'session-head' }, e.bar, e.top);
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
-      e.header, this.strip.element, e.tabs, h('div', { class: 'view-body' }, e.conversation, e.inspector));
+      e.head, h('div', { class: 'view-body' }, e.conversation, e.inspector));
+    const foot = new CollapsingFoot({ view: this.view, slot: e.reply, bar: e.replyBar, copy: e.replyCopy, scroller: e.scroll });
+    this.collapse = new CollapsingHeader({ view: this.view, head: e.head, top: e.top, bar: e.bar, scroller: e.scroll, foot });
+    this.foot = foot;
+    this.#phone?.addEventListener('change', this.#onPhone);
     this.#applyTab();
     // A question that stays where it is can still move (#491): a title wrapping, a tool line
     // coming or going, the response or reasoning or your message changing above it, a note,
@@ -737,7 +767,9 @@ export class SessionCard {
 
     // The header: one meta line, glyph · status · machine · repository.
     e.titleText.textContent = title;
+    e.barTitle.textContent = title;
     setGlyph(e.glyph, words.glyph, { size: 16, driven: words.driven });
+    setGlyph(e.barGlyph, words.glyph, { size: 16, driven: words.driven });
     if (this.#changed('meta', [words.text, words.tone, words.driven, s.driverPrincipal, this.machineName, where, s.repository])) {
       e.statusText.dataset.tone = words.tone;
       setFacts(e.statusText, words.facts);
@@ -813,9 +845,29 @@ export class SessionCard {
     e.delegateCounts.hidden = !counts;
     e.delegates.hidden = !listed && !counts;
     e.tabD.hidden = e.delegates.hidden;
+    // Running as the strip counts them, the main agent's own; asking at any depth, since a
+    // question waits on the person whoever asks it.
+    const d = listed ? delegateList(s) : null;
+    this.#tabCounts = d
+      ? { running: d.active.filter((r) => r.running && (!r.parent || r.parent === r.id)).length, asking: d.active.filter((r) => r.status === 'waiting').length }
+      : { running: 0, asking: 0 };
+    this.#renderTabCount();
     if (e.tabD.hidden && this.#tab === 'delegates') { this.setTab('conversation'); }
     this.#linkDelegatesTab();
     this.#renderEvents(s, now);
+  }
+
+  // From 760 the strip says all this, and the tab is plain "Delegates".
+  #renderTabCount() {
+    const e = this.els;
+    const { running, asking } = this.#phone?.matches ? this.#tabCounts : { running: 0, asking: 0 };
+    // The leading space keeps the visible text "Delegates 2", within the name (WCAG 2.5.3); the
+    // flex row draws only the gap.
+    e.tabCount.textContent = running ? ` ${running}` : '';
+    // An <svg> has no hidden property; the attribute is what app.css hides.
+    e.tabNeeds.toggleAttribute('hidden', !asking);
+    const said = [running && `${running} running`, asking && `${asking} asking`].filter(Boolean);
+    if (said.length) { e.tabD.setAttribute('aria-label', ['Delegates', ...said].join(', ')); } else { e.tabD.removeAttribute('aria-label'); }
   }
 
   // Pushed in the list's place, the delegate open is what the Delegates tab shows: the tab
@@ -1138,6 +1190,8 @@ export class SessionCard {
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
+    // Shown again (a row chosen, the browser's Back or Forward): its header whole, the scroll kept.
+    if (selected) { this.collapse?.shown(); }
     // Shown now, in the page it was put into: what holds it there can move its question too.
     // Hidden, nothing of it is read or watched.
     if (selected) {
@@ -1214,6 +1268,8 @@ export class SessionCard {
       el.tabIndex = on || (this.#tab === 'details' && tab === 'conversation') ? 0 : -1;
     }
     e.detailsButton.setAttribute('aria-pressed', this.#tab === 'details' ? 'true' : 'false');
+    // The header is whole on every tab but the conversation.
+    this.collapse?.setPaused(this.#tab !== 'conversation');
   }
 
   // Details: in the inspector, where it is a pane (shown, if it was hidden); otherwise in place
@@ -1251,7 +1307,7 @@ export class SessionCard {
   // A phone's overflow menu: Pin, Details and End session (ui.md §6.2).
   #openMore() {
     const end = this.#stop?.pressable ? this.#stop : null;
-    this.#menu.show(this.els.header, [
+    this.#menu.show(this.els.bar, [
       { label: this.#pinned ? 'Unpin' : 'Pin', run: () => this.onPin(this, !this.#pinned) },
       { label: 'Details', run: () => { this.setTab('details'); this.focusDetails(); } },
       ...(end ? [{ label: 'End session', run: () => { this.setTab('details'); end.element.querySelector('.end-button').click(); } }] : []),
@@ -1272,6 +1328,8 @@ export class SessionCard {
     this.delegates.dispose();
     this.detail.dispose();
     this.#moves?.stop();
+    this.collapse?.destroy();
+    this.#phone?.removeEventListener('change', this.#onPhone);
     clearTimeout(this.#history.timer);
   }
 
@@ -1312,7 +1370,7 @@ export class SessionCard {
         this.#reply = null;
       }
       if (hostId) {
-        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0 });
+        this.#reply = new ReplyBox({ machineName: this.machineName, replying: { service: ctx.replies, hostId, sessionId: s.id }, attach: ctx.capabilities.includes('sessions.attach'), largeMax: ctx.largeAttachments?.() ?? 0, onGoToQuestion: () => this.#goToQuestion(), onChange: () => this.foot?.changed() });
         if (this.#replyDraft.hostId === hostId) { this.#reply.els.input.value = this.#replyDraft.text; }
       }
       this.#replyHost = hostId;
@@ -1510,6 +1568,23 @@ export class SessionCard {
     this.#scrollTo(el && view.contains(el) && !fits ? el : view, behavior);
   }
 
+  // The phone notice's "Go to the question" (ui.md §6.5): an app scroll to the question, which
+  // leaves the header as it was, and focus on its first choice. A question taking nothing yet (its
+  // machine offline) has no choice to focus: its heading takes focus, as a notification's does.
+  #goToQuestion() {
+    const view = this.#guarded?.isConnected ? this.#guarded : null;
+    if (!view) { return; }
+    const usable = (c) => !c.disabled && !c.closest('fieldset:disabled') && c.getClientRects().length > 0;
+    let target = [...view.querySelectorAll('.answer-controls button, .answer-controls input, .answer-controls select, .answer-controls textarea')].find(usable)
+      ?? [...view.querySelectorAll(QUESTION_CONTROLS)].find(usable);
+    if (!target) {
+      target = view.querySelector('.question-head');
+      if (target) { target.tabIndex = -1; }
+    }
+    target?.focus({ preventScroll: true });
+    this.revealQuestion(scrollBehavior(), target);
+  }
+
   // A scroll to the question: the guard runs from now and, for a smooth scroll that has somewhere
   // to go, again from each step of it until it lands, since that takes the browser's own time. Only
   // that scroll, heard for a little while: a question already in sight makes no scroll, and a
@@ -1521,9 +1596,17 @@ export class SessionCard {
     this.#scrollEnd = null;
     const v = view.getBoundingClientRect();
     const box = sc.getBoundingClientRect();
+    // What the floating header covers, and the room the scroll leaves below it (scroll-padding-top).
+    const covered = this.collapse?.covered() ?? 0;
+    const room = covered > 0 ? parseFloat(sc.ownerDocument.defaultView?.getComputedStyle?.(sc).getPropertyValue('--ab-space-2')) || 0 : 0;
+    const top = box.top + (covered > 0 ? covered + room : 0);
     // A pixel's rounding is nowhere to go.
-    const moves = sc.getClientRects().length > 0 && (v.top < box.top - 1 || v.bottom > box.bottom + 1);
-    view.scrollIntoView({ block: 'nearest', behavior });
+    // And what the reply area covers at the foot (scroll-padding-bottom).
+    const bottom = box.bottom - (this.collapse?.footCovered() ?? 0);
+    const moves = sc.getClientRects().length > 0 && (v.top < top - 1 || v.bottom > bottom + 1);
+    const scroll = () => view.scrollIntoView({ block: 'nearest', behavior });
+    // A scroll the app makes leaves the header as it was.
+    if (this.collapse) { this.collapse.appScroll(scroll); } else { scroll(); }
     this.#guard();
     if (!moves || behavior !== 'smooth') { return; }
     // Every step of the scroll re-arms it, so it runs out only after the question has stopped

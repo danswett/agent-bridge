@@ -31,7 +31,7 @@ const SHELL = [
   './manifest.webmanifest', './icon.svg', './icons/icon-192.png', './icons/icon-512.png',
   './icons/maskable-192.png', './icons/maskable-512.png', './icons/monochrome-192.png', './icons/monochrome-512.png',
   './icons/apple-touch-icon.png', './icons/badge-96.png',
-  './fixtures/sessions-list.json',
+  './fixtures/sessions-list.json', './text-size-boot.js',
   ...BUNDLE,
 ];
 

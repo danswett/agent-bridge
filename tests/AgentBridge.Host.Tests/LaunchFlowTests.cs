@@ -486,7 +486,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var o = await launcher.ResumeAsync(new ResumeAsk(Id, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
 
         Assert.Equal(LaunchOutcome.Unconfirmed, o.Outcome);
-        Assert.Contains("has not been seen ready", launcher.HeldForReply(Id));
+        Assert.Equal("Copilot is asking whether to trust its folder, and a reply would answer it. Answer it on that machine", launcher.HeldForReply(Id));
         Assert.Null(launcher.HeldForReply("7f7f7f7f-7f7f-4f7f-8f7f-7f7f7f7f7f7f"));
         Assert.Empty(screens.Typed);
         screens.Rows = CopilotReady;
@@ -1237,6 +1237,8 @@ public abstract partial class LaunchFlowFixture
         public string? Unavailable_;
         public volatile bool Registers = true;
         public bool ExitsAtOnce;
+        // Starting the agent fails with this.
+        public Exception? Throws;
         // The launcher hands its session to a process of its own (its pid + 3000) and exits.
         public bool HandsOn;
         public readonly string CodexId = "66666666-6666-4666-8666-666666666666";
@@ -1251,6 +1253,7 @@ public abstract partial class LaunchFlowFixture
 
         public Started Start(StartSpec spec)
         {
+            if (Throws is { } broken) { throw broken; }
             int pid;
             lock (Specs) { Specs.Add(spec); pid = ++next; Pids.Add(pid); if (!ExitsAtOnce) { running.Add(pid); } if (HandsOn) { running.Add(pid + 3000); } }
             if (Registers) { Register(spec, HandsOn ? pid + 3000 : pid); }

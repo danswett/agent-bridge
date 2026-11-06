@@ -13,7 +13,8 @@ find in the background, then wait: nothing installs until a person presses **Res
 at the machine, or **Install** on another device (which then waits until no session there has been
 busy for two minutes, however long that takes; #516, AutoUpdater.cs), unless **When an update is
 ready** is **Install between turns**, which installs at the first gap between turns or at the
-six-hour backstop. A package is installed only if its bytes match its release's checksum. The app downloads full packages only, so a
+six-hour backstop. A package is installed only if its bytes match its release's checksum, checked again in a copy
+in the profile's own folder that is what `Update.exe` installs (#984). The app downloads full packages only, so a
 release's delta is published but not used by it. An app from before #516
 still installs by itself once the host is idle, or after 6 hours regardless. Hosts check too,
 for Home Assistant's update entity, and install only when its Install is pressed. They read releases

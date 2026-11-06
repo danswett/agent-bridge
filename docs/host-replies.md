@@ -260,7 +260,9 @@ In order, for every reply:
    launched, resumed or restored whose window has not been seen ready is `refused`: it may
    still show a startup question, folder trust above all, that Enter would answer, and a resume's
    transcript already exists, so the check below never catches it (`LaunchService.HeldForReply`,
-   #780). Once following has ended unready, it stays so while that agent runs (the launcher, or the
+   #780). While following it says what the window shows: the folder-trust question (answered from
+   a device where allowed, #947, else on that machine), another startup question (on that machine),
+   or only "still starting, send it again in a moment" (#1018). Once following has ended unready, it stays so while that agent runs (the launcher, or the
    process it handed the session to), until a prompt of the person's is in its transcript after the
    launch (Copilot; a turn count would not do: it leaves out the turn that prompt starts, and a new
    CLI's `session.resume` ending a killed turn counts one with nobody having typed) or, for an agent
@@ -279,12 +281,22 @@ In order, for every reply:
    reply after a start used to spend before typing, #599), and from where it was
    left on every later read, so the read before typing covers only what was written since. A transcript that cannot be read is `refused`, never taken to
    mean nothing is asking. A Copilot session with no `events.jsonl` yet (its folder there,
-   and no transcript ever read for it) is refused with its own reason. Copilot 1.0.105
+   and no transcript ever read for it) is told apart by its window (#1018). Copilot 1.0.105
    creates the file only with the first prompt, and it registers the session while its
    folder-trust question may still be on screen. There, typed words are dropped and Enter
-   answers "Yes" (seen live: a reply trusted the folder). Without a transcript, the host
-   cannot tell that question from an idle prompt, and only a person answers it. So the
-   first prompt is sent at the machine, or given at launch. The point read up to is where
+   answers "Yes" (seen live: a reply trusted the folder). Copilot draws that question in place
+   of the prompt's box and footer, never beside them (1.0.105 to 1.0.107, seen live), so the
+   reply goes only when the window shows the box and its footer and no startup question is
+   drawn, and the keys are still held to those rows (the worker types nothing if they change).
+   With the trust question showing it is `refused` with words for the phone (`FirstReplyWords`):
+   answer it first, from the phone where the host allows that for a session it launched
+   (#947), else at the machine. With the window unreadable or not drawn yet it is `refused`
+   as "the session is still starting, so it can't take a reply yet. Send it again in a moment"
+   (Creative's words; the clients read it as "The machine refused this reply: {reason}."), and nothing is typed. For a
+   launch the bridge follows it names Needs you ("If it asks whether to trust its folder, that shows in Needs you")
+   only where remote folder trust is on with a device approved, so a reason never promises a place that is not coming.
+   A refused reply stays in the sender's box (only a delivered one comes out), so sending again costs a tap. So a session launched
+   with no first prompt takes its first reply from the phone. The point read up to is where
    confirmation starts.
 6. The worker types it. Nothing written is `refused`, and the staged files are deleted with
    the attachments kept for another try; a worker that stopped after its first write is
@@ -308,12 +320,17 @@ transcript; the reply is added to them, and the prompt recorded differs, so the 
 moments between the transcript check and the keys landing would take the words; the window
 is the worker's start-up, about the same as for an answer.
 
-**What a reason says.** A reply's or an answer's `reason` states only what happened, as a
-lowercase clause with no full stop, naming the agent's session: never where to look, which the
-client's receipt already says ("Check the conversation…", #967), and never "check at the
-machine" (#995). Where the host itself failed (an exception reading the screen, typing, or
+**What a reason says.** An `unconfirmed` reply's or answer's `reason` states only what
+happened, as a lowercase clause with no full stop, naming the agent's session: never where to
+look, which the client's receipt already says ("Check the conversation…", #967), and never
+"check at the machine" (#995). A refusal is different: nothing was typed, so its reason still
+says where the person's next move is ("answer at the machine", "reply at the machine"; Creative,
+6680283740 on #995). Where the host itself failed (an exception reading the screen, typing, or
 checking the transcript, or the attempt ledger unreadable), the reason is "the machine
-couldn't deliver it", and the exception's text goes to the host's log only (#802).
+couldn't deliver it", and the exception's text goes to the host's log only (#802). Launch and
+End session reasons follow the same rule (#1021): fixed words ("the machine couldn't start the
+session", "the machine couldn't end the session"), with their "check at the machine" tails
+where they had them (#467), and the exception's text in the host's log only.
 
 ## Progress and timings
 
@@ -355,3 +372,29 @@ reply 0b7e3c1d timings (ms after 2026-11-04T06:56:28.441Z): checked 2, turn 3, i
 A stage not reached is left out: a reply refused at step 1 logs only `settled` and `sent`. The
 receipt time is UTC, unlike the log's own local-time prefix, so a line is matched to the lines
 around it by its request id, and its times to an agent's transcript as they are, without an offset.
+
+### Confirmation, measured (#1025)
+
+Replies go unconfirmed more often than they fail to arrive, so each reply whose keys went and
+whose confirmation ran logs one more line, to measure how long each agent takes to record one:
+
+```
+reply 0b7e3c1d to 99999999 confirm: copilot, working, typed 25, recorded never, timeout 60 s, unconfirmed
+reply 0b7e3c1d late: recorded 93120
+```
+
+The agent; whether the session was `working` or `idle` when the keys went; `typed`, when the
+last key had gone; `recorded`, the agent's own time on the prompt that is the reply (`~` and the
+host's time where its record has none, `never` if it was not found by the timeout); the timeout
+in force; and the outcome. Times are in ms after receipt, as in the timings line. Never the
+reply's words.
+
+A reply that timed out with its prompt not found (not recorded, or another message recorded)
+keeps its outcome, and the host keeps looking for its prompt, without taking it, for five minutes
+more (`ReplyOptions.LateWatch`, every 5 s), and logs a `late:` line: when it was recorded after
+all, or `not recorded within 300 s more`. `ops/tools/reply-confirm-delays.ps1` reads these lines
+from the host's log, read-only, into the delay from `typed` to `recorded` per agent and state. It
+counts a reply as never recorded only once its late watch is known to be over (its `not recorded`
+line, or a log line 300 s after it with no host `stopped` or start line in between); the rest, still
+watched or not observable (transcript unreadable, host stopped or started within the watch), are
+reported apart.

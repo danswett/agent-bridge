@@ -319,7 +319,7 @@ into one folder with one version. An app update is a host update, so they never 
   30 s, and which then goes on;
   `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon
   task, waiting at most 10 s.
-  The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
+  The app also stops the host itself before it hands an update to `Update.exe`, and starts it on
   launch if it is not running.
 * `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
   default profile's owned agent hooks and instruction blocks, using its saved agent homes.
@@ -436,11 +436,23 @@ into one folder with one version. An app update is a host update, so they never 
     package there that doesn't match the chosen release's checksum from its feed (SHA-256 where the
     feed gives one, else SHA-1) is removed; after it, the package is marked ready only when it
     matches, and otherwise removed and the download has failed. The mark keeps the checksum and its
-    algorithm. A package offered after a restart must still match it, and just before install the
-    package is checked again from a handle that keeps it open, read-only to everyone else, until
-    the app exits; the installer opens it by its path after that, so the check does not reach
-    past the app's exit (Engineering's second-family review, 6677353697): an accepted limitation,
-    whose fix, a verified per-profile copy handed to `Update.exe`, is #984. A release whose feed gives no checksum is never installed. The checksum proves the
+    algorithm. A package offered after a restart must still match it. **The check reaches the
+    installer** (`PackageHandoff`, #984): `Update.exe` opens the package it installs by its path,
+    once the app has exited, and the shared packages folder is every profile's, where another
+    profile could write its own feed's package of the same version after the app's check (#719,
+    6677353697). So just before install the package is copied, from the handle that checked it,
+    into this profile's own folder (`<profile>\app-update`, which no other profile's updater
+    writes, and which is private to this user as the attachment folder is: a protected DACL
+    granting this user alone, nothing inherited, `PrivateFolder`), and the copy is checked against
+    the same checksum again from a handle that keeps it open, read-only to everyone else, until
+    the app exits. The app then starts `Update.exe` itself,
+    as Velopack's `ApplyUpdatesAndRestart` would (`apply --waitPid … --rootDir …`), but with
+    `--package` naming the copy; `--packageDir` stays the shared packages folder, where
+    `Update.exe` takes its install lock (`packages\.velopack_lock`), so profiles still can't
+    install over each other. The copy goes at the app's next start. What remains: `Update.exe`
+    checks nothing itself when it opens the copy (it takes no checksum), so a process running as
+    this same Windows user could still change the copy after the app exits; such a process could as
+    well replace `Update.exe` or the app itself. A release whose feed gives no checksum is never installed. The checksum proves the
     package is the one the chosen feed names, not who published it: the feed supplies its own
     checksum. The app downloads full packages only (`AppPackages`): Velopack rebuilds a release
     from deltas into a package that is never the full package's bytes, so it would fail this
@@ -457,8 +469,8 @@ into one folder with one version. An app update is a host update, so they never 
     refused and leaves the first alone, and a press during a background check waits for it, then
     installs only what is downloaded once it has finished. An install that fails
     starts the host again and keeps the release offered, to be tried again only when the person
-    presses again. Then the path is the one it always was: the host stopped over the
-    pipe, then `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version
+    presses again. Then the host is stopped over the pipe, and `Update.exe` started with the
+    checked copy and `--background --profile <profile>` (above), whose new version
     starts the host again, and whose first start shows a toast: the version it came from, and the
     release's notes. The banner's and Settings' take the same path (`AutoUpdater.RestartToUpdateAsync`),
     which refuses while another profile's app or host runs from this installation (below), asking

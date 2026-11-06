@@ -148,6 +148,16 @@ in the other. Where they disagree today, the files list it as a known difference
 After a deliberate change, regenerate them with `UPDATE_PROTOCOL_VECTORS=1` as
 [vectors/README.md](vectors/README.md#regenerating) says, and commit them with the change.
 
+**Proposed for #970 slice 1b (not generated yet):** the relay's `presence` (roster.md) gets
+vectors of its own, `vectors/presence.json`, so older clients' fallback is tested. `known[]`
+entries with `offline.outcome` set to each value a relay may send, `closed`, `reset`,
+`timeout`, `rate-limited`, `too-large`, `relay-restarting` and `unknown`, and to #815's older
+`dropped` and an unknown future value. A client that predates a value reads it as lost
+connection (`reads`: no reason shown, "Offline" as today). They include an entry with
+`offline.gone` (`since`, `evidence`, `alert`) and one whose `gone.v` is unknown (read as
+absent), so an unknown field never makes a client claim the bridge stopped
+([host-gone.md](host-gone.md)).
+
 ## Channel framing
 
 Inside a channel, as in S4:
@@ -257,7 +267,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 | `offered` | The sessions that died, newest first, at most 20: `id`, `agent`, `title`, `midTurn: true` if a turn was running when it went, `questionLost: true` if a question or approval was waiting in it, which went with it. Never the question's words, a prompt or a response. The notice stays within 8 KiB as JSON: past that, titles are shortened (to 60 bytes), then dropped, then the last names are left out and counted in `offeredMore`; the counts, `cause` and the times are never trimmed. The `restored` notification is made from the same notice |
 | `offeredMore` | How many more died than `offered` names: past 20, or left out to keep the notice within 8 KiB. Absent when none |
 
-Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. A client that does not know `restore` ignores it. It names sessions, so a peer that may not read them (one pinned as a `host`, [trusted peers](../host-config.md#trusted-peers-disposable-host-foundation)) is not told it.
+Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. **Proposed, not built (#948):** a person's device may also restore every session the notice names in one confirmed press, `restore.run` ([restore-run.md](restore-run.md)), through the same path a start-up restore takes. A client that does not know `restore` ignores it. It names sessions, so a peer that may not read them (one pinned as a `host`, [trusted peers](../host-config.md#trusted-peers-disposable-host-foundation)) is not told it.
 
 **Changes (`hello.changed`).** What hello says changes without a new connection: agent-ha-bridge starting or stopping (G5) takes answering, replying, stopping and launching away or gives them back, with `readOnly`; `update` comes and goes. A client used to ask hello again every 10 s to see it, on every connection: about 36 hellos a minute at a host from the account's other machines' Windows apps (#640). Of a host that offers `hello.changed`, a client asks `{ "changes": true }` in its hello, and from then on, for as long as that channel is open, the host sends the event
 
@@ -291,6 +301,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.transfer` | `session.launch` takes a `transfer`: a session that ended on another of the account's machines, brought here and resumed as a copy ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.transfer.serve` | `session.transfer`, host to host: this machine hands its ended sessions to the account's other machines on a command a person's device signed ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.restore` | `hello`'s `machine.restore`: what a reboot or a crash took, offered to resume ([What went](#hello)), and the `restored` notification ([Notifications](#notifications)). Without it, a client says nothing of sessions that went
+| `sessions.restore.run` | **Proposed, not built (#948).** `restore.run`: a person's device restores the sessions `machine.restore` offers, after a confirmation ([restore-run.md](restore-run.md)). Offered with `sessions.restore` and `sessions.launch`, only to a person's device (through the relay as `pwa` or `app`, or the app on the pipe), and never on a read-only machine (G5). Without it, a client says the sessions can be restored at the machine |
 | `update` | `update.get`, `update.subscribe`, `update.check`, `update.install`: the machine's updates, seen and asked for from a person's other devices, installed by its Windows app ([v1-update.md](v1-update.md)). Through the relay only, and never by a read-only machine |
 | `manage` | `manage.get`, `manage.subscribe`, `manage.restart`: a person's device restarts this host, each press a command it signed for this machine, leaving only through #805's quiet lease ([host-lifecycle.md](../host-lifecycle.md)); with `manage.hooks`, `manage.hooks.repair` repairs the hooks of an agent this installation set up (#801). Through the relay only, to a `pwa` or `app` device that is not this machine's own app, never by a read-only machine or one with `permissions.remoteManage` off. `manage.stop`, `manage.config.*` and `manage.haToken.set` are defined but refused `needs-roster` until the signed device roster (#55), and their capabilities are never offered. See [Managing a machine](#managing-a-machine) |
 
@@ -1293,11 +1304,38 @@ host can start the episode again from those fields.
   [session budget](#session-budget) never trims them.
 
 **What a host classes today:** every session it sends, a session restored after a crash
-included, and its `question`, `finished` and `signIn` pushes, and a `restored` push after a crash.
+included, and its `question`, `finished` and `signIn` pushes, and a `restored` push after a crash
+(and, proposed, any `restored` that replaces a `hostGone`, [Host gone](#host-gone-970)).
 Not by the host:
 * **A machine offline unexpectedly (#805)**, which its host cannot say. Each client classes it
   `needsYou` from the relay's presence, once #269's grace period has passed, so a short drop
   never is. #805 owns the threshold.
+* **A machine whose host is gone (#970, proposed)**, which its host cannot say either. The
+  relay decides it ([host-gone.md](host-gone.md)): only after a departure the host didn't
+  announce, with evidence the bridge stopped, and 5 minutes for #805 to heal it first. The
+  relay then sends the host's pre-sealed `hostGone` notice if one was armed
+  ([Host gone](#host-gone-970)), and clients show the machine's state (ui.md §6.14).
+
+  **How the two sit side by side.** Neither replaces the other; each governs its own signal,
+  and #970 changes nothing of #805's, its threshold included:
+  * A machine **with `offline.gone`** is #970's. Its alert is the one `hostGone` notice (or
+    `gone.alert`'s toast), at the `needsYou` tier: it interrupts, with the question sound, once
+    per episode. A client doesn't class that machine again under #805's rule, so one departure
+    never alerts twice, and the shared caps count it once. It is **not counted** in Needs you's N,
+    its filter or the app badge, which count questions and approvals only (owner decision,
+    2026-11-05; Product, #1022); its banner and its row line are how it shows.
+  * Every other machine that is offline unexpectedly is #805's, as above: one that was lost
+    without evidence the bridge stopped (a `timeout`, a machine switched off or asleep), and
+    one whose planned reboot, restart or update didn't return (#805's no-return push,
+    which #970 never sends). #970's pending window sends and shows nothing, and takes nothing
+    from #805's rule while it runs. To keep "never alerts twice" true, #805's threshold for a
+    machine lost with no plan is to be no shorter than `HostGoneAfter`; until SRE confirms that
+    on #805, a machine #805 alerted before it became gone is the one open overlap.
+  * A machine whose host announced its departure (#805's plan) is never #970's.
+
+  `needsYou` here is the tier, the alert's strength, in both rules; neither makes a machine a
+  member of Needs you's N. If #805 meant its classing to count a machine in N or the badge, that
+  conflicts with the 2026-11-05 owner decision for every machine, and is for SRE to settle on #805.
 
 `signInNeeded` pushes as the `signIn` notice of #800, at most once an hour per machine, agent
 and account (ui.md §6.13). The rest of `attention` has no push of its own yet. Being `needsYou`,
@@ -1379,6 +1417,47 @@ them, and the `restored` notice is its own.
   question and opens the machine, so it shows the words and nothing to answer. It ignores
   `reminder` and shows the reminder as the question's notice again, replacing it in place.
 
+### Host gone (#970)
+
+**Proposed, not implemented.** The one notice a host writes for after it has gone. A host that
+has stopped can't send anything, so while any agent in its sessions, a delegate included, is working or waiting it keeps a
+sealed `hostGone` notice armed with the relay (`host-gone-arm`, [host-gone.md](host-gone.md#arming-the-notice-slice-3)),
+one per subscribed device, and disarms it within 5 s of none being so. The relay sends it,
+unread, only if the host goes without announcing it and isn't back within 5 minutes
+([host-gone.md](host-gone.md#the-window-805-goes-first)). The relay never learns what the
+sessions were doing; the host never claims more than it saw when it sealed the notice.
+
+| `kind` | When | Once per |
+|---|---|---|
+| `hostGone` | Sent by the **relay**, sealed by the host in advance: the host went, unannounced, with any agent in its sessions working or waiting by its last arm (a delegate included, [host-gone.md](host-gone.md#arming-the-notice-slice-3)), and wasn't back 5 minutes later. Never for a machine that was simply off with nothing in flight, nor for a departure the host announced (#805's), nor while #805 is still restarting it | Episode. At most one alert an hour per machine and three a day per account, shared with #805's no-return notice: an episode counts as one alert when at least one of its notices was sent or its `gone.alert` was set, never when the caps suppressed it |
+| `hostBack` | Sent by the **host**, live, once it has been back for 2 minutes and #780 has finished judging with nothing to restore, to the devices the relay said were sent `hostGone` (`host-gone-sent`), silently, replacing the `hostGone` in place. **Only if no `restored` notice went in this episode:** a return's `restored`, of any cause, replaces the `hostGone` instead (below), so the person gets one notice on return, never two | Episode |
+
+* **Tag** `<machine id>:host`, and **topic** the first 24 bytes of SHA-256 of
+  `agent-bridge-push|<machine id>|host`, base64url: a `hostBack` replaces the `hostGone`, and a
+  phone that was offline gets the latest of the two.
+* **One notice on return** (Creative and Connection, #1022). The relay sends `host-gone-sent`
+  (`since`, `targets`, and the gone `tag` and `topic`) as soon as the host reconnects, with empty
+  `targets` when its episode wasn't alerted; the host holds any `restored` push until it has it
+  (at most 10 s). A `restored` notice of any cause ([When a host notifies](#when-a-host-notifies)),
+  even one decided after the episode ended, then goes to each device in `targets` on the gone tag
+  and topic, replacing the alert in place, and to every other device on `<machine id>:~restore`
+  as today; no `hostBack` follows. On the gone tag it alerts at Needs you, never silently
+  (`silent` absent, `data.class` `needsYou`, whatever its cause). Withdrawing it uses whichever
+  tag it went on, which the host remembers per device until it is withdrawn; after that, nothing
+  about the `hostGone` comes back ([host-gone.md](host-gone.md)).
+* **TTL and urgency:** `hostGone` 6 h, `high`; `hostBack` 6 h, `normal`.
+* **Payload:** `title` "*machine*'s bridge isn't running" (`hostBack`: "*machine*'s bridge is
+  running again"); `body` "It stopped while sessions there were working or waiting on you."
+  (`hostBack`: "You can reach its sessions again."), the words of ui.md §6.14. Sealed before the
+  host went, so never a time, a count, a session's title or any agent's words. `navigate`: the
+  subscription's `app` with `host` only, which opens that machine's tab. `silent`: absent on
+  `hostGone`, which has the question sound; `true` on `hostBack`. `data.class` `needsYou` on
+  `hostGone`, absent on `hostBack` (it withdraws rather than notifies). `data.machine` the
+  machine's id; no `data.session` or `data.question`. `data.at` is when the host sealed it, not
+  when it went: a client shows the notification's own time.
+* **A client that doesn't know the kinds** reads them as `question`: with no session or question
+  in `navigate`, it opens the machine with nothing to answer, as for `restored`.
+
 ### Replacing and collapsing
 
 Every notice about one session on one machine shares:
@@ -1403,6 +1482,8 @@ Every notice about one session on one machine shares:
 | `signIn` | 6 h | `high` |
 | `restored` | 24 h | `normal` |
 | `group` | 24 h | `high`; `normal` when it changes silently or is withdrawn |
+| `hostGone` (#970, proposed) | 6 h | `high` |
+| `hostBack` (#970, proposed) | 6 h | `normal` |
 
 ### The payload
 
@@ -1430,10 +1511,10 @@ service worker shows from the same fields everywhere else:
 | `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". `signIn`: "*n* sessions affected" ("1 session affected"); the title names the machine. `group`: "`<machine>` · *n* sessions waiting on you" ("1 session waiting on you" once the rest are answered); its withdrawal "`<machine>` · no longer waiting". Creative owns these words (#913, 6690989275). Never the account, a code, a URL or any of the agent's words. Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
 | `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. `signIn`: `host` and `signin=<agent>` only, never `session` or `question` (#800 6646515428): an older client, which reads the kind as `question`, opens the machine and no question view or answer controls. `group` and its withdrawal: `host` and `needsyou=1`, built as `restored`'s (any `host`, `session` and `question` in `app` replaced), opening Needs you; an older client opens the machine. A client opens that machine and session, and the question ready to answer |
 | `silent` | `true` for `resolved`, which replaces a question without alerting again, for a `group` changed in place after its first push, and for `finished`: Done never alerts (#913), so a client that predates `data.class`, and Safari's Declarative Web Push, which shows without the service worker, play nothing for it. Absent for `signIn`, which has the question sound (owner, 2026-11-04, ui.md §6.13) |
-| `data.kind` | `question`, `finished`, `resolved`, `signIn`, `restored` or `group` (**new, #913**). A client reads a kind it doesn't know as `question`. A `group` has no approve or answer controls (#253) and no agent text (#263): `data.session` is empty, `data.question` absent, `data.sessions` its count; its withdrawal is a `resolved` with its tag, `data.session` empty. A `restored` notice is titled `<machine> restarted` (a reboot) or `<machine> · the host stopped`, its body counts the sessions that went and names those mid-turn or with a question lost; its `navigate` has only `host` (the subscription's `app` with any `host`, `session` and `question` it carried replaced, not appended to; the rest of its query kept), its tag is `<machine id>:~restore`, and its `data.session` is empty and `data.question` absent, so an app that reads it as a question (one from before `restored`, whose service worker adds no actions) shows these words and opens the machine, with nothing to answer |
+| `data.kind` | `question`, `finished`, `resolved`, `signIn`, `restored` or `group` (**new, #913**) (and, proposed, `hostGone` and `hostBack`: [Host gone](#host-gone-970)). A client reads a kind it doesn't know as `question`. A `group` has no approve or answer controls (#253) and no agent text (#263): `data.session` is empty, `data.question` absent, `data.sessions` its count; its withdrawal is a `resolved` with its tag, `data.session` empty. A `restored` notice is titled `<machine> restarted` (a reboot) or `<machine> · the bridge stopped` (Creative, #1022: "bridge", never "host", in copy; the built string changes in #970 slice 3), its body counts the sessions that went and names those mid-turn or with a question lost; its `navigate` has only `host` (the subscription's `app` with any `host`, `session` and `question` it carried replaced, not appended to; the rest of its query kept), its tag is `<machine id>:~restore` (proposed, #970: to a device that was sent a `hostGone` in this episode, the gone notice's tag and topic instead, [Host gone](#host-gone-970)), and its `data.session` is empty and `data.question` absent, so an app that reads it as a question (one from before `restored`, whose service worker adds no actions) shows these words and opens the machine, with nothing to answer |
 | `data.machine`, `data.session`, `data.question` | The machine's device id, the session's `id`, the question's `id` (not for `finished`). Neither `session` nor `question` for `signIn`, which is about the machine |
 | `data.agent`, `data.sessions` | `signIn`: whose sign-in it is (`copilot`, `claude`, `codex`), and how many of the machine's sessions need it. `group`: `sessions` only, how many sessions it stands for |
-| `data.class` | **New (#913).** The notice's [notification class](#notification-class-913): `needsYou` for `question`, `group` and `signIn`, and for `restored` after a crash; `done` for `finished`, never `needsYou` (a turn that ends with a question pending sends that question as its own `question` notice). Absent on `resolved`, which withdraws a notice rather than being one, on a `restored` after a reboot or a restart of the host, and from an older host, whose push a client handles as today. Unknown reads as absent |
+| `data.class` | **New (#913).** The notice's [notification class](#notification-class-913): `needsYou` for `question`, `group` and `signIn`, and for `restored` after a crash; `done` for `finished`, never `needsYou` (a turn that ends with a question pending sends that question as its own `question` notice). Absent on `resolved`, which withdraws a notice rather than being one, on a `restored` after a reboot or a restart of the host (proposed, #970: except one that replaces a `hostGone` on its tag, which is `needsYou` whatever its cause), and from an older host, whose push a client handles as today. Unknown reads as absent |
 | `data.reminder` | **New (#913 rule 5).** `true` on a question's one reminder ([Bursts and the reminder](#bursts-and-the-reminder-913)); absent otherwise. A client may word or sound it as a reminder; one that ignores it shows the question again |
 | `data.at` | When the host sent it |
 
