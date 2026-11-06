@@ -522,6 +522,14 @@ public class CopilotPlannerTests
     // and 452 ms; the generated matcher's vectorised scans only shrink the constant, so at n and 2n of
     // a million it ran for minutes, far past a bound the linear match keeps with a wide margin. The
     // default is still not an email.
+    //
+    // The bound is 60 s, not 5 (#990): on a loaded windows-11-arm runner (run 42175493996) the
+    // linear read missed 5 s. What it measures is wall-clock time, and that counts every wait for a
+    // CPU. Grown as n², the old match's 452 ms at 20,000 dots is 452 ms × 50² ≈ 19 minutes at a
+    // million and 452 ms × 100² ≈ 75 minutes at two million, so 60 s still stops it about 19 times
+    // short of its quicker run; the linear match is a few passes over the text, milliseconds. The
+    // read runs on a thread of its own, not the pool's: a Task.Run waits in the pool's queue behind
+    // the suite's other tests, and that wait came out of the bound too.
     [Fact]
     public async Task An_email_default_of_a_long_run_of_dots_is_read_in_linear_time()
     {
@@ -530,7 +538,8 @@ public class CopilotPlannerTests
             using var doc = JsonDocument.Parse(Schema("e", $$"""{ "type": "string", "format": "email", "default": "a@{{new string('.', n)}} " }"""));
             var root = doc.RootElement.Clone();
             // Past the bound, WaitAsync throws: the old match was still running.
-            var question = await Task.Run(() => QuestionMapper.FromCopilotAskUser("call-1", root, Fixture.T0)).WaitAsync(TimeSpan.FromSeconds(5));
+            var read = Task.Factory.StartNew(() => QuestionMapper.FromCopilotAskUser("call-1", root, Fixture.T0), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            var question = await read.WaitAsync(TimeSpan.FromSeconds(60));
             Assert.True(question.AnswerAtMachine);
         }
         Assert.Equal([("a@b.c", true)], Keys(Plan(Schema("t", """{ "type": "string", "format": "email" }"""), Answer(new { t = "a@b.c" }))));
