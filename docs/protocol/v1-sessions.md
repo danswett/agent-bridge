@@ -1289,7 +1289,8 @@ them, and the `restored` notice is its own.
   once more, with `data.reminder: true`: the same title, body, tag, topic and `navigate`,
   alerting. It goes to the devices the first notice went to, each still subscribed under the same
   pairing; it is not grouped. It is cancelled when the session leaves `needsYou` (its question
-  answered on any device or at the machine, or withdrawn) or ends. Never repeated: a further
+  answered on any device or at the machine, or withdrawn) or ends, a reminder still on its way to
+  other devices included: each is checked again as it goes. Never repeated: a further
   question in the same episode brings no second. Rule 4 (only the device in use alerts) narrows
   it later.
 * **A restart of the host** loses a reminder still to come and an open window. The host notifies

@@ -1620,6 +1620,36 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal(1, Received().Count(r => Reminder(r.Notification)));
     }
 
+    // sr2-1020: answered (or ending) while its reminder goes out, device by device: the devices still to
+    // be reminded are not, of a question nobody waits on any more.
+    [Theory]
+    [InlineData("answered")]
+    [InlineData("ending")]
+    public async Task A_reminder_still_queued_for_another_device_is_not_sent_once_the_session_no_longer_needs_you(string change)
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        var reminding = false;
+        sender.Respond = _ =>
+        {
+            if (reminding)
+            {
+                reminding = false;
+                source.Upsert(change == "answered" ? S("s1", SessionStatus.Working) : S("s1", SessionStatus.Waiting, question: Q("q1")) with { Status = SessionStatus.Ending });
+            }
+            return new PushResult(201, null);
+        };
+
+        reminding = true;
+        await After(TimeSpan.FromMinutes(15));
+        await After(TimeSpan.FromSeconds(1));
+
+        Assert.Single(Received(), r => Reminder(r.Notification));
+    }
+
     // ---- #913 rule 3: bursts group ----
 
     [Fact]
@@ -1746,6 +1776,31 @@ public sealed class PushNotifierTests : IDisposable
 
         await After(TimeSpan.FromMinutes(1));
         Assert.Equal(5, sender.Sent.Count);
+    }
+
+    // sr2-1020: a question asked in the same pump as the group's last questions are answered goes as
+    // itself, alerting, even from a session first seen before them: once it joined a group about to
+    // empty, and was said only by a silent group of one.
+    [Fact]
+    public async Task A_question_asked_as_its_group_is_answered_alerts_as_itself_whatever_order_the_sessions_were_seen_in()
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("c", SessionStatus.Working));
+        source.Upsert(S("a", SessionStatus.Waiting, question: Q("qa")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("b", SessionStatus.Waiting, question: Q("qb")));
+        await After(TimeSpan.FromSeconds(2));
+
+        source.Upsert(S("a", SessionStatus.Working));
+        source.Upsert(S("b", SessionStatus.Working));
+        source.Upsert(S("c", SessionStatus.Waiting, question: Q("qc")));
+        await After(TimeSpan.FromSeconds(2));
+
+        var received = Received();
+        var c = Assert.Single(received, r => QuestionOf(r.Notification) == "qc");
+        Assert.Equal(("question", false), (Kind(c.Notification), Silent(c.Notification)));
+        Assert.DoesNotContain(received, r => Kind(r.Notification) == "group" && r.Notification.GetProperty("data").GetProperty("sessions").GetInt32() == 1);
     }
 
     // sr-1020: what a restart found pending was on devices as itself, so it goes again as itself, each
