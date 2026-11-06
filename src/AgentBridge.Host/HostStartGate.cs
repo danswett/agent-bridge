@@ -20,7 +20,7 @@ public sealed class HostStartGate(HostHandover handover, string profileFolder)
     public bool StartRestore(RestoreRecorder restore, ISessionResumer resumer)
     {
         if (handover.StoppedFromTheApp(profileFolder)) { return false; }
-        restore.Restore(new Held(serving.Task, resumer));
+        restore.Restore(Watched(new Held(serving.Task, resumer)));
         restore.Start();
         return true;
     }
@@ -28,6 +28,22 @@ public sealed class HostStartGate(HostHandover handover, string profileFolder)
     // The host has looked for the marker with its pipe open, and serves: from here the app's Stop
     // reaches it through the pipe.
     public void Serving() => serving.TrySetResult();
+
+    // Tests only: told as the recorder asks to resume a session, before the hold, so a test can press
+    // Stop with a resume provably under way (Engineering's 6690940551: left to the scheduler, a test
+    // without the hold failed 6 runs in 30). Unset, the recorder gets the hold itself, as before.
+    internal Action? Resuming { get; init; }
+
+    ISessionResumer Watched(ISessionResumer path) => Resuming is { } told ? new Told(told, path) : path;
+
+    sealed class Told(Action told, ISessionResumer inner) : ISessionResumer
+    {
+        public Task<LaunchResult> ResumeAsync(ResumeAsk ask, CancellationToken cancellationToken = default)
+        {
+            told();
+            return inner.ResumeAsync(ask, cancellationToken);
+        }
+    }
 
     sealed class Held(Task serving, ISessionResumer inner) : ISessionResumer
     {
