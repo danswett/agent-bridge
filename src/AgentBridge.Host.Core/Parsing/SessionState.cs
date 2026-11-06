@@ -74,11 +74,30 @@ internal sealed class SessionState
             if (value == askedFrom) { return; }
             askedFrom = value;
             interrupted.Clear();
-            if (value is { } from) { interrupted.UnionWith(Pending.Where(q => q.AskedAt < from).Select(q => q.Id)); }
+            knownSeen.Clear();
+            if (value is { } from)
+            {
+                foreach (var q in Pending.Where(q => known is { } k ? k.Contains(q.Id) : q.AskedAt < from)) { interrupted.Add(q.Id); knownSeen.Add(q.Id); }
+            }
             backlog = value is not null;
         }
     }
     DateTimeOffset? askedFrom;
+    // The interrupted run's questions as an earlier host run found them (RestoreEntry.Interrupted),
+    // set with the boundary after a host restart: told by identity, not by time, so a new question a
+    // clock set back dated before the restore is not set aside again (Engineering, cr2-837g). Of
+    // each, only its first ask in the transcript is the interrupted run's; asked again, it is the new
+    // run's. Null when not known: told by time in the read that first reads with the boundary.
+    public IReadOnlySet<string>? Known
+    {
+        get => known;
+        set => known = value;
+    }
+    IReadOnlySet<string>? known;
+    readonly HashSet<string> knownSeen = new(StringComparer.Ordinal);
+
+    // The interrupted run's questions set aside now, by id.
+    public IReadOnlyCollection<string> Interrupted => interrupted;
     // The interrupted run's questions, by id, and whether the pass that first reads with the
     // boundary is still reading (what it reads may be from before the restore).
     readonly HashSet<string> interrupted = new(StringComparer.Ordinal);
@@ -110,6 +129,7 @@ internal sealed class SessionState
         Attention = null;
         // Read again from the start: what it asked is told apart as on the first read.
         interrupted.Clear();
+        knownSeen.Clear();
         backlog = askedFrom is not null;
     }
 
@@ -138,7 +158,8 @@ internal sealed class SessionState
         if (askedFrom is not { } from) { return; }
         // Asked again by the new run, in the first read too, it is the new run's: kept apart, it
         // was hidden though the agent was asking it (Copilot on #837).
-        if (backlog && question.AskedAt < from) { interrupted.Add(question.Id); }
+        var interruptedAsk = backlog && (known is { } k ? k.Contains(question.Id) && knownSeen.Add(question.Id) : question.AskedAt < from);
+        if (interruptedAsk) { interrupted.Add(question.Id); }
         else { interrupted.Remove(question.Id); }
     }
 

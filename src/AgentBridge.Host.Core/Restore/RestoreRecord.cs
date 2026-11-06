@@ -37,6 +37,11 @@ public sealed record RestoreEntry
     // interrupted run left (its turn, its question) is never shown again, as answerable least of all
     // (RestoreRecorder.HoldBoundaries). Apart from Restored, which goes after LoopWithin.
     public DateTimeOffset? Boundary { get; init; }
+    // The interrupted run's questions set aside at that boundary, by id (and a Claude hook's stale
+    // approval as hook:<time>): replayed after a restart, they are told by identity, so a new question
+    // a clock set back dated before the restore is not hidden (Engineering, cr2-837g). Absent in a
+    // record from before it, or when not yet read: then told by time, as before.
+    public IReadOnlyList<string>? Interrupted { get; init; }
 }
 
 // A session that went with an earlier run of the host, with why, about when (Since: when that run
@@ -124,12 +129,15 @@ public static class RestoreFiles
     // #837). Set aside instead, as any malformed record. A folder has no protocol limit: Windows' own
     // longest path bounds it.
     public const int MaxCwdChars = 32_767;
+    // RestoreEntry.Interrupted: more than this is never written (told by time instead).
+    public const int MaxInterrupted = 64;
 
     static bool Bounded(RestoreFile file) =>
         Within(file.Instance, LaunchProtocol.MaxName)
         && file.Sessions.Concat(file.Owed.Select(w => w.Entry)).All(e =>
             Within(e.Id, LaunchProtocol.MaxName) && Within(e.Title, Limits.Title) && Within(e.Model, LaunchProtocol.MaxName)
             && (e.Cwd is null || e.Cwd.Length <= MaxCwdChars)
+            && (e.Interrupted is null || (e.Interrupted.Count <= MaxInterrupted && e.Interrupted.All(i => i is not null && Within(i, LaunchProtocol.MaxName))))
             && (e.Launch is not { } l || new[] { l.Launcher, l.Workspace, l.Profile, l.Model, l.Effort, l.Context, l.Permissions }.All(v => Within(v, LaunchProtocol.MaxName))));
 
     static bool Within(string? text, int maxBytes) => text is null || Encoding.UTF8.GetByteCount(text) <= maxBytes;

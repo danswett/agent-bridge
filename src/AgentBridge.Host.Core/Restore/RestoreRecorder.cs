@@ -44,6 +44,14 @@ public interface IRestoreMarks
     // it was then (Continue gone if a turn had started since), or none. Nothing if another mark has
     // been shown since.
     void Revert(string id, SessionRestored mark);
+
+    // A boundary an earlier host run kept, with the interrupted run's questions it found (their ids),
+    // so they are told by identity rather than by time; null when it found none to say.
+    void Hold(string id, SessionRestored mark, IReadOnlyCollection<string>? interrupted) => Hold(id, mark);
+
+    // The interrupted run's questions this run has set aside on a restored session, by id, for the
+    // record; null before it has been read with its boundary.
+    IReadOnlyList<string>? Interrupted(string id) => null;
 }
 
 // Resuming a session that is not running, idle, as a restore does, for a caller other than the
@@ -207,6 +215,9 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // Each restored session's boundary (RestoreEntry.Boundary): its latest restore, for as long as the
     // record keeps it, whatever becomes of its stamp.
     readonly Dictionary<string, DateTimeOffset> boundaries = new(StringComparer.Ordinal);
+    // The interrupted run's questions set aside at each boundary (RestoreEntry.Interrupted), as the
+    // source last said or the record kept; none until known.
+    readonly Dictionary<string, IReadOnlyList<string>> interruptedAt = new(StringComparer.Ordinal);
     // When each stamped session was first seen live: the ten minutes count from there, not from the
     // stamp, so a restore that waits at folder trust keeps its stamp until it has really lived. On the
     // monotonic clock: on the wall clock, one set forward cleared a stamp after seconds of real life,
@@ -408,6 +419,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             if (previous is not null)
             {
                 foreach (var (id, at) in Boundaries(previous)) { boundaries[id] = at; }
+                foreach (var (id, ids) in InterruptedAt(previous)) { interruptedAt[id] = ids; }
             }
         }
         // Heard from now, so nothing between the snapshot and this is missed; the snapshot is taken
@@ -477,6 +489,38 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         if (ready is not null) { Tell(ready); }
     }
 
+    // An owed entry's boundary, kept for the session it becomes live again as (adopted once a hold
+    // lifts, or resumed): adopted as a fresh entry, it was written with none, and the next host run
+    // listed the interrupted question as asked again (Engineering, cr-837g). The later of the two.
+    void CarryBoundaryLocked(RestoreEntry entry)
+    {
+        if (entry.Boundary is not { } b) { return; }
+        if (!boundaries.TryGetValue(entry.Id, out var was) || b > was)
+        {
+            boundaries[entry.Id] = b;
+            if (entry.Interrupted is { } ids) { interruptedAt[entry.Id] = ids; } else { interruptedAt.Remove(entry.Id); }
+        }
+        else if (b == was && entry.Interrupted is { } same) { interruptedAt.TryAdd(entry.Id, same); }
+    }
+
+    // What the record keeps of a boundary's interrupted questions: none past MaxInterrupted, which
+    // are told by time instead.
+    IReadOnlyList<string>? Kept(string id) =>
+        interruptedAt.TryGetValue(id, out var ids) && ids.Count <= RestoreFiles.MaxInterrupted && ids.All(i => System.Text.Encoding.UTF8.GetByteCount(i) <= LaunchProtocol.MaxName) ? ids : null;
+
+    // Of each session's boundary in the record (Boundaries), the interrupted questions kept with it;
+    // none when a later stamp is its boundary (not read with it yet).
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>> InterruptedAt(RestoreFile file)
+    {
+        var at = Boundaries(file);
+        var found = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        foreach (var e in file.Sessions.Concat(file.Owed.Select(w => w.Entry)))
+        {
+            if (e.Boundary is { } b && e.Interrupted is { } ids && at.TryGetValue(e.Id, out var latest) && latest == b) { found.TryAdd(e.Id, ids); }
+        }
+        return found;
+    }
+
     // The restores the record knows of, by session: each live session's boundary, and every stamp (a
     // restore started, registered or not). A stamp is a boundary too: found running, it is the
     // restored session.
@@ -500,10 +544,12 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     public static void HoldBoundaries(string path, IRestoreMarks marks)
     {
         if (RestoreFiles.Read(path).File is not { } file) { return; }
+        var interrupted = InterruptedAt(file);
         foreach (var (id, at) in Boundaries(file))
         {
-            // Only its time is read while it is held: the cause is never shown.
-            marks.Hold(id, new SessionRestored { At = at, Cause = RestoreCause.Crash });
+            // Only its time is read while it is held: the cause is never shown. With the interrupted
+            // questions kept, those are told by identity; without (an older record), by time.
+            marks.Hold(id, new SessionRestored { At = at, Cause = RestoreCause.Crash }, interrupted.GetValueOrDefault(id));
         }
     }
 
@@ -556,7 +602,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             var now = time.GetUtcNow();
             if (change.Kind == SessionChangeKind.Upserted && change.Session is { } s)
             {
-                // Resumed since (from Launch): live again, so no longer owed.
+                // Resumed since (from Launch): live again, so no longer owed. Its boundary goes with it.
+                foreach (var w in owed.Concat(said).Where(w => w.Entry.Id == s.Id)) { CarryBoundaryLocked(w.Entry); }
                 var resumed = owed.RemoveAll(w => w.Entry.Id == s.Id) + said.RemoveAll(w => w.Entry.Id == s.Id) > 0;
 
                 if (resumed) { BuildNoticeLocked(); }
@@ -811,7 +858,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
 
     // What a stamp replaced, so an attempt that started nothing leaves things as they were, and never
     // takes away an earlier restore's protection.
-    sealed record Undo(string Id, DateTimeOffset? At, long? Since, DateTimeOffset? Owed, DateTimeOffset? Live, (SessionRestored Mark, DateTimeOffset Until)? Shown, DateTimeOffset? Boundary);
+    sealed record Undo(string Id, DateTimeOffset? At, long? Since, DateTimeOffset? Owed, DateTimeOffset? Live, (SessionRestored Mark, DateTimeOffset Until)? Shown, DateTimeOffset? Boundary, IReadOnlyList<string>? Interrupted);
 
 
     // Stamped and marked before the launch.
@@ -820,7 +867,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         var i = owed.FindIndex(x => x.Entry.Id == id);
         var undo = new Undo(id, restoredAt.TryGetValue(id, out var at) ? at : null, liveSince.TryGetValue(id, out var since) ? since : null,
             i >= 0 ? owed[i].Restored : null, live.TryGetValue(id, out var e) ? e.Restored : null, shown.TryGetValue(id, out var was) ? was : null,
-            boundaries.TryGetValue(id, out var boundary) ? boundary : null);
+            boundaries.TryGetValue(id, out var boundary) ? boundary : null, interruptedAt.GetValueOrDefault(id));
         restoredAt[id] = now;
         if (i >= 0) { owed[i] = owed[i] with { Restored = now }; }
         if (e is not null) { live[id] = e with { Restored = now }; }
@@ -833,6 +880,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         var id = undo.Id;
         if (undo.At is { } at) { restoredAt[id] = at; } else { restoredAt.Remove(id); }
         if (undo.Boundary is { } bound) { boundaries[id] = bound; } else { boundaries.Remove(id); }
+        if (undo.Interrupted is { } ids) { interruptedAt[id] = ids; } else { interruptedAt.Remove(id); }
         // Registered while the attempt was under way (an earlier attempt's window, or one started at
         // the machine): live now, so its live tracking stays, and its entry carries the stamp put
         // back, never none. Cleared, a crash within ten minutes was restored again (Copilot on #837).
@@ -1031,6 +1079,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         };
         shown[id] = (mark, now + RestoreProtocol.ShownFor);
         boundaries[id] = now;
+        // A new boundary: what it sets aside is known once the source has read with it.
+        interruptedAt.Remove(id);
         options.Marks?.Hold(id, mark);
         ArmMarkLocked(id, RestoreProtocol.ShownFor);
     }
@@ -1111,6 +1161,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             // so a write before its event arrives still keeps it.
             if (!w.Decided && source.Get(w.Entry.Id) is { } current && From(current, now) is { } adopted)
             {
+                CarryBoundaryLocked(w.Entry);
                 live[adopted.Id] = adopted;
                 owed.RemoveAt(i);
                 continue;
@@ -1340,8 +1391,17 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 unconfirmed.Remove(id);
             }
         }
-        // A boundary goes with its session: once the record keeps neither it nor a stamp of it.
-        foreach (var id in boundaries.Keys.Where(id => !live.ContainsKey(id) && !restoredAt.ContainsKey(id)).ToList()) { boundaries.Remove(id); }
+        // A boundary goes with its session: once the record keeps neither it (live or owed) nor a stamp
+        // of it. Owed too: a session held undecided at a start, its stamp long gone, lost its boundary
+        // at the first write, and was adopted with none once the hold lifted (Engineering, cr-837g).
+        var owedIds = owed.Select(w => w.Entry.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var id in boundaries.Keys.Where(id => !live.ContainsKey(id) && !owedIds.Contains(id) && !restoredAt.ContainsKey(id)).ToList()) { boundaries.Remove(id); }
+        foreach (var id in interruptedAt.Keys.Where(id => !boundaries.ContainsKey(id)).ToList()) { interruptedAt.Remove(id); }
+        // What the source has set aside on each live restored session, as it read it with the boundary.
+        foreach (var id in live.Keys.Where(boundaries.ContainsKey))
+        {
+            if (options.Marks?.Interrupted(id) is { } found) { interruptedAt[id] = found; }
+        }
         var file = new RestoreFile
         {
             Boot = boot,
@@ -1349,8 +1409,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             Instance = options.Instance,
             Written = now,
             Stopped = stoppedAt,
-            Sessions = [.. live.Values.OrderBy(e => e.Id, StringComparer.Ordinal).Select(e => boundaries.TryGetValue(e.Id, out var boundaryAt) ? e with { Boundary = boundaryAt } : e)],
-            Owed = [.. owed],
+            Sessions = [.. live.Values.OrderBy(e => e.Id, StringComparer.Ordinal).Select(e => boundaries.TryGetValue(e.Id, out var boundaryAt) ? e with { Boundary = boundaryAt, Interrupted = Kept(e.Id) } : e)],
+            Owed = [.. owed.Select(w => boundaries.TryGetValue(w.Entry.Id, out var owedBoundary) ? w with { Entry = w.Entry with { Boundary = owedBoundary, Interrupted = Kept(w.Entry.Id) } } : w)],
             Stamps = restoredAt.Where(s => !live.ContainsKey(s.Key) && !owed.Any(w => w.Entry.Id == s.Key)).ToDictionary(s => s.Key, s => s.Value, StringComparer.Ordinal),
         };
         try

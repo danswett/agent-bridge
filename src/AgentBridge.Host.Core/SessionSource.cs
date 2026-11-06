@@ -377,7 +377,11 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             var tracker = entry?.Tracker ?? new SessionTracker(discovered, _options, _time);
             // A restored session's boundary, before the transcript is read: what the interrupted run
             // left asking is set aside before the status and its times are worked out (#780).
-            lock (_gate) { tracker.QuestionsFrom = _restoreMarks.TryGetValue(discovered.Id, out var restoreMark) ? restoreMark.Given.At : null; }
+            lock (_gate)
+            {
+                var restoreMark = _restoreMarks.GetValueOrDefault(discovered.Id);
+                tracker.SetQuestionsFrom(restoreMark?.Given.At, restoreMark?.Known);
+            }
             Session full;
             try { full = tracker.Update(discovered); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException)
@@ -387,6 +391,11 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 // running, and must not be offered for resume.
                 if (discover && entry is null) { unread.Add(discovered.Agent); }
                 continue;
+            }
+            // What it set aside, for the recorder to keep with the boundary (IRestoreMarks.Interrupted).
+            lock (_gate)
+            {
+                if (_restoreMarks.TryGetValue(discovered.Id, out var read) && tracker.QuestionsFrom == read.Given.At) { read.Interrupted = tracker.InterruptedQuestions; }
             }
             Commit(entry ?? new Entry(tracker), full);
         }
@@ -869,6 +878,28 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         _ = Task.Run(() => RecommitDriverAsync(id));
     }
 
+    // A boundary an earlier host run kept (RestoreRecorder.HoldBoundaries), with the interrupted run's
+    // questions as that run found them, told by identity from then on.
+    public void Hold(string id, SessionRestored mark, IReadOnlyCollection<string>? interrupted)
+    {
+        lock (_gate)
+        {
+            var changed = SetMark(id, mark, shown: false);
+            if (interrupted is not null && _restoreMarks.TryGetValue(id, out var state) && state.Given == mark)
+            {
+                state.Known = interrupted.ToHashSet(StringComparer.Ordinal);
+                state.Interrupted ??= [.. interrupted];
+            }
+            if (!changed || !_entries.ContainsKey(id)) { return; }
+        }
+        _ = Task.Run(() => RecommitDriverAsync(id));
+    }
+
+    public IReadOnlyList<string>? Interrupted(string id)
+    {
+        lock (_gate) { return _restoreMarks.TryGetValue(id, out var state) ? state.Interrupted : null; }
+    }
+
     // Under _gate. The same mark held earlier is shown in place, keeping what it has seen since (its
     // prompt baseline, Continue gone); another replaces it, kept for Revert. Whether anything changed.
     bool SetMark(string id, SessionRestored mark, bool shown)
@@ -1227,4 +1258,8 @@ sealed class RestoreMarkState(SessionRestored mark)
     // The badge (Session.restored): false once the recorder has taken it away. The boundary stays.
     public bool Shown { get; set; } = true;
     public int? Prompts { get; set; }
+    // The interrupted run's questions as an earlier host run found them, given with a boundary it
+    // kept; and as this run found them, once read with the boundary (SessionState.Known, Interrupted).
+    public IReadOnlySet<string>? Known { get; set; }
+    public IReadOnlyList<string>? Interrupted { get; set; }
 }

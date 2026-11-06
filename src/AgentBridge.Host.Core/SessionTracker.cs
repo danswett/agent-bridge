@@ -119,7 +119,9 @@ internal sealed class SessionTracker
         if (_hookFrom != _state.AskedFrom)
         {
             _hookFrom = _state.AskedFrom;
-            _staleHookAt = _state.AskedFrom is { } from && discovered.Registration?.HookStatusAt is { } hook && hook < from ? hook : null;
+            // After a host restart, by identity: the stale one is the one an earlier run set aside.
+            _staleHookAt = _state.AskedFrom is { } from && discovered.Registration?.HookStatusAt is { } hook
+                && (_state.Known is { } known ? known.Contains(HookKey(hook)) : hook < from) ? hook : null;
             changed = true;
         }
         changed |= _builtFrom != _state.AskedFrom;
@@ -427,6 +429,21 @@ internal sealed class SessionTracker
         get => _state.AskedFrom;
         set => _state.AskedFrom = value;
     }
+
+    // The boundary with the interrupted run's questions as an earlier host run found them
+    // (SessionState.Known), the ids set first so the boundary is set with them.
+    public void SetQuestionsFrom(DateTimeOffset? from, IReadOnlySet<string>? known)
+    {
+        if (from != _state.AskedFrom) { _state.Known = known; }
+        _state.AskedFrom = from;
+    }
+
+    // The interrupted run's questions set aside now, by id (SessionState.Interrupted), and a stale hook
+    // approval by its record's time.
+    public IReadOnlyList<string> InterruptedQuestions =>
+        [.. _state.Interrupted.Concat(_staleHookAt is { } h ? [HookKey(h)] : Array.Empty<string>()).Order(StringComparer.Ordinal)];
+
+    static string HookKey(DateTimeOffset at) => "hook:" + at.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture);
 
     // session.get { id, agent }: one sub-agent with its own words and tools, or null when the
     // session has none by that id.

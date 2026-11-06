@@ -1287,6 +1287,130 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(restoredAt, a.Boundary);
     }
 
+    // Engineering, cr-837g: a restored session whose stamp has long gone, held undecided at a start
+    // (its agent's discovery held) and adopted once the hold lifts, keeps its boundary in the record,
+    // so the start after that still holds it, and the interrupted run's question is not listed as asked.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_boundary_survives_a_start_with_discovery_held_and_the_start_after_it(bool polled)
+    {
+        const string Id = "99999999-9999-4999-8999-999999999982";
+        var boundary = Fixture.T0.AddSeconds(20);
+        Previous(Fixture.T0, false, E(Id) with { Boundary = boundary });
+        source.HeldNow = new DiscoveryHeld("the copilot processes could not be listed", [AgentKind.Copilot]);
+        await using (var r = Recorder())
+        {
+            r.Start();
+            // Adopted as the judging tick finds it listed once the hold lifts, or as its upsert arrives.
+            if (polled)
+            {
+                source.Sessions.Add(S(Id));
+                source.HeldNow = null;
+                Time.Advance(RestoreRecorder.JudgeEvery);
+            }
+            else
+            {
+                source.Upsert(S(Id));
+                source.HeldNow = null;
+            }
+            source.Upsert(S(Id) with { Title = "T again" });
+            Time.Advance(RestoreRecorder.Coalesce);
+
+            Assert.Equal(boundary, Assert.Single(Written().Sessions).Boundary);
+        }
+
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 3));
+        await using var real = f.Source();
+        RestoreRecorder.HoldBoundaries(Record, real);
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Idle, (Question?)null), (after.Status, after.Question));
+    }
+
+    // Engineering, cr2-837g: the record keeps, with the boundary, which questions the source set aside
+    // as the interrupted run's.
+    [Fact]
+    public async Task The_record_keeps_the_interrupted_questions_set_aside_with_a_restored_sessions_boundary()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        await using var r = Recorder(resumer: new Resumer());
+        r.Start();
+        await Until(() => told.Count == 1);
+        marks.Asked["a"] = ["q1"];
+        source.Upsert(S("a"));
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        var a = Assert.Single(Written().Sessions);
+        Assert.NotNull(a.Boundary);
+        Assert.Equal(["q1"], a.Interrupted!);
+    }
+
+    // Engineering, cr2-837g: restored, then a new question a clock set back dated before the restore,
+    // then only the host started again. Replayed by identity, the new question is shown and the
+    // interrupted run's stays set aside. Copilot here, Claude below.
+    [Fact]
+    public async Task After_a_host_restart_a_new_copilot_question_dated_before_the_restore_is_still_shown()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999981";
+        var boundary = Fixture.T0.AddSeconds(20);
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 3));
+        IReadOnlyList<string> interrupted;
+        await using (var first = f.Source())
+        {
+            first.Hold(Id, new SessionRestored { At = boundary, Cause = RestoreCause.Reboot, QuestionLost = true });
+            await first.RefreshAsync();
+            interrupted = first.Interrupted(Id)!;
+            Fixture.Append(events, Copilot.User("again", 10), Copilot.TurnStart(11), Copilot.ToolStart("q2", "ask_user", new { message = "?" }, 12));
+            await first.RefreshAsync();
+            Assert.Equal(SessionStatus.Waiting, first.Get(Id)!.Status);
+        }
+        Assert.Single(interrupted);
+        Previous(Fixture.T0, false, E(Id) with { Boundary = boundary, Interrupted = interrupted });
+
+        await using var real = f.Source();
+        RestoreRecorder.HoldBoundaries(Record, real);
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Waiting, Fixture.T0.AddSeconds(12)), (after.Status, after.Question?.AskedAt));
+    }
+
+    [Fact]
+    public async Task After_a_host_restart_a_new_claude_question_dated_before_the_restore_is_still_shown()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999980";
+        var boundary = Fixture.T0.AddSeconds(20);
+        var transcript = f.ClaudeTranscript(Id);
+        Fixture.Append(transcript, Claude.User("plan it", 1), Claude.Assistant(2, "tool_use", Claude.ToolUse("ask1", "AskUserQuestion", Claude.Ask(("Which database?", false, ["PostgreSQL", "SQLite"])))));
+        f.ClaudeSessionFile(705, Id);
+        f.Processes.Run(AgentKind.Claude, 705);
+        IReadOnlyList<string> interrupted;
+        await using (var first = f.Source())
+        {
+            first.Hold(Id, new SessionRestored { At = boundary, Cause = RestoreCause.Reboot, QuestionLost = true });
+            await first.RefreshAsync();
+            interrupted = first.Interrupted(Id)!;
+            Fixture.Append(transcript, Claude.User("carry on", 10), Claude.Assistant(11, "tool_use", Claude.ToolUse("ask2", "AskUserQuestion", Claude.Ask(("Which cache?", false, ["Redis", "None"])))));
+            await first.RefreshAsync();
+            Assert.Equal(SessionStatus.Waiting, first.Get(Id)!.Status);
+        }
+        Assert.Single(interrupted);
+        Previous(Fixture.T0, false, E(Id, AgentKind.Claude) with { Boundary = boundary, Interrupted = interrupted });
+
+        await using var real = f.Source();
+        RestoreRecorder.HoldBoundaries(Record, real);
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Waiting, Fixture.T0.AddSeconds(11)), (after.Status, after.Question?.AskedAt));
+    }
+
     // Engineering's second-family review: restore a Claude session, then start only the host again.
     // Held from the record before the source first reads it, the boundary keeps the interrupted run's
     // AskUserQuestion from being listed as asked, and answerable from a phone.
@@ -2287,6 +2411,9 @@ public sealed class RestoreTests : IDisposable
         public readonly System.Collections.Concurrent.ConcurrentDictionary<string, SessionRestored?> Before = new(StringComparer.Ordinal);
         // Held, not shown (the boundary): restored and Continue wait for the window to be seen ready.
         public readonly System.Collections.Concurrent.ConcurrentDictionary<string, SessionRestored> Held = new(StringComparer.Ordinal);
+        // What the source would say it set aside on each (IRestoreMarks.Interrupted).
+        public readonly System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<string>> Asked = new(StringComparer.Ordinal);
+        public IReadOnlyList<string>? Interrupted(string id) => Asked.GetValueOrDefault(id);
         public void Mark(string id, SessionRestored? mark)
         {
             if (mark is null || !(Held.TryGetValue(id, out var held) && held == mark)) { Before[id] = Of.GetValueOrDefault(id); }
