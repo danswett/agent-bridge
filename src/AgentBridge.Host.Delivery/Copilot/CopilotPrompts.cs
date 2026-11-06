@@ -33,8 +33,10 @@ public sealed class CopilotInput(string path)
     // own completion, an abort or shutdown, a question asked since (shown in their place), or a
     // prompt the person typed at the machine (no source, or "user" for one with an attachment; never a
     // schedule's or an agent's), so nothing held the input. Answers are not held by
-    // them: an answer to one of these is refused as stale (CopilotPermissionTranscript).
-    readonly HashSet<string> stale = new(StringComparer.Ordinal);
+    // them: an answer to one of these is refused as stale (CopilotPermissionTranscript). Each with the
+    // agent that asked it (null for the session's own, and for a permission request), so a helper's
+    // abort or shutdown settles its own (Copilot on #837).
+    readonly Dictionary<string, string?> stale = new(StringComparer.Ordinal);
     long scannedTo;
 
     public string Path => path;
@@ -100,8 +102,8 @@ public sealed class CopilotInput(string path)
                     break;
                 case "session.resume" when e.AgentId is null:
                     // A new CLI: what the killed one asked may still be on its screen (stale).
-                    stale.UnionWith(asks.Keys);
-                    stale.UnionWith(permissions);
+                    foreach (var (id, agent) in asks) { stale[id] = agent; }
+                    foreach (var id in permissions) { stale[id] = null; }
                     asks.Clear();
                     permissions.Clear();
                     break;
@@ -112,8 +114,9 @@ public sealed class CopilotInput(string path)
                     stale.Clear();
                     break;
                 case "abort" or "session.shutdown":
-                    // A subagent's ends only its own questions.
+                    // A subagent's ends only its own questions, the killed CLI's left stale too.
                     foreach (var id in asks.Where(a => a.Value == e.AgentId).Select(a => a.Key).ToList()) { asks.Remove(id); }
+                    foreach (var id in stale.Where(a => a.Value == e.AgentId).Select(a => a.Key).ToList()) { stale.Remove(id); }
                     break;
             }
         }

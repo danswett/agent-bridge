@@ -375,6 +375,9 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             Entry? entry;
             lock (_gate) { _entries.TryGetValue(discovered.Id, out entry); }
             var tracker = entry?.Tracker ?? new SessionTracker(discovered, _options, _time);
+            // A restored session's boundary, before the transcript is read: what the interrupted run
+            // left asking is set aside before the status and its times are worked out (#780).
+            lock (_gate) { tracker.QuestionsFrom = _restoreMarks.TryGetValue(discovered.Id, out var restoreMark) ? restoreMark.Given.At : null; }
             Session full;
             try { full = tracker.Update(discovered); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or ArgumentException)

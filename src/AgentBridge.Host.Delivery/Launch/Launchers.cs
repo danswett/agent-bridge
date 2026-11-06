@@ -43,10 +43,18 @@ public static class Launchers
 
     public static Launcher? Find(string? id) => All.FirstOrDefault(l => l.Id == id);
 
-    // The argument Arguments puts a prompt behind on this agent's command line: -i for Copilot and
-    // Agency, -- for Claude and Codex. A restore passes no prompt; one in the extra arguments would
-    // make it submit one, and nothing is ever typed into a restored session automatically (#780).
-    public static string PromptFlag(Launcher launcher) => launcher.Tuning is "claude" or "codex" ? "--" : "-i";
+    // The extra arguments (launch.agents.<id>.extraArgs) a restore passes on: only ones known to carry
+    // no prompt and to widen no permission. A restore opens idle, with the permission mode it was
+    // recorded with; an extra argument could submit a prompt (-i, or Claude's bare positional one) or
+    // grant what the recorded mode does not (--allow-all, --dangerously-skip-permissions,
+    // --ask-for-approval never), and one added to an agent later could do either. So it is an
+    // allowlist, empty until an argument is shown safe (lead's decision on #837, for Engineering to
+    // confirm): a restore with any other is refused, and the session stays offered.
+    public static IReadOnlySet<string> RestoreSafeExtras(Launcher launcher) => SafeExtras.TryGetValue(launcher.Id, out var safe) ? safe : NoExtras;
+
+    // By launcher id, each argument exactly as written in extraArgs. None yet.
+    static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> SafeExtras = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
+    static readonly IReadOnlySet<string> NoExtras = new HashSet<string>(StringComparer.Ordinal);
 
     // Effort names ordered weakest first, as agent-ha-bridge's $script:BridgeEffortOrder.
     public static readonly IReadOnlyList<string> EffortOrder = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];

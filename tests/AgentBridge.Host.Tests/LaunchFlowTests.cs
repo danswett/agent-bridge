@@ -380,7 +380,8 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(2, starter.Specs.Count);
 
         // Copilot on #837: extra arguments from the config that carry a prompt (-i) would make the
-        // restore submit one. Refused before anything starts, so it stays offered for Launch.
+        // restore submit one. Not on the allowlist, so refused before anything starts, and it stays
+        // offered for Launch.
         const string Prompted = "76767676-7676-4676-8676-767676767676";
         Resumable(Prompted, app, "Extra prompt");
         var prompted = await Launcher(Config(c => c with
@@ -391,6 +392,38 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(LaunchOutcome.Refused, prompted.Outcome);
         Assert.Contains("extraArgs", prompted.Reason, StringComparison.Ordinal);
         Assert.Equal(2, starter.Specs.Count);
+    }
+
+    // Copilot on #837, and the lead's allowlist: a restore passes on no extra argument not known to
+    // carry no prompt and widen no permission (none yet). --allow-all would give a session started by
+    // hand, restored asking permission, Allow all it never had; Claude takes a bare argument as its
+    // prompt. Both are refused, and nothing starts.
+    [Fact]
+    public async Task A_restore_refuses_extra_arguments_not_known_to_be_safe_whether_they_widen_permissions_or_carry_a_prompt()
+    {
+        const string Hand = "75757575-7575-4575-8575-757575757575";
+        const string Talk = "74747474-7474-4474-8474-747474747474";
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        Resumable(Hand, app, "By hand");
+        ClaudeResumable(Talk, app, "Plan the release");
+        var launcher = Launcher(Config(c => c with
+        {
+            Permissions = LaunchProtocol.Ask,
+            ResumeCount = 0,
+            Agents = new Dictionary<string, AgentConfig>
+            {
+                ["copilot"] = new() { ExtraArgs = ["--allow-all"] },
+                ["claude"] = new() { ExtraArgs = ["carry on where you left off"] },
+            },
+        }));
+
+        var widened = await launcher.ResumeAsync(new ResumeAsk(Hand, AgentKind.Copilot, null, RestoreRecorder.RestorePrincipal));
+        var positional = await launcher.ResumeAsync(new ResumeAsk(Talk, AgentKind.Claude, null, RestoreRecorder.RestorePrincipal));
+
+        Assert.Equal((LaunchOutcome.Refused, LaunchOutcome.Refused), (widened.Outcome, positional.Outcome));
+        Assert.Contains("extraArgs", widened.Reason, StringComparison.Ordinal);
+        Assert.Contains("extraArgs", positional.Reason, StringComparison.Ordinal);
+        Assert.Empty(starter.Specs);
     }
 
     [Fact]

@@ -59,11 +59,17 @@ internal sealed class SessionState
     public readonly BackgroundWork Background = new();
     // Questions the agent is waiting on, oldest first; the newest is the one shown.
     public readonly List<Question> Pending = [];
+    // A restored session's boundary (#780): a question asked before it is the interrupted run's,
+    // which went with it, so it neither shows nor makes the session waiting. Set by the session
+    // source; not the transcript's, so a reset keeps it.
+    public DateTimeOffset? AskedFrom;
+    // What is asking now: Pending, less what the interrupted run left.
+    public List<Question> Asking => AskedFrom is { } from ? Pending.Where(q => q.AskedAt >= from).ToList() : Pending;
     // session.attention (#800): what went wrong that the status cannot say. An error lasts until
     // the next turn, a sign-in until the model is seen answering (CopilotParser.Answered).
     public Attention? Attention;
 
-    public SessionStatus Effective => Pending.Count > 0 ? SessionStatus.Waiting : Status;
+    public SessionStatus Effective => (AskedFrom is { } from ? Pending.Any(q => q.AskedAt >= from) : Pending.Count > 0) ? SessionStatus.Waiting : Status;
     public DateTimeOffset? EffectiveSince;
 
     public void Reset()

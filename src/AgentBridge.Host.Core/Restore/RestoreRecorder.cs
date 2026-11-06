@@ -205,8 +205,11 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     // Restored (stamped before its launch), by when, until each has stayed live LoopWithin.
     readonly Dictionary<string, DateTimeOffset> restoredAt = new(StringComparer.Ordinal);
     // When each stamped session was first seen live: the ten minutes count from there, not from the
-    // stamp, so a restore that waits at folder trust keeps its stamp until it has really lived.
-    readonly Dictionary<string, DateTimeOffset> liveSince = new(StringComparer.Ordinal);
+    // stamp, so a restore that waits at folder trust keeps its stamp until it has really lived. On the
+    // monotonic clock: on the wall clock, one set forward cleared a stamp after seconds of real life,
+    // and a crash then was restored again (Copilot on #837). The stamps themselves stay wall-clock
+    // times, as the record keeps them.
+    readonly Dictionary<string, long> liveSince = new(StringComparer.Ordinal);
     // The marks shown on sessions restored in this run, each taken away after ShownFor.
     // Each with its generation: a callback already under way for a timer since replaced takes
     // nothing away.
@@ -417,7 +420,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
             }
             goneBeforeStart.Clear();
             // Restored lately and still running: its ten minutes start again from now.
-            foreach (var id in live.Keys.Where(restoredAt.ContainsKey)) { liveSince.TryAdd(id, now); }
+            foreach (var id in live.Keys.Where(restoredAt.ContainsKey)) { liveSince.TryAdd(id, time.GetTimestamp()); }
             // A restore on request that had not registered when the host went: still a request, its
             // folder unknown, so every worktree is kept until it registers or its stamp lapses. Before,
             // a restart dropped it, and its worktree could be reclaimed before it registered.
@@ -524,7 +527,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                 requested.Remove(s.Id);
                 if (From(s, now) is not { } e) { return; }
                 // Stamped by a restore, and live now: its ten minutes start.
-                if (restoredAt.ContainsKey(e.Id)) { liveSince.TryAdd(e.Id, now); }
+                if (restoredAt.ContainsKey(e.Id)) { liveSince.TryAdd(e.Id, time.GetTimestamp()); }
                 if (live.TryGetValue(e.Id, out var was) && was.Gone is null && Same(was, e) && !resumed) { return; }
                 live[e.Id] = e;
                 if (running) { ScheduleWriteLocked(Coalesce); }
@@ -597,10 +600,6 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         {
             if (r - now > AheadTolerance) { restoredAt[id] = now; }
         }
-        foreach (var (id, since) in liveSince.ToList())
-        {
-            if (since - now > AheadTolerance) { liveSince[id] = now; }
-        }
         // Read as now with the stamp they were taken from, so the two still match (SeenReadyLate).
         foreach (var (id, u) in unconfirmed.ToList())
         {
@@ -653,6 +652,10 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     void PumpLocked(DateTimeOffset now)
     {
         if (stopped || stopping.IsCancellationRequested || !running || resuming || now < retryAt || !CanRestoreLocked()) { return; }
+        // Not while any is still being judged (its agent's discovery held, or its hooks' endings not
+        // yet taken in): every session is judged before the newest is restored, across agents
+        // (Copilot on #837). The judging timer pumps again once they are.
+        if (owed.Any(w => !w.Decided)) { return; }
         if (Candidates().OrderByDescending(w => w.Entry.Seen).FirstOrDefault() is not { } next) { return; }
         var entry = next.Entry;
         var undo = StampLocked(entry.Id, now, next.Cause, next.Since ?? next.At, entry.Turn == RestoreTurn.Working, entry.QuestionWaiting);
@@ -770,7 +773,7 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
 
     // What a stamp replaced, so an attempt that started nothing leaves things as they were, and never
     // takes away an earlier restore's protection.
-    sealed record Undo(string Id, DateTimeOffset? At, DateTimeOffset? Since, DateTimeOffset? Owed, DateTimeOffset? Live, (SessionRestored Mark, DateTimeOffset Until)? Shown);
+    sealed record Undo(string Id, DateTimeOffset? At, long? Since, DateTimeOffset? Owed, DateTimeOffset? Live, (SessionRestored Mark, DateTimeOffset Until)? Shown);
 
 
     // Stamped and marked before the launch.
@@ -790,10 +793,15 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
     {
         var id = undo.Id;
         if (undo.At is { } at) { restoredAt[id] = at; } else { restoredAt.Remove(id); }
-        if (undo.Since is { } since) { liveSince[id] = since; } else { liveSince.Remove(id); }
+        // Registered while the attempt was under way (an earlier attempt's window, or one started at
+        // the machine): live now, so its live tracking stays, and its entry carries the stamp put
+        // back, never none. Cleared, a crash within ten minutes was restored again (Copilot on #837).
+        var registered = live.TryGetValue(id, out var e) && e.Gone is null;
+        if (undo.Since is { } since) { liveSince[id] = since; }
+        else if (!(registered && restoredAt.ContainsKey(id))) { liveSince.Remove(id); }
         var i = owed.FindIndex(x => x.Entry.Id == id);
         if (i >= 0) { owed[i] = owed[i] with { Restored = undo.Owed }; }
-        if (live.TryGetValue(id, out var e)) { live[id] = e with { Restored = undo.Live }; }
+        if (e is not null) { live[id] = e with { Restored = undo.Live ?? (registered && restoredAt.TryGetValue(id, out var back) ? back : (DateTimeOffset?)null) }; }
         if (marks.Remove(id, out var timer)) { timer.Timer.Dispose(); }
         if (shown.Remove(id, out var tried)) { options.Marks?.Revert(id, tried.Mark); }
         if (undo.Shown is { } before)
@@ -914,6 +922,12 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
                         if (late) { ready = ReadyLateLocked(ask.Session); }
                     }
                     ScheduleWriteLocked(Coalesce);
+                    // The start-up queue again, as after its own: a candidate this request held back
+                    // (in flight, so not one) may be one again, and a tick meanwhile left only the
+                    // offer-expiry timer, which stalled it for days (Copilot on #837).
+                    var after = time.GetUtcNow();
+                    ArmLocked(after);
+                    PumpLocked(after);
                 }
             }
             if (ready is not null) { Tell(ready); }
@@ -1258,7 +1272,8 @@ public sealed class RestoreRecorder : IRestorePending, ISessionRestorer, IAsyncD
         {
             if (live.TryGetValue(id, out var e) && e.Gone is null && liveSince.TryGetValue(id, out var since))
             {
-                if (now - since < LoopWithin) { Next(since + LoopWithin); continue; }
+                var lived = time.GetElapsedTime(since);
+                if (lived < LoopWithin) { Next(now + (LoopWithin - lived)); continue; }
                 // While its agent's discovery is held the source keeps the sessions it listed, so
                 // still listed is not still live: one that died in the hold, its stamp gone, would
                 // not read as a loop once the hold lifts and it is found gone.

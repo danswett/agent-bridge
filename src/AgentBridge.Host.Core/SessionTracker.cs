@@ -150,9 +150,12 @@ internal sealed class SessionTracker
         var reg = d.Registration;
         var now = _time.GetUtcNow();
         var status = _state.Status;
+        // Without what an interrupted run left asking (a restored session's boundary, #780): it went
+        // with that run, and must neither hide what is asked now nor hold the status at waiting.
+        var pending = _state.Asking;
         // Status precedence (docs/design/subagents.md §4): the session's own question wins over
         // a sub-agent's (rule 1, "question wins"), and a sub-agent's makes it waiting too (rule 2).
-        var question = _state.Pending.LastOrDefault(q => q.Agent is null) ?? (_state.Pending.Count > 0 ? _state.Pending[^1] : null);
+        var question = pending.LastOrDefault(q => q.Agent is null) ?? (pending.Count > 0 ? pending[^1] : null);
         // Delivery types only into the main agent's ask_user (AnswerService refuses a stamped
         // call), so nothing proves where keys for a sub-agent's would land: it is answered at
         // the machine. Nor for a Copilot form while a permission prompt or a sub-agent's
@@ -160,7 +163,7 @@ internal sealed class SessionTracker
         // dialog can be the one on screen while the session's own question is the one listed.
         // A permission prompt carries its own proof (CopilotPermission).
         if (question is { Kind: QuestionKind.Form } && (question.Agent is not null
-            || (d.Agent == AgentKind.Copilot && _state.Pending.Any(q => q != question && (q.Kind == QuestionKind.Approval || q.Agent is not null)))))
+            || (d.Agent == AgentKind.Copilot && pending.Any(q => q != question && (q.Kind == QuestionKind.Approval || q.Agent is not null)))))
         {
             question = question with { AnswerAtMachine = true };
         }
@@ -392,7 +395,14 @@ internal sealed class SessionTracker
     public DateTimeOffset? LastPromptAt => _state.LastPromptAt;
 
     // The sub-agents with a question pending.
-    HashSet<string> Waiting() => [.. _state.Pending.Where(q => q.Agent is not null).Select(q => q.Agent!)];
+    HashSet<string> Waiting() => [.. _state.Asking.Where(q => q.Agent is not null).Select(q => q.Agent!)];
+
+    // The restored session's boundary (SessionState.AskedFrom), set before each read.
+    public DateTimeOffset? QuestionsFrom
+    {
+        get => _state.AskedFrom;
+        set => _state.AskedFrom = value;
+    }
 
     // session.get { id, agent }: one sub-agent with its own words and tools, or null when the
     // session has none by that id.

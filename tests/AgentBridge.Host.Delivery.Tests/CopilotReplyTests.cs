@@ -120,6 +120,20 @@ public sealed class CopilotReplyTests : IDisposable
         Assert.False(CopilotPrompts.Before(events).Asking);
     }
 
+    // Copilot on #837: a helper's question the killed CLI left is kept with the helper that asked it,
+    // so that helper's abort after the resume settles it, and another's does not.
+    [Fact]
+    public void A_helpers_question_left_by_a_killed_cli_is_settled_by_that_helpers_abort_after_the_resume()
+    {
+        Fixture.Append(events, Copilot.User("go", 1), Ask("q1", 2, agentId: "helper"), Copilot.Event("session.resume", new { }, 30));
+        Assert.True(CopilotPrompts.Before(events).Resumed);
+
+        Fixture.Append(events, Copilot.Event("abort", new { }, 31, agentId: "other"));
+        Assert.True(CopilotPrompts.Before(events).Asking);
+        Fixture.Append(events, Copilot.Event("abort", new { }, 32, agentId: "helper"));
+        Assert.False(CopilotPrompts.Before(events).Asking);
+    }
+
     [Fact]
     public void A_transcript_that_cannot_be_read_is_never_taken_to_say_nothing_is_asking()
     {

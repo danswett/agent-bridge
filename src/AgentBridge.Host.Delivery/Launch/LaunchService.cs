@@ -813,13 +813,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // bound to its launch as the first new Codex session to appear: with Codex's
             // discovery held, one that was running unseen could appear first and be taken for it.
             if (HeldFor(plan) is { } held) { return new LaunchResult(LaunchOutcome.Busy, HeldReason(held)); }
-            // Read once, so the arguments checked are the ones passed. A restore opens idle: extra
-            // arguments carrying a prompt would submit one with nobody pressing Continue (Copilot on
-            // #837), so it is refused before anything is made, and stays offered.
+            // Read once, so the arguments checked are the ones passed. A restore opens idle and with
+            // its recorded permission mode: an extra argument not known to be safe could submit a
+            // prompt or widen what it may do (Copilot on #837), so it is refused before anything is
+            // made, and stays offered.
             var extras = Config.Agent(plan.Launcher.Id).ExtraArgs;
-            if (restoring && Launchers.PromptFlag(plan.Launcher) is var flag && extras.Contains(flag, StringComparer.Ordinal))
+            if (restoring && extras.Any(a => !string.IsNullOrWhiteSpace(a) && !Launchers.RestoreSafeExtras(plan.Launcher).Contains(a)))
             {
-                return Refused($"{plan.Launcher.Label}'s extraArgs in the host's config carry {flag}, which would start the restored session with a prompt; resume it from Launch");
+                return Refused($"{plan.Launcher.Label}'s extraArgs in the host's config hold arguments a restore does not pass on (only ones known to start no prompt and widen no permission); resume it from Launch");
             }
 
             var directory = plan.Directory;

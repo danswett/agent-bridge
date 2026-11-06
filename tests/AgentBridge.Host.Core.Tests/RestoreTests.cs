@@ -1306,6 +1306,45 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal((SessionStatus.Working, (Question?)null), (after.Status, after.Question));
     }
 
+    // Copilot on #837: the interrupted run's unanswered form is set aside before the status is worked
+    // out, so a permission prompt the hooks report for the new turn is shown, not hidden behind it.
+    [Fact]
+    public async Task A_restored_claude_session_shows_a_new_permission_prompt_while_the_interrupted_question_has_no_result()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999998";
+        var transcript = f.ClaudeTranscript(Id);
+        Fixture.Append(transcript, Claude.User("plan it", 1), Claude.Assistant(2, "tool_use", Claude.ToolUse("ask1", "AskUserQuestion", Claude.Ask(("Which database?", false, ["PostgreSQL", "SQLite"])))));
+        f.ClaudeRegistration(Id, 701, transcript, hookStatus: "waiting", hookAt: Fixture.T0.AddSeconds(12));
+        f.Processes.Run(AgentKind.Claude, 701);
+        await using var real = f.Source();
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Reboot, QuestionLost = true });
+        Fixture.Append(transcript, Claude.User("carry on", 10), Claude.Assistant(11, "tool_use", Claude.ToolUse("t1", "Bash", new System.Text.Json.Nodes.JsonObject { ["command"] = "deploy.sh" })));
+
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Waiting, "t1", QuestionKind.Approval), (after.Status, after.Question?.Id, after.Question?.Kind));
+    }
+
+    // And a whole new turn is dated by its own end, not by the restore.
+    [Fact]
+    public async Task A_restored_claude_session_dates_a_finished_new_turn_by_its_end_while_the_interrupted_question_has_no_result()
+    {
+        const string Id = "99999999-9999-4999-8999-999999999989";
+        var transcript = f.ClaudeTranscript(Id);
+        Fixture.Append(transcript, Claude.User("plan it", 1), Claude.Assistant(2, "tool_use", Claude.ToolUse("ask1", "AskUserQuestion", Claude.Ask(("Which database?", false, ["PostgreSQL", "SQLite"])))));
+        f.ClaudeSessionFile(702, Id);
+        f.Processes.Run(AgentKind.Claude, 702);
+        await using var real = f.Source();
+        real.Mark(Id, new SessionRestored { At = Fixture.T0.AddSeconds(5), Cause = RestoreCause.Reboot, QuestionLost = true });
+        Fixture.Append(transcript, Claude.User("carry on", 10), Claude.Assistant(11, null, Claude.Text("Done.")), Claude.System("turn_duration", 12));
+
+        await real.RefreshAsync();
+
+        var after = real.Get(Id)!;
+        Assert.Equal((SessionStatus.Idle, Fixture.T0.AddSeconds(12), (Question?)null), (after.Status, after.StatusSince, after.Question));
+    }
+
     // ---- #837 review: the restore lifecycle ----
 
     // The restore's stamp is written down before its launch: a session that registers and then dies
@@ -1739,6 +1778,98 @@ public sealed class RestoreTests : IDisposable
         Assert.Equal(LaunchOutcome.Busy, result.Outcome);
         Assert.Empty(resumer.Asked);
         Assert.False(marks.Held.ContainsKey("s"));
+    }
+
+    // ---- Copilot on #837 at 8db6ae68, 93e6317f and de0401f0 ----
+
+    // An earlier unconfirmed restore's window registers while a retry is under way, and the retry is
+    // refused. Put back, the earlier stamp stays on the live entry, so a crash within ten minutes is
+    // still a loop.
+    [Fact]
+    public async Task A_session_that_registers_while_a_refused_retry_is_under_way_keeps_the_earlier_restores_stamp()
+    {
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Unconfirmed, "Copilot in App is asking whether to trust the folder; left for a person at the machine") { Session = "s" });
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        Assert.Equal(LaunchOutcome.Unconfirmed, (await r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" })).Outcome);
+        var first = Time.GetUtcNow();
+        Time.Advance(TimeSpan.FromMinutes(1));
+
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Refused, "that session is already running"));
+        resumer.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retry = r.RestoreAsync(new RestoreAsk { Session = "s", Cause = RestoreCause.Crash, By = "host-signin" });
+        await Until(() => { lock (resumer.Asked) { return resumer.Asked.Count == 2; } });
+        source.Upsert(S("s"));
+        resumer.Gate.SetResult();
+        Assert.Equal(LaunchOutcome.Refused, (await retry).Outcome);
+        Time.Advance(RestoreRecorder.Coalesce);
+
+        Assert.Equal(first, Assert.Single(Written().Sessions).Restored);
+    }
+
+    // How long a restored session has lived is elapsed time: a clock set forward past ten minutes just
+    // after it registered does not clear its stamp.
+    [Fact]
+    public async Task A_clock_set_forward_does_not_clear_a_restore_stamp_before_its_session_has_lived_ten_minutes()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var clock = new SystemLimits(Time);
+        await using var r = Recorder(resumer: new Resumer(), clock: clock);
+        r.Start();
+        await Until(() => told.Count == 1);
+        source.Upsert(S("a"));
+
+        clock.SetForward(RestoreRecorder.LoopWithin + TimeSpan.FromMinutes(1));
+        source.Upsert(S("a", SessionStatus.Working));
+        clock.Advance(RestoreRecorder.Coalesce);
+
+        Assert.NotNull(Assert.Single(Written().Sessions).Restored);
+    }
+
+    // A request holds the queue's only candidate while a judging tick finds nothing left to restore
+    // (only the offer's expiry is armed then). Once the request is busy, the queue goes on.
+    [Fact]
+    public async Task The_start_up_queue_goes_on_after_a_request_that_held_back_its_last_candidate_is_busy()
+    {
+        Previous(Fixture.T0, false, E("a"));
+        var resumer = new Resumer();
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Busy, "a folder-trust question is waiting for a person at the machine"));
+        await using var r = Recorder(resumer: resumer);
+        r.Start();
+        await Until(() => Logged("session a waits"));
+
+        resumer.Answers.Enqueue(new LaunchResult(LaunchOutcome.Busy, "a folder-trust question is waiting for a person at the machine"));
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        resumer.Gate = gate;
+        var request = r.RestoreAsync(new RestoreAsk { Session = "a", Cause = RestoreCause.Crash, By = "host-signin" });
+        await Until(() => { lock (resumer.Asked) { return resumer.Asked.Count == 2; } });
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        resumer.Gate = null;
+        gate.SetResult();
+        Assert.Equal(LaunchOutcome.Busy, (await request).Outcome);
+
+        Time.Advance(RestoreRecorder.BusyRetry);
+        await Until(() => { lock (resumer.Asked) { return resumer.Asked.Count == 3; } });
+    }
+
+    // Nothing is restored while any session is still being judged (a Claude ending still in the
+    // hooks' spool); once all are, the newest goes first, whatever its agent.
+    [Fact]
+    public async Task Nothing_is_restored_while_any_session_is_still_being_judged_and_then_the_newest_goes_first()
+    {
+        var settled = false;
+        Previous(Fixture.T0, false, E("a"), E("b", AgentKind.Claude) with { Seen = Fixture.T0.AddMinutes(1) });
+        var resumer = new Resumer();
+        await using var r = Recorder(resumer: resumer, endsSettled: agent => agent != AgentKind.Claude || settled);
+        r.Start();
+        Assert.Empty(resumer.Asked);
+
+        settled = true;
+        Time.Advance(RestoreRecorder.JudgeEvery);
+        await Until(() => { lock (resumer.Asked) { return resumer.Asked.Count == 2; } });
+
+        Assert.Equal(["b", "a"], resumer.Asked.Select(a => a.Id));
     }
 
     [Fact]
