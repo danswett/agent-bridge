@@ -343,6 +343,51 @@ test.describe('a folder-trust question', () => {
     await expect(field(page, 'prompt')).toHaveValue('');
   });
 
+  test('a Trust whose session started while the app was hidden opens its card only once the app is shown again (#973)', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+    await page.waitForTimeout(1000);
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+      Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    await page.waitForTimeout(1000);
+    await expect(panel(page)).toBeVisible();
+    await expect(page.locator('.session-view:visible')).toHaveCount(0);
+
+    await page.evaluate(() => { delete document.visibilityState; delete document.hidden; document.dispatchEvent(new Event('visibilitychange')); });
+    await expect(page.locator('.session-view:visible')).toHaveCount(1);
+  });
+
+  test('a Trust whose session started after Launch was left for Settings opens nothing there (#973)', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+    await page.waitForTimeout(1000);
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await go(page, 'settings');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.trustLog.length)).toBe(1);
+    await page.waitForTimeout(1000);
+    await expect(page.locator('[data-route="settings"]')).toBeVisible();
+    await expect(page.locator('.session-view:visible')).toHaveCount(0);
+  });
+
   test('a question this panel\'s launch did not meet, trusted, leaves the first message being written', async ({ page }) => {
     await openDemo(page);
     await ask(page, QUESTION);
@@ -941,6 +986,29 @@ test.describe('a launch followed after it was not confirmed', () => {
     await expect(view(page, LATE)).toBeInViewport();
     await expect(status(page)).toHaveText('Session started in a new worktree.');
     await expect(field(page, 'prompt')).toHaveValue('');
+  });
+
+  test('two new Codex sessions in its folder leave a launch that named none not confirmed: neither is said to be it (#973)', async ({ page }) => {
+    const OTHER = '7b1d3f5a-9c2e-4a6b-8d0f-1e3a5c7b9d2f';
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'unconfirmed', reason: 'the session started, but it did not confirm it was ready within 60 seconds' });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'workspace').selectOption('agent-bridge');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
+
+    await page.evaluate((ids) => {
+      const at = new Date().toISOString();
+      ids.forEach((id, i) => window.agentBridgeDemo.upsert({ id, agent: 'codex', title: 'Add pagination.', cwd: 'C:\\Users\\demo\\repos\\agent-bridge', status: 'working', statusSince: at, startedAt: at, updatedAt: at, processId: 4300 + i, activity: { userMessage: 'Add pagination.', turnCount: 1 } }));
+    }, [LATE, OTHER]);
+    await expect(row(page, LATE)).toHaveCount(1);
+    await expect(row(page, OTHER)).toHaveCount(1);
+    await page.waitForTimeout(2000);
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
+    await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
+    await expect(page.locator('.session-view:visible')).toHaveCount(0);
   });
 
   test('a busy machine is listed again when a session registers on it, and its busy goes', async ({ page }) => {

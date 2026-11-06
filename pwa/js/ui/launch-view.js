@@ -146,7 +146,7 @@ export class LaunchPanel {
       signal: this.#alive.signal,
     });
     // Every machine's: one launched on and then left is still followed.
-    service.onAny?.((entry) => this.#follow.follow(entry?.hostId, entry, (id) => !!this.session(entry.hostId, id), () => this.sessions(entry.hostId)));
+    service.onAny?.((entry) => this.#follow.follow(entry?.hostId, entry, (id) => !!this.session(entry?.hostId, id), () => this.sessions(entry?.hostId), (id) => this.session(entry?.hostId, id)));
     this.#build();
   }
 
@@ -829,11 +829,13 @@ export class LaunchPanel {
   // Retried until the card arrives, for 15 seconds at most, and only while it would still be
   // wanted: this panel open on that machine, with that launch still its last (request, when one
   // is named). Closing it, another machine, or signing out ends the wait (#cancelJump); a page
-  // hidden meanwhile is not jumped in.
+  // hidden is not jumped in, from the first try on (#973): a start seen in the background waits
+  // for it to come back, within those 15 seconds.
   #jumpTo(id, hostId, request) {
     this.#cancelJump();
     const wanted = () => this.#open && this.#target?.hostId === hostId && (!request || this.service.get(hostId)?.request === request);
-    if (this.jump(id, hostId)) { return; }
+    if (!wanted()) { return; }
+    if (!globalThis.document?.hidden && this.jump(id, hostId)) { return; }
     const until = Date.now() + 15000;
     this.#jumpTimer = setInterval(() => {
       if (!wanted() || Date.now() > until) { this.#cancelJump(); return; }

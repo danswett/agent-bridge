@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LaunchFollow, sameQuestion, samePrompt, sameFolder, BUSY_FOR_MS, BUSY_SLACK_MS, BUSY_AT_LEAST_MS, LATE_FOLLOW_FOR_MS, LATE_START_SLACK_MS } from '../../js/launch-follow.js';
+import { LaunchFollow, sameQuestion, samePrompt, sameFolder, BUSY_FOR_MS, BUSY_SLACK_MS, BUSY_AT_LEAST_MS, LATE_FOLLOW_FOR_MS, LATE_START_SLACK_MS, LATE_SETTLE_MS } from '../../js/launch-follow.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const T0 = Date.parse('2026-05-01T12:00:00.000Z');
@@ -255,11 +255,15 @@ test('a launch that named no session has started when a new session of its agent
   const t = setup();
   assert.equal(t.follow.follow('h1', codex(), () => false, () => ['old']), true);
   t.follow.session('h1', codexSession({ cwd: 'c:/repos/bridge/' }));
+  // Not at once: a list coming one session at a time may yet show another like it.
+  t.advance(LATE_SETTLE_MS - 1);
+  assert.equal(t.started.length, 0);
+  t.advance(1);
   assert.deepEqual(t.started.map((s) => [s.hostId, s.request, s.session]), [['h1', 'r1', 'c1']]);
   assert.equal(t.relists, 1);
 });
 
-test('a launch that named no session is not started by another folder, another agent, a session listed before, an old one, or another machine', () => {
+test('a launch that named no session is not started by another folder, another agent, a session listed before, an old one, one that says nothing of when it started, or another machine', () => {
   const t = setup();
   t.follow.follow('h1', codex(), () => false, () => ['old']);
   t.follow.session('h1', codexSession({ cwd: 'C:\\repos\\other' }));
@@ -267,13 +271,88 @@ test('a launch that named no session is not started by another folder, another a
   t.follow.session('h1', codexSession({ id: 'old' }));
   t.follow.session('h1', codexSession({ startedAt: iso(T0 - LATE_START_SLACK_MS - 1) }));
   t.follow.session('h1', codexSession({ status: 'ending' }));
+  t.follow.session('h1', codexSession({ id: 'c3', startedAt: undefined }));
   t.follow.session('h2', codexSession());
+  t.advance(LATE_SETTLE_MS);
   assert.equal(t.started.length, 0);
   // Still followed: the one that is its own does.
   t.follow.session('h1', codexSession({ id: 'c2', startedAt: iso(T0 - LATE_START_SLACK_MS) }));
+  t.advance(LATE_SETTLE_MS);
   assert.deepEqual(t.started.map((s) => s.session), ['c2']);
 });
 
+test('a launch whose outcome came late, its first response lost, is matched to a session that registered after it was first sent (#973)', () => {
+  const t = setup();
+  let listed = ['old'];
+  const sessions = { old: codexSession({ id: 'old', startedAt: iso(T0 - 3600000) }) };
+  const ids = () => listed;
+  const get = (id) => sessions[id] ?? null;
+  t.follow.follow('h1', { state: 'sending', outcome: null, request: 'r1', detail: null }, () => false, ids, get);
+  t.now += 30000;
+  // Sent again after the lost response: still the first send's list and time.
+  t.follow.follow('h1', { state: 'waiting', outcome: null, request: 'r1', detail: null }, () => false, ids, get);
+  t.follow.follow('h1', { state: 'sending', outcome: null, request: 'r1', detail: null }, () => false, ids, get);
+  sessions.c1 = codexSession({ startedAt: iso(T0 + 10000) });
+  listed = ['old', 'c1'];
+  t.follow.session('h1', sessions.c1);
+  t.now += 30000;
+  assert.equal(t.follow.follow('h1', codex(), () => false, ids, get), true);
+  t.advance(LATE_SETTLE_MS);
+  assert.deepEqual(t.started.map((s) => [s.request, s.session]), [['r1', 'c1']]);
+});
+
+test('a launch whose named session was listed by the time its outcome came has started, unless it is a Copilot\'s', () => {
+  const t = setup();
+  const sessions = { s9: { id: 's9', agent: 'claude', status: 'working' } };
+  assert.equal(t.follow.follow('h1', unconfirmed(), (id) => !!sessions[id], () => ['s9'], (id) => sessions[id] ?? null), true);
+  t.advance(LATE_SETTLE_MS);
+  assert.deepEqual(t.started.map((s) => [s.request, s.session]), [['r1', 's9']]);
+  sessions.s9 = { id: 's9', agent: 'copilot', status: 'working' };
+  assert.equal(t.follow.follow('h1', unconfirmed({ request: 'r2' }), (id) => !!sessions[id], () => ['s9'], (id) => sessions[id] ?? null), false);
+});
+
+test('two sessions that may be a launch\'s own leave it unconfirmed, as a wrong one is worse than none (#973)', () => {
+  const t = setup();
+  t.follow.follow('h1', codex(), () => false, () => []);
+  t.follow.session('h1', codexSession());
+  t.advance(LATE_SETTLE_MS - 1);
+  // A reconnect's list, a session at a time.
+  t.follow.session('h1', codexSession({ id: 'c2' }));
+  t.advance(LATE_SETTLE_MS);
+  assert.equal(t.started.length, 0);
+  t.follow.session('h1', codexSession({ id: 'c3' }));
+  t.advance(LATE_SETTLE_MS);
+  assert.equal(t.started.length, 0);
+});
+
+test('a session that started well before a launch was sent is not its own, though new to the list (#973)', () => {
+  const t = setup();
+  t.follow.follow('h1', codex(), () => false, () => []);
+  t.follow.session('h1', codexSession({ startedAt: iso(T0 - 5 * 60000) }));
+  t.advance(LATE_SETTLE_MS);
+  assert.equal(t.started.length, 0);
+});
+
+test('a launch is not matched by its folder while an earlier one of its agent into that folder may still start (#973)', () => {
+  const t = setup();
+  t.follow.follow('h1', codex(), () => false, () => []);
+  t.now += 3 * 60000;
+  t.follow.follow('h1', { state: 'sending', outcome: null, request: 'r2', detail: null }, () => false, () => []);
+  t.follow.follow('h1', codex({ request: 'r2' }), () => false, () => []);
+  // The first launch's session, registering now, is not the second's.
+  t.follow.session('h1', codexSession({ startedAt: iso(T0 + 10000) }));
+  t.advance(LATE_SETTLE_MS);
+  assert.equal(t.started.length, 0);
+  // Once the earlier one's own has started, a later launch there is matched again.
+  const u = setup();
+  u.follow.follow('h1', codex(), () => false, () => []);
+  u.follow.session('h1', codexSession());
+  u.advance(LATE_SETTLE_MS);
+  u.follow.follow('h1', codex({ request: 'r2' }), () => false, () => ['c1']);
+  u.follow.session('h1', codexSession({ id: 'c2' }));
+  u.advance(LATE_SETTLE_MS);
+  assert.deepEqual(u.started.map((s) => [s.request, s.session]), [['r1', 'c1'], ['r2', 'c2']]);
+});
 test('a launch that named no session is told by its folder only for a new Claude or Codex, never a Copilot\'s, a resumed one or a transferred one', () => {
   const t = setup();
   const launched = { agent: 'agency', workspace: 'bridge', cwd: 'C:\\repos\\bridge' };
