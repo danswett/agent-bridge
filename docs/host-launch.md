@@ -283,7 +283,11 @@ says how many were restored (a session restored and then offered as a loop is co
 `hello`, not notified again, and is not restored by a later start: a person resumes it from Launch.
 One an earlier start was still judging is judged now, as of this start's cause. Beside agent-ha-bridge,
 or while the machine is read-only or launching is off, nothing is restored: the sessions are only
-offered (design G5), and are restored if the machine takes launches again while this run lasts. With
+offered (design G5), and are restored if the machine takes launches again while this run lasts.
+A host the logon task's launcher started after the person pressed Stop in the app restores nothing: it
+looks for the app's Stop marker before the record starts, and exits as it always has; and no restore
+resumes an agent until it has looked again with its pipe open, so a Stop pressed while it starts leaves
+what died offered (#986). With
 `sessions.restoreOnStart` off ([host-config.md](host-config.md)), nothing is restored, what went is
 said and nothing is kept owed, and what earlier starts kept owed is let go. Off only because
 `config.json` could not be read, nothing is restored but what died is kept owed, as when it is on.
