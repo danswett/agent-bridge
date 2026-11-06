@@ -103,7 +103,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             RegistrationWait = wait ?? TimeSpan.FromSeconds(5),
             PollInterval = TimeSpan.FromMilliseconds(25),
             ScreenAfter = TimeSpan.Zero,
-            ScreenEvery = TimeSpan.FromMilliseconds(25),
+            ScreenEvery = TimeSpan.Zero,
             ReadyWait = readyWait ?? TimeSpan.FromSeconds(5),
             TrustConfirmWait = trustConfirm ?? TimeSpan.FromSeconds(5),
             FollowFor = follow ?? TimeSpan.FromMinutes(10),
