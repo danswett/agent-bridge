@@ -442,13 +442,16 @@ into one folder with one version. An app update is a host update, so they never 
     profile could write its own feed's package of the same version after the app's check (#719,
     6677353697). So just before install the package is copied, from the handle that checked it,
     into this profile's own folder (`<profile>\app-update`, which no other profile's updater
-    writes), and the copy is checked against the same checksum again from a handle that keeps it
-    open, read-only to everyone else, until the app exits. The app then starts `Update.exe` itself,
+    writes, and which is private to this user as the attachment folder is: a protected DACL
+    granting this user alone, nothing inherited, `PrivateFolder`), and the copy is checked against
+    the same checksum again from a handle that keeps it open, read-only to everyone else, until
+    the app exits. The app then starts `Update.exe` itself,
     as Velopack's `ApplyUpdatesAndRestart` would (`apply --waitPid … --rootDir …`), but with
     `--package` naming the copy; `--packageDir` stays the shared packages folder, where
     `Update.exe` takes its install lock (`packages\.velopack_lock`), so profiles still can't
-    install over each other. The copy goes at the app's next start. What remains is a process of
-    the same Windows user writing into this profile's folder after the app exits, which could as
+    install over each other. The copy goes at the app's next start. What remains: `Update.exe`
+    checks nothing itself when it opens the copy (it takes no checksum), so a process running as
+    this same Windows user could still change the copy after the app exits; such a process could as
     well replace `Update.exe` or the app itself. A release whose feed gives no checksum is never installed. The checksum proves the
     package is the one the chosen feed names, not who published it: the feed supplies its own
     checksum. The app downloads full packages only (`AppPackages`): Velopack rebuilds a release

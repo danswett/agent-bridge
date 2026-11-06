@@ -1,6 +1,10 @@
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text;
 using AgentBridge.App.Core;
+using AgentBridge.Host.Delivery.Staging;
 using Xunit;
 
 // #984: the package Update.exe installs is the one checked against its release, through the
@@ -122,6 +126,39 @@ public sealed class PackageHandoffTests : IDisposable
 
         Assert.Equal(["apply", "--package", copy.Package, "--waitPid", "4242", "--rootDir", install, "--packageDir", Packages, "--", "--background", "--profile", "work"], handed);
         Assert.NotEqual(Path.GetFullPath(Packages), Path.GetFullPath(Path.GetDirectoryName(copy.Package)!));
+    }
+
+    // Engineering's review of #1036 (6693104164, MEDIUM): the handle on the copy closes with the app,
+    // before Update.exe opens it, so the folder it is in is private to this user, as the attachment
+    // folder is (PrivateFolder): narrowed if it was made before with the default ACL, and the copy
+    // inherits that (0600 elsewhere).
+    [Fact]
+    public void The_folder_the_copy_is_made_in_is_private_to_this_user_and_so_is_the_copy()
+    {
+        Directory.CreateDirectory(ProfileCopies);
+        if (!OperatingSystem.IsWindows()) { File.SetUnixFileMode(ProfileCopies, (UnixFileMode)0b111_101_101); }
+        Assert.False(PrivateFolder.IsPrivate(ProfileCopies));
+
+        var copy = new PackageHandoff(Mark, ProfileCopies).Prepare(Downloaded(), "0.2.0", Source);
+
+        Assert.True(PrivateFolder.IsPrivate(ProfileCopies));
+        if (OperatingSystem.IsWindows()) { AssertOnlyMe(ProfileCopies, copy.Package); }
+        else { Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(copy.Package)); }
+    }
+
+    [SupportedOSPlatform("windows")]
+    static void AssertOnlyMe(string folder, string file)
+    {
+        var me = WindowsIdentity.GetCurrent().User!;
+        var acl = new DirectoryInfo(folder).GetAccessControl();
+        Assert.True(acl.AreAccessRulesProtected, "inherits access from the folder above");
+        var rules = acl.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToList();
+        Assert.All(rules, r => Assert.Equal(me, r.IdentityReference));
+        Assert.Contains(rules, r => r.FileSystemRights.HasFlag(FileSystemRights.FullControl)
+            && r.InheritanceFlags == (InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit));
+        var fileRules = new FileInfo(file).GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToList();
+        Assert.NotEmpty(fileRules);
+        Assert.All(fileRules, r => Assert.Equal(me, r.IdentityReference));
     }
 
     // A copy an earlier hand-over left (installed since, or refused) is not kept: a release's size.

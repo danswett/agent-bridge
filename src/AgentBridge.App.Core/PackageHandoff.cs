@@ -1,3 +1,5 @@
+using AgentBridge.Host.Delivery.Staging;
+
 namespace AgentBridge.App.Core;
 
 // How the package checked against its release reaches Velopack's installer (#984). Update.exe opens
@@ -8,9 +10,12 @@ namespace AgentBridge.App.Core;
 // installer opened it (#719, 6677353697). So the installer is handed a copy in this profile's own
 // folder, which no other profile's updater writes: copied from the handle that checked the shared
 // package, and checked again against the same digest from the handle that keeps it, read-only to
-// everyone else, until this process ends. The shared packages folder is still the one named for
-// --packageDir: Update.exe takes its install lock there (packages\.velopack_lock), which keeps the
-// profiles from installing over each other.
+// everyone else, until this process ends. The folder is private to this user (PrivateFolder: on
+// Windows a protected DACL granting this user alone, nothing inherited from above), so once that
+// handle closes with the app, before Update.exe opens the copy, no other account is granted
+// access to it; Update.exe takes no checksum, so a process of this same user still could. The
+// shared packages folder is still the one named for --packageDir: Update.exe takes its install
+// lock there (packages\.velopack_lock), which keeps the profiles from installing over each other.
 public sealed class PackageHandoff(DownloadMark mark, string folder)
 {
     // The copy for the installer, and the digest it was checked against.
@@ -24,10 +29,11 @@ public sealed class PackageHandoff(DownloadMark mark, string folder)
             ?? throw new PackageMismatchException($"no package downloaded for {version} from the source selected now has been checked; nothing was installed");
         using var held = DownloadMark.Hold(shared, digest)
             ?? throw new PackageMismatchException($"the package downloaded for {version} is no longer the bytes verified for it; nothing was installed, so check for updates again");
+        var dir = PrivateFolder.Ensure(folder, "the folder the update is handed to the installer from", "nothing was installed");
         Clear();
-        Directory.CreateDirectory(folder);
-        var copy = Path.Combine(folder, Path.GetFileName(shared));
-        using (var to = new FileStream(copy, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        var copy = Path.Combine(dir, Path.GetFileName(shared));
+        // A new file, inheriting the folder's DACL (0600 elsewhere), never one already there.
+        using (var to = PrivateFolder.CreateNew(copy))
         {
             held.CopyTo(to);
             to.Flush(flushToDisk: true);
@@ -71,7 +77,8 @@ public sealed class PackageHandoff(DownloadMark mark, string folder)
     {
         try
         {
-            if (!Directory.Exists(folder)) { return; }
+            // A link would have this delete wherever it points.
+            if (!Directory.Exists(folder) || new DirectoryInfo(folder).Attributes.HasFlag(FileAttributes.ReparsePoint)) { return; }
             foreach (var old in Directory.EnumerateFiles(folder))
             {
                 try { File.Delete(old); }
