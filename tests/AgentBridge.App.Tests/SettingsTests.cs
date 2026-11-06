@@ -444,7 +444,7 @@ public sealed class SettingsTests : IAsyncLifetime
     public void Each_agent_rows_buttons_are_named_for_its_agent_and_have_ids_of_their_own()
     {
         var copilot = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction), canManage: true);
-        var claude = new AgentReadinessRow(Agent("claude", "Claude Code", ReadinessState.Failed), canManage: true);
+        var claude = new AgentReadinessRow(Agent("claude", "Claude Code", ReadinessState.Failed, hooksDetail: DidNotComplete), canManage: true);
 
         Assert.Equal("Set up Copilot CLI", copilot.SetUpName);
         Assert.Equal("Repair Claude Code", claude.SetUpName);
@@ -461,13 +461,16 @@ public sealed class SettingsTests : IAsyncLifetime
     const string NoRecordIntakeOn = "Intake is enabled; this agent's registration and ownership have not been verified.";
     const string RecordIntakeOn = "An owned setup record exists; registration and activation still need verification.";
     const string UnknownRecord = "The hook ownership record is not recognized. Inspect it before repairing setup.";
+    const string DidNotComplete = "Hook setup for this profile did not complete; its registrations may be partial. Repair setup.";
+    const string Unreadable = "Hook ownership could not be checked: Access to the path is denied.";
 
     [Theory]
     [InlineData(ReadinessState.Missing, "Fixture hooks.", "Set up")]
     [InlineData(ReadinessState.NeedsAction, NoRecordIntakeOff, "Set up")]
     [InlineData(ReadinessState.NeedsAction, RecordIntakeOff, "Set up")]
     [InlineData(ReadinessState.Unknown, NoRecordIntakeOn, "Set up")]
-    [InlineData(ReadinessState.Failed, UnknownRecord, "Repair")]
+    [InlineData(ReadinessState.Failed, UnknownRecord, null)]
+    [InlineData(ReadinessState.Failed, DidNotComplete, "Repair")]
     [InlineData(ReadinessState.Working, "Fixture hooks.", null)]
     [InlineData(ReadinessState.Blocked, "Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", null)]
     public void An_agent_row_offers_one_verb_for_its_hooks_state_and_none_once_they_work(ReadinessState hooks, string detail, string? verb)
@@ -516,18 +519,13 @@ public sealed class SettingsTests : IAsyncLifetime
     [InlineData("unknown", RecordIntakeOn, "unknown", null, "Not tested yet")]
     [InlineData("unknown", NoRecordIntakeOn, null, "Set up", "")]
     [InlineData("blocked", "Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "incomplete", null, "")]
+    [InlineData("failed", UnknownRecord, "unknown", null, UnknownRecord)]
+    [InlineData("failed", Unreadable, "unknown", null, Unreadable)]
+    [InlineData("failed", DidNotComplete, "incomplete", "Repair", "")]
+    [InlineData("failed", DidNotComplete, null, "Repair", "")]
     public void An_agent_row_takes_its_verb_from_the_hosts_hook_setup_and_reads_a_missing_one_as_unknown(string hooks, string detail, string? hookSetup, string? verb, string status)
     {
-        var json = $$"""
-            {"id":"codex","label":"Codex","home":"fixture-home","executable":"codex.exe","version":"0.48.0",
-             "installation":{"state":"working","detail":"Executable found."},
-             "versionCheck":{"state":"working","detail":"Version 0.48.0"},
-             "hooks":{"state":"{{hooks}}","detail":{{JsonSerializer.Serialize(detail)}}},
-             "authentication":{"state":"unknown","detail":"Sign-in has not been verified."},
-             "activation":{"state":"unknown","detail":"Trust has not been verified."}
-             {{(hookSetup is null ? "" : $",\"hookSetup\":\"{hookSetup}\"")}}}
-            """;
-        var agent = JsonSerializer.Deserialize<AgentReadiness>(json, ProtocolJson.Options)!;
+        var agent = FromWire(hooks, detail, hookSetup);
         var built = typeof(AgentReadiness).GetProperty("HookSetup") is not null;
         var sent = HookSetups.Parse(hookSetup);
         Assert.Equal(built ? sent : HookSetup.Unknown, HookSetups.Of(agent));
@@ -537,6 +535,49 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(sent, row.Setup);
         Assert.Equal(verb, row.SetUpVerb);
         Assert.Equal(status, row.Status);
+    }
+
+    // A readiness row as a host sends it, with `hookSetup` or, for an older host, without.
+    static AgentReadiness FromWire(string hooks, string detail, string? hookSetup) => JsonSerializer.Deserialize<AgentReadiness>($$"""
+        {"id":"codex","label":"Codex","home":"fixture-home","executable":"codex.exe","version":"0.48.0",
+         "installation":{"state":"working","detail":"Executable found."},
+         "versionCheck":{"state":"working","detail":"Version 0.48.0"},
+         "hooks":{"state":"{{hooks}}","detail":{{JsonSerializer.Serialize(detail)}}},
+         "authentication":{"state":"unknown","detail":"Sign-in has not been verified."},
+         "activation":{"state":"unknown","detail":"Trust has not been verified."}
+         {{(hookSetup is null ? "" : $",\"hookSetup\":\"{hookSetup}\"")}}}
+        """, ProtocolJson.Options)!;
+
+    [Fact]
+    public void Failed_hooks_the_host_cannot_repair_offer_no_verb_and_say_the_hosts_words_in_danger()
+    {
+        var row = new AgentReadinessRow(FromWire("failed", UnknownRecord, "unknown"), canManage: true);
+
+        Assert.False(row.ShowSetUp);
+        Assert.False(row.CanSetUp);
+        Assert.Equal(UnknownRecord, row.Status);
+        Assert.Equal(Tone.Bad, row.StatusTone);
+        Assert.Equal($"Codex: {UnknownRecord}", row.StatusName);
+    }
+
+    // The host removes only hooks this profile's owned record says it set up, and refuses the rest.
+    [Theory]
+    [InlineData("needsAction", NoRecordIntakeOff, "notSetUp", false)]
+    [InlineData("unknown", NoRecordIntakeOn, "notSetUp", false)]
+    [InlineData("unknown", RecordIntakeOn, "completed", true)]
+    [InlineData("failed", DidNotComplete, "incomplete", true)]
+    [InlineData("needsAction", RecordIntakeOff, "incomplete", true)]
+    [InlineData("failed", UnknownRecord, "unknown", false)]
+    [InlineData("blocked", "Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "incomplete", false)]
+    [InlineData("needsAction", NoRecordIntakeOff, null, false)]
+    [InlineData("unknown", NoRecordIntakeOn, null, false)]
+    [InlineData("unknown", RecordIntakeOn, null, true)]
+    [InlineData("needsAction", RecordIntakeOff, null, true)]
+    [InlineData("failed", DidNotComplete, null, true)]
+    [InlineData("failed", UnknownRecord, null, false)]
+    public void Remove_is_offered_only_for_hooks_this_profiles_owned_record_set_up(string hooks, string detail, string? hookSetup, bool canRemove)
+    {
+        Assert.Equal(canRemove, new AgentReadinessRow(FromWire(hooks, detail, hookSetup), canManage: true).CanRemove);
     }
 
     [Fact]
@@ -724,7 +765,7 @@ public sealed class SettingsTests : IAsyncLifetime
     public void Only_broken_hooks_offer_repair_whatever_the_host_says_of_them()
     {
         var repair = (from state in Enum.GetValues<ReadinessState>()
-                      from detail in new[] { NoRecordIntakeOff, RecordIntakeOff, NoRecordIntakeOn, RecordIntakeOn, UnknownRecord }
+                      from detail in new[] { NoRecordIntakeOff, RecordIntakeOff, NoRecordIntakeOn, RecordIntakeOn, UnknownRecord, DidNotComplete }
                       where new AgentReadinessRow(Agent("copilot", "Copilot CLI", state, hooksDetail: detail), canManage: true).SetUpVerb == "Repair"
                       select state).Distinct();
 
@@ -744,7 +785,7 @@ public sealed class SettingsTests : IAsyncLifetime
     public async Task A_setup_says_its_progress_and_result_on_its_own_row_and_not_on_the_others()
     {
         await ConnectedWith(FakeHost.StatusOf() with { Agents = new(DateTimeOffset.UtcNow,
-            [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction), Agent("claude", "Claude Code", ReadinessState.Failed)]) });
+            [Agent("copilot", "Copilot CLI", ReadinessState.NeedsAction), Agent("claude", "Claude Code", ReadinessState.Failed, hooksDetail: DidNotComplete)]) });
         await Wait.UntilAsync(() => settings.Agents.Count == 2, "agent readiness");
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         host.OnAsync(HostOps.AgentsSetup, async _ =>

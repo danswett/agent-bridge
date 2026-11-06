@@ -719,11 +719,12 @@ public sealed partial class DemoHost : IAsyncDisposable
     // healthy agent reads on a real host (Unknown with this profile's owned record), with none. The
     // demo writes no files, but its readiness moves as a real host's does after a setup (#705
     // review): one that completes leaves the owned record with intake on, so the row offers no Set
-    // up beside "Hooks registered…"; a removal leaves intake on without it. Claude Code's repair fails.
+    // up beside "Hooks registered…"; a removal leaves intake on without it. Claude Code's setup didn't
+    // finish, which is the Failed a host can repair (an unrecognised record it can't); its repair fails.
     readonly Dictionary<string, ReadinessCheck> hooks = new(StringComparer.Ordinal)
     {
         ["copilot"] = new(ReadinessState.NeedsAction, "Hook intake is off for this profile. Explicit setup or migration is required."),
-        ["claude"] = new(ReadinessState.Failed, "The hook ownership record is not recognized. Inspect it before repairing setup."),
+        ["claude"] = new(ReadinessState.Failed, "Hook setup for this profile did not complete; its registrations may be partial. Repair setup."),
         ["codex"] = new(ReadinessState.Unknown, SetUpHooks),
     };
     const string SetUpHooks = "An owned setup record exists; registration and activation still need verification.";
