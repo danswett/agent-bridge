@@ -767,6 +767,22 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_Claude_or_Codex_ending_is_never_settled_while_intake_json_cannot_be_read_and_is_once_the_intake_has_drained()
+    {
+        var broken = HookIntake.EndingsSettled(migrated: false, problem: "intake.json is not valid", () => null);
+        Assert.False(broken(AgentKind.Claude));
+        Assert.False(broken(AgentKind.Codex));
+        Assert.True(broken(AgentKind.Copilot));
+        Assert.True(HookIntake.EndingsSettled(migrated: false, problem: null, () => null)(AgentKind.Claude));
+        Assert.False(HookIntake.EndingsSettled(migrated: true, problem: null, () => null)(AgentKind.Codex));
+        var intake = Intake();
+        var settled = HookIntake.EndingsSettled(migrated: true, problem: null, () => intake);
+        Assert.False(settled(AgentKind.Codex));
+        intake.Pass();
+        Assert.True(settled(AgentKind.Codex));
+    }
+
+    [Fact]
     public void A_Codex_approval_recorded_outside_the_runtime_the_intake_settles_is_never_answerable()
     {
         var intake = Intake();
@@ -863,6 +879,58 @@ public sealed class IntakeTests : IDisposable
 
         Assert.True(File.Exists(Path.Combine(_f.ClaudeRegistrations, "dead-old.json")));
         Assert.Equal("the daemon started", gated.Paused);
+    }
+
+    [Fact]
+    public void A_first_drain_longer_than_the_prune_interval_keeps_an_ended_Codex_registration_until_restore_has_read_it()
+    {
+        // A Codex session that ended while the host was down: its SessionEnd waits in the spool.
+        _f.CodexRegistration("s", 63, null, updated: Fixture.T0.AddMinutes(-5));
+        Spooled("0001", "codex", "hook", new { session_id = "s", hook_event_name = "SessionEnd" });
+        var judging = true;
+        var looked = false;
+        var intake = new HookIntake(new HookIntakeOptions
+        {
+            RuntimeRoot = _f.Runtime,
+            ClaudeHome = _f.ClaudeHome,
+            // The first pass's drain takes over a minute (the prune interval) from the host's start.
+            AgentHaBridgeActive = () =>
+            {
+                if (!looked) { looked = true; _f.Time.Advance(TimeSpan.FromSeconds(61)); }
+                return null;
+            },
+            UseFileSystemWatcher = false,
+            KeepEndings = () => judging,
+        }, _f.Processes, _f.Time, _log.Add);
+        _intakes.Add(intake);
+
+        intake.Pass();
+
+        Assert.True(intake.Drained);
+        Assert.True(Registration("agent-bridge-codex", "s").GetProperty("Ended").GetBoolean());
+
+        // Read: pruned as before.
+        judging = false;
+        intake.Pass();
+        Assert.False(File.Exists(Path.Combine(_f.CodexRegistrations, "s.json")));
+    }
+
+    // Copilot on #813: standing back because the claim failed is not standing back for the daemon.
+    // Nobody here took the spool in, so a SessionEnd still in it leaves Codex's endings unsettled.
+    [Fact]
+    public void An_intake_that_cannot_claim_the_spool_leaves_endings_unsettled()
+    {
+        _f.CodexRegistration("s", 63, null, updated: Fixture.T0.AddMinutes(-5));
+        Spooled("0001", "codex", "hook", new { session_id = "s", hook_event_name = "SessionEnd" });
+        Directory.CreateDirectory(_f.Runtime);
+        using var taken = new FileStream(Path.Combine(_f.Runtime, HookIntake.ClaimFile), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var intake = Intake();
+
+        Assert.Equal(0, intake.Pass());
+
+        Assert.Contains("another host is taking this spool", intake.Paused);
+        Assert.False(intake.Drained);
+        Assert.False(HookIntake.EndingsSettled(migrated: true, problem: null, () => intake)(AgentKind.Codex));
     }
 
     [Fact]

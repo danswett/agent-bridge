@@ -36,8 +36,11 @@ public sealed record PushListResult(IReadOnlyList<PushDevice> Devices);
 public sealed record PushDevice(string Device, string Name, string Service, DateTimeOffset Since, bool Current);
 
 // SignIn (#800): one per machine, agent and account while sessions need sign-in; never per session.
+// Restored: one per machine, when its host started after sessions went with a reboot or a crash
+// (#780). An older client reads it as a question: shown and alerting, with its own title and body,
+// opening the machine (no session or question is named), so nothing invites an answer.
 [UnknownAs(Question)]
-public enum NoticeKind { Question, Finished, Resolved, SignIn }
+public enum NoticeKind { Question, Finished, Resolved, SignIn, Restored }
 
 // The plaintext of one push, before RFC 8291 encryption. It is a Declarative Web Push
 // message (web_push: 8030), which Safari 18.4+ shows without running the service worker,
@@ -125,6 +128,30 @@ public static class PushNotice
         var hash = app.IndexOf('#');
         if (hash >= 0) { app = app[..hash]; }
         return app + (app.Contains('?') ? "&" : "?") + q;
+    }
+
+    // To a machine and no session (the restore notice, #780). The subscribed URL may already route
+    // somewhere (installed from a session's page): its host, session and question are replaced, never
+    // appended to, which left a second host and a session or question the notice never meant.
+    // Anything else in the query stays.
+    public static string NavigateMachine(string app, string machine)
+    {
+        var hash = app.IndexOf('#');
+        if (hash >= 0) { app = app[..hash]; }
+        var mark = app.IndexOf('?');
+        var kept = new List<string>();
+        if (mark >= 0)
+        {
+            foreach (var part in app[(mark + 1)..].Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var eq = part.IndexOf('=');
+                var key = Uri.UnescapeDataString(eq >= 0 ? part[..eq] : part);
+                if (key is not ("host" or "session" or "question")) { kept.Add(part); }
+            }
+            app = app[..mark];
+        }
+        kept.Add($"host={Uri.EscapeDataString(machine)}");
+        return app + "?" + string.Join('&', kept);
     }
 
     // Whitespace runs collapse to one space: a lock screen shows a few lines, and newlines

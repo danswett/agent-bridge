@@ -64,14 +64,14 @@ public sealed class PushNotifierTests : IDisposable
 
     PushPeer Peer(string device, string account = Account, bool inAccount = true) => new(device, device == Phone ? "iPhone" : "Laptop", account, inAccount);
 
-    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null)
+    object? Subscribe(string device, string? endpoint = null, PushPeer? peer = null, string? name = null, string app = "https://danswett.github.io/agent-bridge/app/")
     {
         if (!browsers.TryGetValue(device, out var b)) { browsers[device] = b = (P256KeyPair.Generate(), System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)); }
         var data = JsonSerializer.SerializeToElement(new
         {
             endpoint = endpoint ?? $"https://web.push.apple.com/{device}",
             keys = new { p256dh = B64Url.Encode(b.Key.Public), auth = B64Url.Encode(b.Auth) },
-            app = "https://danswett.github.io/agent-bridge/app/",
+            app,
             device = name ?? (device == Phone ? "iPhone" : "Laptop"),
         });
         return notifier.Handle(peer ?? Peer(device), Ops.PushSubscribe, data);
@@ -122,6 +122,59 @@ public sealed class PushNotifierTests : IDisposable
         source.Upsert(S("s1", SessionStatus.Waiting, response: "thinking", question: Q("q1")));
         await After(TimeSpan.FromSeconds(10));
         Assert.Single(sender.Sent);
+    }
+
+    // #780: what a reboot took, to every device, as words only. An app from before restored reads
+    // it as a question; with no question and no session named, it opens the machine and nothing
+    // that could be answered.
+    [Fact]
+    public async Task What_a_reboot_took_reaches_every_device_naming_no_question_and_opening_only_the_machine()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = RestoreCause.Reboot,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login", MidTurn = true }, new RestoreSession { Id = "s2", Agent = AgentKind.Claude, QuestionLost = true }],
+        });
+        await After(TimeSpan.Zero);
+
+        var received = Received();
+        Assert.Equal([Phone, Laptop], received.Select(r => r.Device).Order(StringComparer.Ordinal));
+        var (_, n, ttl, urgency, topic) = received.Single(r => r.Device == Phone);
+        Assert.Equal("restored", Kind(n));
+        Assert.Equal("DEV restarted", n.GetProperty("title").GetString());
+        Assert.Equal("2 sessions went with it.\nMid-turn: Fix the login.\nA question went unanswered in Claude session.\nResume them from Launch.", n.GetProperty("body").GetString());
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?host={Machine}", n.GetProperty("navigate").GetString());
+        Assert.Equal("", n.GetProperty("data").GetProperty("session").GetString());
+        Assert.False(n.GetProperty("data").TryGetProperty("question", out _));
+        Assert.Equal((86400, "normal", PushNotice.Topic(Machine, "~restore")), (ttl, urgency, topic));
+    }
+
+    // A subscribed URL that already routes somewhere (the page it was installed from was a session's)
+    // still opens only the machine: its routing is replaced, not appended to, and nothing else in it
+    // is lost.
+    [Fact]
+    public async Task What_a_reboot_took_opens_only_the_machine_from_an_app_url_that_already_routes_to_a_session()
+    {
+        Start();
+        Subscribe(Phone, app: "https://danswett.github.io/agent-bridge/app/?v=2&host=other&session=s9&question=q9#top");
+
+        notifier.NotifyRestore(new RestoreNotice
+        {
+            At = T,
+            Cause = RestoreCause.Crash,
+            Why = RestoreWhy.Pending,
+            Offered = [new RestoreSession { Id = "s1", Agent = AgentKind.Copilot, Title = "Fix the login" }],
+        });
+        await After(TimeSpan.Zero);
+
+        var n = Assert.Single(Received()).Notification;
+        Assert.Equal($"https://danswett.github.io/agent-bridge/app/?v=2&host={Machine}", n.GetProperty("navigate").GetString());
     }
 
     [Fact]

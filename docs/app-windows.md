@@ -447,7 +447,9 @@ into one folder with one version. An app update is a host update, so they never 
   that started it, so the update hooks may find their ancestry incomplete and leave the host
   alone (`LifecycleGuard`); the app's own start brings it back either way.
 * Uninstall (`OnBeforeUninstallFastCallback`) stops the host and removes the logon task,
-  the app's `Run` entry and the toast registration. The host's profile (device key,
+  the app's `Run` entry, the toast registration and the host's empty logon markers
+  (`HKCU\Software\AgentBridge\logon-*`, volatile, [host-launch.md](host-launch.md#restoring-after-a-reboot-or-a-crash)),
+  and that key once nothing else is in it. The host's profile (device key,
   account, `config.json`, logs) stays in `%LOCALAPPDATA%\AgentBridge`, like any app's
   data, so a reinstall picks up where it was.
 

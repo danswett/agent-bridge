@@ -43,6 +43,11 @@ namespace AgentBridge.Host;
 // devBox: keeping a Microsoft Dev Box from hibernating on disconnect (DevBoxSettings,
 // KeepAwakeService). Off unless turned on; a file that cannot be read leaves it off.
 //
+// sessions.restoreOnStart: whether sessions a reboot or a crash took are kept offered to resume,
+// and later (#780) resumed, idle, when the host starts again (docs/host-launch.md). On when absent.
+// A value that is not true or false, or a file that cannot be read, turns it off: what was lost is
+// still said, and nothing is kept.
+//
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)
 {
@@ -81,6 +86,8 @@ public sealed record HostSettings(bool RemoteApproval)
     public bool ReadOnly { get; init; }
     public bool TrustedPeers { get; init; }
 
+    public bool RestoreOnStart { get; init; } = true;
+
     // Why a read-only host takes nothing, said to devices; and why one whose file has a problem doesn't.
     public const string ReadOnlyReason = "this is a read-only comparison host (delivery.readOnly in its config); answer at the machine";
     public const string ProblemReason = "this host's config.json has a problem, so it takes nothing from other devices; answer at the machine";
@@ -90,18 +97,17 @@ public sealed record HostSettings(bool RemoteApproval)
     static HostSettings Off => Default with
     {
         RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, ReadOnly = true,
-        Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true,
+        Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RestoreOnStart = false,
     };
 
     public static (HostSettings Settings, string? Problem) Load(string folder)
     {
         var path = Path.Combine(folder, FileName);
         string text;
-        try
-        {
-            if (!File.Exists(path)) { return (Default, null); }
-            text = File.ReadAllText(path);
-        }
+        // Only "not found" is absent. File.Exists also said false for a config.json that is a folder
+        // or whose metadata could not be read, which read as no settings at all: everything on.
+        try { text = File.ReadAllText(path); }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return (Default, null); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             return (Off, $"{path} could not be read ({e.Message}); remote approval of permission prompts, launching, notifications and agent usage are off, and the host is read-only");
@@ -170,6 +176,22 @@ public sealed record HostSettings(bool RemoteApproval)
                             JsonValueKind.True => true,
                             JsonValueKind.False => false,
                             _ => throw new JsonException("push.enabled is not true or false"),
+                        },
+                    };
+                }
+            }
+            if (root.TryGetProperty("sessions", out var sessions) && sessions.ValueKind != JsonValueKind.Null)
+            {
+                if (sessions.ValueKind != JsonValueKind.Object) { throw new JsonException("sessions is not an object"); }
+                if (sessions.TryGetProperty("restoreOnStart", out var restore) && restore.ValueKind != JsonValueKind.Null)
+                {
+                    settings = settings with
+                    {
+                        RestoreOnStart = restore.ValueKind switch
+                        {
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            _ => throw new JsonException("sessions.restoreOnStart is not true or false"),
                         },
                     };
                 }
