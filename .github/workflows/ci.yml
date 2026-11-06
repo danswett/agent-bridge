@@ -1141,6 +1141,21 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
+      # Renders of the demo for design review (pwa/test/renders): captures, not checks, so they
+      # never fail the job, and they are kept whatever the tests did. Design signs a state off
+      # against what the product draws, and nothing runs on an owner's machine, so CI draws them.
+      # Chromium alone: the engine that emulates forced colours.
+      - name: Renders of the demo
+        if: ${{ !cancelled() && matrix.project == 'chromium' && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
+        continue-on-error: true
+        run: npx playwright test --config playwright.renders.config.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() && matrix.project == 'chromium' }}
+        with:
+          name: pwa-renders
+          path: pwa/renders/
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:

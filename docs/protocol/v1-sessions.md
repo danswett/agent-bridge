@@ -1141,9 +1141,18 @@ their own (#253, #610, #754 and #764 were each one client's). The session carrie
 | `class` | Tier | The host sets it when (first match wins) |
 |---|---|---|
 | `fyi` | | `status` is `ending`: the person asked for the session to end |
-| `needsYou` | Needs you: interrupts | a `question` is pending, the session's own or a delegate's (`waitingOn`), a form or an approval alike, one marked `answerAtMachine` included; or `attention` is present: `signInNeeded`, `error` (an errored turn) or `notResponding` |
+| `needsYou` | Needs you: interrupts | a `question` is pending, the session's own or a delegate's (`waitingOn`), a form or an approval alike, one marked `answerAtMachine` included; or `attention` is present: `signInNeeded`, `error` (an errored turn) or `notResponding`; or `restored` is present with `cause` `crash` and nobody has acted on the session since its restore (no prompt since it, and no turn started after it). `restored` after a reboot or a host restart gives no class: those sessions are `needsYou` only through their own state |
 | `done` | Done: waits | `status` is `idle` with a non-empty response of the main agent's own: `own.response` while `source.response` names a delegate, `response` otherwise (the same text a `finished` push quotes). Delegates still running in the `background` do not change it, as they do not hold back a `finished` push |
 | `fyi` | FYI: never notifies | anything else: working, or idle (delegating or not) with nothing of the main agent's own said |
+
+**A session restored after a crash (#780)** is `needsYou` from its restore (`classSince` is
+`restored.at`) until the person acts on it: a prompt arrives after the restore (Continue, any reply,
+or one typed at the machine), or a turn starts after it. It is also no longer `needsYou` for it once
+`restored` goes (after 24 hours). After a reboot or a host restart its
+`restored` gives it no class (Product on #975): its `class` comes from `status`, `question` and
+`attention` like any other session's, and it is restored idle, so `done` if its last turn left an
+answer of the main agent's own, else `fyi`. Neither changes the Needs you list, its count or the
+badge, which follow ui.md; `class` is the notification tier only.
 
 The wire names are the owner's tier names from #913 in this protocol's camelCase, as
 `signInNeeded` is, so the spec, the code and ui.md say each tier with one word. They are short
@@ -1156,8 +1165,9 @@ session's own, one question answered as the next is asked, working and idle with
 never worked out again per question, so a new question while the session is already `needsYou`
 does not restart the reminder. When `class` changes, or the host sends a session for the first
 time (after the host starts, or when it finds the session), it is taken from the fields that
-put the session in the tier: for `needsYou` the earliest of `question.askedAt` and
-`attention.since` that are present, the oldest thing waiting on the person; for `done` and
+put the session in the tier: for `needsYou` the earliest of `question.askedAt`,
+`attention.since` and, for a restore after a crash, `restored.at` that are present, the oldest
+thing waiting on the person; for `done` and
 `fyi` it is `statusSince` (for `ending`, when the end was asked for). A snapshot, a list or a
 resumed subscription carries the same `classSince` the host last sent; only a restart of the
 host can start the episode again from those fields.
@@ -1211,17 +1221,12 @@ host can start the episode again from those fields.
   they never move `updatedAt` or send an upsert on their own, and the
   [session budget](#session-budget) never trims them.
 
-**What a host classes today:** every session it sends, and its `question`, `finished` and
-`signIn` pushes, and a `restored` push after a crash. Not by the host:
+**What a host classes today:** every session it sends, a session restored after a crash
+included, and its `question`, `finished` and `signIn` pushes, and a `restored` push after a crash.
+Not by the host:
 * **A machine offline unexpectedly (#805)**, which its host cannot say. Each client classes it
   `needsYou` from the relay's presence, once #269's grace period has passed, so a short drop
   never is. #805 owns the threshold.
-* **A session restored after a crash (#780)**: the machine's `restored` notice after a crash is
-  `needsYou`. Hosts set a restored session's `restored` field, but in this version its `class`
-  does not follow `restored`: it comes from `status`, `question` and `attention` like any other
-  session's (it is restored idle, so `done` if its last turn left an answer of the main agent's
-  own, else `fyi`). Whether `restored` after a crash should make the session itself `needsYou`
-  is an open Product decision, tracked on #780.
 
 `signInNeeded` pushes as the `signIn` notice of #800, at most once an hour per machine, agent
 and account (ui.md §6.13). The rest of `attention` has no push of its own yet. Being `needsYou`,
@@ -1415,11 +1420,11 @@ is for disposable evaluation, not production service enrollment.
 | `driverPrincipal` | string? | With `driver` `agent`, which agent, when the host knows: at most 128 bytes, plain text, shown as secondary detail only. Absent otherwise |
 | `subagents` | [Subagent](#subagent)[]? | The sub-agents the session started, at any depth ([design/subagents.md](../design/subagents.md)): running ones (`working`, `waiting`) first, newest start first, then the most recently finished. At most 20, and fewer if the [session budget](#session-budget) trims them. Absent when there are none. Finished ones stay until the session ends. Only Copilot sends them so far |
 | `subagentsMore` | number? | Entries left out of `subagents`, by the host's limit or the budget. Absent when none are |
-| `restored` | object? | Set on a session its host restored, idle, after a reboot or a crash (#780), once its window has been seen ready (never on one that may be asking whether to trust its folder), for that run of the host and at most 24 hours: `at`, `cause`, `midTurn` (it went while working, and no prompt has arrived since the restore), `questionLost` (a question was waiting in it) and, with `midTurn` only, `continue`: the words a client offers to send as an ordinary `session.reply` when a person presses Continue, with no more trust than any reply; the host never sends that reply itself. Hosts set `restored` on each session they restore ([What went](#hello)); it does not change the session's `class` ([Notification class](#notification-class-913)). `midTurn` and `continue` go once a prompt arrives after the restore. A question the interrupted run left waiting is not shown as `question` (`questionLost` says it went) |
+| `restored` | object? | Set on a session its host restored, idle, after a reboot or a crash (#780), once its window has been seen ready (never on one that may be asking whether to trust its folder), for that run of the host and at most 24 hours: `at`, `cause`, `midTurn` (it went while working, and no prompt has arrived since the restore), `questionLost` (a question was waiting in it) and, with `midTurn` only, `continue`: the words a client offers to send as an ordinary `session.reply` when a person presses Continue, with no more trust than any reply; the host never sends that reply itself. Hosts set `restored` on each session they restore ([What went](#hello)); after a crash, it makes the session `needsYou` until the person acts on it, and after a reboot or a host restart it does not change the session's `class` ([Notification class](#notification-class-913)). `midTurn` and `continue` go once a prompt arrives after the restore. A question the interrupted run left waiting is not shown as `question` (`questionLost` says it went) |
 | `waitingOn` | string? | Status precedence rule 2: the id of the sub-agent whose question is `question`, while the session has none of its own. Absent otherwise |
 | `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
 | `class` | `"needsYou"` \| `"done"` \| `"fyi"`? | **New (#913).** The session's notification tier, which every client follows instead of its own rules: [Notification class](#notification-class-913). Absent from an older host; a client then keeps today's behaviour. A client that does not know a value reads it as absent |
-| `classSince` | time? | **New (#913).** When the session entered its present tier, the episode's start, which the 15-minute reminder counts from. Kept while `class` is unchanged (a further question does not move it); on a change of `class`, for `needsYou` the earliest of `question.askedAt` and `attention.since`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
+| `classSince` | time? | **New (#913).** When the session entered its present tier, the episode's start, which the 15-minute reminder counts from. Kept while `class` is unchanged (a further question does not move it); on a change of `class`, for `needsYou` the earliest of `question.askedAt`, `attention.since` and, after a crash, `restored.at`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
 
 **Status precedence** with sub-agents (first match wins): the session's own question
 (`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn

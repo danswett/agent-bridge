@@ -31,13 +31,14 @@ public sealed class UsageProbeTests : IDisposable
     // Inside the home, where Claude Code keeps it under the CLAUDE_CONFIG_DIR a probe of this (not the default) home is given.
     string AccountPath => Path.Combine(f.ClaudeHome, ".claude.json");
 
-    UsageOptions Options(string? socket = null, string? claudeAccount = null) => new()
+    UsageOptions Options(string? socket = null, string? claudeAccount = null, TimeSpan? daemonConnect = null) => new()
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
         ClaudeAccountPath = claudeAccount ?? AccountPath,
         CodexHome = f.CodexHome,
         CodexControlSocket = socket ?? Path.Combine(f.Root, "no-daemon.sock"),
+        DaemonConnectTimeout = daemonConnect ?? TimeSpan.FromSeconds(5),
     };
 
     UsageProbes Probes(ICodexDaemon? daemon = null, FakeLeases? leases = null, string? seen = null) => new()
@@ -1779,7 +1780,9 @@ public sealed class UsageProbeTests : IDisposable
         f.Processes.Run(AgentKind.Codex, 7728, @"C:\Users\u\.codex\packages\app-server-daemon\releases\0.166.0\bin\codex.exe app-server --listen unix:// --managed-daemon");
         var probes = Probes(new CodexDaemonSocket());
 
-        var run = new CodexUsageProbe(Options(socket), probes, time, Log).Start();
+        // A real socket on the wall clock: a loaded runner took over the default 5 s to connect and
+        // upgrade, and the probe skipped the daemon (#1026). Only a failure bound here.
+        var run = new CodexUsageProbe(Options(socket, daemonConnect: TimeSpan.FromSeconds(60)), probes, time, Log).Start();
         var outcome = await run.Reported;
         await run.Finished.WaitAsync(TimeSpan.FromSeconds(10));
 

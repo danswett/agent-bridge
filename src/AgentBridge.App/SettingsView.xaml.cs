@@ -20,10 +20,16 @@ public sealed partial class SettingsView : UserControl
         get => viewModel!;
         set
         {
+            if (viewModel is not null) { viewModel.UpdateStatusAnnounced -= AnnounceUpdate; }
             viewModel = value;
+            if (viewModel is not null) { viewModel.UpdateStatusAnnounced += AnnounceUpdate; }
             Bindings.Update();
         }
     }
+
+    // After the binding has put the new words in.
+    void AnnounceUpdate() =>
+        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(UpdateStatusText)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
 
     // The page came into view: the log is read then, not on every host event.
     public void Opened() => viewModel?.RefreshLog();
@@ -132,7 +138,12 @@ public sealed partial class SettingsView : UserControl
             foreach (var inner in Descendants(child)) { yield return inner; }
         }
     }
-    async void OnInstallUpdate(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.InstallUpdateAsync(); } }
+    async void OnInstallUpdate(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { Busy: false } v) { return; }
+        // Told what a restart would interrupt, just before it does (#516). It shows, never throws.
+        await v.InstallUpdateAsync(RestartDialog.For(XamlRoot));
+    }
     void OnRefreshLog(object sender, RoutedEventArgs e) => viewModel?.RefreshLog();
 
     // The device code goes to the clipboard and GitHub's page opens: the person pastes and

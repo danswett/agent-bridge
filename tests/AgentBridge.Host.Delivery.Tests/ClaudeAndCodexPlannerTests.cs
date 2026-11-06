@@ -206,17 +206,21 @@ public class AttemptLedgerTests
         Assert.Null(new AttemptLedger(path).Claim(key));
     }
 
+    // #995, #802: the refusal is fixed words; why the ledger failed goes to the host's log only.
     [Fact]
     public void A_ledger_that_cannot_be_read_or_written_refuses_every_claim()
     {
         using var f = new Fixture();
+        var logged = new List<string>();
         var corrupt = Path.Combine(f.Root, "corrupt.json");
         File.WriteAllText(corrupt, "{\"codex");
-        Assert.Contains("could not be read", new AttemptLedger(corrupt).Claim("k"));
+        Assert.Equal("the machine couldn't deliver it", new AttemptLedger(corrupt, log: logged.Add).Claim("k"));
+        Assert.Contains(logged, l => l.Contains("could not be read", StringComparison.Ordinal) && l.Contains(nameof(System.Text.Json.JsonException), StringComparison.Ordinal));
 
         // A folder where the file should be: nothing can be written there.
         var blocked = Path.Combine(f.Root, "blocked");
         Directory.CreateDirectory(blocked + ".tmp");
-        Assert.Contains("could not record", new AttemptLedger(blocked).Claim("k"));
+        Assert.Equal("the machine couldn't deliver it", new AttemptLedger(blocked, log: logged.Add).Claim("k"));
+        Assert.Contains(logged, l => l.Contains("could not be recorded", StringComparison.Ordinal));
     }
 }

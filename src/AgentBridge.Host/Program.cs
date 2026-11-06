@@ -447,8 +447,15 @@ async Task<int> ServeAsync(HostHandover handover)
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore);
     launcher.SessionStarted += restore.Launched;
     launcher.SeenReadyLate += restore.SeenReadyLate;
-    restore.Restore(launcher);
-    restore.Start();
+    // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
+    // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
+    // agent; the resumes stay held until the look with the pipe open, below, has passed too.
+    var startGate = new HostStartGate(handover, identity.Folder);
+    if (!startGate.StartRestore(restore, launcher))
+    {
+        Log($"stopped from the {Product.App} while starting; not serving");
+        return 0;
+    }
     transfers.Launcher = launcher;
     // No reply into a session whose launch here has not seen its window ready (a restore at folder
     // trust above all): Enter would answer the question (#780).
@@ -564,6 +571,11 @@ async Task<int> ServeAsync(HostHandover handover)
         }, stop.Token);
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
+    // host.restart's one way out, also the committed-departure watchdog's (#805 N1): probes
+    // settled first (#238), and a stop asked for meanwhile is never turned into a restart.
+    var restart = new SettledRestart(usageMonitor is null ? null : (t, ct) => usageMonitor.SettleProbesAsync(t, ct), handover.Request, stop.Cancel, stop.Token);
+    void RestartHost() => _ = Task.Run(restart.RunAsync);
+    using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -594,7 +606,7 @@ async Task<int> ServeAsync(HostHandover handover)
         Agents = agentReadiness,
         AgentSetup = agentSetup,
         AgentInstall = agentInstall,
-        Lifecycle = new LifecycleCoordinator(deliveryGate, new DepartureConditions()),
+        Lifecycle = new LifecycleCoordinator(deliveryGate, new DepartureConditions(), watchdog: departureWatchdog),
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -614,14 +626,7 @@ async Task<int> ServeAsync(HostHandover handover)
             wake.Release();
         },
         Stop = () => stop.Cancel(),
-        // Done with any usage probe tied to this host before it stops, so a standalone Codex probe
-        // is not cut mid-refresh (#238); the replacement starts once it has (HostHandover).
-        Restart = () => _ = Task.Run(async () =>
-        {
-            if (usageMonitor is not null) { await usageMonitor.SettleProbesAsync(TimeSpan.FromSeconds(90)); }
-            handover.Request();
-            stop.Cancel();
-        }),
+        Restart = RestartHost,
         HoldProbes = () => usageMonitor?.HoldProbes(TimeSpan.FromMinutes(15)) == true
             ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null,
     }, Log);
@@ -653,6 +658,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // Only now: a host stopped while starting, whose pipe the app could not reach, must start no
     // usage probe it would cut short on its way out, past the app's probe hold (#238 review).
     usageMonitor?.Start();
+    startGate.Serving();
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = new ReconnectBackoff();
@@ -786,7 +792,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
     IAgentHaBridgeProbe probe = new ReadOnlyGate(g5, ReadOnlyReason());
-    IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : new NoScreens();
+    IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens();
     var launcher = new LaunchService(deliveryGate, source, probe, injector, starter, agentLocator, new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
     {
         CopilotHome = options.CopilotHome,
@@ -910,7 +916,7 @@ static string OsName() =>
         return (new UnsupportedPlatformAnswerer(), new UnsupportedPlatformReplier(), null, new UnsupportedPlatformStopper());
     }
     var probe = new ReadOnlyGate(g5, ReadOnlyReason());
-    var injector = new WorkerInjector();
+    var injector = new WorkerInjector(log: Log);
     var guard = new TargetGuard();
     if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers and replies will be refused"); }
     Log(probe.Active() is { } active ? $"answering, replying and ending sessions are off for now: {active}" : "answering, replying and ending sessions are on");

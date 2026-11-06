@@ -111,7 +111,7 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
             answered.TrySetResult();
             released.TrySetResult();
             IRpcLink? daemon;
-            using (var connect = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            using (var connect = new CancellationTokenSource(options.DaemonConnectTimeout))
             {
                 daemon = await probes.Daemon.ConnectAsync(options.ControlSocket, connect.Token);
             }
