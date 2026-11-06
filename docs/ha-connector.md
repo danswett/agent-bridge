@@ -708,8 +708,8 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
     `bridge_signin_<slug>_<agent>_<first 8 hex of SHA-256(account)>`, with the question's
     icon, colour and interruption level, the subtitle `<machine> - needs sign-in`, and the
     dashboard to open. When `notifications.enabled` is on, it also goes on `notifications.service`.
-  * Title: `<machine> · Copilot needs sign-in`. Message: `2 sessions: <name>, <name>`, naming three
-    at most.
+  * Title: `<Agent> on <machine> needs sign-in` (ui.md §6.13). Message: `2 sessions: <name>, <name>`
+    (`1 session: <name>` for one), naming three at most.
   * **No account, code or URL** is in either one.
   * It is withdrawn from the phones (`clear_notification` by its tag) once none of its sessions
     needs a person: signed in, recovered or ended. A later need is news again. Nothing is withdrawn
