@@ -255,6 +255,22 @@ public class DiscoveryTests
     }
 
     [Fact]
+    public async Task The_hosts_usage_probe_whose_session_file_is_caught_mid_write_holds_nothing()
+    {
+        using var f = new Fixture();
+        var dir = Path.Combine(f.ClaudeHome, "sessions");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "714.json"), "{\"pid\":714,\"sessionId\":");
+        f.Processes.Run(AgentKind.Claude, 714, "claude.exe -p /usage --safe-mode --no-session-persistence --output-format json");
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
     public async Task A_probe_whose_path_macOS_flattened_is_known_by_its_folder_and_a_session_elsewhere_ending_so_is_still_listed()
     {
         using var f = new Fixture();

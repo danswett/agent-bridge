@@ -47,6 +47,8 @@ public sealed class UsageMonitor : IAsyncDisposable
     Task? loop;
     bool? deferring;
     DateTimeOffset deferCheckedAt;
+    // The sessions open at the last pass, by agent and id (passes run one at a time).
+    HashSet<(AgentKind Agent, string Id)> seen = [];
 
     public UsageMonitor(IEnumerable<IUsageCollector> collectors, ISessionSource sessions, UsageOptions options, TimeProvider? time = null,
         Func<string?>? agentHaBridge = null, Action<string>? log = null)
@@ -108,7 +110,13 @@ public sealed class UsageMonitor : IAsyncDisposable
     async Task<bool> PassLockedAsync(CancellationToken cancellationToken)
     {
         var now = time.GetUtcNow();
-        var open = sessions.Snapshot().Select(s => s.Agent).ToHashSet();
+        var snapshot = sessions.Snapshot();
+        var open = snapshot.Select(s => s.Agent).ToHashSet();
+        // The sessions the last pass did not see, by agent: a new one beside another still open is
+        // an arrival too, which open alone never shows (#238 review).
+        var ids = snapshot.Select(s => (s.Agent, s.Id)).ToHashSet();
+        var arrived = ids.Where(s => !seen.Contains(s)).Select(s => s.Agent).ToHashSet();
+        seen = ids;
         bool? defer = null;
         var due = new List<(IUsageCollector Collector, State State)>();
         var further = new List<(IUsageCollector Collector, State State)>();
@@ -127,7 +135,11 @@ public sealed class UsageMonitor : IAsyncDisposable
             var busy = sessionOpen && defer != true;
             // A collector that cannot take its pace still gets its turn, and the other agents
             // theirs: like a failed read, it ends nothing but itself.
-            try { collector.Pace(sessionOpen, busy); }
+            try
+            {
+                collector.Pace(sessionOpen, busy);
+                if (arrived.Contains(collector.Agent)) { collector.SessionArrived(); }
+            }
             catch (Exception e) when (e is not OperationCanceledException)
             {
                 log($"usage: pacing {collector.Agent.ToString().ToLowerInvariant()} failed: {e.GetType().Name}");

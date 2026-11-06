@@ -180,6 +180,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.True(host.Sent(HostOps.ProbeHold).Count >= 2);
         Assert.Single(log, l => l.Contains("waiting to install 0.2.0: Codex's app-server", StringComparison.Ordinal));
+        // And said to the devices, not an idle timer or "installs at the next look".
+        Assert.Equal("Codex's app-server, started to read its allowance, is still answering or finishing; it installs once that is done", auto.State.Waiting);
 
         finishing = false;
         await auto.TickAsync();

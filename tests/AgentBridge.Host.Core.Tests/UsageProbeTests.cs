@@ -1596,6 +1596,37 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_second_Codex_session_after_a_sign_out_ends_the_hold_though_the_first_stayed_open_throughout()
+    {
+        // #238 review: only Codex going from no sessions to some ended the hold, so with one left
+        // open, signing in and opening another left the sign-out standing for two hours.
+        CodexUsed();
+        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var sessions = new FakeSessions();
+        sessions.Open(AgentKind.Codex);
+        var monitor = new UsageMonitor([codex], sessions, Options(), time, log: Log);
+        await monitor.PassAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        await monitor.PassAsync();
+        Assert.Equal(CodexUsageProbe.SignedOutError, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Error);
+        var started = launcher.Started.Count;
+
+        // The first session still open, and nothing new: the hold stands.
+        time.Advance(TimeSpan.FromMinutes(16));
+        await monitor.PassAsync();
+        await Task.Delay(100);
+        Assert.Equal(started, launcher.Started.Count);
+
+        // A second arrives beside it: the probe goes ahead, long before the two hours.
+        AppServer();
+        sessions.Open(AgentKind.Codex);
+        time.Advance(Options().MinimumGap);
+        await monitor.PassAsync();
+        await Until(() => launcher.Started.Count == started + 1);
+    }
+
+    [Fact]
     public async Task A_sign_out_ends_without_a_probe_only_where_none_can_run_and_an_older_reading_never_takes_its_place()
     {
         CodexUsed();

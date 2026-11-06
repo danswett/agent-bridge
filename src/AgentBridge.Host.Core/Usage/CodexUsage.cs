@@ -46,22 +46,33 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
         lock (gate)
         {
             (this.sessionOpen, this.busy) = (sessionOpen, busy);
-            // A Codex session running here again ends the hold a sign-out put on the probes: it
-            // may have signed in. The sign-out stands until a probe says so (ending). Not a
-            // transcript: a session whose refresh token is lost still reads its limits on the access
-            // token it has, and its readings hid a sign-out it was still in (#238 review).
-            if (sessionOpen && !wasOpen && signedOutAt is not null)
-            {
-                ending = true;
-                pace.Release();
-                // Due at once, so the monitor wakes for the probe this allows: beside agent-ha-bridge
-                // the pace stays idle, so a session opening does not bring the next ask forward, and
-                // with no wake the probe waited out the idle interval (#238 review). The monitor's
-                // MinimumGap still spaces the asks.
-                nextDue = clock.GetUtcNow();
-            }
+            if (sessionOpen && !wasOpen) { EndHold(); }
             wasOpen = sessionOpen;
         }
+    }
+
+    // Any new one, not only the first: with one session left open, the user signing in and
+    // opening another changed nothing Pace sees, and the sign-out stood for the hold's two hours
+    // (#238 review).
+    public void SessionArrived()
+    {
+        lock (gate) { EndHold(); }
+    }
+
+    // Under gate. A Codex session running here again ends the hold a sign-out put on the probes: it
+    // may have signed in. The sign-out stands until a probe says so (ending). Not a transcript: a
+    // session whose refresh token is lost still reads its limits on the access token it has, and
+    // its readings hid a sign-out it was still in (#238 review).
+    void EndHold()
+    {
+        if (signedOutAt is null) { return; }
+        ending = true;
+        pace.Release();
+        // Due at once, so the monitor wakes for the probe this allows: beside agent-ha-bridge the
+        // pace stays idle, so a session opening does not bring the next ask forward, and with no
+        // wake the probe waited out the idle interval (#238 review). The monitor's MinimumGap still
+        // spaces the asks.
+        nextDue = clock.GetUtcNow();
     }
 
     public DateTimeOffset? WakeAt

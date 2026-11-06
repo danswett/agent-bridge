@@ -321,6 +321,14 @@ internal static class ClaudeSessionDiscovery
             var parsed = Parse(file, out var filePid);
             var holder = running.TryGetValue(filePid, out var p) ? p : unread.TryGetValue(filePid, out var u) ? u : null;
             if (holder is null) { continue; }
+            // The host's own /usage probe, known by its exact options alone, is nobody's session
+            // whatever its file holds: caught mid-write, that file held discovery for a pass
+            // (#238 review). One known only with its folder (flattened) is decided below, from it.
+            if (running.ContainsKey(filePid) && CommandLine.IsClaudeUsageProbe(holder.CommandLine))
+            {
+                accounted?.Add(filePid);
+                continue;
+            }
             if (parsed is null)
             {
                 // Unreadable, or not a whole file of its own process: the file's time is all

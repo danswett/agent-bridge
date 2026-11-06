@@ -29,6 +29,10 @@ public interface IUsageCollector
     // paces its probes by it.
     void Pace(bool sessionOpen, bool busy) { }
 
+    // A session of this agent the last pass did not see has arrived here, whether or not another
+    // was already open: somebody is at the machine, and may have signed in again.
+    void SessionArrived() { }
+
     // When the collector has something new to read before its next turn: a probe it started has
     // finished, or a reading has become old enough to probe for. Never sooner than the monitor's
     // MinimumGap after the last ask.

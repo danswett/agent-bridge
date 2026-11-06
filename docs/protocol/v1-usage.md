@@ -282,7 +282,7 @@ refresh and locking, and runs no model turn.
   usage the probe read just before goes out as the reading, carrying that error (a later probe's
   too, should it find the same). An answer that comes after the 60 s the host waits to report
   (below) still counts: a sign-out found then is a sign-out, and a reading found then is kept. No probe follows for 2 hours or
-  until a Codex session next runs here. A session running here lets a probe go ahead at once, and
+  until a Codex session next runs here (any new one, even beside one that stayed open). A session running here lets a probe go ahead at once, and
   the sign-out stands until that probe says otherwise: a reading replaces it, another login (an
   API key) withdraws it, and a sign-out found again, or a probe that fails, leaves it standing. A
   transcript reading does not end it, however recent: a session whose refresh token is lost still

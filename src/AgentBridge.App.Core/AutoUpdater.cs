@@ -220,6 +220,9 @@ public sealed class AutoUpdater
         // Never a time already gone: the wait is over, and the next tick installs it.
         var until = at > now ? $"; it installs anyway at {at.ToLocalTime():g}" : "; its wait is over, so it installs at the next look";
         if (lastWhyNot is { } why) { return Overdue(why, now) is { } since ? NeedsYouText(Pending!, since, why) : why; }
+        // Due, but held for a usage probe on the host (#238): without it, devices read an idle
+        // timer, or "installs at the next look", while every look waited on the probe.
+        if (lastProbe is { } probe) { return $"{probe}; it installs once that is done"; }
         return Idle ? $"no session has been busy for {IdleFor.TotalMinutes:0} minutes yet{until}"
             : $"a session on this machine has a turn running or a question waiting{until}";
     }
@@ -443,7 +446,8 @@ public sealed class AutoUpdater
                 }
             }
             if (Refused(why)) { idleSince = null; Changed(); return; }
-            if (Pending is null || !Due(time.GetUtcNow())) { Changed(); return; }
+            // No longer due (a session busy again): what holds it is that, not a probe from before.
+            if (Pending is null || !Due(time.GetUtcNow())) { lastProbe = null; Changed(); return; }
             // Settings shares the updater: a check there, or a change of feed, may have replaced
             // the release downloaded here. Then it is found and downloaded again first.
             if (Stale()) { return; }
