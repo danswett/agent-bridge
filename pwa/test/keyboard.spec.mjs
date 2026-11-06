@@ -222,7 +222,7 @@ test.describe('on a desktop', () => {
     await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.answerLog.map((a) => a.fields))).toEqual([{ mode: 'fast', notes: 'by keyboard' }]);
   });
 
-  test('a reply is typed and sent with Tab and Space, and End session is pressed twice with Space', async ({ page }) => {
+  test('a reply is typed and sent with Tab and Space, and End session is pressed twice with Space, focus staying on each while it goes', async ({ page }) => {
     await openDemo(page);
     await tabTo(page, row(page, CLAUDE).locator('.row-main'));
     await page.keyboard.press('Enter');
@@ -230,22 +230,64 @@ test.describe('on a desktop', () => {
     await expect(v).toBeVisible();
     await tabTo(page, v.getByRole('textbox', { name: 'Reply' }));
     await page.keyboard.type('Ship it.');
-    await tabTo(page, v.getByRole('button', { name: 'Send' }));
+    const send = v.getByRole('button', { name: 'Send' });
+    await tabTo(page, send);
+    // Held, so the reply stays on its way while focus is looked at (#369).
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
     await page.keyboard.press('Space');
-    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.replyLog.map((r) => r.text))).toEqual(['Ship it.']);
+    await expect(v.locator('form.reply')).toHaveAttribute('data-reply', 'sending');
+    await expect(send).toBeFocused();
+    await expect(send).toHaveAttribute('aria-disabled', 'true');
+    // Pressed again while it goes: nothing more is sent.
+    await page.keyboard.press('Space');
+    await page.keyboard.press('Enter');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+    await expect(v.locator('form.reply')).not.toHaveAttribute('data-reply', 'sending');
+    // Its outcome keeps the words (this agent takes no replies yet), and focus where it was.
+    await expect(send).toBeFocused();
+    expect(await page.evaluate(() => window.agentBridgeDemo.host.replyLog.map((r) => r.text))).toEqual(['Ship it.']);
     // A working session ends on a second press.
     const end = v.locator('.end-session').getByRole('button', { name: /^End session/ });
     await tabTo(page, end);
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
     await page.keyboard.press('Space');
+    await expect(v.locator('.end-session')).toHaveAttribute('data-stop', 'sending');
+    await expect(end).toBeFocused();
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
     await expect(v.locator('.end-session')).toHaveAttribute('data-stop', 'confirm');
-    // The press disabled it while it went, which took its focus (#369): Tab finds it again.
-    await tabTo(page, end);
+    // Focus stayed on it while the first press went, so the second press is the next key.
+    await expect(end).toBeFocused();
+    const ids = await page.locator('#list-pane .session[data-id]').evaluateAll((rows) => rows.map((r) => r.dataset.id));
+    const at = ids.indexOf(CLAUDE);
+    expect(at, 'a row comes after the one ended').toBeLessThan(ids.length - 1);
     await page.keyboard.press('Space');
     await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.stopLog.length)).toBe(2);
     await expect(row(page, CLAUDE)).toHaveCount(0);
+    // The ended session's view went with it, and its focus to the row that took its place, never
+    // the page (§9.1 A4): the next Tab goes on from there, not from the top.
+    const next = row(page, ids[at + 1]).locator('.row-main');
+    await expect(next).toBeFocused();
+    expect((await focused(page)).shown, 'focus shown on the row').toBe(true);
   });
 
-  test('Launch is reached on the rail and opened with Enter, and a session starts with Tab, typing and Enter', async ({ page, browserName }) => {
+  test('a row with focus whose session ends gives it to the row before when it was last, and to the Sessions heading when none are left', async ({ page }) => {
+    await openDemo(page);
+    const ids = await page.locator('#list-pane .session[data-id]').evaluateAll((rows) => rows.map((r) => r.dataset.id));
+    expect(ids.length).toBeGreaterThan(1);
+    const remove = (id) => page.evaluate((id) => window.agentBridgeDemo.host.remove(id), id);
+    const last = ids.at(-1);
+    await tabTo(page, row(page, last).locator('.row-main'));
+    await remove(last);
+    await expect(row(page, last)).toHaveCount(0);
+    await expect(row(page, ids.at(-2)).locator('.row-main')).toBeFocused();
+    for (const id of ids.slice(0, -2)) { await remove(id); }
+    await expect(row(page, ids.at(-2)).locator('.row-main')).toBeFocused();
+    await remove(ids.at(-2));
+    await expect(page.locator('#list-pane .session[data-id]')).toHaveCount(0);
+    await expect(page.locator('#sessions-h')).toBeFocused();
+  });
+
+  test('Launch is reached on the rail and opened with Enter, and a session starts with Tab, typing and Enter, focus staying on Launch while it goes', async ({ page, browserName }) => {
     await openDemo(page);
     await reachLink(page, browserName, page.locator('#nav [data-nav="launch"]'));
     await page.keyboard.press('Enter');
@@ -253,8 +295,17 @@ test.describe('on a desktop', () => {
     await expect(panel).toBeVisible();
     await tabTo(page, panel.locator('[name="prompt"]'));
     await page.keyboard.type('Add pagination.');
-    await tabTo(page, panel.getByRole('button', { name: 'Launch' }));
+    const launch = panel.getByRole('button', { name: 'Launch' });
+    await tabTo(page, launch);
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
     await page.keyboard.press('Enter');
+    await expect(panel.locator('.launch-status')).toHaveText(/^Starting/);
+    await expect(launch).toBeFocused();
+    await expect(launch).toHaveAttribute('aria-disabled', 'true');
+    // Pressed again while it goes: nothing more is sent.
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Space');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
     await expect(panel.locator('.launch-status')).toHaveText('Session started in a new worktree.');
     expect((await page.evaluate(() => window.agentBridgeDemo.host.launchLog)).map((l) => l.prompt)).toEqual(['Add pagination.']);
   });

@@ -112,9 +112,14 @@ export class EndSession {
     return ms > 0 ? Math.ceil(ms / 1000) : null;
   }
 
+  // Whether a press would do anything now.
+  get pressable() { return this.#pressable(this.entry); }
+
+  #pressable(entry) { return !this.#held && !this.#pending(entry) && !this.#busyTimer && this.#session?.status !== 'ending'; }
+
   #press() {
     const entry = this.entry;
-    if (this.#held || this.#pending(entry) || this.#busyTimer || this.#session?.status === 'ending') { return; }
+    if (!this.#pressable(entry)) { return; }
     const { service, hostId, sessionId } = this.stopping;
     const confirm = this.#left(entry) !== null ? entry.detail.confirm : null;
     service.submit({ hostId, sessionId, confirm });
@@ -150,8 +155,9 @@ export class EndSession {
       this.#busyFor = entry.request;
       this.#busyTimer = setTimeout(() => { this.#busyTimer = null; this.#show(this.entry); }, STOP_BUSY_PAUSE_MS);
     }
-    const ending = this.#session?.status === 'ending';
-    e.button.disabled = this.#pending(entry) || !!this.#busyTimer || ending || !!this.#held;
+    // Not disabled when it can't be pressed: a disabled button loses focus, which fell to the top
+    // of the page between a working session's two presses (#369). #press does nothing meanwhile.
+    if (this.#pressable(entry)) { e.button.removeAttribute('aria-disabled'); } else { e.button.setAttribute('aria-disabled', 'true'); }
     e.resend.disabled = !!this.#held;
     e.held.textContent = this.#held ?? '';
     e.held.hidden = !this.#held;
