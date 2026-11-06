@@ -2460,7 +2460,10 @@ in flight, notifies nothing.
 
 - **Tier:** Needs you: it interrupts, with the question sound, sent once per episode (#913).
   It doesn't count in Needs you's N, its filter or the app badge: N counts questions and
-  approvals only (owner decision, 2026-11-05), and nothing on a session row fixes this.
+  approvals only (owner decision, 2026-11-05), and nothing on a session row fixes this. #805's
+  rule for a machine offline unexpectedly still governs every machine that isn't gone
+  ([v1-sessions.md](../protocol/v1-sessions.md#notification-class-913), "What a host classes
+  today"); this section governs one that is.
 - **Once.** One per machine per episode, at most one an hour per machine and three a day per
   account, shared with #805's no-return notice. A device on screen gets it too: the banner is
   easy to miss on another tab.

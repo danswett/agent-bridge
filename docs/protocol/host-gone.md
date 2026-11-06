@@ -72,14 +72,27 @@ disposable host on the staging relay, each case run several times:
 2. **Pull the machine's network, and separately suspend the machine:** reads as `timeout`, never
    `reset`.
 3. **Restart the ingress, or roll a new revision:** every socket ends at once, and the
-   mass-end guard below classifies them all as relay-side.
+   mass-end guard below classifies them all as relay-side. Run with **at least 3 sockets
+   connected** (the disposable host and two throwaway device sockets, which the staging smoke
+   test already opens): one disposable host is enough, and the guard doesn't need 5 hosts.
 
-**Mass-end guard.** When many of the relay's host sockets end within a few seconds of each
-other (the threshold is set from case 3; for example, at least 5 hosts and a quarter of those
-connected, within 5 s), the relay classifies every one of those departures as relay-side
-(row 1), not as the hosts going. One host never ends with its own process in step with dozens of
-others, and the cost of the guard is that a real crash in that same moment is reported as
-offline only.
+**Mass-end guard.** It counts **every socket the relay holds, hosts and devices, across all
+accounts** (an ingress restart ends the phones' and apps' sockets too, not only the hosts').
+When at least 3 sockets are connected and at least half of them end within 5 s of each other, or
+a quarter with at least 5 ending (the numbers are confirmed from case 3), the relay classifies
+every host departure in that burst as relay-side (row 1), not as the host going. A host that
+ends within 5 s of the relay's own start, drain or revision change (1012, a restart the relay
+observed itself) is relay-side too, however few sockets there are. One host never ends with
+its own process in step with the relay's other sockets, and the cost of the guard is that a
+real crash in that same moment is reported as offline only.
+
+**Why counting devices, not requiring 5 hosts (Engineering, #1022).** Requiring 5 hosts would
+leave staging, with one disposable host, unable to run case 3, and leave a small relay (a
+household's one or two machines) unguarded. Counting every socket means the phones' and apps'
+sockets beside the machines make 3, and a busier relay has many more. What remains: a host that
+is the **only** socket on the whole relay, ending in an ingress restart, is unguarded. That
+costs nothing the window doesn't absorb: the host reconnects in seconds, and staying connected
+2 minutes cancels the pending window ([The window](#the-window-805-goes-first)).
 
 **If case 2 ever reads as `reset`,** `reset` stops being evidence: row 6 then takes only a
 witness (`not-running` or `not-responding`) for a `reset` too, and the line can appear only
@@ -91,7 +104,7 @@ First match wins. Only row 6 can ever become "host gone".
 
 | # | Departure | Treatment |
 |---|---|---|
-| 1 | Relay-side end (4008, 4009, 4013, 4029, 1012), or one of many host sockets ending together (the [mass-end guard](#through-the-ingress-checked-on-staging-before-slice-1)) | Not a departure of the host. Nothing for #970 |
+| 1 | Relay-side end (4008, 4009, 4013, 4029, 1012), or one of many sockets ending together (the [mass-end guard](#through-the-ingress-checked-on-staging-before-slice-1)) | Not a departure of the host. Nothing for #970 |
 | 2 | A valid #815 plan was received before it (`host-planned-state`, `phase: planned`, within its `departBy`): `update`, `restart`, `stop`, `sleep`, `shutdown`, `reboot` or `sign-out` | **Deliberate.** #805's planned copy, and #805's no-return push if a reboot, restart or update doesn't come back. Never "host gone", never #970's push |
 | 3 | The machine's app, declared by the host for the current episode, witnesses `stopped` or `updating` | **Deliberate,** seen locally. `stopped` as a `stop` plan (no return timer); `updating` exactly as an `update` plan, with #805's return timer and no-return push, so an update that never comes back is still told |
 | 4 | `closed` from a host that doesn't advertise `host-gone-v1` | **Unknown.** An older host closes the same way for a deliberate local stop as for anything else. Today's offline |
@@ -118,6 +131,16 @@ departure without a plan means it wasn't meant, and each path has a test that sh
 * **`agent-bridge-host stop`** writes the stop marker too (today only `HostManager.MarkStopped`
   does), and the host it stops announces `stop`. Test: "agent-bridge-host stop writes the stop
   marker and the host announces stop."
+
+**A merge condition, not a promise (Engineering, #1022).** A change that adds or alters a path
+that stops the host on purpose **cannot merge without that path's announce test**, and the
+host-gone-v1 capability stays advertised only while every such path has one. #801 is held to
+it: **#801's two tests ("A remote stop announces stop before the host leaves", "A remote
+restart announces restart before the host leaves") are a merge condition on #801**, checked in
+its review and in the merge-rule's independent-review receipt for that PR. A PR that adds any
+other stop path (an uninstaller, a CLI command, a new menu item) is held on the same terms:
+it brings its own announce test, or it doesn't merge. So a host can't gain an unannounced stop
+path while it advertises `host-gone-v1`.
 
 **Accepted false positives,** each true from the person's side (the bridge isn't running):
 
@@ -216,7 +239,7 @@ A relay text control from the host, alongside #815's `host-planned-state`:
 
 | Field | Contract |
 |---|---|
-| `seq` | Strictly increasing within the connection. The relay keeps only the newest; an older one is ignored |
+| `seq` | Strictly increasing **within the connection** and **reset to 1 on every new connection**. The relay keeps only the newest and ignores an older one, comparing only against an arm from the same connection. **The first arm on a new connection always replaces the stored one, whatever its `seq`** (a disarm at `seq` 1 replaces an arm stored at 7 from the previous connection); otherwise a stale arm would outlive the work it armed and alert later for nothing |
 | `armed` | `true`: an agent in a session is working or waiting (below); alert if this host becomes gone, and send these notices. `false`: nothing in flight; `notices` absent. An arm with no notices (a host no browser subscribes to) still counts: it is what `gone.alert` reads |
 | `notices` | One per subscribed device, at most 8: #815's envelope exactly. `target` is the device's consent handle from #815's target registration, never a free-form endpoint; `body` is RFC 8291 ciphertext the host sealed to that device's subscription, at most `WebPushCrypto.RecordSize` bytes decoded; `topic` is valid `PushTopic` syntax |
 
@@ -285,11 +308,19 @@ replaces them, on forget, and on expiry. A failed or uncertain delivery isn't re
    on `<machine id>:~restore`, as today. No `hostBack` follows in this episode. So "You can reach
    its sessions again" is never shown when the bridge's going took sessions. A `restored` decided
    after the episode ended (#780 judges for up to 10 minutes) still goes on the gone tag to
-   `targets`. The **relay** keeps `targets` until the host confirms that a `restored` or a
-   `hostBack` went (`{ "t": "host-gone-closed", "v": 1, "since": "…" }`), or 6 hours after the
-   episode began, whichever is first, and sends them again in `host-gone-sent` on every
-   reconnect meanwhile. So a host that dies between the episode's end and its restore check
-   still replaces the alert when it comes back.
+   `targets`. The **relay** keeps `targets` for the **episode**, not for a fixed time: until the
+      host confirms that a `restored` or a `hostBack` went (`{ "t": "host-gone-closed", "v": 1,
+      "since": "…" }`), or the machine is forgotten, or the account signs out or changes, and sends
+      them again in `host-gone-sent` on every reconnect meanwhile. A host that is away all night
+      still gets its list back when it returns, so the alert is always replaced. **This is not the
+      arm's expiry.** The arm (the permission to send a sealed notice) expires 6 h after the relay
+      received it, so a stale arm never alerts; `targets` are the separate list of devices the
+      alert *was* sent to, a record kept only so that notice can be replaced, and it must outlive a
+      long outage. They are consent handles only, at most 8, one list per host, overwritten by the
+      next alerted episode's and never accumulated, with no history. A handle whose consent
+      registration has expired or been revoked (#815) is dropped when next resolved, so the list
+      never outlives consent. So a host that dies between the episode's end and its restore check
+      still replaces the alert when it comes back.
    **It alerts** as a Needs you notice does today, with the question sound (`silent` absent),
    never silently, because the person still has something to answer (Creative, 6691268328).
 3. **Otherwise,** once the host has been back for 2 minutes (the episode ends) **and** #780 has
@@ -329,10 +360,10 @@ the two deliberate states, `stopped` and `updating`; slice 2 the rest:
 { "t": "host-witness", "v": 1, "host": "0123456789abcdef0123456789abcdef", "state": "not-running" }
 ```
 
-The app sends one when its local host's state changes and when it connects, at most one a
-minute otherwise, and sends `stopped` as it stops its host (before any fallback that kills a
-host too slow to stop) and `updating` before it hands a host over to an update, so the relay
-has them before the socket ends. The relay takes it only from the app device the host itself last declared as its own
+The app sends one when its local host's state changes and when it connects, and **re-sends its
+current state at least every 60 s while it stays connected**. It sends `stopped` as it stops
+its host (before any fallback that kills a host too slow to stop) and `updating` before it
+hands a host over to an update, so the relay has them before the socket ends. The relay takes it only from the app device the host itself last declared as its own
 (`{ "t": "host-local-app", "v": 1, "app": "<device id>" }`, sent by the host on each
 connection), in the same account, and only about that host. The binding's conditions
 (Connection, #1022 6691184855):
@@ -353,6 +384,35 @@ A witness never makes an online host offline. `running` cancels a pending window
 return timer); `restarting` holds the window; `not-running` and
 `not-responding` are evidence, and turn a `timeout` into row 6.
 
+**A witness is only as good as its age.** A `running` left by an app that has since closed
+must never cancel a later crash's window, and an old `stopped` must never make a later crash
+read as deliberate. So the relay keeps for each host only the app's **latest** witness and its
+receipt time, and:
+
+* **The four state witnesses expire when the app's own connection leaves the relay** (the
+  socket ends, which is what closing the app, signing out and a dropped network all do), and
+  **150 s after the relay received them** unless re-sent, whether or not the socket is still
+  open (a hung app). The app re-sends every 60 s, so 150 s tolerates one lost re-send and a
+  little jitter (two re-sends and a margin). `stopped` and `updating` expire by the 150 s only
+  (below). **Why 150 s against the 5-minute window:** it is half of it, so a witness read when
+  the window ends was sent in the last 2.5 minutes, never at the start of the window or before
+  the departure; and it is long enough that a live app is never read as gone silent by one
+  late re-send.
+* **`running`, `restarting`, `not-running` and `not-responding` describe the host's state now,**
+  so each counts only if the relay **received it after the host's latest departure** (the
+  latest socket end, not the episode's first: a flapping host's second death is judged against
+  its own socket end) and it hasn't expired. A `running` received before that says nothing about
+  what happened after.
+* **`stopped` and `updating` are announcements made in advance,** so each counts only if the
+  relay received it **before** the departure and the departure followed within 150 s: they
+  are not made stale by the app leaving (an update quits the app too, and its `updating` still
+  has to count when the host's socket ends after it), only by time. A host that then comes
+  back and stays connected (the episode's end), or reconnects at all, clears every witness
+  received before that connection, so one episode's `stopped` never reaches the next.
+* **The decision belongs to its episode.** A departure classed deliberate by a fresh `stopped`
+  or `updating` stays deliberate if the witness later expires or the app leaves; and no witness
+  carries over to decide another episode.
+
 ## Privacy and retention
 
 This adds plaintext metadata to the relay, approved by Connection with the conditions below
@@ -368,17 +428,31 @@ This adds plaintext metadata to the relay, approved by Connection with the condi
 **Retention.** Per host, the relay keeps only the **current** value of each of these,
 overwritten in place, with no history:
 
-* the arm and its notices: expire at 21600 s; notices deleted once sent;
-* the witness state, and the app device the host declared (for the current episode, and the
-  latest): dropped when that app leaves the roster or the host declares another;
-* the episode's start and `gone`: `gone` lasts until the host returns or is forgotten;
-* the episode's sent `targets` (handles only): kept until the host confirms its `restored` or
-  `hostBack` went (`host-gone-closed`), or 6 hours after the episode began, then deleted;
+* the arm and its notices: expire at 21600 s after the relay **received** the newest arm; that
+  receipt time is the one time kept for the arm, and a re-seal (or any later arm) arrives as a
+  new arm and overwrites it, so no earlier receipt or re-seal time is kept; notices are deleted
+  once sent;
+* the witness state and its receipt time (for the 150 s expiry), and the app device the host
+  declared (for the current episode, and the latest): each overwritten by the next witness;
+  the four state witnesses are dropped when that app's connection leaves, `stopped` and
+  `updating` only by the 150 s; all are cleared when the host reconnects, and the declared app
+  device when it leaves the roster or the host declares another ([The app's
+  witness](#the-apps-witness-slices-1a-and-2));
+* the episode's start and `gone`: `gone` lasts until the host returns or is forgotten; and the
+  host's `lastSeen`, which the roster already keeps, overwritten at each disconnect;
+* the episode's sent `targets` (handles only, at most 8): kept for the episode, until the host
+  confirms its `restored` or `hostBack` went (`host-gone-closed`) or the machine is forgotten,
+  with no fixed time limit (an overnight outage must not lose them), replaced by the next alerted
+  episode's and never accumulated. Not the arm's 6 h: that expires a permission to send, these
+  record who was sent to;
 * the alert caps' counters (one an hour per machine, three a day per account), in #815's store
   and shared with its no-return notice: a count per window, each expiring with its window (at
   most 24 h), no other time kept.
 
-No time is kept beyond the current episode's start and the caps' windows. All of it is deleted
+The times kept are exactly these: the newest arm's receipt time, the witness's receipt time,
+the episode's start, the host's latest departure (`offline.since`, already in presence) and
+the time it last reconnected (for the 2-minute return timer), `lastSeen` and the caps' windows. Each is overwritten in place, with no
+history and never as a series. All of it is deleted
 on forget, sign-out and account change. [relay-deploy.md](../relay-deploy.md#host-gone-state-970-proposed-not-built)
 records it beside the roster's retention.
 
@@ -416,8 +490,8 @@ through the ingress run, with their results on #970
 
 - **1a. Every deliberate stop announces first, and lands first.** The host announces `stop`,
   `restart` or `update` through #815's `host-planned-state` before it leaves, on every path:
-  the app's Stop, the app's update hook, #801's stop and restart (when #801 lands; until then
-  it has no path to cover), and `agent-bridge-host stop`, which also writes the stop marker. The
+  the app's Stop, the app's update hook, #801's stop and restart (their tests are a merge
+  condition on #801, [above](#classifying-a-departure)), and `agent-bridge-host stop`, which also writes the stop marker. The
   app sends the two **deliberate** witness states, `stopped` before any fallback that kills a
   host too slow to stop and `updating` before it hands a host to an update, with the
   `host-local-app` binding under Connection's conditions. One test per path
@@ -451,6 +525,8 @@ families.
 * "A planned restart's return timer starts when its socket ends, not when it announced."
 * "A machine that times out without a witness is offline, not gone."
 * "Many hosts ending within a few seconds are read as relay-side, not as hosts going."
+* "One host and two device sockets ending together in an ingress restart are read as relay-side."
+* "A host ending within five seconds of the relay's own restart is relay-side, however few sockets there are."
 * "A host that flaps within two minutes keeps its first departure as since."
 * "A replaced socket's departure never makes its replacement gone."
 * "A relay restart is never read as the host going."
@@ -463,12 +539,19 @@ families.
 * "The app's update hook witnesses updating before the package replaces the host."
 * "agent-bridge-host stop writes the stop marker and the host announces stop."
 * "A host that doesn't advertise host-gone-v1 is never shown as gone."
+* "Every path that stops the host on purpose is in one list, and each entry has an announce test: a path added without one fails this test."
 * "An update witnessed by the app that never comes back gets #805's no-return notice, not #970's."
 
 **The witness**
 * "An app that witnesses its host restarting holds the window until it ends or fifteen minutes pass."
 * "An app that witnesses its host running cancels a pending window."
 * "A witness from an app the host didn't declare is ignored."
+* "A running witness from an app that has since closed never cancels a later crash's window."
+* "A stopped witness older than 150 seconds never makes a later departure deliberate."
+* "A running witness received before a flapping host's second death never cancels that death's window."
+* "A stale witness never decides a later episode."
+* "An updating witness still counts when its app quits before the host's socket ends."
+* "A witness that isn't re-sent within 150 seconds expires, though its socket is open."
 * "The host takes the app's device id only from the guarded pipe, never from an agent."
 * "The relay drops a witness binding when that app leaves the roster."
 * "A stopped or updating witness counts only from the app declared for the current episode."
@@ -480,6 +563,8 @@ families.
 * "An arm counts while any delegate in a session is working or waiting."
 * "A host that dies again before it re-arms keeps the arm its episode began with."
 * "A host still starting never disarms before its first full list."
+* "The first arm on a new connection replaces the stored one whatever its seq: a disarm at seq 1 replaces an arm stored at seq 7."
+* "An arm from an earlier connection is never compared by seq with a new connection's."
 * "An arm older than its six-hour ttl never alerts: a host that finished cleanly, restarted and crashed before its first full list sends nothing."
 * "An armed host with no browser subscribed still sets alert, so the Windows app toasts."
 * "A disarm is sent within five seconds, whatever the coalescing."
@@ -497,10 +582,13 @@ families.
 * "The Windows app removes its gone toast when the host is back, leaving only a restore toast."
 * "The Windows app toasts once per episode, however often a flapping host clears and sets gone."
 * "A host that restarts after the episode ended but before restore judging finished still replaces the alert."
+* "A host away overnight, longer than the arm's six hours, still gets its targets in host-gone-sent and replaces the alert."
+* "The targets are kept until host-gone-closed or forget, and the next alerted episode's replace them."
 * "A restore after the bridge's crash says bridge, never host, in its row mark, banner title and push title."
 
 **Retention**
 * "Forget, sign-out and an account change delete a host's arm, witness and gone."
+* "The only times kept for a host are the arm's receipt, the witness's receipt, the episode's start, the latest departure and reconnect, lastSeen and the caps' windows, each overwritten in place."
 * "No arm, witness, target or episode time reaches a log or a metric label."
 
 ## Review
@@ -526,3 +614,10 @@ families.
   push.
 - **Product** (6691661234): the deliberate-stop gap is closed, not accepted: slice 1 is split so
   every stop announces first (1a) before the line (1b).
+- **Engineering, round 2** (Claude family 6692311402, Gemini family 6692368886), folded in:
+  #805's `needsYou` rule restored beside #970's in v1-sessions.md (each governs its own signal;
+  SRE to confirm); the mass-end guard counts every socket, so a small fleet or one staging host
+  exercises it; `seq` resets per connection and a new connection's first arm always replaces the
+  stored one; #801's announce tests are a merge condition on #801; the privacy statement names
+  every time kept; the witness expires with its app's connection or 150 s after its last
+  re-send; `targets` are kept for the episode, apart from the arm's 6 h expiry.

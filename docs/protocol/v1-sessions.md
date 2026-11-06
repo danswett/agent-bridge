@@ -1306,12 +1306,35 @@ host can start the episode again from those fields.
 included, and its `question`, `finished` and `signIn` pushes, and a `restored` push after a crash
 (and, proposed, any `restored` that replaces a `hostGone`, [Host gone](#host-gone-970)).
 Not by the host:
-* **A machine whose host is gone (#970, proposed)**, which its host cannot say. The relay
-  decides it ([host-gone.md](host-gone.md)): only after a departure the host didn't announce,
-  with evidence the bridge stopped, and 5 minutes for #805 to heal it first. The relay then
-  sends the host's pre-sealed `hostGone` notice if one was armed ([Host gone](#host-gone-970)),
-  and clients show the machine's state (ui.md §6.14). A machine that is merely offline, or one
-  whose host announced its departure (#805), is never classed `needsYou` by a client.
+* **A machine offline unexpectedly (#805)**, which its host cannot say. Each client classes it
+  `needsYou` from the relay's presence, once #269's grace period has passed, so a short drop
+  never is. #805 owns the threshold.
+* **A machine whose host is gone (#970, proposed)**, which its host cannot say either. The
+  relay decides it ([host-gone.md](host-gone.md)): only after a departure the host didn't
+  announce, with evidence the bridge stopped, and 5 minutes for #805 to heal it first. The
+  relay then sends the host's pre-sealed `hostGone` notice if one was armed
+  ([Host gone](#host-gone-970)), and clients show the machine's state (ui.md §6.14).
+
+  **How the two sit side by side.** Neither replaces the other; each governs its own signal,
+  and #970 changes nothing of #805's, its threshold included:
+  * A machine **with `offline.gone`** is #970's. Its alert is the one `hostGone` notice (or
+    `gone.alert`'s toast), at the `needsYou` tier: it interrupts, with the question sound, once
+    per episode. A client doesn't class that machine again under #805's rule, so one departure
+    never alerts twice, and the shared caps count it once. It is **not counted** in Needs you's N,
+    its filter or the app badge, which count questions and approvals only (owner decision,
+    2026-11-05; Product, #1022); its banner and its row line are how it shows.
+  * Every other machine that is offline unexpectedly is #805's, as above: one that was lost
+    without evidence the bridge stopped (a `timeout`, a machine switched off or asleep), and
+    one whose planned reboot, restart or update didn't return (#805's no-return push,
+    which #970 never sends). #970's pending window sends and shows nothing, and takes nothing
+    from #805's rule while it runs. To keep "never alerts twice" true, #805's threshold for a
+    machine lost with no plan is to be no shorter than `HostGoneAfter`; until SRE confirms that
+    on #805, a machine #805 alerted before it became gone is the one open overlap.
+  * A machine whose host announced its departure (#805's plan) is never #970's.
+
+  `needsYou` here is the tier, the alert's strength, in both rules; neither makes a machine a
+  member of Needs you's N. If #805 meant its classing to count a machine in N or the badge, that
+  conflicts with the 2026-11-05 owner decision for every machine, and is for SRE to settle on #805.
 
 `signInNeeded` pushes as the `signIn` notice of #800, at most once an hour per machine, agent
 and account (ui.md §6.13). The rest of `attention` has no push of its own yet. Being `needsYou`,

@@ -503,11 +503,16 @@ What #970 adds beside the roster ([protocol/host-gone.md](protocol/host-gone.md#
 in #805's lifecycle store, never in this roster blob's v1 schema:
 
 * **Per host, only the current state, overwritten in place:** its arm (the newest
-  `host-gone-arm`, with its sealed notices), the latest witness state and the app device the host
-  declared, the current episode's start, the episode's sent targets (handles), and `gone`. No
+  `host-gone-arm`, with its sealed notices, and the time the relay received it), the latest
+  witness state with its receipt time and the app device the host
+  declared, the current episode's start, the host's latest departure and reconnect times, the episode's sent targets (handles), `lastSeen` and `gone`. No
   history and no series: a new value replaces the old one.
-* **Expiry:** an arm and its notices expire at the notices' TTL (21600 s, 6 h); notices are
-  deleted once sent; sent targets once the host confirms its return notice went, or 6 h after the episode began; the
+* **Expiry:** an arm and its notices expire at the notices' TTL (21600 s, 6 h) after receipt; notices are
+  deleted once sent; a state witness when its app's connection leaves or 150 s after its receipt
+  (`stopped` and `updating` by the 150 s only), and every witness when the host
+  reconnects; sent targets (routing handles, at most 8) are kept for the episode, until the host confirms its
+  return notice went or the machine is forgotten, **not** on the arm's 6 h clock, so an overnight outage
+  keeps them; the
   app binding when that app leaves the roster. `gone` lasts until the host returns or is
   forgotten. The alert caps keep a count per window (at most 24 h), in #805's lifecycle store.
 * **Deleted** on forget, on sign-out and when the account changes, with the machine's roster
