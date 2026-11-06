@@ -93,6 +93,10 @@ static partial class SelfTest
             await CheckInlineMono(window, Check);
             await CheckCodeBlocks(window, Check, outFile);
             await CheckUnparsableMarkdown(window, Check);
+            // Written down first: without its fix, the next check ends the process (0xC000027B).
+            await Write(outFile, result, checks, failures, "a word too long for WinUI's text layout");
+            await CheckLongWords(window, Check);
+            await Write(outFile, result, checks, failures, null);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
             await CheckCurrentTools(window, main, Check);

@@ -49,6 +49,15 @@ $global:PpBuildsFor = $null
 $global:PpFeedExtra = $null
 $global:PpGeneratedNotes = $null
 $global:PpPublishedBody = $null
+# GitHub failing calls (#907): the next N listings or DELETEs fail; a DELETE that "goes through"
+# deletes before it fails, as a 500 after the fact does.
+$global:PpListFailures = 0
+$global:PpListings = 0
+$global:PpFailListAfter = -1
+$global:PpDeleteFailures = 0
+$global:PpDeleteGoesThrough = $false
+$global:PpSleeps = [Collections.Generic.List[int]]::new()
+function global:Start-Sleep { [CmdletBinding()] param([int]$Seconds, [int]$Milliseconds) $global:PpSleeps.Add($Seconds) }
 
 # What vpk names a channel's full package (build/app-channels.ps1): x64's `win` without a suffix.
 function global:Get-PpFull([string]$channel, [string]$version) {
@@ -76,13 +85,22 @@ function global:gh {
     $global:PpCalls.Add("gh $($a -join ' ')")
     $global:LASTEXITCODE = 0
     if ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/releases?*") {
+        if ($global:PpListFailures -gt 0) { $global:PpListFailures--; $global:LASTEXITCODE = 1; return }
+        $global:PpListings++
+        if ($global:PpFailListAfter -ge 0 -and $global:PpListings -gt $global:PpFailListAfter) { $global:LASTEXITCODE = 1; return }
         foreach ($r in $global:PpReleases) { $r | ConvertTo-Json -Compress }
     } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/git/matching-refs/tags/*") {
         $prefix = 'refs/tags/' + $a[1].Substring("repos/$repo/git/matching-refs/tags/".Length)
         $global:PpTags | Where-Object { $_.StartsWith($prefix) }
     } elseif ($a[0] -eq 'api' -and $a[1] -eq '-X' -and $a[2] -eq 'DELETE') {
         $id = [long]($a[3] -split '/')[-1]
-        [void]$global:PpReleases.RemoveAll({ param($r) $r.id -eq $id })
+        if ($global:PpDeleteFailures -gt 0) {
+            $global:PpDeleteFailures--
+            if ($global:PpDeleteGoesThrough) { [void]$global:PpReleases.RemoveAll({ param($r) $r.id -eq $id }) }
+            $global:LASTEXITCODE = 1; return
+        }
+        # As GitHub answers a release that isn't there: 404.
+        if (-not $global:PpReleases.RemoveAll({ param($r) $r.id -eq $id })) { $global:LASTEXITCODE = 1 }
     } elseif ($a[0] -eq 'api' -and $a[1] -eq '-X' -and $a[2] -eq 'POST' -and $a[3] -eq "repos/$repo/releases/generate-notes") {
         if ($global:PpGeneratedNotes -eq 'fail') { $global:LASTEXITCODE = 1; return }
         @{ body = $global:PpGeneratedNotes } | ConvertTo-Json -Compress
@@ -178,6 +196,7 @@ function Reset([int]$prereleases = 0) {
     $global:PpBuildsFor = $null; $global:PpFeedExtra = $null
     $global:PpGeneratedNotes = "## What's Changed`n* A change (#200)`n`n**Full Changelog**: https://github.com/$repo/compare/v0.1.503...v0.1.600"
     $global:PpPublishedBody = $null
+    $global:PpListFailures = 0; $global:PpListings = 0; $global:PpFailListAfter = -1; $global:PpDeleteFailures = 0; $global:PpDeleteGoesThrough = $false; $global:PpSleeps.Clear()
     for ($i = 1; $i -le $prereleases; $i++) { New-PpRelease "v0.1.$(500 + $i)" }
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 }
@@ -514,6 +533,69 @@ Check 'Only pre-releases beyond the newest twenty are deleted, never a full rele
     foreach ($kept in 'v0.1.504', 'v0.1.522', 'v0.1.600', 'v0.1.100', 'v0.1.400', 'nightly') { Assert ($kept -in $left) "$kept was deleted" }
     foreach ($t in $tagsBefore) { Assert ($t -in $global:PpTags) "the tag $t was deleted" }
     Assert (-not ($global:PpCalls | Where-Object { $_ -like '*git/refs*' })) 'a ref was changed'
+}
+
+# --- GitHub failing a call (#907): twice on 2026-11-05 that alone turned main red.
+Check 'A prune that GitHub fails once is tried again and the old pre-release is deleted' {
+    Reset 20
+    $global:PpDeleteFailures = 1
+    Invoke-Publish '0.1.600'
+    Assert ('v0.1.501' -notin @($global:PpReleases | ForEach-Object tag_name)) 'v0.1.501 was kept'
+    Assert (@(Deletes).Count -eq 2) "deletes: $(Deletes)"
+    Assert (@($global:PpSleeps) -join ',' -eq '2') "waits: $($global:PpSleeps -join ',')"
+}
+
+Check 'A prune DELETE that failed but went through counts as done' {
+    Reset 20
+    $global:PpDeleteFailures = 1; $global:PpDeleteGoesThrough = $true
+    Invoke-Publish '0.1.600'
+    Assert ('v0.1.501' -notin @($global:PpReleases | ForEach-Object tag_name)) 'v0.1.501 was kept'
+}
+
+Check 'A prune that keeps failing after a successful publish is a warning, not a failed publish' {
+    Reset 20
+    $global:PpDeleteFailures = 99
+    $plan = Invoke-Publish '0.1.600' -Plan
+    Assert ($global:LASTEXITCODE -eq 0) "the step would exit $global:LASTEXITCODE"
+    $r = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
+    Assert ($r -and -not $r.draft) 'v0.1.600 was not published'
+    Assert ('v0.1.501' -in @($global:PpReleases | ForEach-Object tag_name)) 'v0.1.501 is gone'
+    Assert ($plan -like '*v0.1.501 was not deleted*') "plan: $plan"
+    Assert ($plan -like '*1 left for the next publish*') "plan: $plan"
+}
+
+Check 'Listing releases to prune that keeps failing after a successful publish is a warning, not a failed publish' {
+    # How many listings a publish makes; the last is pruning's. Every one from that on fails.
+    Reset 21
+    Invoke-Publish '0.1.600'
+    $listings = @($global:PpCalls | Where-Object { $_ -like "gh api repos/$repo/releases?*" }).Count
+    Reset 21
+    $global:PpFailListAfter = $listings - 1
+    $plan = Invoke-Publish '0.1.600' -Plan
+    Assert ($global:LASTEXITCODE -eq 0) "the step would exit $global:LASTEXITCODE"
+    $r = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
+    Assert ($r -and -not $r.draft) 'v0.1.600 was not published'
+    Assert ($plan -like '*old pre-releases were not pruned*') "plan: $plan"
+    Assert (@(Deletes).Count -eq 0) "deletes: $(Deletes)"
+}
+
+Check 'A leftover draft whose DELETE failed but went through does not stop the version being published' {
+    Reset 3
+    New-PpRelease 'v0.1.600' $true $true
+    $global:PpDeleteFailures = 1; $global:PpDeleteGoesThrough = $true
+    Invoke-Publish '0.1.600'
+    Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
+    Assert (@($global:PpReleases | Where-Object tag_name -EQ 'v0.1.600').Count -eq 1) 'not exactly one v0.1.600'
+}
+
+Check 'A leftover draft that cannot be deleted still stops the publish before anything is uploaded' {
+    Reset 3
+    New-PpRelease 'v0.1.600' $true $true
+    $global:PpDeleteFailures = 99
+    $threw = $false
+    try { Invoke-Publish '0.1.600' } catch { $threw = $true }
+    Assert $threw 'the publish went on past a draft it could not delete'
+    Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
 
 Check 'A dry run uploads, publishes and deletes nothing, and has vpk read the folder' {

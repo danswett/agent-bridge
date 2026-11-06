@@ -90,6 +90,9 @@ public sealed class SessionSource : ISessionSource
         // emitted (null when none waits): what a resumed subscription and its watermark go by.
         public long Committed;
         public long? Pending;
+        // What the last commit was made from: Commit made again from the same is the same.
+        public Session? CommittedFull;
+        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt) CommittedWith;
     }
 
     public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null)
@@ -161,6 +164,14 @@ public sealed class SessionSource : ISessionSource
     }
 
     public event EventHandler<string>? UnbudgetedChanged;
+
+    // Tests: how many times a session was fitted and serialised (Commit), and built (its tracker).
+    internal int Commits { get; private set; }
+
+    internal int Builds
+    {
+        get { lock (_gate) { return _entries.Values.Sum(e => e.Tracker.Builds); } }
+    }
 
     // Read between passes, as a pass is what changes a tracker's state.
     public async Task<Subagent?> GetAgentAsync(string id, string agent, CancellationToken cancellationToken = default)
@@ -851,6 +862,30 @@ public sealed class SessionSource : ISessionSource
         entry.Full = full;
         DateTimeOffset? endingSince;
         lock (_gate) { endingSince = _ending.TryGetValue(full.Id, out var at) ? at : null; }
+        (DriverKind? Kind, string? Principal) driver = (null, null);
+        var agentsPrompt = false;
+        if (_drivers is not null)
+        {
+            // From what the transcript says, not the ending override: a new turn decides who drives it.
+            // Every pass, changed or not: an arm runs out with time.
+            _drivers.For(full.Id).Observe(full, _time.GetUtcNow(), _drivers.Arm, entry.Tracker.PromptKey, entry.Tracker.Prompts);
+            driver = _drivers.Shown(full.Id);
+            agentsPrompt = _drivers.For(full.Id).PromptIsAgents;
+        }
+        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt);
+        // The tracker hands back the very session it built last when nothing it reads changed.
+        // Fitting and serialising it again (about 37 MB/min, #608) found the same JSON every time.
+        // Never while a sign-in recovery overlay is held (#800): each step of it (Checking, then
+        // Pending), and the clearing of one gone stale, is decided below and nowhere else, often
+        // with the same session and the same time (#634 review, H2). It is held only while a
+        // sign-in is under way.
+        if (ReferenceEquals(full, entry.CommittedFull) && inputs == entry.CommittedWith)
+        {
+            lock (_gate)
+            {
+                if (_entries.TryGetValue(full.Id, out var current) && current == entry && !_recovery.ContainsKey(full.Id)) { return; }
+            }
+        }
         var shown = entry.Touched is { } touched && touched > full.UpdatedAt ? full with { UpdatedAt = touched } : full;
         lock (_gate)
         {
@@ -866,17 +901,17 @@ public sealed class SessionSource : ISessionSource
         if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
         if (_drivers is not null)
         {
-            // From what the transcript says, not the ending override: a new turn decides who drives it.
-            _drivers.For(full.Id).Observe(full, _time.GetUtcNow(), _drivers.Arm, entry.Tracker.PromptKey, entry.Tracker.Prompts);
-            var (driver, principal) = _drivers.Shown(full.Id);
-            shown = shown with { Driver = driver, DriverPrincipal = principal };
+            shown = shown with { Driver = driver.Kind, DriverPrincipal = driver.Principal };
             // A prompt an agent sent through the host carries no mark of it in the transcript:
             // the host knows it from the turn the agent's reply or launch started (#489).
-            if (shown.Activity is { UserMessage: not null, UserMessageFrom: null } activity && _drivers.For(full.Id).PromptIsAgents)
+            if (shown.Activity is { UserMessage: not null, UserMessageFrom: null } activity && agentsPrompt)
             {
                 shown = shown with { Activity = activity with { UserMessageFrom = UserMessageFrom.Agent } };
             }
         }
+        Commits++;
+        entry.CommittedFull = full;
+        entry.CommittedWith = inputs;
         var getForm = SessionBudget.Fit(shown);
         var listForm = SessionBudget.Fit(shown.WithoutHistory());
         var json = JsonSerializer.Serialize(getForm, ProtocolJson.Options);
