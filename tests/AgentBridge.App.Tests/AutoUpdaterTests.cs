@@ -180,7 +180,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         await AskedAsync(UpdateAskKind.Install);
         await TwoIdleTicksAsync();
-        // Six hours on, it still waits: never cut short.
+        // Said to the devices, not an idle timer or "installs at the next look".
+        Assert.Equal("Codex's app-server, started to read its allowance, is still answering or finishing; it installs once that is done", auto.State.Waiting);
+        // Six hours on, it still waits, and the reminder names the probe, not the sessions.
         time.Advance(AutoUpdater.WaitAtMost);
         await auto.TickAsync();
 
@@ -188,8 +190,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Empty(host.Sent(HostOps.Stop));
         Assert.True(host.Sent(HostOps.ProbeHold).Count >= 2);
         Assert.Single(log, l => l.Contains("waiting to install 0.2.0: Codex's app-server", StringComparison.Ordinal));
-        // And said to the devices, not an idle timer or "installs at the next look".
-        Assert.Equal("Codex's app-server, started to read its allowance, is still answering or finishing; it installs once that is done", auto.State.Waiting);
+        Assert.StartsWith("Needs you: the update to 0.2.0 has waited since ", auto.State.Waiting);
+        Assert.EndsWith("because Codex's app-server, started to read its allowance, is still answering or finishing", auto.State.Waiting);
 
         finishing = false;
         await auto.TickAsync();
@@ -208,22 +210,23 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(finishing, finishing ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null));
 
         await auto.TickAsync();
+        // The gap settles: its tick (Arm) finds the probe still finishing.
         time.Advance(AutoUpdater.SettleFor);
-        await auto.TickAsync();
+        await Wait.UntilAsync(() => log.Any(l => l.Contains("waiting to install 0.2.0: Codex's app-server", StringComparison.Ordinal)), "the hold for the probe");
         // Past the backstop too: still waits.
         time.Advance(AutoUpdater.WaitAtMost);
         await auto.TickAsync();
+        await Wait.UntilAsync(() => host.Sent(HostOps.ProbeHold).Count >= 2, "the probe asked about again");
 
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
-        Assert.True(host.Sent(HostOps.ProbeHold).Count >= 2);
         Assert.Single(log, l => l.Contains("waiting to install 0.2.0: Codex's app-server", StringComparison.Ordinal));
         Assert.Equal("Codex's app-server, started to read its allowance, is still answering or finishing; it installs once that is done", auto.State.Waiting);
 
         finishing = false;
         await auto.TickAsync();
 
-        Assert.True(updater.Applied);
+        await Wait.UntilAsync(() => updater.Applied, "the install once the probe is done", TimeSpan.FromSeconds(5));
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
@@ -540,8 +543,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         host.On(HostOps.ProbeHold, _ => { prefs = prefs with { AutoUpdate = false }; return new ProbeHoldResult(false); });
 
         await auto.TickAsync();
+        // The gap settles, and its tick (Arm) asks about the probes; then it looks again as of now.
         time.Advance(AutoUpdater.SettleFor);
-        await auto.TickAsync();
+        await Wait.UntilAsync(() => log.Contains($"auto-update: not installing updates: {AutoUpdater.SwitchedOff}"), "the switch seen off after the probe question");
 
         Assert.NotEmpty(host.Sent(HostOps.ProbeHold));
         Assert.False(updater.Applied);

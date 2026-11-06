@@ -388,7 +388,9 @@ public sealed class AutoUpdater
         if (lastWhyNot is { } why) { return Chosen(why) ? null : why; }
         if (Ready is not null)
         {
-            if (Asked(UpdateAskKind.Install) is not null) { return Busyness(); }
+            // A device's Install held past it by a usage probe on the host (#238) says so, not the
+            // sessions it no longer waits for.
+            if (Asked(UpdateAskKind.Install) is not null) { return lastProbe ?? Busyness(); }
             // Install between turns: only the backstop held by a question (or not knowing) keeps
             // it; until then it installs at the first gap, or at ForcedAt.
             if (BetweenTurns) { return now >= ForcedAt(now) ? BackstopHeld() : null; }

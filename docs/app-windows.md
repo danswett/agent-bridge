@@ -436,8 +436,8 @@ into one folder with one version. An app update is a host update, so they never 
     algorithm. A package offered after a restart must still match it, and just before install the
     package is checked again from a handle that keeps it open, read-only to everyone else, until
     the app exits; the installer opens it by its path after that, so the check does not reach
-    past the app's exit (Engineering's second-family review, 6677353697, left to Engineering and
-    Trust). A release whose feed gives no checksum is never installed. The checksum proves the
+    past the app's exit (Engineering's second-family review, 6677353697): an accepted limitation,
+    whose fix, a verified per-profile copy handed to `Update.exe`, is #984. A release whose feed gives no checksum is never installed. The checksum proves the
     package is the one the chosen feed names, not who published it: the feed supplies its own
     checksum. The app downloads full packages only (`AppPackages`): Velopack rebuilds a release
     from deltas into a package that is never the full package's bytes, so it would fail this
