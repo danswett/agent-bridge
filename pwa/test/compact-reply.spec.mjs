@@ -12,12 +12,12 @@ const IDLE = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
 const later = (ms = 1000) => new Date(Date.now() + ms).toISOString();
 const LONG = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
 
-async function openDemo(page) {
+async function openDemo(page, query = '') {
   await page.addInitScript(() => {
     window.__cspViolations = [];
     document.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
   });
-  await page.goto('?demo=1&static=1');
+  await page.goto(`?demo=1&static=1${query}`);
   await page.waitForSelector('html[data-demo-ready]');
 }
 
@@ -66,9 +66,18 @@ const scrollTo = (v, y, input = true) => v.locator('.stream-scroll').evaluate((s
   sc.scrollTo({ top: y, behavior: 'instant' });
 }), [y, input]);
 
-// The idle session, its answer long enough to scroll, opened at its end as a person finds it.
-async function session(page, { long = true } = {}) {
-  await openDemo(page);
+// Where the reply area is: its slide (--fy), the room it folds by, and what the view says of it.
+const foot = (v) => v.evaluate((el) => ({
+  fy: parseFloat(el.style.getPropertyValue('--fy') || '0'),
+  room: el.querySelector('.reply-slot').offsetHeight - el.querySelector('.reply-bar').offsetHeight,
+  state: el.dataset.foot ?? null,
+  solid: el.hasAttribute('data-fsolid'),
+}));
+const end = (v) => v.locator('.stream-scroll').evaluate((sc) => sc.scrollHeight - sc.clientHeight);
+
+// The idle session, its answer long enough to scroll.
+async function session(page, { long = true, query = '' } = {}) {
+  await openDemo(page, query);
   if (long) { await upsert(page, IDLE, { activity: { response: LONG, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() }); }
   const v = await open(page, IDLE);
   await expect(input(v)).toBeVisible();
@@ -143,6 +152,153 @@ test.describe('on a phone', () => {
     expect((await head(v)).ty).toBe(before.ty);
   });
 
+  test('a session opens with the reply area in full; reading back up it rides down, then is a pinned 48 bar', async ({ page }) => {
+    const v = await session(page);
+    await settle(v);
+    const max = await end(v);
+    expect(max).toBeGreaterThan(600);
+    // Opened at the conversation's top, far from its end, the area is whole.
+    expect(await foot(v)).toEqual({ fy: 0, room: 25, state: 'returned', solid: false });
+    await scrollTo(v, max);
+    expect(await foot(v)).toMatchObject({ fy: 0, state: 'rest' });
+    // The conversation keeps room for the whole area at its end: its last words clear of it.
+    const last = await v.locator('.stream').evaluate((el) => el.lastElementChild.getBoundingClientRect().bottom);
+    expect(last).toBeLessThanOrEqual((await v.locator('.reply-slot').boundingBox()).y);
+    await scrollTo(v, max - 10);
+    expect(await foot(v)).toMatchObject({ fy: 10, state: 'riding', solid: false });
+    await scrollTo(v, max - 400);
+    expect(await foot(v)).toMatchObject({ fy: 25, state: 'compact', solid: true });
+    // The bar: 48, pinned to the conversation's foot, over the box's top, holding the placeholder.
+    const bar = await v.locator('.reply-bar').boundingBox();
+    const conv = await v.locator('.conversation').boundingBox();
+    expect(bar.height).toBe(48);
+    expect(bar.y + bar.height).toBeCloseTo(conv.y + conv.height, 0);
+    expect((await v.locator('.reply-slot').boundingBox()).y).toBeCloseTo(bar.y, 0);
+    const copy = v.locator('.reply-copy');
+    await expect(copy).toBeVisible();
+    await expect(copy).toHaveText(await input(v).getAttribute('placeholder'));
+    await expect(copy).not.toHaveClass(/draft/);
+  });
+
+  test('away from the end 64 down brings it back and 32 up sends it away; the end always shows it in full', async ({ page }) => {
+    const v = await session(page);
+    await settle(v);
+    const max = await end(v);
+    await scrollTo(v, max);
+    await scrollTo(v, max - 400);
+    expect((await foot(v)).fy).toBe(25);
+    await scrollTo(v, max - 337);
+    expect((await foot(v)).fy).toBe(25);
+    await scrollTo(v, max - 336);
+    expect(await foot(v)).toMatchObject({ fy: 0, state: 'returned', solid: false });
+    await scrollTo(v, max - 367);
+    expect((await foot(v)).fy).toBe(0);
+    await scrollTo(v, max - 368);
+    expect(await foot(v)).toMatchObject({ fy: 25, state: 'compact' });
+    await scrollTo(v, max);
+    expect(await foot(v)).toMatchObject({ fy: 0, state: 'rest' });
+  });
+
+  test('compact, the bar shows the draft\'s first line, drawn and not read; a tap brings the box back in full, focused', async ({ page }) => {
+    const v = await session(page);
+    await settle(v);
+    const t = input(v);
+    await t.fill('Ship it on Friday\nand tell the team');
+    await t.blur();
+    await settle(v);
+    const max = await end(v);
+    await scrollTo(v, max);
+    await scrollTo(v, max - 400);
+    const f = await foot(v);
+    expect(f.room).toBeGreaterThan(25);
+    expect(f).toMatchObject({ fy: f.room, state: 'compact', solid: true });
+    const copy = v.locator('.reply-copy');
+    await expect(copy).toHaveText('Ship it on Friday');
+    await expect(copy).toHaveClass(/draft/);
+    // Drawn: hidden from assistive technology, and no stop for Tab.
+    await expect(copy).toHaveAttribute('aria-hidden', 'true');
+    expect(await copy.evaluate((el) => [el.tabIndex, el.querySelectorAll('a, button, input, textarea, [tabindex]').length])).toEqual([-1, 0]);
+    // Typing elsewhere is not needed: the copy follows the words as they change.
+    await t.evaluate((el) => { el.value = 'Ship it on Monday'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+    await expect(copy).toHaveText('Ship it on Monday');
+    await copy.tap();
+    await expect(t).toBeFocused();
+    expect((await foot(v)).fy).toBe(0);
+    const slot = await v.locator('.reply-slot').boundingBox();
+    const conv = await v.locator('.conversation').boundingBox();
+    expect(slot.y + slot.height).toBeCloseTo(conv.y + conv.height, 0);
+  });
+
+  test('focus coming into the reply area brings it back at once and holds it while the person reads', async ({ page }) => {
+    const v = await session(page);
+    await settle(v);
+    const max = await end(v);
+    await scrollTo(v, max);
+    await scrollTo(v, max - 400);
+    expect((await foot(v)).fy).toBe(25);
+    // At once: no slide, the box whole in the same frame.
+    const at = await v.evaluate((el) => {
+      el.querySelector('form.reply textarea').focus();
+      return { fy: el.style.getPropertyValue('--fy'), sliding: el.classList.contains('fanimating') };
+    });
+    expect(at).toEqual({ fy: '0px', sliding: false });
+    await scrollTo(v, max - 600);
+    expect((await foot(v)).fy).toBe(0);
+    await expect(input(v)).toBeInViewport({ ratio: 1 });
+    // Let go, it stays whole until 32 up sends it away.
+    await input(v).blur();
+    await scrollTo(v, max - 500);
+    expect((await foot(v)).fy).toBe(0);
+    await scrollTo(v, max - 531);
+    expect((await foot(v)).fy).toBe(0);
+    await scrollTo(v, max - 532);
+    expect((await foot(v)).fy).toBe(25);
+  });
+
+  test('a question waiting at the end is clear of the reply area, its notice and all', async ({ page }) => {
+    const v = await session(page);
+    await upsert(page, IDLE, { status: 'waiting', statusSince: later(), updatedAt: later(), question: choices('q-935') });
+    await expect(box(v).locator('.reply-held')).toBeVisible();
+    await settle(v);
+    await scrollTo(v, await end(v));
+    expect(await foot(v)).toMatchObject({ fy: 0, room: 51 });
+    const answer = await v.locator('.question-slot .answer').boundingBox();
+    expect(answer.y + answer.height).toBeLessThanOrEqual((await v.locator('.reply-slot').boundingBox()).y);
+  });
+
+  test('under reduced motion it leaves with the cross-fade, and does not slide', async ({ page }) => {
+    const v = await session(page);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await settle(v);
+    const max = await end(v);
+    await scrollTo(v, max);
+    await scrollTo(v, max - 400);
+    await scrollTo(v, max - 300);
+    expect((await foot(v)).fy).toBe(0);
+    await expect(v).not.toHaveClass(/fanimating/);
+    const fade = await v.evaluate((el) => new Promise((resolve) => {
+      const sc = el.querySelector('.stream-scroll');
+      const slot = el.querySelector('.reply-slot');
+      sc.addEventListener('scroll', () => requestAnimationFrame(() => {
+        const s = getComputedStyle(slot);
+        resolve({ fading: el.classList.contains('ffading'), props: s.transitionProperty, fy: el.style.getPropertyValue('--fy') });
+      }), { once: true });
+      sc.scrollTo({ top: sc.scrollTop - 40, behavior: 'instant' });
+    }));
+    expect(fade).toEqual({ fading: true, props: 'opacity', fy: '0px' });
+    await expect.poll(async () => (await foot(v)).fy).toBe(25);
+    await expect(v.locator('.reply-slot')).not.toHaveCSS('opacity', '0');
+  });
+
+  test('a machine that takes no replies has no reply area, and no bar', async ({ page }) => {
+    await openDemo(page, '&reply=0');
+    const v = await open(page, IDLE);
+    await expect(v.locator('.conversation')).toBeVisible();
+    await expect(v.locator('form.reply')).toHaveCount(0);
+    await expect(v.locator('.reply-bar')).toBeHidden();
+    expect(await v.evaluate((el) => el.style.getPropertyValue('--foot-h'))).toBe('0px');
+  });
+
   test('the link is not drawn from 760: the notice says it in full', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     const v = await session(page, { long: false });
@@ -151,5 +307,46 @@ test.describe('on a phone', () => {
     // A phone's notice comes back when the window narrows.
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(box(v).locator('.reply-held')).toHaveText('Answer its question first. Go to the question');
+  });
+});
+
+test.describe('on a phone, in forced colours', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('the compact bar is Canvas with a CanvasText hairline', async ({ page, browserName }) => {
+    test.skip(browserName === 'webkit', 'WebKit has no forced-colors emulation');
+    await page.emulateMedia({ forcedColors: 'active' });
+    const v = await session(page);
+    await settle(v);
+    await scrollTo(v, await end(v));
+    await scrollTo(v, (await end(v)) - 400);
+    expect((await foot(v)).solid).toBe(true);
+    const probe = await page.evaluate(() => {
+      const p = document.createElement('div');
+      p.style.cssText = 'background:Canvas;color:CanvasText';
+      document.body.append(p);
+      const s = getComputedStyle(p);
+      const r = { canvas: s.backgroundColor, text: s.color };
+      p.remove();
+      return r;
+    });
+    const bar = await v.locator('.reply-bar').evaluate((el) => { const s = getComputedStyle(el, '::before'); return [s.backgroundColor, s.borderTopColor, s.borderTopWidth]; });
+    expect(bar).toEqual([probe.canvas, probe.text, '1px']);
+  });
+});
+
+test.describe('from 760 px up', () => {
+  test.use({ viewport: { width: 900, height: 800 } });
+
+  test('nothing is different: the reply area is in the column, never folded, with no bar', async ({ page }) => {
+    const v = await session(page);
+    await settle(v);
+    await scrollTo(v, (await end(v)) - 400);
+    expect(await v.evaluate((el) => [el.style.getPropertyValue('--fy'), el.style.getPropertyValue('--foot-h'), el.dataset.foot ?? null])).toEqual(['', '', null]);
+    await expect(v.locator('.reply-bar')).toBeHidden();
+    await expect(v.locator('.reply-slot')).toHaveCSS('position', 'static');
+    const slot = await v.locator('.reply-slot').boundingBox();
+    const sc = await v.locator('.stream-scroll').boundingBox();
+    expect(slot.y).toBeCloseTo(sc.y + sc.height, 0);
   });
 });

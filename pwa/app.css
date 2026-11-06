@@ -1520,6 +1520,57 @@ summary {
     font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
   }
 }
+/* ---- a phone's reply area, compact while reading (ui.md §6.5, #935) ----
+   Below 760 the reply area floats over the conversation's foot as the header floats over its top,
+   and mirrors it (collapse-foot.js sets --fy, --fcovered and --foot-h): near the end it rides down
+   with the scroll, and past its room it is compact, under a pinned 48 bar holding a copy of the box
+   (the draft's first line, or the placeholder) that is drawn, not read, and no tab stop. Folded, the
+   area is only translated: its controls stay in the accessibility tree and the tab order, and focus
+   coming into it brings it back at once. The conversation keeps room for all of it at its end, and
+   what focus or the app scrolls to stays clear of what covers it. From 760 none of this applies. */
+.reply-bar { display: none; }
+@media (max-width: 759px) {
+  /* Resting values; collapse-foot.js overrides them inline on the view. */
+  .session-view { --fy: 0px; --fcovered: 0px; --foot-h: 0px; }
+  .conversation { position: relative; }
+  .stream-scroll {
+    padding-bottom: calc(var(--foot-h, 0px) + var(--ab-space-4));
+    scroll-padding-bottom: calc(var(--fcovered, 0px) + var(--ab-space-2));
+  }
+  .reply-slot {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 1;
+    background: var(--ab-shell); transform: translateY(var(--fy, 0px)); will-change: transform;
+  }
+  .fanimating .reply-slot { transition: transform var(--ab-motion-collapse-duration) var(--ab-motion-collapse-ease); }
+  .reply-bar {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 1; display: flex; align-items: center;
+    min-height: 3rem; padding: var(--ab-space-1) var(--ab-space-4); pointer-events: none; isolation: isolate;
+  }
+  .reply-slot:empty + .reply-bar { display: none; }
+  .reply-bar::before {
+    content: ""; position: absolute; inset: 0; z-index: -1; background: var(--ab-shell); border-top: 1px solid var(--ab-stroke2);
+    opacity: 0; transition: opacity var(--ab-motion-cross-fade) linear;
+  }
+  .session-view[data-fsolid] .reply-bar::before { opacity: 1; }
+  .reply-copy {
+    flex: 1; min-width: 0; height: 40px; display: flex; align-items: center; padding: 0 var(--ab-space-3);
+    background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-bottom: 2px solid var(--ab-bridge);
+    border-radius: var(--ab-radius-control); color: var(--ab-text3); font-size: 16px; line-height: 24px; cursor: text;
+    opacity: 0; visibility: hidden; transition: opacity var(--ab-motion-cross-fade) linear, visibility 0s linear var(--ab-motion-cross-fade);
+  }
+  .reply-copy > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reply-copy.draft { color: var(--ab-text); }
+  .session-view[data-fsolid] .reply-copy { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
+}
+@media (max-width: 759px) and (prefers-reduced-motion: reduce) {
+  .fanimating .reply-slot { transition: none; animation: head-cross-fade var(--ab-motion-collapse-duration) linear; }
+  .ffading .reply-slot { transition: opacity var(--ab-motion-cross-fade) linear; opacity: 0; }
+}
+@media (max-width: 759px) and (forced-colors: active) {
+  .reply-slot { background: Canvas; }
+  .reply-bar::before { forced-color-adjust: none; background: Canvas; border-top-color: CanvasText; }
+  .reply-copy { border-color: CanvasText; color: CanvasText; }
+}
 /* A button's pressed fill keeps its label at 4.5:1 (ui.md §9) rather than fading the whole
    control: a filled button's Bridge moves toward the text colour, darker on light and lighter on
    dark, away from its label's; an outlined one takes the selected fill, and its Bridge label moves

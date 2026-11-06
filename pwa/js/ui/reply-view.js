@@ -112,13 +112,16 @@ export class ReplyBox {
   #fitFrame = 0;
   // Takes the person to the question the reply waits on, and focuses its first choice.
   #onGoToQuestion = null;
+  // Told whenever the box's words or state are drawn again (a phone's compact copy of them).
+  #onChange = null;
 
   // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
   // largeMax: the largest it takes through the blob store, 0 for none. onGoToQuestion: the
-  // phone notice's link, to the question the reply waits on.
-  constructor({ machineName, replying, attach = false, largeMax = 0, onGoToQuestion = null, uuid = () => globalThis.crypto.randomUUID() }) {
+  // phone notice's link, to the question the reply waits on. onChange: told when the words change.
+  constructor({ machineName, replying, attach = false, largeMax = 0, onGoToQuestion = null, onChange = null, uuid = () => globalThis.crypto.randomUUID() }) {
     this.machineName = machineName;
     this.#onGoToQuestion = onGoToQuestion;
+    this.#onChange = onChange;
     this.replying = replying;
     this.uuid = uuid;
     this.idBase = `r${++seq}`;
@@ -335,6 +338,7 @@ export class ReplyBox {
     if (!off && (pending || this.#busyTimer)) { e.send.setAttribute('aria-disabled', 'true'); } else { e.send.removeAttribute('aria-disabled'); }
     e.resend.disabled = !!this.#offline;
     this.fit();
+    this.#onChange?.();
   }
 
   #clearError() {
