@@ -94,7 +94,7 @@ public sealed partial class SessionsPage
         };
         AutomationProperties.SetAutomationId(code, "SignInCode");
         var expiry = new TextBlock { Style = (Style)Application.Current.Resources["AbSecondaryText"] };
-        var copy = new Button { Content = "Copy", MinHeight = 32 };
+        var copy = new Button { Content = "Copy", MinHeight = 32, Style = (Style)Application.Current.Resources["AccentButtonStyle"] };
         AutomationProperties.SetAutomationId(copy, "SignInCopy");
         var openPage = new Button { Content = "Open", MinHeight = 32 };
         AutomationProperties.SetAutomationId(openPage, "SignInOpen");
@@ -107,7 +107,9 @@ public sealed partial class SessionsPage
             XamlRoot = XamlRoot,
             Content = body,
             CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close,
+            // Copy is the one primary (accent) and the default, so Cancel is drawn as secondary
+            // (Creative 6675007095, ui.md §6.13); Enter copies (below).
+            DefaultButton = ContentDialogButton.None,
         };
         AutomationProperties.SetAutomationId(dialog, "SignInSheet");
 
@@ -140,7 +142,7 @@ public sealed partial class SessionsPage
             FrameworkElementAutomationPeer.CreatePeerForElement(copied)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
         };
         sheet.CopiedSaid += sayCopied;
-        copy.Click += (_, _) =>
+        void CopyCode()
         {
             if (!sheet.HasCode) { return; }
             try
@@ -151,7 +153,17 @@ public sealed partial class SessionsPage
                 sheet.CopiedCode(true);
             }
             catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { sheet.CopiedCode(false); }
-        };
+        }
+        copy.Click += (_, _) => CopyCode();
+        // Enter copies the code, as Copy is the sheet's default (Creative 6675007095), wherever focus is
+        // but on Open, whose own Enter opens the page. Space still presses what has focus, and Escape
+        // is Cancel. Only while the code is shown: nothing else is copied.
+        dialog.AddHandler(UIElement.PreviewKeyDownEvent, new KeyEventHandler((_, e) =>
+        {
+            if (e.Key != Windows.System.VirtualKey.Enter || !sheet.HasCode || ReferenceEquals(FocusManager.GetFocusedElement(dialog.XamlRoot), openPage)) { return; }
+            e.Handled = true;
+            CopyCode();
+        }), true);
         openPage.Click += async (_, _) =>
         {
             // The allowlist's own string, on this press only.
@@ -159,7 +171,7 @@ public sealed partial class SessionsPage
             try { await Windows.System.Launcher.LaunchUriAsync(uri); }
             catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { }
         };
-        // Cancel is where it starts (§6.13), so Enter or Space can't open or copy anything unmeant.
+        // Cancel is where it starts (§6.13), so Space can't open or copy anything unmeant; Enter copies.
         // Programmatic: WinUI draws the ring only when the last input was a key, never after a touch
         // or a click (§9.1 A12).
         dialog.Opened += (_, _) =>
