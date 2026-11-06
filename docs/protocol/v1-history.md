@@ -400,6 +400,12 @@ from the bytes as written.
   their own (design §5.5, #45). An agent can read the latest exchange today; a whole past
   conversation of every session on the machine, including words the person pasted into other
   sessions, is more than it needs. Not a `host` peer (another machine), and not a `service` peer.
+* **Only in enforcing mode.** The relay roles above are checked only with
+  [`permissions.trustedPeers`](../host-config.md#trusted-peers-disposable-host-foundation) on. With
+  it off (the default, legacy mode) the host checks no remote peer's role for any op, so every
+  peer the relay connects may call `session.history`, as it may every other op, and its hello is
+  not shaped by role: "a person's devices only" holds in enforcing mode alone. That was so before
+  history. The local pipe's refusal of an agent does not depend on it.
 * **Home Assistant.** The HA connector (`service` role) gets **no history**: `session.history` is
   not among the reads its role allows, a `service` peer's hello never lists `sessions.history`, and
   the [connector read profile](connector-read.md) (`hello`, `sessions.list`, `session.get`,
