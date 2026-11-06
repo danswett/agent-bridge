@@ -484,10 +484,10 @@ full.addEventListener('touchcancel', endTouch);
     let hidden = -ty;
     // The one exception to keeping the header as it was: on a screen shorter than twice the header the kept header
     // would cover what the app scrolls to, so it folds to the bar first.
+    // Judged on the full header, not on where it is now: an already compact header still folds a full reply area.
     const stageH = $('stage').clientHeight;
-    if (hidden < room && stageH - Math.max(BAR, fullH - hidden) < stageH / 2) {
-      clearTimeout(fadeTimer); clearTimeout(animTimer); fading = false; phone.classList.remove('fading', 'animating');
-      hidden = room;
+    if (stageH < 2 * fullH) {
+      if (hidden < room) { clearTimeout(fadeTimer); clearTimeout(animTimer); fading = false; phone.classList.remove('fading', 'animating'); hidden = room; }
       clearTimeout(ffadeTimer); clearTimeout(fanimTimer); ffading = false; phone.classList.remove('ffading', 'fanimating');
       fy = froom;   // the foot folds to its bar with it
     }
