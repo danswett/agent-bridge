@@ -104,6 +104,12 @@ public sealed class ToastResponder
             Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, $"Not sent: {problem}. Open the session to answer.", action.Machine));
             return;
         }
+        // The words chosen (Delivery.Chosen), as the app knows the question at the click: taken here,
+        // before anything is waited for. Taken after FindAsync, an option relabelled while the machine
+        // was coming back gave its new label (#625 cr2-625d, 6676595964). A question the app doesn't
+        // know yet at the click gives none ("You answered"), and none is looked up later.
+        var asked = SessionOf(action.Machine, action.Session)?.Question is { } q && q.Id == action.Question ? q : null;
+        var chosen = ReceiptWords.AnsweredValue(asked, answer);
         if (await FindAsync(action.Machine) is not { } deliveries)
         {
             Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, "Not sent: that machine is not connected to this app now. Open the session to answer.", action.Machine));
@@ -121,9 +127,7 @@ public sealed class ToastResponder
         deliveries.Changed += Watch;
         try
         {
-            // The words chosen, as the app knows the question at the click (Delivery.Chosen).
-            var asked = SessionOf(action.Machine, action.Session)?.Question is { } q && q.Id == action.Question ? q : null;
-            var entry = deliveries.Submit(key, AgentBridge.Protocol.Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer, chosen: ReceiptWords.AnsweredValue(asked, answer));
+            var entry = deliveries.Submit(key, AgentBridge.Protocol.Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer, chosen: chosen);
             if (entry.State is DeliveryState.Done or DeliveryState.Failed) { done.TrySetResult(entry); }
             Delivery result;
             try { result = await done.Task.WaitAsync(OutcomeWait); }
