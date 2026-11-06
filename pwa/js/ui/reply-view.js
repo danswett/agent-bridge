@@ -24,7 +24,6 @@ import { isSendKey, shortcutHints } from '../platform.js';
 import { ReceiptClock, describeInFlight, drawReceipt, drawn, dropCheck, holdCheck, receiptLive } from './receipt.js';
 
 let seq = 0;
-const where = (machineName) => (machineName ? ` on ${machineName}` : '');
 const kib = (n) => `${(n / 1024).toFixed(1)} KiB`;
 const capitalise = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 // Images a browser can show as a thumbnail. HEIC only Safari can, and it says so by loading.
@@ -37,7 +36,7 @@ export const REPLY_BUSY_PAUSE_MS = 2000;
 
 const OUTCOME_TEXT = {
   delivered: () => 'Delivered',
-  unconfirmed: (at) => `Sent, but not confirmed. Check at the machine${at} before sending it again.`,
+  unconfirmed: () => 'Sent, but not confirmed. Check the conversation before sending it again.',
   stale: () => 'Not sent: the session has ended.',
   busy: () => 'Not sent: an answer or another reply to this session is being delivered. Try again in a moment.',
   refused: () => 'The machine refused this reply.',
@@ -50,7 +49,6 @@ const OUTCOME_TEXT = {
 // (ReceiptClock). Returns { key, text, more, tone, line, speech }; tone: progress | warn | bad,
 // or room for nothing to show.
 export function describeReply(entry, { machineName, stalled = false } = {}) {
-  const at = where(machineName);
   const said = (key, text, tone) => ({ key, text, more: null, tone, line: true, speech: `Reply: ${text}` });
   switch (entry.state) {
     case 'sending': {
@@ -74,7 +72,7 @@ export function describeReply(entry, { machineName, stalled = false } = {}) {
       const outcome = OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed';
       // Send's check says it (holdCheck), and the line keeps its room, empty.
       if (outcome === 'delivered') { return { key: 'delivered', text: '', more: null, tone: 'room', line: false, speech: 'Reply delivered' }; }
-      let text = OUTCOME_TEXT[outcome](at);
+      let text = OUTCOME_TEXT[outcome]();
       if (outcome === 'refused' && entry.reason) { text = `The machine refused this reply: ${entry.reason}.`; }
       if (outcome === 'unconfirmed' && entry.reason) { text += ` (${entry.reason})`; }
       return said(outcome, text, outcome === 'refused' ? 'bad' : 'warn');

@@ -166,13 +166,13 @@ test.describe('on a phone', () => {
 test.describe('outcomes', () => {
   test.use({ viewport: { width: 390, height: 664 } });
 
-  test('unconfirmed keeps the words and says to check at the machine before sending again', async ({ page }) => {
+  test('unconfirmed keeps the words and says to check the conversation before sending again', async ({ page }) => {
     await openDemo(page);
     await script(page, { outcome: 'unconfirmed', reason: 'the session did not record the reply within 60 seconds' });
     const reply = box(page, IDLE);
     await reply.getByRole('textbox', { name: 'Reply' }).fill('did this land?');
     await reply.getByRole('button', { name: 'Send' }).click();
-    await expect(reply.locator('.reply-status')).toHaveText('Sent, but not confirmed. Check at the machine on Demo machine before sending it again. (the session did not record the reply within 60 seconds)');
+    await expect(reply.locator('.reply-status')).toHaveText('Sent, but not confirmed. Check the conversation before sending it again. (the session did not record the reply within 60 seconds)');
     await expect(reply.locator('.reply-status')).toHaveClass(/\bwarn\b/);
     await expect(reply.getByRole('textbox', { name: 'Reply' })).toHaveValue('did this land?');
   });

@@ -32,6 +32,21 @@ test('each phase reads as a line, and Install is offered only when a release is 
   assert.ok(!canCheck(noApp));
 });
 
+test("a machine whose update needs you says so in any phase, in the host's own words", () => {
+  const needsYou = 'Needs you: the update to 0.5.0 has waited since 11/2/2026 9:00 AM because it is downloaded and waits for Restart to update on this machine';
+  const idle = { ...found, waiting: needsYou };
+  assert.equal(updateLine(idle, NOW), `${needsYou}.`);
+  assert.ok(canInstall(idle));
+  assert.equal(updateLine({ ...idle, phase: 'checking' }, NOW), `${needsYou}.`);
+});
+
+// Creative on #719 (6674096426): an update the backstop holds back for a question waiting reads
+// exactly as the host words it.
+test('a machine whose update waits for a question to be answered says so in the host\'s words', () => {
+  const held = { ...found, phase: 'waiting', automatic: true, waiting: 'Update ready \u00b7 waiting for a question to be answered' };
+  assert.equal(updateLine(held, NOW), 'Update ready \u00b7 waiting for a question to be answered');
+});
+
 test('the last outcome reads as what happened', () => {
   const at = '2026-11-02T17:00:00.000Z';
   assert.equal(lastLine({ last: { outcome: 'updated', from: '0.4.0', to: '0.5.0', at } }, NOW), 'Updated from 0.4.0 to 0.5.0 1h 0m ago.');

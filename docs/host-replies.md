@@ -269,7 +269,7 @@ In order, for every reply:
    `permission.completed`, since the last abort or shutdown. One left open when a new CLI
    resumed the session (`session.resume`, with no end written for it) still counts, since the
    new CLI may show it again without writing it again: until it completes, an abort or shutdown,
-   a question asked since, or a prompt typed at the machine (`refused`, saying it was resumed). The whole transcript counts,
+   a question the session itself asks since (a subagent's is its own, #855), or a prompt typed at the machine (`refused`, saying it was resumed). The whole transcript counts,
    since a subagent's question stops only that subagent and other work can write any
    amount after it (and the session source does not report a subagent's question): it is
    read from the start once per session, in the background as soon as the session is found
@@ -305,6 +305,13 @@ transcript; the reply is added to them, and the prompt recorded differs, so the 
 `unconfirmed`. agent-ha-bridge has the same exposure. A question the agent opens in the
 moments between the transcript check and the keys landing would take the words; the window
 is the worker's start-up, about the same as for an answer.
+
+**What a reason says.** A reply's or an answer's `reason` states only what happened, as a
+lowercase clause with no full stop, naming the agent's session: never where to look, which the
+client's receipt already says ("Check the conversation…", #967), and never "check at the
+machine" (#995). Where the host itself failed (an exception reading the screen, typing, or
+checking the transcript, or the attempt ledger unreadable), the reason is "the machine
+couldn't deliver it", and the exception's text goes to the host's log only (#802).
 
 ## Progress and timings
 

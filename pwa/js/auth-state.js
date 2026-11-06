@@ -19,8 +19,8 @@
 //   * nothing else of a signin.code is read at all, so no token can reach the page through it;
 //   * an attention's message is a sentence the host composes from kind, errorClass, statusCode
 //     and provider, never the agent's text (6649775484): shown as it is, as plain text, revealed;
-//   * a machine's reason (signin.done, a start's result) is plain text, revealed, cut short, and
-//     dropped whole when it holds anything shaped like a token.
+//   * a refused start's reason is shown only as this client's words for one of the host's known
+//     reasons (START_REASONS), never as the machine's text; signin.done's is never read.
 // No code here completes a flow, enters a code, or opens anything: a person presses for each.
 import { hasHidden, hasRightToLeft, reveal } from './hidden-text.js';
 
@@ -176,6 +176,17 @@ export function readMachineSignIn(raw) {
   }).filter(Boolean);
 }
 
+// A refused start's reason in plain words, by the host's own reason (AgentSignInService), compared
+// whole (ui.md §6.13: a reason is the host's, from a known set, never the machine's words). Any
+// other reason, a request this client got wrong included, reads as none: "Sign-in refused". The
+// raw text stays in the host's own log, for diagnostics (#802). AuthState.StartReasons is its twin.
+export const START_REASONS = Object.freeze({
+  'too many recent sign-in requests': 'too many requests, try again later',
+  'this credential store is busy': 'another sign-in is under way',
+  'too many sign-ins are pending': 'too many sign-ins waiting on this machine',
+  'sign-in is unavailable or not authorized': 'not available from this device',
+});
+
 // signin.start's result: { outcome, flow, reason }. An outcome this client doesn't know reads as
 // refused, with no reason: never as started, which would wait for a code, nor as machine, which
 // would say the provider has no device flow when nothing proved it. Only a refused says why.
@@ -184,7 +195,8 @@ export function readStartResult(raw) {
   // The merged protocol's (#834, #841): any other reads as refused.
   const outcome = ['started', 'busy', 'refused'].includes(r.outcome) ? r.outcome : 'refused';
   const flow = str(r.flow) || null;
-  return { outcome: (outcome === 'started' || outcome === 'busy') && !flow ? 'refused' : outcome, flow, reason: r.outcome === 'refused' ? agentText(r.reason, 200) : null };
+  const reason = r.outcome === 'refused' && typeof r.reason === 'string' && Object.hasOwn(START_REASONS, r.reason) ? START_REASONS[r.reason] : null;
+  return { outcome: (outcome === 'started' || outcome === 'busy') && !flow ? 'refused' : outcome, flow, reason };
 }
 
 // signin.code's data, as it may be shown: { flow, agent, code, uri, expiresAt }, or { flow,

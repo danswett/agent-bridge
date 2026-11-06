@@ -447,12 +447,21 @@ async Task<int> ServeAsync(HostHandover handover)
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore);
     launcher.SessionStarted += restore.Launched;
     launcher.SeenReadyLate += restore.SeenReadyLate;
-    restore.Restore(launcher);
-    restore.Start();
+    // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
+    // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
+    // agent; the resumes stay held until the look with the pipe open, below, has passed too.
+    var startGate = new HostStartGate(handover, identity.Folder);
+    if (!startGate.StartRestore(restore, launcher))
+    {
+        Log($"stopped from the {Product.App} while starting; not serving");
+        return 0;
+    }
     transfers.Launcher = launcher;
     // No reply into a session whose launch here has not seen its window ready (a restore at folder
     // trust above all): Enter would answer the question (#780).
     if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; }
+    // Nor /exit, whose Enter would answer it the same way: such a session is terminated untyped (#855).
+    if (stops is StopService stopper) { stopper.LaunchHeld = launcher.HeldForReply; }
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
     // Approve on an approval with escaped characters, confirmed from a person's device approved here
@@ -651,6 +660,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // Only now: a host stopped while starting, whose pipe the app could not reach, must start no
     // usage probe it would cut short on its way out, past the app's probe hold (#238 review).
     usageMonitor?.Start();
+    startGate.Serving();
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = new ReconnectBackoff();
@@ -784,7 +794,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
     IAgentHaBridgeProbe probe = new ReadOnlyGate(g5, ReadOnlyReason());
-    IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : new NoScreens();
+    IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens();
     var launcher = new LaunchService(deliveryGate, source, probe, injector, starter, agentLocator, new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
     {
         CopilotHome = options.CopilotHome,
@@ -908,7 +918,7 @@ static string OsName() =>
         return (new UnsupportedPlatformAnswerer(), new UnsupportedPlatformReplier(), null, new UnsupportedPlatformStopper());
     }
     var probe = new ReadOnlyGate(g5, ReadOnlyReason());
-    var injector = new WorkerInjector();
+    var injector = new WorkerInjector(log: Log);
     var guard = new TargetGuard();
     if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers and replies will be refused"); }
     Log(probe.Active() is { } active ? $"answering, replying and ending sessions are off for now: {active}" : "answering, replying and ending sessions are on");

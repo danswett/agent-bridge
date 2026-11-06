@@ -258,25 +258,18 @@
                                                     UseSystemFocusVisuals="True"
                                                     HorizontalContentAlignment="Stretch"
                                                     Visibility="{x:Bind local:Ui.Show(HasLine), Mode=OneWay}">
-                                                    <TextBlock
-                                                        AutomationProperties.AutomationId="SignInLine"
-                                                        TextWrapping="Wrap"
-                                                        Text="{x:Bind Line, Mode=OneWay}" />
+                                                    <Grid>
+                                                        <TextBlock
+                                                            AutomationProperties.AutomationId="SignInLine"
+                                                            TextWrapping="Wrap"
+                                                            Text="{x:Bind Line, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(PlainLine), Mode=OneWay}" />
+                                                        <!-- "2 sessions affected: A, B", each title a link to its session (ui.md §6.13). -->
+                                                        <local:SignInSessionLinks
+                                                            Banner="{x:Bind}"
+                                                            Visibility="{x:Bind local:Ui.Show(ListsSessions), Mode=OneWay}" />
+                                                    </Grid>
                                                 </ContentControl>
-                                                <ItemsControl ItemsSource="{x:Bind Sessions}" IsTabStop="False" Visibility="{x:Bind local:Ui.Show(HasSessions), Mode=OneWay}">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate x:DataType="core:SignInSession">
-                                                            <HyperlinkButton
-                                                                Padding="0"
-                                                                MinHeight="32"
-                                                                AutomationProperties.AutomationId="SignInSession"
-                                                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                                                                Click="{x:Bind Press}">
-                                                                <TextBlock TextWrapping="Wrap" Text="{x:Bind Title}" />
-                                                            </HyperlinkButton>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
                                                 <TextBlock
                                                     AutomationProperties.AutomationId="SignInProblem"
                                                     Foreground="{ThemeResource AbNeedsText}"

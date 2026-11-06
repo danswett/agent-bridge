@@ -1147,6 +1147,17 @@ jobs:
           name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
           path: pwa/test-results
           retention-days: 7
+      # The sign-in captures test/sign-in.spec.mjs takes in Chromium (#800, #963), for Creative to
+      # look at on every run, not only a failed one.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() && matrix.project == 'chromium' }}
+        with:
+          name: pwa-captures
+          path: |
+            pwa/test-results/**/signin-*.png
+            !pwa/test-results/**/attachments/**
+          if-no-files-found: warn
+          retention-days: 7
 
   pwa-e2e:
     # The PWA end to end through the spike dev stack's relay, in Chromium and WebKit

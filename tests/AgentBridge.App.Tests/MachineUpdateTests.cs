@@ -96,6 +96,32 @@ public sealed class MachineUpdateTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_machine_whose_update_needs_you_says_so_in_any_phase()
+    {
+        var row = await ListedAsync();
+        const string needsYou = "Needs you: the update to 0.5.0 has waited since 11/2/2026 9:00 AM because it is downloaded and waits for Restart to update on this machine";
+
+        await remoteHost.SendAsync(UpdateProtocol.Event, Found with { Waiting = needsYou });
+        await Wait.UntilAsync(() => row.StatusText == needsYou + ".", "Needs you while idle");
+        Assert.True(TestUi.Read(() => row.CanInstall));
+
+        await remoteHost.SendAsync(UpdateProtocol.Event, Found with { Phase = UpdatePhase.Checking, Waiting = needsYou });
+        await Wait.UntilAsync(() => row.StatusText == needsYou + ".", "Needs you while it checks");
+    }
+
+    // Creative on #719 (6674096426): an update the backstop holds back for a question waiting reads
+    // exactly as the host words it.
+    [Fact]
+    public async Task A_machine_whose_update_waits_for_a_question_to_be_answered_says_so_in_the_hosts_words()
+    {
+        var row = await ListedAsync();
+
+        await remoteHost.SendAsync(UpdateProtocol.Event, Found with { Phase = UpdatePhase.Waiting, Automatic = true, Waiting = AutoUpdater.QuestionLine });
+
+        await Wait.UntilAsync(() => row.StatusText == "Update ready \u00b7 waiting for a question to be answered", "the line as the host words it");
+    }
+
+    [Fact]
     public async Task A_machine_whose_app_has_not_checked_yet_is_not_called_up_to_date()
     {
         var row = await ListedAsync();

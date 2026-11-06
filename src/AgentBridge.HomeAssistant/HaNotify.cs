@@ -251,13 +251,14 @@ public static partial class HaNotify
     public static string AccountDigest(string? account) =>
         Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(account ?? ""))).Substring(0, 8);
 
-    // "<machine> · Copilot needs sign-in" over "2 sessions: <name>, <name>", the host's push's
-    // words. The first three sessions are named; more are counted.
+    // "Copilot on <machine> needs sign-in" over "2 sessions: <name>, <name>": every channel's plain
+    // title (ui.md §6.13, Creative 6675847530), with the sessions named in the message. The first
+    // three sessions are named; more are counted.
     public static (string Title, string Message) SignIn(string machineName, string agentName, IReadOnlyList<string> sessionNames)
     {
         var shown = string.Join(", ", sessionNames.Take(3)) + (sessionNames.Count > 3 ? ", …" : "");
         var count = sessionNames.Count == 1 ? "1 session" : $"{sessionNames.Count} sessions";
-        return (NotificationTitle($"{machineName} · {agentName} needs sign-in"), Cap($"{count}: {shown}"));
+        return (NotificationTitle($"{agentName} on {machineName} needs sign-in"), Cap($"{count}: {shown}"));
     }
 
     // The sign-in notice for the phones answer buttons go to: the same styling as a question's, no

@@ -22,6 +22,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     readonly Fixture f = new();
     readonly Probe probe = new();
     readonly Screen console = new();
+    readonly System.Collections.Concurrent.ConcurrentQueue<string> logged = new();
     // The reply's time: it moves on only while the reply waits between its looks, so its looks and
     // its timeouts do not race the wall clock (#486).
     readonly PollClock clock = new();
@@ -66,7 +67,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         SubmitPatience = submitPatience,
         ImageWait = TimeSpan.FromMilliseconds(500),
         Time = clock,
-    }, attachments: store);
+    }, logged.Enqueue, attachments: store);
 
     ReplyService? replier;
     // Left at the product's 15 s for the tests that press Enter again, which end on what the box
@@ -298,6 +299,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("did not record the reply", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
         Assert.Single(console.Plans);
     }
 
@@ -437,6 +439,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("has not read every file", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
     }
 
     // ---- Codex ----
@@ -561,6 +564,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("did not take an attachment as an image", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
         Assert.Single(console.Plans);
     }
 
@@ -574,6 +578,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("did not attach every image", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
     }
 
     [Fact]
@@ -593,8 +598,9 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         var result = await ReplyAsync(CodexId, "see", Upload(Png(100)), Upload(Png(100)));
 
-        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
-        Assert.Contains("could not read Codex's screen part way", result.Reason);
+        // #995, #802: what went wrong is in the host's log, never in the reason.
+        Assert.Equal(new ReplyResult(AnswerOutcome.Unconfirmed, "the machine couldn't deliver it"), result);
+        Assert.Contains(logged, l => l.Contains("part way through a reply", StringComparison.Ordinal) && l.Contains("the console went away", StringComparison.Ordinal));
         Assert.Equal(2, Directory.GetFiles(Path.Combine(f.Root, "profile", "attachments")).Length);
         Assert.Equal(0, store.Count);
     }
