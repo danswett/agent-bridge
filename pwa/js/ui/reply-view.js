@@ -126,6 +126,7 @@ export class ReplyBox {
     this.#largeMax = largeMax;
     this.#phone = globalThis.matchMedia?.(PHONE) ?? null;
     this.#build();
+    this.#place();
     this.#phone?.addEventListener('change', this.#onPhone);
     // The box's width decides where its words wrap, and it has none until it is drawn.
     if (typeof globalThis.ResizeObserver === 'function') {
@@ -160,7 +161,18 @@ export class ReplyBox {
     for (const f of this.#files) { if (f.url) { URL.revokeObjectURL(f.url); } }
   }
 
-  #onPhone = () => { this.#sync(); };
+  #onPhone = () => { this.#place(); this.#sync(); };
+
+  // A phone draws Attach before the text, so it comes before it in Tab and reading order too
+  // (ui.md §9); from 760 it is with Send again, after the text.
+  #place() {
+    const e = this.els;
+    const phone = !!this.#phone?.matches;
+    if ((e.attach.parentElement === e.box) === phone) { return; }
+    const had = e.attach.ownerDocument?.activeElement === e.attach;
+    if (phone) { e.box.insertBefore(e.attach, e.box.firstElementChild); } else { e.tools.prepend(e.attach); }
+    if (had) { e.attach.focus({ preventScroll: true }); }
+  }
 
   // A phone's box as tall as its words, from one line to six, then it scrolls inside. From 760 the
   // box is as the stylesheet draws it.
@@ -247,10 +259,10 @@ export class ReplyBox {
     e.form = h('form', { class: 'reply', novalidate: true, 'aria-labelledby': `${id}-label` },
       h('label', { for: `${id}-text`, class: 'text-label sr-only', id: `${id}-label` }, 'Reply'),
       e.held,
-      h('div', { class: 'reply-box' },
+      e.box = h('div', { class: 'reply-box' },
         h('div', { class: 'text-wrap' }, e.input, e.bytes),
         e.files,
-        h('div', { class: 'reply-tools' }, e.attach, e.send)),
+        e.tools = h('div', { class: 'reply-tools' }, e.attach, e.send)),
       e.hint, e.error,
       h('div', { class: 'answer-actions' }, e.resend, e.cancel),
       e.picker,

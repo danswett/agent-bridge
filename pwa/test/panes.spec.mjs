@@ -215,7 +215,7 @@ test.describe('on a phone', () => {
   test('a pushed session\'s Back, overflow, tabs and reply buttons are at least 44 px to a finger', async ({ page }) => {
     await openDemo(page);
     const v = await open(page, CLAUDE);
-    const controls = await v.locator('.session-bar .back, .session-bar .more, .view-tab, .reply-tools button').filter({ visible: true }).all();
+    const controls = await v.locator('.session-bar .back, .session-bar .more, .view-tab, .reply-tools button, .reply-box > .attach').filter({ visible: true }).all();
     expect(controls.length).toBeGreaterThanOrEqual(5);
     for (const c of controls) {
       const b = await c.boundingBox();
