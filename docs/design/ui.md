@@ -324,6 +324,7 @@ does.
     and the overline in the band's top 20. Nothing else sits above the band.
   - **Meta lists** (property rows such as Details, Tools rows and delegate events) have a row
     pitch of 24. A wrapped row grows by whole lines; its next row still starts on the pitch.
+    Delegate events on touch are the exception: §6.4 gives their rows 44 and their lines a gap.
   - **Scrolling under a header:** a header that stays put (a pane's header band, the delegate
     strip) shows a hairline at its foot only while content is scrolled beneath it, and none
     at rest.
@@ -933,6 +934,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     "Started 3 delegates: *A*, *B* and 1 more", and "1 more" expands the line to name the rest.
     "*n* more" meets §9.1 A11's size: 44×44 on touch, 32×32 with a pointer. Its text can stay
     small; the hit area makes up the size.
+    On touch every row of every line, on one row or wrapped, is 44 high, so each name and "*n* more"
+    fills its row: a 44 target over no other name. Lines sit 8 apart, so a line's own rows are
+    always closer together than the next line and a wrapped line reads as one. With a pointer,
+    lines keep the meta style's own leading.
     One that reports back in the same gap leaves the shared line for its own merged line, in place.
   - **Runs fold (D3):** more than 3 lines in a row between two messages fold into one, drawn
     "5 delegates · 4 reported back › 1 still working". It shows no working glyph. It expands in

@@ -470,8 +470,6 @@ export class SessionCard {
   // The keys of the delegate event lines drawn, or null before the first: only a line arriving
   // after that fades in.
   #eventKeys = null;
-  // A line's rows are counted again as its width changes (#markWraps).
-  #eventsSized = typeof ResizeObserver === 'function' ? new ResizeObserver(() => this.#markWraps()) : null;
   #promptAt = null;
 
   // hostId: the machine the session is on, which everything the view sends goes to.
@@ -598,7 +596,6 @@ export class SessionCard {
     // fold into one (D3): its button, the chevron ending it, then a link of its own to the
     // earliest delegate still working.
     e.events = h('ol', { class: 'delegate-events', 'aria-label': 'Delegates started and finished', hidden: true });
-    this.#eventsSized?.observe(e.events);
     e.foldText = h('span', { class: 'delegate-fold-label' });
     // The button's name is the whole summary (aria-label); the chevron only shows which way it is.
     e.foldToggle = h('button', { type: 'button', class: 'delegate-fold-toggle', 'aria-expanded': 'false', 'aria-controls': this.ids.events, onclick: () => this.#toggleEventFold() },
@@ -881,7 +878,6 @@ export class SessionCard {
     }
     e.events.hidden = lines.length === 0;
     if (drawn) { items.forEach((li, i) => { if (!drawn.has(lines[i].key) && !drawn.has(was(lines[i]))) { enter(li, 'listItem'); } }); }
-    this.#markWraps();
     // A control no longer drawn has lost focus, whatever activeElement says (WebKit keeps a
     // hidden one there).
     if (!had || (document.activeElement === had && had.isConnected && !had.hidden && had.getClientRects().length)) { return; }
@@ -896,27 +892,6 @@ export class SessionCard {
       : (fold && !st.open) ? e.foldToggle
         : (li && byId(li)) ?? byId(e.events) ?? (li && ((where.more ? li.querySelector('.delegate-more') : null) ?? li.querySelector('.delegate-link')));
     target?.focus({ preventScroll: true });
-  }
-
-  // Marks each line whose words take more than one row (a phone), which app.css gives rows a tap
-  // high, evenly spaced. A row is where the line's first run of words is; a run wholly below it is
-  // another. The words for a screen reader alone are not drawn, so not counted.
-  #markWraps() {
-    const range = document.createRange();
-    for (const li of this.els.events.querySelectorAll('li.delegate-event')) {
-      const walk = document.createTreeWalker(li.querySelector('.delegate-event-text'), NodeFilter.SHOW_TEXT,
-        { acceptNode: (n) => (n.parentElement?.closest('.sr-only') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
-      let first = null;
-      let wraps = false;
-      for (let n = walk.nextNode(); n && !wraps; n = walk.nextNode()) {
-        range.selectNodeContents(n);
-        for (const r of range.getClientRects()) {
-          if (!r.width) { continue; }
-          if (first === null) { first = r.bottom; } else if (r.top >= first - 1) { wraps = true; break; }
-        }
-      }
-      li.toggleAttribute('data-wrapped', wraps);
-    }
   }
 
   // One line: the delegate icon for a start, the outcome's glyph once it reported back; its words
@@ -1296,7 +1271,6 @@ export class SessionCard {
     this.delegates.dispose();
     this.detail.dispose();
     this.#moves?.stop();
-    this.#eventsSized?.disconnect();
     clearTimeout(this.#history.timer);
   }
 

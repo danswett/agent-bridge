@@ -342,10 +342,12 @@ const rows = (li) => li.evaluate((el) => {
   }
   return { tops: tops.sort((a, b) => a - b), height: text.getBoundingClientRect().height };
 });
-// A line on more than one row whose rows are evenly spaced, each a 44 line box: the same pitch
-// from each row to the next, its words' box that many rows high.
-const expectEvenRows = (box) => {
-  expect(box.tops.length).toBeGreaterThan(1);
+// Each name's and "N more"'s boxes in a list, a name over two rows a box on each.
+const targets = (list) => list.evaluate((el) => [...el.querySelectorAll('.delegate-event .delegate-link')]
+  .flatMap((n) => [...n.getClientRects()].map((b) => ({ name: n.textContent, top: b.top, bottom: b.bottom, left: b.left, right: b.right }))));
+// A line whose rows are each a 44 line box: 44 from each row to the next, its words' box that
+// many rows high.
+const expectTapRows = (box) => {
   for (let i = 1; i < box.tops.length; i++) {
     expect(Math.abs(box.tops[i] - box.tops[i - 1] - 44)).toBeLessThanOrEqual(1);
   }
@@ -605,7 +607,7 @@ test.describe('on a phone', () => {
     expect(box.link.left).toBeGreaterThanOrEqual(box.first.left);
   });
 
-  test('on a phone a line that wraps with its "N more" on a later row keeps its glyph by the first row, "N more" a 44 target over no name, and its rows evenly spaced', async ({ page }, testInfo) => {
+  test('on a phone a line that wraps with its "N more" on a later row keeps its glyph by the first row, "N more" a 44 target over no name, and the meta line\'s leading', async ({ page }, testInfo) => {
     await openDemo(page);
     const events = card(page).locator('.agent-block .delegate-events');
     const more = events.locator('.delegate-more');
@@ -615,10 +617,14 @@ test.describe('on a phone', () => {
     // Too long for one row at 390: "1 more" falls on a later one.
     expect(box.more.top).toBeGreaterThanOrEqual(box.first.bottom);
     expectMoreTarget(box);
-    // Its 44 target makes no row of the line taller than the others: each is a 44 line box.
-    const line = events.locator('li.delegate-event:has(.delegate-more)');
-    await expect(line).toHaveAttribute('data-wrapped', '');
-    expectEvenRows(await rows(line));
+    // With a pointer, no tap-high line boxes: each row is the meta line's 18 but the one with
+    // "N more", whose target makes it a tap high; a line on one row is one meta line.
+    const line = await rows(events.locator('li.delegate-event:has(.delegate-more)'));
+    expect(line.tops.length).toBeGreaterThan(1);
+    expect(Math.abs(line.height - (18 * (line.tops.length - 1) + 44))).toBeLessThanOrEqual(1);
+    const one = await rows(events.locator('li.delegate-event', { hasText: 'Draft' }));
+    expect(one.tops).toHaveLength(1);
+    expect(Math.abs(one.height - 18)).toBeLessThanOrEqual(1);
     for (const scheme of ['light', 'dark']) {
       await page.emulateMedia({ colorScheme: scheme });
       await testInfo.attach(`delegate-more-wrapped-phone-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
@@ -645,21 +651,43 @@ test.describe('on a phone', () => {
       }
     });
 
-    test('a line that wraps has its rows evenly spaced, each a 44 line box; a line on one row is as it was', async ({ page }) => {
+    test('every line\'s rows are 44 line boxes, each name and "N more" a 44 target over no other, and the lines further apart than a line\'s rows', async ({ page }, testInfo) => {
       await openDemo(page);
       const events = card(page).locator('.agent-block .delegate-events');
+      const more = events.locator('.delegate-more');
       await listOnly(page, [
-        { id: 'long', kind: 'background', name: 'Read the witness logic end to end, then every test that covers it', status: 'working', startedAt: 5 },
-        { id: 'short', kind: 'background', name: 'Docs', status: 'working', startedAt: 1 },
+        { id: 'early', kind: 'background', name: 'Docs', status: 'ended', outcome: 'done', startedAt: 9, endedAt: 8 },
+        ...THREE(['Read the witness logic end to end', 'Run the full suite on both engines', 'Check the docs']),
       ]);
-      const long = events.locator('li.delegate-event', { hasText: 'witness logic' });
-      const short = events.locator('li.delegate-event', { hasText: 'Docs' });
-      await expect(long).toHaveAttribute('data-wrapped', '');
-      expectEvenRows(await rows(long));
-      await expect(short).not.toHaveAttribute('data-wrapped');
-      const one = await rows(short);
-      expect(one.tops).toHaveLength(1);
-      expect(one.height).toBeLessThan(44);
+      await expect(more).toHaveText('1 more');
+      const lines = events.locator('> li.delegate-event');
+      expect(await lines.count()).toBeGreaterThan(2);
+      const all = [];
+      for (const li of await lines.all()) { all.push(await rows(li)); }
+      // A mix: lines on one row and the one with "1 more" over more than one.
+      expect(all.some((r) => r.tops.length === 1)).toBe(true);
+      expect(all.some((r) => r.tops.length > 1)).toBe(true);
+      all.forEach(expectTapRows);
+      // From one line's last row to the next's first is the 44 rows' pitch and the 8 between
+      // lines: more than any line's own rows are apart.
+      for (let i = 1; i < all.length; i++) {
+        expect(Math.abs(all[i].tops[0] - all[i - 1].tops.at(-1) - 52)).toBeLessThanOrEqual(1);
+      }
+      // Every name and "N more" a whole 44 target, none over another.
+      const t = await targets(events);
+      expect(t.length).toBeGreaterThan(4);
+      for (const b of t) { expect(b.bottom - b.top).toBeGreaterThanOrEqual(44); }
+      for (let i = 0; i < t.length; i++) {
+        for (let j = i + 1; j < t.length; j++) {
+          const [a, b] = [t[i], t[j]];
+          expect(a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5 || a.right <= b.left || b.right <= a.left).toBe(true);
+        }
+      }
+      expectMoreTarget(await moreBox(more));
+      for (const scheme of ['light', 'dark']) {
+        await page.emulateMedia({ colorScheme: scheme });
+        await testInfo.attach(`delegate-more-wrapped-phone-touch-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+      }
     });
   });
 });

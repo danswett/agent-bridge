@@ -887,14 +887,20 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   display: inline-block; min-width: var(--tap); min-height: var(--tap); white-space: nowrap; text-align: center;
   padding: calc((var(--tap) - var(--type-meta-line)) / 2) 0;
 }
-.delegate-event:is(:has(.delegate-more), [data-wrapped]) { align-items: first baseline; }
-.delegate-event:is(:has(.delegate-more), [data-wrapped]) > .delegate-event-mark::before { content: '\200b'; content: '\200b' / ''; }
-/* A line that wraps (a phone) gives every row a tap-high line box, so its rows are evenly spaced:
-   one with "N more" in it, whose target would otherwise make its own row taller than the others,
-   and on touch every line. "N more" then fills its row, unpadded. A line on one row is as it was. */
-.delegate-event[data-wrapped]:has(.delegate-more) > .delegate-event-text { line-height: var(--tap); }
-@media (pointer: coarse) { .delegate-event[data-wrapped] > .delegate-event-text { line-height: var(--tap); } }
-.delegate-event[data-wrapped] .delegate-link.delegate-more { padding-block: 0; }
+.delegate-event:has(.delegate-more) { align-items: first baseline; }
+.delegate-event:has(.delegate-more) > .delegate-event-mark::before { content: '\200b'; content: '\200b' / ''; }
+/* On touch every line's rows are tap-high line boxes, one row or wrapped, and each name and
+   "N more" fills its row (a button, so a box of its own, a line high): a whole 44 target over no
+   other name. The lines sit 8 apart, more than a line's own rows, so a line that wraps still reads
+   as one (§9.1 A11). The glyph keeps to the first row, as above. With a pointer, the meta line's
+   own leading. */
+@media (pointer: coarse) {
+  .delegate-events { gap: var(--ab-space-2); }
+  .delegate-event { align-items: first baseline; }
+  .delegate-event > .delegate-event-mark::before { content: '\200b'; content: '\200b' / ''; }
+  .delegate-event > .delegate-event-text { line-height: var(--tap); }
+  .delegate-event .delegate-link.delegate-more { padding-block: 0; }
+}
 
 /* ---- the conversation (ui.md §6.4) ---- */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
