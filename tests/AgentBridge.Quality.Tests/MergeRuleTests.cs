@@ -28,6 +28,8 @@ public class MergeRuleTests
           exempt_labels: [fixes-main]
         copilot_waiver:
           labels: [copilot-waived]
+          second_review: independent-review-2
+          one_review_paths: [docs/status.md]
         sensitive_paths:
           - .github/**
           - src/AgentBridge.Transport/**
@@ -75,6 +77,13 @@ public class MergeRuleTests
 
     static StatusFact Receipt(string state, string creator = "danswett", int minute = 0) =>
         new("independent-review", state, $"sec-42 {state}", creator, new DateTimeOffset(2026, 11, 3, 12, minute, 0, TimeSpan.Zero));
+
+    // Receipts as Engineering words them, naming the agent and its model.
+    static StatusFact First(string model = "claude-opus-5.5", string state = "success") =>
+        new("independent-review", state, $"CLEAN ENTIRE: security-review, {model} (Engineering)", "danswett", new DateTimeOffset(2026, 11, 3, 12, 0, 0, TimeSpan.Zero));
+
+    static StatusFact Second(string model = "gpt-6.1-sol", string state = "success", string creator = "danswett") =>
+        new("independent-review-2", state, $"sr-42b {(state == "success" ? "CLEAN" : "HIGH")}: security-review, {model}", creator, new DateTimeOffset(2026, 11, 3, 12, 1, 0, TimeSpan.Zero));
 
     [Fact]
     public void A_reviewed_change_with_green_CodeQL_and_nothing_sensitive_passes()
@@ -215,6 +224,158 @@ public class MergeRuleTests
             ["Copilot review waived by the label 'copilot-waived', but the waiver needs an independent review's receipt on abcdef0 in its place",
              "the independent review of abcdef0 failed: sec-42 failure"],
             failed.Reasons);
+    }
+
+    [Fact]
+    public void A_waived_sensitive_change_needs_a_second_receipt_from_another_model_family()
+    {
+        string[] files = [".github/workflows/ci.yml"];
+        ReviewFact[] quota = [Copilot with { Body = QuotaError }];
+
+        var oneFamily = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [First()]))!;
+        var twoFamilies = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [First(), Second()]))!;
+
+        Assert.Equal("failure", oneFamily.State);
+        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but it touches .github/workflows/ci.yml, so the waiver needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], oneFamily.Reasons);
+        Assert.Equal(("success", "Copilot review waived (label); two model families' reviews on file; every check passed"), (twoFamilies.State, twoFamilies.Description));
+    }
+
+    [Fact]
+    public void Two_receipts_from_one_model_family_or_naming_no_model_dont_waive_a_sensitive_change()
+    {
+        string[] files = ["src/AgentBridge.Host/Pairing/Codes.cs"];
+        ReviewFact[] quota = [Copilot with { Body = QuotaError }];
+        const string why = "Copilot review waived by the label 'copilot-waived', but the two receipts on abcdef0 must each name a model, from different families";
+
+        var sameFamily = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [First(), Second("claude-sonnet-5.5")]))!;
+        var unnamed = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [Receipt("success"), Second()]))!;
+
+        Assert.Equal([why], sameFamily.Reasons);
+        Assert.Equal([why], unnamed.Reasons);
+    }
+
+    [Fact]
+    public void A_second_receipt_from_someone_not_a_poster_doesnt_count()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], reviews: [], labels: ["copilot-waived"], statuses: [First(), Second(creator: "github-actions")]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Contains("needs a second review's receipt (independent-review-2)", verdict.Reasons[0]);
+    }
+
+    [Fact]
+    public void A_security_marked_change_needs_the_second_family_even_when_it_touches_nothing_sensitive()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [First()]) with { Title = "Security: bind approvals to what was shown" })!;
+
+        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but it's marked as a security change, so the waiver needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_failed_second_receipt_blocks_even_a_change_that_one_review_would_waive()
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [First(), Second(state: "failure")]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal(["the second review of abcdef0 failed: sr-42b HIGH: security-review, gpt-6.1-sol"], verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_status_md_row_alone_is_waived_on_one_receipt_but_not_beside_another_sensitive_file()
+    {
+        var config = MergeRuleConfig.Parse("""
+            base: main
+            status_poster: github-actions
+            copilot_reviewer: copilot-pull-request-reviewer
+            independent_review:
+              context: independent-review
+              posters: [danswett]
+            codeql:
+              workflow: CodeQL
+              check: CodeQL
+            main_green:
+              workflow: ci.yml
+            copilot_waiver:
+              labels: [copilot-waived]
+              second_review: independent-review-2
+              one_review_paths: [docs/status.md]
+            sensitive_paths:
+              - docs/status.md
+              - .github/**
+            """);
+
+        var rowAlone = MergeRule.Evaluate(config, MainGreen, Pr(["docs/status.md", "docs/design/ui.md"], reviews: [], labels: ["copilot-waived"], statuses: [First()]))!;
+        var withCi = MergeRule.Evaluate(config, MainGreen, Pr(["docs/status.md", ".github/workflows/ci.yml"], reviews: [], labels: ["copilot-waived"], statuses: [First()]))!;
+
+        Assert.Equal(("success", "Copilot review waived (label); independent review on file; every check passed"), (rowAlone.State, rowAlone.Description));
+        Assert.Equal("failure", withCi.State);
+    }
+
+    [Fact]
+    public void A_waiver_label_with_no_second_review_context_refuses_to_load()
+    {
+        var error = Assert.Throws<FormatException>(() => MergeRuleConfig.Parse("""
+            base: main
+            status_poster: github-actions
+            copilot_reviewer: copilot-pull-request-reviewer
+            independent_review:
+              context: independent-review
+              posters: [danswett]
+            codeql:
+              workflow: CodeQL
+              check: CodeQL
+            main_green:
+              workflow: ci.yml
+            copilot_waiver:
+              labels: [copilot-waived]
+            sensitive_paths: [.github/**]
+            """));
+
+        Assert.Contains("copilot_waiver.second_review", error.Message);
+    }
+
+    [Theory]
+    [InlineData("CLEAN: code-review agent, claude-opus-5.5 (Engineering)", "sr-1b CLEAN: security-review, gpt-6.1-sol", true)]
+    [InlineData("CLEAN: claude-opus-5.5", "CLEAN: Gemini-4-argon", true)]
+    [InlineData("CLEAN: claude-opus-5.5", "CLEAN: claude-haiku-5.5", false)]
+    [InlineData("CLEAN: claude-opus-5.5 and gpt-6.1-sol", "CLEAN: gpt-5.6-terra", false)]
+    [InlineData("sec-42 CLEAN", "CLEAN: gpt-6.1-sol", false)]
+    [InlineData("CLEAN: claude-opus-5.5", "CLEAN by Gptbot", false)]
+    [InlineData(null, "CLEAN: gpt-6.1-sol", false)]
+    public void Model_families_are_read_from_the_model_each_receipt_names(string? first, string second, bool different)
+    {
+        Assert.Equal(different, MergeRule.DifferentFamilies(first, second));
+    }
+
+    [Fact]
+    public void Removing_the_waiver_label_doesnt_discard_a_failed_second_review()
+    {
+        // sr-962b: Copilot completed, the first receipt passed, the second family failed; taking the
+        // label off used to read the second receipt as absent and pass.
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], statuses: [First(), Second(state: "failure")]))!;
+
+        Assert.Equal("failure", verdict.State);
+        Assert.Equal(["the second review of abcdef0 failed: sr-42b HIGH: security-review, gpt-6.1-sol"], verdict.Reasons);
+    }
+
+    [Fact]
+    public void A_completed_Copilot_review_is_the_other_family_so_the_label_then_changes_nothing()
+    {
+        var labelled = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], labels: ["copilot-waived"], statuses: [First()]))!;
+        var unlabelled = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], statuses: [First()]))!;
+
+        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file"), (labelled.State, labelled.Description));
+        Assert.Equal((labelled.State, labelled.Description), (unlabelled.State, unlabelled.Description));
+    }
+
+    [Theory]
+    [InlineData("gemini-4-argon", "gpt-6.1-sol", "success")]
+    [InlineData("claude-opus-5.5 and gpt-5.6-terra", "gpt-6.1-sol", "failure")]
+    public void The_waiver_gate_passes_any_two_families_and_refuses_a_shared_one(string firstModel, string secondModel, string state)
+    {
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(["src/AgentBridge.Transport/Relay.cs"], reviews: [], labels: ["copilot-waived"], statuses: [First(firstModel), Second(secondModel)]))!;
+
+        Assert.Equal(state, verdict.State);
     }
 
     [Fact]
@@ -703,6 +864,18 @@ public class MergeRuleTests
         Assert.Equal(
             ["Apple clients pending", "CodeQL success", "Dependencies pending", "HA contract drift failure", "Perf pending", "Relay deploy failure", "Workflow lint failure", "ci/legacy failure", "drift success", "external failure", "native-clients pending", "perf success", "product success", "psrule success", "pwa-ui success", "scan success"],
             facts.Checks.Select(c => $"{c.Name} {c.State}").Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void The_second_review_receipt_is_judged_as_a_receipt_not_counted_as_a_check()
+    {
+        using var doc = JsonDocument.Parse(GraphQLPullRequest(Head,
+            extraStatuses: [new { context = "independent-review-2", state = "FAILURE", description = "spoofed", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "someone" } }]));
+
+        var facts = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), Config);
+
+        Assert.DoesNotContain(facts.Checks, c => c.Name == "independent-review-2");
+        Assert.Contains(facts.Statuses, s => s.Context == "independent-review-2");
     }
 
     // apple.yml (#260) sits outside quality-gate: a red native-clients must hold the merge on its own.

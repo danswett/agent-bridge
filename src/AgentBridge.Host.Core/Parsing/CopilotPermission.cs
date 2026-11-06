@@ -282,7 +282,11 @@ public static partial class CopilotPermission
             foreach (var (name, raw) in named) { Part(name); Part(raw!); }
             identity = b.ToString();
         }
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
-        return Convert.ToHexStringLower(hash.AsSpan(0, 8));
+        return IdentityHash(identity);
     }
+
+    // The digest of an approval's identity, as a question id carries it: the first 8 bytes of its
+    // SHA-256, lowercase hex. A Codex approval's id is bound the same way (CodexApprovalId).
+    internal static string IdentityHash(string identity) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 8));
 }

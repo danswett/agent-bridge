@@ -713,8 +713,15 @@ test('the same question redrawn while its wait runs says so on the new drawing, 
     d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: new Date(Date.now() + 60_000 + message.length).toISOString(), question });
   }, message);
   const marked = () => v.locator('.question-slot .question').evaluate((q) => q.hasAttribute('data-arriving'));
+  // The fake clock drives timers and animation frames, not native ResizeObserver delivery.
+  // Let watchMoves read each drawing before running the clock beyond its arrival wait.
+  const laidOut = () => v.locator('.question-slot .question').evaluate((q) => new Promise((resolve) => {
+    const observer = new ResizeObserver(() => { observer.disconnect(); resolve(); });
+    observer.observe(q);
+  }));
   await draw('Which?');
   await page.clock.runFor(20);
+  await laidOut();
   expect(await marked()).toBe(true);
   const first = await v.locator('.question-slot .question').elementHandle();
   const top = await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top);
@@ -723,6 +730,7 @@ test('the same question redrawn while its wait runs says so on the new drawing, 
   await page.clock.runFor(280);
   await draw('Which?');
   await page.clock.runFor(20);
+  await laidOut();
   expect(await first.evaluate((q) => q.isConnected)).toBe(false);
   expect(await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top)).toBe(top);
   expect(await marked()).toBe(true);

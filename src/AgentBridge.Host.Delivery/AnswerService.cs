@@ -489,11 +489,17 @@ public sealed class AnswerService : ISessionAnswerer
     }
 
     // A Codex approval, keyed by the generation agent-ha-bridge's hook wrote into its
-    // marker (DecisionId). The marker is the gate, read afresh immediately before typing:
-    // the same generation, readable, and never already attempted by agent-ha-bridge.
+    // marker (DecisionId) and a digest of what the person was shown (CodexApprovalId, #958).
+    // The marker is the gate, read afresh immediately before typing: the same generation,
+    // reading exactly as shown, readable, and never already attempted by agent-ha-bridge.
+    // The generation alone does not bind the command: Codex can list it again with another,
+    // so the question is rebuilt from the fresh marker and its id must still be this one.
+    // The session's listing is no help there: it is refreshed by a watcher or a poll, and can
+    // still show the approval that was answered after the marker has moved on.
     async Task<AnswerResult> CodexAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline)
     {
         if (question.Kind != QuestionKind.Approval) { return Refused("this Codex prompt can only be answered at the machine"); }
+        if (CodexApprovalId.Parse(question.Id) is not { } parsed) { return Refused("this Codex approval can only be answered at the machine"); }
         if (source.Files(session.Id)?.Registration is not { Length: > 0 } registration) { return Refused("the session's approval record is not known; answer at the machine"); }
         if (Target(session, AgentKind.Codex) is { } unfit) { return unfit; }
         var pid = session.ProcessId!.Value;
@@ -504,7 +510,9 @@ public sealed class AnswerService : ISessionAnswerer
         await gate.WaitToTypeAsync();
         timeline.Turn();
         InjectionResult typed;
-        var attempt = AttemptLedger.Key("codex", session.Id, question.Id);
+        // Keyed by the generation, not the whole id: whatever the generation reads as later,
+        // it is typed into once (and ledger entries from before #958 still hold).
+        var attempt = AttemptLedger.Key("codex", session.Id, parsed.DecisionId);
         try
         {
             if (probe.Active() is { } active) { return Refused(active); }
@@ -516,7 +524,8 @@ public sealed class AnswerService : ISessionAnswerer
                 case ApprovalMarkerState.Absent: return Stale("Codex is no longer asking for that approval");
                 case ApprovalMarkerState.Unreadable: return Refused("Codex's approval record could not be read, so nothing is typed; answer at the machine");
             }
-            if (!string.Equals(marker.DecisionId, question.Id, StringComparison.Ordinal)) { return Stale("Codex is asking for a different approval now"); }
+            if (!string.Equals(marker.DecisionId, parsed.DecisionId, StringComparison.Ordinal)) { return Stale("Codex is asking for a different approval now"); }
+            if (!string.Equals(CodexApprovalId.Of(marker), question.Id, StringComparison.Ordinal)) { return Stale("Codex's approval reads differently from what was shown"); }
             if (marker.Attempted) { return Refused("agent-ha-bridge has already typed an answer into this approval, and it is never typed again; check at the machine"); }
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }

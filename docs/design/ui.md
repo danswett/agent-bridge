@@ -2236,6 +2236,16 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   pressed (#256). Needs you · N is a toggle in the tab order after the machine tabs and before
   the list. Space or Enter toggles it, and Enter on a waiting row puts focus on its question's
   heading.
+- **Focus stays on a pressed button (#369).** While its request is on its way, Send, End session
+  and Launch (and Forget, on Machines) are never disabled, which would drop keyboard focus to
+  the top of the page. Each says it can't be pressed (`aria-disabled`), looks it, and does
+  nothing when pressed again, by key, click or the form's submit, so a reply, an end or a
+  launch goes once. Focus stays on it through the outcome, and between End session's two
+  presses; a delivered reply, which empties the box and so turns Send off, gives focus back to
+  the box. Send with nothing to send, or held by a question, is disabled as before. When the
+  session ends, its view and row go, and focus that was in either goes to the row that takes
+  its place, or the row before it if it was last, or else the Sessions heading. On a phone the
+  list comes back with focus on the Sessions heading, as Back gives it when its row has gone.
 - **Collaborators (#519):**
   - A collaborator's row reads "External session, @*login*, *machine*, their name, *title*,
     working, read-only". A person header is a group named "@*login*, external collaborator, 2

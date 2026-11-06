@@ -395,6 +395,39 @@ test.describe('from a keyboard', () => {
     await expect(box(page, IDLE)).toHaveAttribute('data-reply', 'delivered');
     expect((await log(page)).map((r) => r.text)).toEqual(['line one\nline two']);
   });
+
+  test('Send keeps focus while its reply goes, a second press of any kind sends nothing more, and delivered gives focus back to the box', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page, IDLE);
+    const input = reply.getByRole('textbox', { name: 'Reply' });
+    const send = reply.getByRole('button', { name: 'Send' });
+    await input.fill('exactly once');
+    await hold(page);
+    await send.focus();
+    await page.keyboard.press('Enter');
+    await expect(reply).toHaveAttribute('data-reply', 'sending');
+    await expect(send).toBeFocused();
+    await expect(send).toHaveAttribute('aria-disabled', 'true');
+    // Every way of pressing it again while it goes: the keys on Send, a click, a submit, and
+    // the shortcut from the box.
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Space');
+    await send.click({ force: true });
+    await reply.evaluate((form) => form.requestSubmit());
+    await input.focus();
+    await page.keyboard.press('ControlOrMeta+Enter');
+    await send.focus();
+    await expect(send).toBeFocused();
+    await release(page);
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
+    // The box is empty, so Send is off; focus goes back to the box rather than the page.
+    await expect(send).toBeDisabled();
+    await expect(input).toBeFocused();
+    const sent = await log(page);
+    expect(new Set(sent.map((r) => r.request)).size).toBe(1);
+    expect(sent.map((r) => r.text)).toEqual(sent.map(() => 'exactly once'));
+    expect(await typed(page)).toHaveLength(1);
+  });
 });
 
 test('a machine that does not take replies shows no reply box', async ({ page }) => {
