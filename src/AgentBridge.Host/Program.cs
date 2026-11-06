@@ -459,7 +459,7 @@ async Task<int> ServeAsync(HostHandover handover)
     transfers.Launcher = launcher;
     // No reply into a session whose launch here has not seen its window ready (a restore at folder
     // trust above all): Enter would answer the question (#780).
-    if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; }
+    if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; typist.Stopping = stop.Token; }
     // Nor /exit, whose Enter would answer it the same way: such a session is terminated untyped (#855).
     if (stops is StopService stopper) { stopper.LaunchHeld = launcher.HeldForReply; }
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
@@ -946,7 +946,7 @@ static string OsName() =>
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log, blobs: blobs);
     return (
         new AnswerService(gate, source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled, Writes = writes }, Log),
-        new ReplyService(gate, source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome, Writes = writes }, Log, attachments),
+        new ReplyService(gate, source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome, Writes = writes, LateWatch = TimeSpan.FromMinutes(5) }, Log, attachments),
         attachments,
         new StopService(gate, source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log));
 }
