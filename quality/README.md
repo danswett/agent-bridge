@@ -424,8 +424,13 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    than any published, and never from a commit that doesn't hold the latest release's commit
    (a run number says nothing of commit order; behind it publishes nothing, and diverged or
    unreadable stops publishing). So a run publishes even after `main` has moved on (an app
-   change followed by a docs-only commit is released by the first's run), and one reaching
-   `publish` after a newer release publishes nothing. `publish-prerelease` keeps every waiting
+   change followed by a docs-only commit is released by the first's run), unless main's head,
+   read under the lock, has since changed the app by main's own ring-1 selector: then main's
+   later run publishes both, since publishing the older first could leave the newer's lower run
+   number refused (an unreadable or off-main head stops publishing). One reaching
+   `publish` after a newer release publishes nothing. `publish` runs exactly when
+   `publish-gate` succeeded (`!cancelled()`, pinned by the catalog check), since the implicit
+   `success()` would carry a skipped check's skip down to it. `publish-prerelease` keeps every waiting
    publish (`queue: max`: up to 100, and one arriving to a full queue is cancelled, never one
    already waiting), since by default the next to arrive replaces the one waiting and a re-run
    of an old run could leave a newer run's app unpublished; GitHub doesn't promise the order
@@ -477,7 +482,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      finished run before it, red or green; any other cancelled run (the newest included), or one
      whose jobs or compare can't be read, still counts as not green: re-run it. A run that passed
      doesn't vouch for a later commit (by main's compare from it) whose run, older by id since
-     runs aren't promised to be created in push order, hasn't passed. While it
+     runs aren't promised to be created in push order, hasn't passed, nor for one whose run isn't
+     found: a later commit with no run on the first page of 20 is looked for on up to four more,
+     and one still not found (further back, or never run, as a commit inside a push of several)
+     holds main not green until a run on main's head passes. While it
      isn't green, every pull request fails, its description starting `Main is red (CI <sha>)`;
      main unread, or with no finished run, fails closed. The fix itself gets the `fixes-main`
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage

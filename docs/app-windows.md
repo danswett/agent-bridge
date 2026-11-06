@@ -478,7 +478,9 @@ connector's Install button on a machine the dashboard drives.
   out and never from a commit that doesn't hold the latest release's commit, so release order
   doesn't rest on the order main's CI runs go in (first attempts share
   concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
-  its own): a run publishes even after `main` has moved on, and
+  its own): a run publishes even after `main` has moved on, unless main's head has since
+  changed the app (main's own selector, under the lock, says so; main's later run publishes
+  both, where publishing this first could leave that one's lower version refused), and
   one that reaches `publish` after a newer release publishes nothing. Its group keeps every
   waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
   one already waiting), where by default the next to arrive would replace the one waiting, so a

@@ -1112,6 +1112,45 @@ public class MergeRuleTests
         }
     }
 
+    // A passed run's later commits each need their run found: one past the first page (runs aren't
+    // promised to be created in push order) is read from the next few, and blocks unless it
+    // passed; one not found within them, or never run, or a page that can't be read, fails closed.
+    [Theory]
+    [InlineData("cancelled", "failure", "Main's CI hasn't passed on c500000, a commit after CI c400000: waiting for main to be green")]
+    [InlineData("passed", "success", "Copilot reviewed abcdef0; every check passed; independent review on file")]
+    [InlineData("beyond", "failure", "Main's CI on c500000, a commit after CI c400000, can't be found: waiting for main's CI")]
+    [InlineData("never", "failure", "Main's CI on c500000, a commit after CI c400000, can't be found: waiting for main's CI")]
+    [InlineData("unreadable", "error", "Couldn't read main's CI: gh: HTTP 502")]
+    public void A_passed_main_run_does_not_vouch_for_a_later_commit_whose_run_is_past_the_first_page(string where, string state, string description)
+    {
+        // Twenty finished runs, ids down from the given one; run 5 is the later commit's.
+        static string Page(int from, int cancelled = 0) =>
+            MainRuns([.. Enumerable.Range(from - 19, 20).Reverse().Select(id => ((long)id, "completed", (string?)(id == cancelled ? "cancelled" : "success"), 1))]);
+        string?[] pages = where switch
+        {
+            "cancelled" => [Page(40), Page(20, cancelled: 5)],
+            "passed" => [Page(40), Page(20)],
+            "beyond" => [Page(40), Page(200), Page(180), Page(160), Page(140), Page(20, cancelled: 5)],
+            "never" => [Page(40), MainRuns((20, "completed", "success", 1))],
+            _ => [Page(40), null],
+        };
+        var after = JsonSerializer.Serialize(new { status = "ahead", total_commits = 1, commits = new[] { new { sha = "c5".PadRight(40, '0') } } });
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainAfter: after, mainPages: pages);
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} {state} merge-rule {description} "], github.Posted);
+            Assert.Contains("repos/danswett/agent-bridge/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20&page=2", github.RestPaths);
+            Assert.DoesNotContain(github.RestPaths, p => p.EndsWith("&page=6", StringComparison.Ordinal) || (where == "never" && p.EndsWith("&page=3", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
     // Only a cancelled run proven never to have started, with a newer run after it, is passed over:
     // one a runner picked up, the newest run, a re-run, or one whose jobs can't be read or are cut
     // short could hide a real failure, so it still blocks, whether the run before it passed or
@@ -1469,7 +1508,7 @@ public class MergeRuleTests
     /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
     /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainCompare = """{"status": "ahead"}""", string? mainAfter = """{"status": "identical", "total_commits": 0, "commits": []}""") : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false, string? mainJobs = null, string? mainCompare = """{"status": "ahead"}""", string? mainAfter = """{"status": "identical", "total_commits": 0, "commits": []}""", string?[]? mainPages = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -1495,6 +1534,13 @@ public class MergeRuleTests
         public JsonDocument Rest(string path)
         {
             RestPaths.Add(path);
+            // Main's runs a page at a time when given pages (null: one that can't be read), past
+            // the last none.
+            if (mainPages is not null && path.Contains("/actions/workflows/", StringComparison.Ordinal))
+            {
+                var page = path.Contains("&page=", StringComparison.Ordinal) ? int.Parse(path[(path.LastIndexOf('=') + 1)..], System.Globalization.CultureInfo.InvariantCulture) : 1;
+                return JsonDocument.Parse(page > mainPages.Length ? """{"workflow_runs": []}""" : mainPages[page - 1] ?? throw new InvalidOperationException("gh: HTTP 502"));
+            }
             if (path.Contains("/actions/workflows/", StringComparison.Ordinal))
                 return failMain ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
             if (path.Contains("/actions/runs/", StringComparison.Ordinal))

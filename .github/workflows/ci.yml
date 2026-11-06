@@ -685,8 +685,11 @@ jobs:
     # that doesn't hold the latest release's commit, since neither a run number nor the order
     # waiting publishes start in says anything of commit order. So a run that publishes after a
     # newer commit's release publishes nothing, and an older commit's run that gets there first
-    # is followed by the newer one. Had it to be main's head instead, an app change followed by a
-    # docs-only commit would never be released.
+    # publishes nothing when main's head has since changed the app (main's selector says so):
+    # main's later run builds the app with both changes and publishes it, whatever the two runs'
+    # numbers, where publishing the older first could leave the newer one refused as an older
+    # version. Had it to be main's head instead, an app change followed by a docs-only commit
+    # would never be released.
     # quality-gate must have passed: every ci.yml check job the plan selected (product, app, the
     # PWA, Home Assistant and spike jobs, light) ran and succeeded, since a release is what
     # installed copies take within the half hour. That's this workflow's jobs only; CodeQL, perf
@@ -707,6 +710,10 @@ jobs:
     # Arm64's in one release, once the product's tests pass on every system. Never a pull request
     # and never a fork, and the only job here that can write to the repository.
     needs: [publish-gate]
+    # publish-gate's result, not the implicit success(): that also needs every job further up to
+    # have succeeded, and a check the plan skipped (PWA, Home Assistant) carries its skip down past
+    # publish-gate's !cancelled(), so a checked app build would never publish (#938's review).
+    if: ${{ !cancelled() && needs.publish-gate.result == 'success' }}
     runs-on: windows-latest
     permissions:
       contents: write
@@ -731,9 +738,21 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      # Main's head now, under the publish lock, with its history: publish-prerelease.ps1 doesn't
+      # publish a commit main has since changed the app past (main's later run publishes that),
+      # read with main's own selector and catalog, as that run plans. A second clone, since the
+      # first one's origin/main is this run's commit.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          fetch-depth: 0
+          path: main-head
+          persist-credentials: false
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
+      - name: Build main's selector
+        run: dotnet build main-head/tools/AgentBridge.Quality -c Release --nologo -v q
       - run: dotnet tool install -g vpk --version 1.2.161
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -748,7 +767,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}"
+        run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -MainHead (git -C main-head rev-parse HEAD) -MainRepo main-head
 
   attest:
     # Build provenance and an SBOM attestation for each package publish uploaded (quality/README.md

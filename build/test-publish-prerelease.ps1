@@ -68,6 +68,9 @@ $global:PpTagSha = @{}
 $global:PpTagType = 'commit'
 $global:PpTagRef = $null
 $global:PpAncestry = $null
+# What main's selector, at main's head, says of the commits after the one publishing: its JSON,
+# or 'fail' for a nonzero exit.
+$global:PpSelect = $null
 # What vpk names a channel's full package (build/app-channels.ps1): x64's `win` without a suffix.
 function global:Get-PpFull([string]$channel, [string]$version) {
     "AgentBridgeApp-$version$(if ($channel -ne 'win') { "-$channel" })-full.nupkg"
@@ -191,6 +194,11 @@ function global:vpk {
 function global:dotnet {
     $a = @($args)
     $global:LASTEXITCODE = 0
+    if ($a[0] -like '*agent-bridge-quality.dll') {
+        $global:PpCalls.Add("selector $($a[1..($a.Count - 1)] -join ' ')")
+        if ($global:PpSelect -eq 'fail') { $global:LASTEXITCODE = 1; return }
+        return $global:PpSelect
+    }
     $out = $a[[array]::IndexOf($a, '-o') + 1]
     $rid = $a[[array]::IndexOf($a, '-r') + 1]
     $global:PpPublishRids.Add($rid)
@@ -220,6 +228,7 @@ function Reset([int]$prereleases = 0) {
     $global:PpPublishedBody = $null
     $global:PpListFailures = 0; $global:PpListings = 0; $global:PpFailListAfter = -1; $global:PpDeleteFailures = 0; $global:PpDeleteGoesThrough = $false; $global:PpSleeps.Clear()
     $global:PpMain = @($ancestor, $commit, $descendant); $global:PpTagSha = @{}; $global:PpTagType = 'commit'; $global:PpTagRef = $null; $global:PpAncestry = $null
+    $global:PpSelect = $null
     for ($i = 1; $i -le $prereleases; $i++) { New-PpRelease "v0.1.$(500 + $i)" }
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 }
@@ -267,11 +276,11 @@ function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @(),
 }
 
 # Both architectures' folders, as the publish job downloads them, unless -Only names one.
-function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string[]]$Only = @('win', 'win-arm64'), [hashtable]$Machine = @{}, [switch]$Plan) {
+function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string[]]$Only = @('win', 'win-arm64'), [hashtable]$Machine = @{}, [switch]$Plan, [string]$Head = $commit) {
     $dirs = @(foreach ($channel in $Only) { New-Folder $version -DeltaFrom $DeltaFrom -Skip $Skip -DevBuild:$DevBuild -Channel $channel -Machine $Machine[$channel] })
-    # -Plan: what it says it does, rather than nothing.
-    if ($Plan) { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -DryRun:$DryRun 6>&1 | Out-String }
-    else { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -DryRun:$DryRun 6>$null }
+    # -Plan: what it says it does, rather than nothing. -Head: main's head as publish reads it.
+    if ($Plan) { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $Head -MainRepo $scratch -DryRun:$DryRun 6>&1 | Out-String }
+    else { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $Head -MainRepo $scratch -DryRun:$DryRun 6>$null }
 }
 
 function Get-Asset([string]$channel = 'win') { @(Get-Content (Join-Path (Get-PpDir $channel) "assets.$channel.json") -Raw | ConvertFrom-Json) }
@@ -464,6 +473,80 @@ Check "A commit off the latest release's line, or a tag or comparison that can't
     }
 }
 
+$appTail = '{"mode":"partial","jobs":{"ci.yml":{"app":["app-windows"],"product":["product"]}}}'
+Check "An ancestor whose run publishes first stands aside when main has changed the app since, and the descendant's lower version publishes both" {
+    # S -> A -> B: B's run was created first (0.1.600), A's after it (0.1.601). Were A out first,
+    # B's lower version would be refused and B's app changes never released (#938's review).
+    Reset 3
+    $global:PpSelect = $appTail
+    $plan = Invoke-Publish '0.1.601' -Head $descendant -Plan
+    Assert ($global:PpCalls -contains "gh api repos/$repo/compare/$commit...$descendant --jq .status") "calls: $($global:PpCalls -join '; ')"
+    Assert ($global:PpCalls -contains "selector select --repo $scratch --ring 1 --base $commit --head $descendant") "calls: $($global:PpCalls -join '; ')"
+    Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) "uploads: $(Uploads); deletes: $(Deletes)"
+    Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "writes: $($global:PpCalls -join '; ')"
+    Assert ($plan -like "*main has moved on to $descendant, which changes the app since $commit*") "plan: $plan"
+    # Then B's run, main's head, publishes its lower version over S's release.
+    Remove-Item (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Recurse -Force
+    $dirs = @(New-Folder '0.1.600'; New-Folder '0.1.600' -Channel 'win-arm64')
+    & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $descendant -MainHead $descendant -MainRepo $scratch 6>$null
+    Assert (@(Uploads).Count -eq 2 -and -not (Uploads | Where-Object { $_ -notlike "*--tag v0.1.600 --targetCommitish $descendant *" })) "uploads: $(Uploads)"
+    Assert (-not ($global:PpReleases | Where-Object tag_name -EQ 'v0.1.601')) 'the ancestor was released'
+}
+
+Check "A commit whose later commits on main leave the app alone, docs only say, still publishes" {
+    foreach ($select in '{"mode":"partial","jobs":{"ci.yml":{"light":["docs"]}}}', '{"mode":"docs-only","jobs":{}}') {
+        Reset 3
+        $global:PpSelect = $select
+        Invoke-Publish '0.1.600' -Head $descendant
+        Assert (@(Uploads).Count -eq 2) "$select; uploads: $(Uploads)"
+        $read = CallIndex 'selector select*'
+        Assert ($read -ge 0 -and $read -lt (CallIndex 'vpk upload github*')) "$select; main's head wasn't read before uploading: $($global:PpCalls -join '; ')"
+    }
+    # And main's head being the commit itself needs no selector.
+    Reset 3
+    $global:PpSelect = $appTail
+    Invoke-Publish '0.1.600'
+    Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
+    Assert (-not ($global:PpCalls | Where-Object { $_ -like 'selector*' -or $_ -like "gh api repos/$repo/compare/$commit...*" })) "calls: $($global:PpCalls -join '; ')"
+}
+
+Check "A main head that isn't after the commit, or a selector answer that can't be read, stops publishing" {
+    # With no release (0), only main's head is compared: the release ancestry check has nothing to read.
+    foreach ($case in @(
+        @{ Name = 'a diverged head'; Head = 'abababababababababababababababababababab'; Releases = 3; Selects = $false; Set = {} },
+        @{ Name = 'a head behind the commit'; Head = $ancestor; Releases = 3; Selects = $false; Set = {} },
+        @{ Name = 'an unknown head comparison'; Head = $descendant; Releases = 0; Selects = $false; Set = { $global:PpAncestry = 'unknown' } },
+        @{ Name = 'an unreadable head comparison'; Head = $descendant; Releases = 0; Selects = $false; Set = { $global:PpAncestry = 'fail' } },
+        @{ Name = 'a failing selector'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = 'fail' } },
+        @{ Name = 'no selector output'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = $null } },
+        @{ Name = 'malformed selector output'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = '{"jobs":' } },
+        @{ Name = 'selector output without jobs'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = '{"mode":"partial"}' } },
+        @{ Name = "selector output whose ci.yml jobs aren't a map"; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = '{"jobs":{"ci.yml":["app"]}}' } }
+    )) {
+        Reset $case.Releases
+        $global:PpSelect = $appTail
+        & $case.Set
+        $threw = $false
+        try { Invoke-Publish '0.1.600' -Head $case.Head } catch { $threw = $_.Exception.Message -like '*not publishing v0.1.600*' }
+        Assert $threw "$($case.Name) was published past"
+        Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) "$($case.Name): uploads: $(Uploads); deletes: $(Deletes)"
+        Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "$($case.Name): writes: $($global:PpCalls -join '; ')"
+        Assert ($case.Selects -eq [bool]($global:PpCalls | Where-Object { $_ -like 'selector*' })) "$($case.Name): calls: $($global:PpCalls -join '; ')"
+    }
+}
+
+Check "Publishing without main's head, or with one that isn't a commit, is refused before anything is read" {
+    foreach ($case in @(@{ Name = 'no head'; Args = @{ MainRepo = $scratch } }, @{ Name = 'a branch name'; Args = @{ MainHead = 'main'; MainRepo = $scratch } }, @{ Name = 'no clone'; Args = @{ MainHead = $descendant } })) {
+        Reset 3
+        $dirs = @(New-Folder '0.1.600'; New-Folder '0.1.600' -Channel 'win-arm64')
+        $named = $case.Args
+        $threw = $false
+        try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit @named 6>$null } catch { $threw = $_.Exception.Message -like '*publishing needs -MainHead*' }
+        Assert $threw "$($case.Name) was not refused"
+        Assert ($global:PpCalls.Count -eq 0) "$($case.Name): calls: $($global:PpCalls -join '; ')"
+    }
+}
+
 Check "Only a run that uploads the release tells CI's attest job so, never a re-run or a dry run" {
     # attest signs the release's assets with this run's SBOMs; after a re-run rebuilt the app,
     # those would not describe what is out.
@@ -515,7 +598,7 @@ Check "A folder of another version's packages is refused" {
     Reset 3
     $threw = $false
     $dir = New-Folder '0.1.599'
-    try { & $publishScript -Version '0.1.600' -ReleasesDir $dir -Repository $repo -Commit $commit 6>$null } catch { $threw = $true }
+    try { & $publishScript -Version '0.1.600' -ReleasesDir $dir -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch 6>$null } catch { $threw = $true }
     Assert $threw 'a 0.1.599 folder was published as 0.1.600'
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
@@ -563,7 +646,7 @@ Check "An Arm64 delta is left out when the latest release has no Arm64 package, 
     New-Folder '0.1.600' -DeltaFrom '0.1.503' | Out-Null
     New-Folder '0.1.600' -Channel 'win-arm64' | Out-Null
     $global:PpDownload = 'fail'
-    & $publishScript -Version '0.1.600' -ReleasesDir (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Repository $repo -Commit $commit 6>$null
+    & $publishScript -Version '0.1.600' -ReleasesDir (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch 6>$null
     Assert ((Get-Delta) -eq 'delta 0.1.503->0.1.600') "x64 delta: $(Get-Delta)"
     Assert ($null -eq (Get-Delta 'win-arm64')) "arm64 delta: $(Get-Delta 'win-arm64')"
     Assert (-not (Get-Asset 'win-arm64' | Where-Object Type -EQ 'Delta')) 'assets.win-arm64.json lists a delta'

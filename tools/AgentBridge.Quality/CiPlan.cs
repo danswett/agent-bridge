@@ -57,6 +57,7 @@ static partial class CiPlan
     // newer run's waiting publish (#938's review). Only publish: elsewhere, ci-main's newest run
     // is meant to replace the one waiting (quality/README.md §4.7).
     const string PublishGroup = "publish-prerelease";
+    const string PublishIf = "!cancelled() && needs.publish-gate.result == 'success'";
     // The only shape a suite-gated step's if: may take: guards that hold in the whole ring too
     // (the runner's OS, not cancelled), then a disjunction of exactly the whole-ring bypass and the
     // suite tests. A substring check passed `... || contains(...)) && contains(...)`, which the
@@ -67,8 +68,6 @@ static partial class CiPlan
     private static partial Regex Guard();
     [GeneratedRegex(@"^\$\{\{ matrix\.([A-Za-z0-9_-]+) \}\}$")]
     private static partial Regex MatrixValue();
-    [GeneratedRegex(@"\b(?:always|cancelled|failure|success)\s*\(", RegexOptions.IgnoreCase)]
-    private static partial Regex StatusFunction();
     [GeneratedRegex(@"^contains\(fromJSON\(env\.SUITES\), '[^']*'\)$")]
     private static partial Regex SuiteTerm();
     [GeneratedRegex(@"\s+")]
@@ -228,11 +227,11 @@ static partial class CiPlan
         }
         if (jobs.TryGetValue("publish", out var publish))
         {
-            // No status function: then the implicit success() holds publish to publish-gate's.
-            var publishCondition = Expression(Scalar(publish, "if") ?? "");
-            if (publishCondition.Contains("||", StringComparison.Ordinal) || IsTemplate(publishCondition)
-                || StatusFunction().IsMatch(publishCondition))
-                Add($"ci.yml publish's if: has a ||, ${{{{ }}}} inside or a status function, so it could run without {PublishGate} succeeding");
+            // Exactly this: the implicit success() also needs every job further up to have succeeded,
+            // and a skip there (a check the plan didn't select) carries down past publish-gate's
+            // !cancelled(), so a checked app build would never publish (#938's review).
+            if (Expression(Scalar(publish, "if") ?? "") != PublishIf)
+                Add($"ci.yml publish's if: isn't exactly {PublishIf}, so it could run without {PublishGate} succeeding or never run after a skipped check");
             // Exactly these three keys: cancel-in-progress false is also the only value queue: max
             // may be combined with.
             if (Child(publish, "concurrency") is not YamlMappingNode publishConcurrency || publishConcurrency.Children.Count != 3
