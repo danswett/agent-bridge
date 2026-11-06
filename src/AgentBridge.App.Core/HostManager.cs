@@ -567,7 +567,7 @@ public sealed class HostManager
     bool LauncherRunning() =>
         tasks.Exists(TaskName) && tasks.IsRunning(TaskName) || launcher is { } pid && processes.IsRunning(pid);
 
-    // For Velopack's update and uninstall hooks, which have about 25 s: a host the app already
+    // For Velopack's update hook, which has 15 s (docs.velopack.io/integrating/hooks): a host the app already
     // stopped (every update the app starts) is left alone, so no stop is begun only to be abandoned.
     // One still running is stopped only once its usage probes are done within probeWait; otherwise
     // it is not asked to stop at all, and the reason is returned: Velopack ends it with the package.

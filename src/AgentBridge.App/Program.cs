@@ -124,9 +124,14 @@ static class Lifecycle
         return true;
     }
 
-    // How long Velopack's hooks wait for a usage probe tied to the host (#238), within the 25 s
-    // they give the whole stop: the rest is the stop itself.
-    static readonly TimeSpan HookProbeWait = TimeSpan.FromSeconds(10);
+    // Velopack gives each update hook 15 s, the old version's (--veloapp-obsolete) and the new
+    // one's (--veloapp-updated) alike, and kills one still running then, going on with the update
+    // whatever it was doing (https://docs.velopack.io/integrating/hooks). The waits here were 25 s,
+    // so a slow stop was killed part-way. Now the hook waits at most HookWait, which leaves the app's
+    // own start-up and exit the rest; within it, a usage probe tied to the host (#238) gets
+    // HookProbeWait, and the stop itself the remainder.
+    static readonly TimeSpan HookWait = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan HookProbeWait = TimeSpan.FromSeconds(6);
 
     // In the old version, before its folder is replaced: the host runs from that folder. Every
     // update the app starts has stopped the host already, waiting for its usage probes however long
@@ -141,7 +146,7 @@ static class Lifecycle
         try
         {
             var stop = Manager().StopWithinAsync(HookProbeWait);
-            if (!stop.Wait(TimeSpan.FromSeconds(25))) { AppLog.Write($"{what}: the host had not stopped after 25 s"); }
+            if (!stop.Wait(HookWait)) { AppLog.Write($"{what}: the host had not stopped after {HookWait.TotalSeconds:0} s, and Velopack ends it"); }
             else if (stop.Result is { } busy) { AppLog.Write($"{what}: the host was left running, and Velopack ends it: {busy}"); }
         }
         catch (Exception e) { AppLog.Write($"{what}: the host did not stop: {e.GetBaseException().Message}"); }
@@ -155,7 +160,7 @@ static class Lifecycle
         try
         {
             var manager = Manager();
-            if (manager.StartsAtSignIn) { manager.StartAsync().Wait(TimeSpan.FromSeconds(25)); }
+            if (manager.StartsAtSignIn && !manager.StartAsync().Wait(HookWait)) { AppLog.Write($"update: the host had not started after {HookWait.TotalSeconds:0} s"); }
         }
         catch (Exception e) { AppLog.Write($"update: the host did not start: {e.Message}"); }
     }

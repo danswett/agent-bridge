@@ -298,10 +298,15 @@ into one folder with one version. An app update is a host update, so they never 
   over the pipe and waits for its process to exit, so nothing in `current\` is locked. Every
   update the app starts has stopped the host already, after waiting for its usage probes (below),
   so the hook finds it stopped and begins nothing. One it finds running (an update the app did
-  not start) is stopped only if its usage probes are done within 10 s of the hook's 25 s; if not,
-  it is not asked to stop at all, and Velopack ends it with the package, which can cut a Codex
-  app-server it started mid-refresh (#238). The same holds for uninstall, which then goes on;
-  `OnAfterUpdateFastCallback` (the new version) starts it again through its logon task.
+  not start) is stopped only if its usage probes are done within 6 s. Velopack gives this hook
+  15 s and kills it after that, carrying on with the update
+  ([Velopack: App Hooks](https://docs.velopack.io/integrating/hooks)), so the hook waits at most
+  10 s in all and leaves the rest to the app's own start and exit. If the probes are not done, the
+  host is not asked to stop at all, and Velopack ends it with the package, which can cut a Codex
+  app-server it started mid-refresh (#238; keeping the probe alive across such an update is
+  #974). The same holds for uninstall, whose hook has 30 s, and which then goes on;
+  `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon
+  task, waiting at most 10 s.
   The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
   launch if it is not running.
 * `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the

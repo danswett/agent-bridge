@@ -366,9 +366,10 @@ E4). So the host never kills a probe:
   holds and waits for this host's probes and refuses while another profile's host runs from the
   package, whose probes it cannot hold, asked both before and after the wait. Giving up that wait
   (the host stopping) leaves the probe running. Velopack's own update and uninstall hooks wait
-  only within their 25 s, and leave a busy host to Velopack. So only a host that is killed
+  only a few seconds, within the 15 s Velopack gives the update hook and the 30 s it gives the
+  uninstall hook, and leave a busy host to Velopack. So only a host that is killed
   outright, or a busy one Velopack ends for an update or uninstall the app did not start, can
-  still have a probe cut short.
+  still have a probe cut short (#974).
 
 **Leaving the agents' credentials alone.** A host never reads, refreshes, copies or logs Claude's
 or Codex's credentials: Anthropic retires a refresh token once used and Codex's are single-use too,
