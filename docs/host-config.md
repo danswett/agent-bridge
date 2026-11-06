@@ -108,7 +108,7 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `homeAssistant.machineName` | the computer's | The name the entities are keyed on (`agent_bridge_<slug>`). Only for a rehearsal posing as another machine on a disposable Home Assistant |
 | `homeAssistant.disposable` | `false` | Says `baseUrl` is a disposable Home Assistant. A development build writes to no other |
 | `homeAssistant.agentUserIds` | `[]` | Home Assistant user ids whose presses are an agent's, as agent-ha-bridge's own setting: an answer or reply they send makes the next turn agent-driven (the card's purple edge). A list of strings; `migrate` carries agent-ha-bridge's ([migration.md](migration.md)) |
-| `homeAssistant.agentTokenEnvVar` | none | Carried from agent-ha-bridge by `migrate`: the variable agents read their own Home Assistant token from. Recorded only; nothing reads it yet |
+| `homeAssistant.agentTokenEnvVar` | none | Legacy variable-name metadata carried by `migrate`. The native launcher does not resolve it or inject an HA token; ordinary inherited environment is not managed token propagation. Not the proposed native agent credential (#519); see [ha-connector.md](ha-connector.md#credentials-agent-attribution-and-notifications) |
 | `homeAssistant.notifications.enabled` | `false` | The pushes agent-ha-bridge's hooks sent (a question, a permission prompt, a blocked Claude, a finished turn), sent by the connector (stage 5b) |
 | `homeAssistant.notifications.service` | `notify.notify` | The notify-style service they go to (`notify.mobile_app_<phone>`, `ticker.notify`) |
 | `homeAssistant.notifications.tickerCategory` | `""` | The category a `ticker.*` service is given |

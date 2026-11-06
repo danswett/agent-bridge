@@ -44,11 +44,23 @@ with rollback, and the publication writer (DSWETT-HOME) moves last.
 **Current goal (decided 2026-10-29):** parity with agent-ha-bridge first, then migrate
 real machines. New features wait, except the few marked "beyond parity" in parity.md.
 
-**HA retention (owner, 2026-11-02):** the optional HA dashboard must keep working
-without any legacy daemon. #317 tracks native fenced publication (#318) followed by
-writer migration, rollback and rehearsal (#319). This replaces the planned dashboard
-retirement, not the current G7 migration refusal. Copilot CLI session
-`d5ac689c-a9f6-4618-8e8f-9220793487f4` owns this implementation; coordination is on #170.
+**HA redirect (owner, 2026-11-02; reconciled 2026-11-05):** HA functionality must
+remain without any legacy daemon. #387 redirects delivery to the separate
+[HA integration and companion card](https://github.com/danswett/agent-bridge-home-assistant/issues/1);
+HA owns entities/actions/presentation and Bridge remains generic at protocol/core.
+The current host connector is compatibility, not that target implemented.
+#318's permanent native publisher direction is superseded, not completed.
+#317 remains the parent goal, #319 the verified reversible production cutover,
+and #389 cleanup only after replacement. G7 still refuses writer migration.
+[Disposition and dependencies](ha-connector.md#retaining-ha-without-a-legacy-daemon-317)
+retain #322 and existing owners. #331/#337 closed unmerged on 2026-11-05 at
+12:45 PT, with branches and heads kept. #345 closed
+unmerged on 2026-11-05 at 00:59:49 PT, with sources retained. #394's original
+architecture/enrollment proposal at `d9382fd31dc9fad9d34919317bf7a3265de43c18`
+is preserved historical, unadopted evidence, withdrawn from its corrected
+documentation-only scope. #522 is merged design and #534 a draft read profile
+with reference fixtures, not proof of installable HA delivery.
+Copilot CLI session `d5ac689c-a9f6-4618-8e8f-9220793487f4` retains coordination.
 
 ## 2. Where things are (2026-11-02)
 
@@ -237,13 +249,16 @@ legacy daemon or HA changes. Scope is coordinated on #170.
 - **Next on track A:** S2 (#174), using the sub-agent transcripts the soak recorded (in `~/repos/wt/agent-bridge-soak-transcripts`, not committed). #175 still needs its live check.
 - **Queued backend:** #231 (agents installed later), #257 (provider-neutral account ID), #239, #206, #207, #241.
 
-In flight on #317 (publication owner above):
-- #318: first slice is the native protocol-1 policy/fence contract, verified against
-  legacy-function recordings (`PublicationTests`). It does not enable publication.
-  Next: protected receipts and actual HA resource/dashboard observation, renderer and
-  versioned card publication, then integration into the connector.
-- #319: writer cutover remains blocked until #318 and the disposable-HA handover/
-  rollback rehearsal pass. No live HA or legacy-install changes during development.
+Historical native publication work under #317, superseded by #387's redirect:
+- #322's merged protocol-1 policy/fence contract and recordings are retained
+  compatibility evidence, not publication enablement. #331/#337 closed unmerged on
+  2026-11-05 at 12:45 PT, with branches and heads kept; #345 closed unmerged on
+  2026-11-05 at 00:59:49 PT, with sources retained. The
+  [retain/extract/supersede boundaries](ha-connector.md#publisher-work-disposition-387)
+  replace the former instruction to continue that stack.
+- #319 still gates writer cutover on the replacement integration/card and
+  disposable-HA handover/rollback verification. No live HA or legacy-install
+  changes during development; no cleanup under #389 before that gate.
 
 ## 3. Shadow gate (#40)
 
@@ -287,9 +302,10 @@ closed. The steps below are the machine and migration steps within it.
 2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
 3. **Migrate machines while the soak runs** (owner, 2026-11-01): ~~ARM8~~ done. ~~DEV-VM1~~ done 11-02 14:16 PT. Its keep-awake has landed (#224), and the commands are with the owner. Then DASDESK when it's online, and the Mac after P5. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
 4. **The VM soak's gate** (§3): report it when it passes, then run `-Finish` to deallocate.
-5. **Writer migration** (P7, #317): native shared publication first (#318), then a
-   reversible, verified handover (#319). Keep the HA dashboard working without a
-   legacy daemon; do not bypass G7 or retire the dashboard as a migration prerequisite.
+5. **Writer migration** (P7, #317): verify the separate HA integration/card
+   replacement (#387), then reversible handover/rollback (#319). Do not resume
+   superseded #318 publication work, bypass G7, or retire HA functionality as a
+   migration prerequisite. Cleanup remains gated under #389.
 6. **UI design track** (§5).
 7. **Later:** code signing, macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
 
@@ -541,6 +557,7 @@ agent-ha-bridge releases from this work:
 | 11-04 | **No-RDP tenet** (above): #696 rule 5, the `needs-rdp` label, and #801–#805 filed |
 | 11-04 | Times: the product UI shows the viewer's local time, adding the zone where another machine's time could be misread; "Pacific" applies to repository text (AGENTS.md) |
 | 11-04 | The P0 feature freeze ends at 23:08 PT: #212, #209, #662 and #220 are closed, and Migration starts ([#696](https://github.com/danswett/agent-bridge/issues/696#issuecomment-6651880884)) |
+| 11-04 | Phone session header (#620), signed off with every recommended option, then revised by the owner on 11-05:<br>• At rest (11-05): the title at most two lines, one meta line, and the tabs on their own row, 152 pt on a 390 × 844 phone. There is no delegate strip on a phone: the Delegates tab carries the running count and the `needs` glyph, and questions stay in the conversation.<br>• Scrolling down slides it up under a 48 pt bar (Back, the glyph, the title on one line, More), following the finger near the top.<br>• Mid-conversation, 64 pt up brings it back and 32 pt down sends it away.<br>• The bar keeps the `needs` glyph while a session waits on you.<br>• The reply area (11-05, #935): on a phone the box starts at one line and grows to six; while a question waits, a one-line notice links to it; while reading, it compacts to a 48 pt bar on the header's 32/64 counts, the end shows it in full, and it never expands over the focused control.<br>• From 760 and in the Windows app, nothing changes.<br>Spec in ui.md §6.2 and the `collapse` motion (#629); built by #631; reasoning in docs/design/proposals/620-compact-header.md |
 | 11-05 | Remote Other on Copilot forms matches the terminal (#876). #510 may ship a time-limited interim without Other on Copilot lists, with the reason shown, until #908 lands. Schema-less and legacy-choice questions: the card says why now, remote support follows (#887) |
 | 11-05 | Lab recordings (#736) sign in with dedicated lab-only accounts per agent, kept in the lab's Key Vault and provisioned by the owner |
 | 11-05 | Agent messaging (#912): a standing coordination grant (an owner-approved daily group whose members message each other unattended) replaces hourly G windows for coordinators, subject to a security review; delegate isolation (Q47) accepted for now, revisited after three `delegate-tools` cases; 17 other gating recommendations accepted |

@@ -26,10 +26,51 @@ Settings' **Agents on this machine** section uses the host's shared readiness re
 (`#384` foundation, partial `#231`), with executable/version detection, hook ownership/intake
 evidence and separately labelled current-run hook activity. **Check agents again** requests
 a fresh host scan. CLI sign-in, trust and new-session activation stay explicitly unverified;
-this is not yet the first-run installer. **Set up / Repair** and **Remove connection** ask
-for explicit confirmation and use the host's owned hook backend. Setup results and failures
-stay visible, successful changes refresh readiness evidence, and restart remains a separate
-person's action. No CLI sign-in, hook trust or workspace approval is implied.
+this is not yet the first-run installer. Each row offers one verb for its hooks' state (#678),
+from the host's `hookSetup` (`notSetUp`, `incomplete`, `completed`, `unknown`; App.Core reads it
+through one adapter, `HookSetups`, which reads a missing field as `unknown`): **Set up** while
+they aren't set up (`notSetUp`, or this profile's intake off), **Repair** only for `incomplete`, a
+setup that failed after the host saved its record, across fresh checks, and none when nothing
+needs doing: set up (`completed`) but not yet tested by a new session, which the host can't do
+yet, says "Not tested yet" (#705), never "Ready". Removing Copilot CLI's connection can leave its
+owned record when other entries share the file, which the host reads as a setup that didn't
+finish; that row keeps its removal and offers **Set up** through a fresh check. Agency runs on
+Copilot CLI's hooks (the host sets them up as Copilot's), so what a setup or removal on either row
+left counts for both rows; the row that ran it keeps its words.
+
+A row the app can't act on has its own words and no verb, in the neutral secondary text with no
+status colour, never Ready, Not set up or Needs repair, and nothing on it is a button that can't
+work (Creative's rulings on #784 and #705):
+- hooks the host holds back (`blocked`: a read-only host, or another profile's) say
+  "Read-only · *why*" ("an older bridge runs this machine", "another bridge profile owns its
+  hooks", or "set in this host's settings"), and Install CLI is hidden on them;
+- hooks the host reports `failed` with `hookSetup: unknown`, which its setup refuses, say "Hook
+  ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or
+  "Hook intake couldn't be checked · *why*" for this profile's intake record;
+- `unknown` beside any other hooks comes only from a host older than the field, and says
+  "Can't check · this machine's host is older". Its rows offer no Set up, Repair or Remove: the
+  detail's words they once fell back on offered actions the host might refuse.
+
+No row shows an exception's, a command's or an installer's own text, which named paths: each
+says why from a known set (`AgentWords`), and the app's log keeps the host's words. That
+includes a setup's outcome: "Set up · restart the host, then start a new session to check it",
+"Repaired · …", "Removed · sessions already running keep their hooks until they end", or
+"Setup failed · *why*" ("Repair failed", "Removal failed"), and the CLI's line: "Not installed"
+with **Install CLI** where the host installs it, else "Not installed · install it on this
+machine" with no verb; "Installing…" while it runs, **Install CLI** showing its ring (a plain button,
+never a toggle, with its item status "Installing…", still focusable and its presses ignored, ui.md
+§9.1 A4) and **Cancel** beside it ("Cancel CLI installation"); then the
+state the check finds, or "Install failed · *why*" (for example "Windows Package Manager couldn't
+install it") with **Install CLI** offered again. **Remove connection** comes after the verb, in
+Danger text, never an accent button, and is shown only when the host says this profile has a
+setup to remove (`completed` or `incomplete`; the host refuses a removal without one). Both ask for
+confirmation naming the agent (Cancel is the default) and use the host's owned hook backend. The
+buttons are named for the product they act on ("Set up Copilot CLI", "Remove Copilot CLI's connection"; sessions, pushes and banners name the agent instead), with
+AutomationIds of their own (`SetUpAgent_<id>`, `RemoveAgent_<id>`). A setup's progress ("Setting
+up…", "Repairing…", "Removing…") and result stay on its own row (`AgentStatus_<id>`), a polite
+live region named for its agent ("Copilot CLI: Setting up…") and raised again as each is drawn,
+once per status: a raise for a status the row has moved on from is skipped. A failure is in Danger. Successful changes refresh
+readiness evidence, and restart remains a separate person's action. No CLI sign-in, hook trust or workspace approval is implied.
 Older hosts explain that an update
 and restart are needed, and disconnected hosts show no stale agent rows. See
 [agent readiness evidence](protocol/local-pipe.md#agent-readiness-evidence) for the contract.
@@ -259,6 +300,35 @@ into one folder with one version. An app update is a host update, so they never 
   off; every merge to main publishes one, below), or a folder or URL holding
   `releases.<channel>.json` (`releases.win.json` for x64, `releases.win-arm64.json` for Arm64) in
   `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM).
+* **Release discovery** (#530, `ReleaseDiscovery` in `AgentBridge.Host.Core/Updates`). The only
+  request that counts against GitHub's API limit is the release list
+  (`api.github.com/repos/danswett/agent-bridge/releases`), and it is made unauthenticated: 60 an
+  hour for the whole IP address, shared with everything else behind it. The app's GitHub
+  sign-in is the relay's and is never sent to the API, and the updater borrows no other
+  credential. Each release's `releases.<channel>.json` and the packages come from their browser
+  download URLs, which the limit doesn't count. Velopack's `GithubSource` asked for the list at
+  every check, from every profile's app and host and at every press of Check, and so ran the
+  budget out. Now the app and every host on a machine share one answer, in
+  `%LOCALAPPDATA%\AgentBridge\app\release-discovery.json`, with a lock file beside it so they
+  take turns: GitHub is asked at most once every 10 minutes (plus up to 2 minutes of jitter)
+  whoever asks, and checks in between are answered from the file. After that the request
+  carries the ETag (`If-None-Match`), and a 304 is answered from the file; GitHub doesn't count
+  a 304 against the limit only for authenticated requests, so the interval is what bounds an
+  unauthenticated budget. A 403 or 429 is not asked again until `Retry-After`, or
+  `X-RateLimit-Reset` once `X-RateLimit-Remaining` is 0 (at least a minute and at most an hour,
+  plus up to a minute of jitter). Any other failure (no network, a 5xx, an answer that isn't a
+  list of release objects, or one with a field the updater can't read, such as
+  `[{"prerelease":{}}]`) is backed off from a minute, doubling up to an hour, and such an answer
+  is never kept. A backoff in force
+  is said even when a clock put back makes the last list look fresh again. Until then a check fails at once, with
+  no request, saying when it will next try and when the last good check was. Those times are
+  carried as instants (`ReleaseDiscoveryException.RetryAt`, `LastSuccess`) and said in the local
+  time of the process that shows them. Settings shows that
+  as the update status rather than as an error, and a failure is never reported as "up to date".
+  What the account's other devices are told the app last checked (`UpdateState.CheckedAt`) is
+  when GitHub last answered, not when the shared copy was read.
+  No static feed is published (no Pages copy of `releases.<channel>.json`, and every release is a
+  pre-release, so `releases/latest/download` finds nothing), so the API list stays the source.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and
@@ -307,11 +377,14 @@ into one folder with one version. An app update is a host update, so they never 
     (`HostConnection.Reconnect`, which never runs two attempts at once). The updater never starts
     a host: whether one runs is the person's, and the app's own start's.
   * A release check the feed refuses for its rate limit (GitHub's unauthenticated 60 requests an
-    hour per address, which machines behind one address share: a 429, or a 403 whose reason says
-    "rate limit" or when GitHub's free `rate_limit` endpoint shows the limit spent; any other 403
-    is a failure like any other) holds the checks off until GitHub's `Retry-After` or the limit's
-    reset (read from that endpoint, as Velopack's error carries no headers), or otherwise for an
-    hour, then two hours each time, until one succeeds. The next check is made at the hold's end,
+    hour per address, which machines behind one address share) holds the checks off. GitHub's
+    release list comes through the machine's release discovery (#530, above), whose refusal says
+    so (`ReleaseDiscoveryException.Limited`) with when it will ask GitHub again: GitHub's
+    `Retry-After` or the limit's reset, or, when GitHub named no time, its own backoff from a
+    minute doubling to an hour, which the hold ends with so the devices are told one time. A
+    429, or a 403 whose reason says "rate limit", straight from a feed counts too (any other 403
+    is a failure like any other); it holds for an hour, then two hours each time, until one
+    succeeds, as Velopack's error carries no headers. The next check is made at the hold's end,
     however recently a press was answered. A press from a device in the meantime is answered with
     the reason without asking the feed. The reason goes to the devices as the last update's
     outcome (`failed`), once each time, though never over an update made, or a press answered,
@@ -623,7 +696,9 @@ HA ids and names) are not the name and stay (#541).
 protocol's example sessions on a private pipe and answering every op as a cooperative
 host would, and a second pretend host ("Build server") that the app reaches as it would
 another machine through the relay. For trying the app without agents, for screenshots, and for CI. It never
-reaches the real host or its profile.
+reaches the real host or its profile. Its Settings agents move as a real host's readiness does
+after a setup, without writing anything: a setup that completes leaves the agent set up and not
+tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to set up again.
 
 ## Deferred, explicitly
 
@@ -672,7 +747,7 @@ reaches the real host or its profile.
   page at 1300, 1000 and 800 px, the widths come back at 1440, and resetting them gives the defaults (#297), adds three machines with long names and checks every machine is a tab or under More with nothing past the pane's edge at the narrowest list, at 1000 and at 400 px, More's menu names each with its state and says so while open when one goes offline, and one chosen there becomes a selected tab, its name cut short and named in full (#290), launches a session from the Launch page
   and waits for its row, then checks your message in it and in the session with delegates is at the right of the conversation's column, at most 85% of it, and the column and the reply box at the same measure, centred in the pane with its scroll bar at the pane's edge, at 1440, 1200 and 400 px (#255, #294), and still centred while the list's divider is dragged,
   sends a session a scheduled prompt and checks it is a line at the column's start, not your bubble, with a clock and "Scheduled prompt · #4" in agent colour, two lines of it and Show prompt (compact: a chevron pointing right before its words, at the label's size, as wide as they are; a control Tab reaches, named "Scheduled prompt 4, Show prompt" and heard as collapsed), which opens, its chevron turned down, on all of it inside a thin agent rule; then its repeat folded to "same as last time", an agent's prompt with the driven diamond, and your bubble back for your own (#489),
-  checks Codex on the other machine is not launched without a prompt, checks the shell (the 48 px title bar, the
+  checks Codex on the other machine is not launched without a prompt, checks Settings' agent rows (#678: each button named for its agent with an id of its own, one verb per hooks' state and none for an agent set up and not tested yet, and a setup made through its button and confirmation, named for the agent with Cancel the default, raised for Narrator as it starts and ends, named for its agent, a superseded raise skipped, its result on its own row as a polite live region, a failure in Danger, pictured in Light, Dark and high contrast, and a failure already drawn repainted in high contrast's Danger text when it comes on, then the rows the app can't act on, each saying why with no raw text and nothing that can't work, pictured in Light, Dark and high contrast as `settings-agents-cant-act.*.png`: Read-only with Install CLI hidden, a failed installation and an unreadable hook ownership by their reasons, and Can't check), checks the shell (the 48 px title bar, the
   search box finding and opening another machine's session, the rail and its Bridge pill, the layer's radius, an
   accent button in Bridge, the caption buttons in the app's theme, the 360×600 minimum), checks the Machines page's rows (#213), draws every page, the Sessions page in three panes with the inspector, in Light and
   Dark and, on CI, turns Windows' high contrast on to draw every page again and check that every role and surface is a
