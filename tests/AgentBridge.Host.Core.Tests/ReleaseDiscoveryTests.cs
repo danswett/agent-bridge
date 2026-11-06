@@ -1,5 +1,6 @@
 using System.Net;
 using AgentBridge.Host.Core.Updates;
+using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -67,7 +68,7 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.True(limited.Limited);
         Assert.Equal(reset, limited.RetryAt);
-        Assert.Equal("GitHub is limiting how often this network can check for updates. Agent Bridge will check again after 12:20 PT.", limited.Message);
+        Assert.Equal($"GitHub is limiting how often this network can check for updates. {Product.Name} will check again after 12:20 PT.", limited.Message);
 
         // Clicks before the reset are answered at once, with the same words, and ask nothing.
         time.Advance(TimeSpan.FromMinutes(19));

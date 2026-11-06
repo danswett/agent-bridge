@@ -332,11 +332,14 @@ into one folder with one version. An app update is a host update, so they never 
     (`HostConnection.Reconnect`, which never runs two attempts at once). The updater never starts
     a host: whether one runs is the person's, and the app's own start's.
   * A release check the feed refuses for its rate limit (GitHub's unauthenticated 60 requests an
-    hour per address, which machines behind one address share: a 429, or a 403 whose reason says
-    "rate limit" or when GitHub's free `rate_limit` endpoint shows the limit spent; any other 403
-    is a failure like any other) holds the checks off until GitHub's `Retry-After` or the limit's
-    reset (read from that endpoint, as Velopack's error carries no headers), or otherwise for an
-    hour, then two hours each time, until one succeeds. The next check is made at the hold's end,
+    hour per address, which machines behind one address share) holds the checks off. GitHub's
+    release list comes through the machine's release discovery (#530, above), whose refusal says
+    so (`ReleaseDiscoveryException.Limited`) with when it will ask GitHub again: GitHub's
+    `Retry-After` or the limit's reset, or, when GitHub named no time, its own backoff from a
+    minute doubling to an hour, which the hold ends with so the devices are told one time. A
+    429, or a 403 whose reason says "rate limit", straight from a feed counts too (any other 403
+    is a failure like any other); it holds for an hour, then two hours each time, until one
+    succeeds, as Velopack's error carries no headers. The next check is made at the hold's end,
     however recently a press was answered. A press from a device in the meantime is answered with
     the reason without asking the feed. The reason goes to the devices as the last update's
     outcome (`failed`), once each time, though never over an update made, or a press answered,

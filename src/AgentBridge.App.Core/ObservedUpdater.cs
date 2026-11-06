@@ -112,10 +112,3 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
 
 // A download not tried, its release's having failed a moment ago (ObservedUpdater.DownloadAgainAfter).
 public sealed class DownloadHeldException(string message) : InvalidOperationException(message);
-
-// A release check the feed refused for its rate limit (GitHub's 403 "rate limit exceeded", or a
-// 429), with when it said to ask again, when it said: AutoUpdater holds its checks off until then.
-public sealed class UpdateRateLimitedException(string message, DateTimeOffset? retryAt, Exception? inner = null) : IOException(message, inner)
-{
-    public DateTimeOffset? RetryAt { get; } = retryAt;
-}

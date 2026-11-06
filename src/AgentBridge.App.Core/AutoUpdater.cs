@@ -1,3 +1,4 @@
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 
@@ -666,13 +667,18 @@ public sealed class AutoUpdater
     }
 
     // Whether a check failed for the feed's rate limit, and until when it asked to be left alone.
-    // A 403 counts only when it says so: GitHub refuses other things with 403 too.
+    // GitHub's list comes through the machine's ReleaseDiscovery (#530), which says a limit as
+    // Limited with when it will ask again: GitHub's reset when GitHub sent one, else its own
+    // backoff (a minute, doubling to an hour), which every app and host on the machine keeps to, so
+    // the hold here ends with it rather than telling the devices a second, different time. A 403 or
+    // 429 straight from a feed (a release's releases.<channel>.json) counts too, a 403 only when it
+    // says so: GitHub refuses other things with 403 too.
     static bool RateLimited(Exception e, out DateTimeOffset? retryAt)
     {
         retryAt = null;
         for (var x = e; x is not null; x = x.InnerException)
         {
-            if (x is UpdateRateLimitedException limited) { retryAt = limited.RetryAt; return true; }
+            if (x is ReleaseDiscoveryException { Limited: true } limited) { retryAt = limited.RetryAt; return true; }
             if (x is HttpRequestException { StatusCode: System.Net.HttpStatusCode.TooManyRequests }) { return true; }
             if (x is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Forbidden } && x.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)) { return true; }
         }
