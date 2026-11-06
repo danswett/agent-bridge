@@ -417,6 +417,7 @@ public sealed class QuestionView : StackPanel
             if (!string.IsNullOrEmpty(f.Description)) { field.Children.Add(new TextBlock { Text = f.Description, Style = Muted(), TextWrapping = TextWrapping.Wrap }); }
             field.Children.Add(new TextBlock { Text = f.TypeLabel, Style = Muted(), FontSize = 12 });
             field.Children.Add(Control(f));
+            if (f.OtherAtMachineNote is { } note) { field.Children.Add(new TextBlock { Text = note, Style = Muted(), TextWrapping = TextWrapping.Wrap }); }
             var frame = new Border { Child = field, BorderThickness = new Thickness(0, 0, 0, 0), Padding = new Thickness(0, 2, 0, 2) };
             Watch(f, () => FieldInvalid(frame, f));
             FieldInvalid(frame, f);
@@ -445,12 +446,15 @@ public sealed class QuestionView : StackPanel
             case FieldType.Multi:
                 {
                     var panel = new StackPanel { Spacing = 2 };
+                    var note = f.OtherAtMachineNote;
+                    if (note is not null) { Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(panel, note); }
                     var group = $"{vm.Id}:{f.Name}";
                     foreach (var o in f.Options)
                     {
                         var choice = Acting<ToggleButton>(f.Type == FieldType.Choice ? new RadioButton { GroupName = group } : new CheckBox());
                         choice.Content = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
                         AutomationProperties(choice, o.Label, $"Option:{f.Name}:{o.Value}");
+                        if (note is not null) { Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(choice, note); }
                         choice.IsChecked = o.IsSelected;
                         choice.Checked += (_, _) => o.IsSelected = true;
                         choice.Unchecked += (_, _) => o.IsSelected = false;

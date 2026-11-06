@@ -635,7 +635,7 @@ permission prompts goes beyond it, at the user's request:
 
 | Agent | Prompt | `kind` | Answered | `delivered` when |
 |---|---|---|---|---|
-| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
+| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes; free text in place of an option (`allowOther`) only in a question that is one `choice`. In a form of more than one field, or a checkbox list, the CLI's Other is typed at the machine (`otherAtMachine`) | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
 | Copilot CLI | Permission request for a shell command, path access, a file edit or read, a URL, an MCP tool or a custom tool | `approval` | Yes, with `sessions.approve`: approve once or deny, nothing that grants more | Its `permission.completed` for that request records `approved` (approve), or `denied-interactively-by-user` with no message or `cancelled` followed by the session's abort of the turn (deny) |
 | Copilot CLI | Any other permission request (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read, or any on a host with `permissions.remoteApproval` off | `approval` | No: `answerAtMachine` | |
 | Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
@@ -1709,6 +1709,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `type` | `"choice"` \| `"multi"` \| `"boolean"` \| `"text"` \| `"number"` | `choice` takes one of `options`, `multi` any number of them |
 | `options` | Option[]? | For `choice` and `multi` |
 | `allowOther` | bool? | `choice` and `multi` also accept free text |
+| `otherAtMachine` | bool? | The agent offers free text for this `choice` or `multi` too, but only at the machine: no host can type it from another device, so the field has no `allowOther` and an answer with `other` is still refused. A client says so beside the field ("To type your own answer, answer at the machine") and still offers its options. Display only: it never makes anything answerable, and is never sent with `allowOther`. A Copilot `ask_user` form of more than one field, or a checkbox list, sets it on each `choice` and `multi` with options (#146) |
 | `default` | any? | |
 | `required` | bool? | |
 | `constraints` | FieldConstraints? | What the agent's schema allows of the value (#766). Absent when it says nothing a host checks |

@@ -187,6 +187,20 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_choice_whose_Other_is_typed_only_at_the_machine_says_so_and_offers_no_Other()
+    {
+        var q = Question(Make.Form(
+            new Field { Name = "pick", Type = FieldType.Choice, Options = [new Option("a"), new Option("b")], OtherAtMachine = true },
+            new Field { Name = "ok", Type = FieldType.Boolean, OtherAtMachine = true },
+            new Field { Name = "both", Type = FieldType.Multi, Options = [new Option("x")], AllowOther = true, OtherAtMachine = true }));
+
+        Assert.Equal(["To type your own answer, answer at the machine.", null, null], q.Fields.Select(f => f.OtherAtMachineNote));
+        Assert.Equal([false, false, true], q.Fields.Select(f => f.AllowOther));
+        Assert.False(QuestionViewModel.SaysTheSame(Make.Form(new Field { Name = "pick", Type = FieldType.Choice, Options = [new Option("a")] }),
+            Make.Form(new Field { Name = "pick", Type = FieldType.Choice, Options = [new Option("a")], OtherAtMachine = true })));
+    }
+
+    [Fact]
     public void An_approval_offers_approve_once_and_deny_coloured_for_what_they_do()
     {
         var q = Question(Make.Approval(), [.. connection.Capabilities, Capabilities.SessionsApprove]);

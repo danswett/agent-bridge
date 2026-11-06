@@ -467,6 +467,7 @@ export class QuestionPanel {
   #field(field, idBase) {
     const st = this.state[field.name];
     const titleId = `${idBase}-t`;
+    const otherNoteId = field.otherAtMachine && !field.allowOther && (field.type === 'choice' || field.type === 'multi') ? `${idBase}-other-at-machine` : null;
     const parts = [h('legend', { class: 'field-head' }, headParts(field, titleId))];
     if (field.description) { parts.push(h('p', { class: 'field-desc' }, field.description)); }
     const name = `${idBase}-v`;
@@ -515,6 +516,9 @@ export class QuestionPanel {
         list.append(h('label', { class: 'opt other' }, other, h('span', { class: 'label' }, 'Other…')), h('div', { class: 'other-box' }, text, counter));
       }
       parts.push(list);
+      if (otherNoteId) {
+        parts.push(h('p', { id: otherNoteId, class: 'field-desc other-at-machine' }, 'To type your own answer, answer at the machine.'));
+      }
     } else if (field.type === 'boolean') {
       const yes = h('button', { type: 'button', class: 'toggle', 'aria-pressed': st.value === true ? 'true' : 'false', dataset: { value: 'true' } }, 'Yes');
       const no = h('button', { type: 'button', class: 'toggle', 'aria-pressed': st.value === false ? 'true' : 'false', dataset: { value: 'false' } }, 'No');
@@ -538,7 +542,7 @@ export class QuestionPanel {
       if (field.required) { parts[parts.length - 1].querySelector('textarea').setAttribute('aria-required', 'true'); }
     }
     return h('li', { class: `field field-${field.type}`, dataset: { field: field.name, type: field.type } },
-      h('fieldset', { class: 'field-set' }, parts));
+      h('fieldset', { class: 'field-set', 'aria-describedby': otherNoteId }, parts));
   }
 
   #clearError() {

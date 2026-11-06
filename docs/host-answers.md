@@ -11,7 +11,7 @@ how the host does it and what it refuses.
 |---|---|---|
 | Copilot CLI | `ask_user` with no form: free text | Yes: the words, then Enter |
 | Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`type: string` with `enum` or `oneOf`), `boolean`, `multi` (`type: array`, items `anyOf` or `enum`), `text`, `number`, any number of fields | Yes |
-| Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
+| Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape). In a form of more than one field or a checkbox list, no: each option field is marked `otherAtMachine`, and a client says Other is typed at the machine (#146) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
 | Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped (#220); such an approval carries `escaped`, and Approve on it takes the two-step confirmation from a person's device this machine approved, through the relay only, or is held at the machine by `permissions.escapedApproval` (#803, [v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)). Deny goes as for any approval |
