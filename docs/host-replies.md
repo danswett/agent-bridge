@@ -71,8 +71,10 @@ command", or as the footer's "Shell" label or "esc exit shell mode" hint. The re
   An empty box must also show "/ commands" in the footer, which the CLI draws only while
   the box is empty. While a turn runs, the footer's place holds the turn's own row (spinner,
   "esc interrupt" or another Esc hint, "ctrl+q enqueue"; `LMe`'s activity layout) instead,
-  never with "/ commands": that row is taken for the footer when it carries Esc's or the
-  enqueue hint, the box's own rows decide whether it is empty, and its vim and shell labels
+  never with "/ commands". CLI 1.0.106 uses "ctrl+c interrupt" or "ctrl+c stop agents"
+  when the box is empty (captured live and checked against its rendering code); the Esc
+  hints remain supported. That row is taken for the footer when it carries one of those
+  interrupt hints or the enqueue hint, the box's own rows decide whether it is empty, and its vim and shell labels
   are read as in the idle footer, so a reply can still steer a working session. In a
   window under 80 columns (measured by the box's own bottom edge, which spans the frame) the
   turn's row leaves those labels out, and a box holding only spaces in shell mode draws as
@@ -101,7 +103,7 @@ with only those rows held, a real box holding a draft, or a permission dialog, d
 them afterwards passed. The box's rows alone cannot say so: '!' then a space enters
 shell mode with only a space in the box, which draws as an empty box, and Esc into vim's
 normal mode changes only the footer. In a window under 80 columns (the box's bottom edge)
-the footer must also not have become a running turn's row (Esc's hint, the enqueue hint):
+the footer must also not have become a running turn's row (Esc's or Ctrl+C's hint, the enqueue hint):
 there that row leaves out the mode labels, so a turn starting after the read would hide
 them, and it is refused as one running at the read is. Anything else in the footer (its
 spinner, its hints) may change. If a check fails, nothing is typed and the reply is `refused` ("input box
