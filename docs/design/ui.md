@@ -1306,8 +1306,10 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   - "Restored *n* sessions" (`restored`).
   - When `midTurn` is non-zero: "Can continue: *title*, *title*". The titles are those of this
     machine's sessions whose `restored.midTurn` is true, from the client's own session list, so
-    the host sends no extra field. Each title opens its session, where Continue waits. If the
-    list doesn't have them yet, the line reads "*n* were mid-turn and can continue" until it does.
+    the host sends no extra field. Each title opens its session, where Continue waits. A session
+    continued since, here or on another device, drops out, and the line is left out once none
+    remain. If the list doesn't have them yet, the line reads "*n* were mid-turn", with no promise
+    to continue, until it does.
   - "Questions lost: *title*, *title*" (`questionsLost[].title`). The question itself died with
     the session; the notice says so, and nothing reasks it.
   - "Couldn't be restored: *title* (*reason*)", one per entry in `failed`, with the host's
@@ -1408,7 +1410,7 @@ arrives, as a `question`.
 | Row mark | "Restored after a reboot · *time*" / "Restored after the host restarted · *time*" |
 | Notice title | "*machine* restarted after a reboot at *time*" / "*machine*'s host restarted at *time*" |
 | Signed in | "restored when you signed in at *time*" |
-| Restored | "Restored *n* sessions"; "Can continue: *title*, *title*"; "*n* were mid-turn and can continue" |
+| Restored | "Restored *n* sessions"; "Can continue: *title*, *title*"; "*n* were mid-turn" |
 | Offered | "*n* sessions can be restored at the machine" |
 | Lost | "Questions lost: *title*, …" |
 | Failed | "Couldn't be restored: *title* (*reason*)" |
