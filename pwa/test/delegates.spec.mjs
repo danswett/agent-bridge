@@ -1016,6 +1016,50 @@ test.describe('at three panes', () => {
     await expect(fold).toBeFocused();
   });
 
+  // Four reported back, a and b started together, and d still working when `working`: a and b
+  // waking share a line again, so three lines are left and the fold goes from under the keyboard.
+  const WAKING = (working) => [
+    { id: 'wake-a', kind: 'background', name: 'Check the changelog', status: 'ended', outcome: 'done', startedAt: 10, endedAt: 9 },
+    { id: 'wake-b', kind: 'background', name: 'Update screenshots', status: 'ended', outcome: 'done', startedAt: 9.9, endedAt: 8 },
+    { id: 'wake-c', kind: 'background', name: 'Read the issue', status: 'ended', outcome: 'done', startedAt: 7, endedAt: 6 },
+    working ? { id: 'wake-d', kind: 'background', name: 'Try the fix', status: 'working', startedAt: 5 }
+      : { id: 'wake-d', kind: 'background', name: 'Try the fix', status: 'ended', outcome: 'done', startedAt: 5, endedAt: 4 },
+  ];
+  // The demo session's delegates, all of them these, their times in minutes ago.
+  const listOnly = (page, list) => page.evaluate(({ id, now, list }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    const at = (m) => (m === undefined ? undefined : new Date(now - m * 60000).toISOString());
+    d.upsert({ ...s, updatedAt: new Date(now).toISOString(), subagents: list.map((a) => ({ ...a, startedAt: at(a.startedAt), endedAt: at(a.endedAt) })) });
+  }, { id: SESSION, now: Date.now(), list });
+  const wake = (list) => list.map((a) => (a.id === 'wake-a' || a.id === 'wake-b' ? { ...a, status: 'working', outcome: undefined, endedAt: undefined } : a));
+
+  for (const [from, working, to, toName] of [
+    ['button', false, 'the first line\'s first name', 'wake-a'],
+    ['still working link', true, 'the working delegate\'s name', 'wake-d'],
+  ]) {
+    test(`a fold that goes as its run shrinks to three lines gives keyboard focus from its ${from} to ${to}, not the page`, async ({ page }, testInfo) => {
+      await openDemo(page);
+      const c = card(page);
+      const events = c.locator('.agent-block .delegate-events');
+      await listOnly(page, WAKING(working));
+      await expect(events.locator('> li.delegate-fold')).toHaveCount(1);
+      await events.locator(working ? '.delegate-fold-working' : '.delegate-fold-toggle').focus();
+      await listOnly(page, wake(WAKING(working)));
+      await expect(events.locator('> li')).toHaveCount(3);
+      await expect(events.locator('> li.delegate-fold')).toHaveCount(0);
+      const name = events.locator(`li.delegate-event .delegate-link[data-id="${toName}"]`);
+      await expect(name).toBeFocused();
+      for (const scheme of ['light', 'dark']) {
+        await page.emulateMedia({ colorScheme: scheme });
+        await testInfo.attach(`delegate-fold-gone-${working ? 'link' : 'button'}-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+      }
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.keyboard.press('Enter');
+      await expect(pane(page)).toHaveAttribute('data-id', toName);
+    });
+  }
+
 
   test('a delegate named as the main agent, or as an instruction, is shown as a delegate everywhere and never speaks in the reply', async ({ page }) => {
     await openDemo(page);
