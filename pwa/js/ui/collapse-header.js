@@ -129,6 +129,7 @@ export class CollapsingHeader {
   #paused = false;
   #focusInside = false;
   #fading = false;
+  #gone = false; // the view was not drawn (another screen showed) at the last measure
   #app = null; // { wasFull, quiet, limit } while the app is scrolling
   #fullH = 0;
   #barH = BAR;
@@ -203,6 +204,8 @@ export class CollapsingHeader {
       // The header's border box: its own padding growing moves what it covers as much as its content.
       for (const el of [this.#top, this.#bar, this.#view, sc, this.#stream]) { if (el) { this.#observer.observe(el, el === this.#top ? { box: 'border-box' } : undefined); } }
     }
+    // Focus already in the header (a window narrowed to a phone's) holds it, as focus coming in does.
+    this.#focusInside = this.#head.contains(this.#doc.activeElement);
     this.#measure();
   }
 
@@ -218,6 +221,7 @@ export class CollapsingHeader {
     this.#app = null;
     this.#pan = null;
     this.#fading = false;
+    this.#gone = false;
     this.#focusInside = false;
     this.#fold = new Fold();
     this.#shown = {};
@@ -238,21 +242,29 @@ export class CollapsingHeader {
     if (paused === this.#paused) { return; }
     this.#paused = paused;
     if (!this.#on) { return; }
-    if (!paused) {
-      const f = this.#fold;
-      f.sync(this.#scroller.scrollTop, this.#max());
-      f.returned = f.last > 0;
-      f.held = null;
-      f.dir = 0;
-      f.run = 0;
-    }
+    if (!paused) { this.#whole(); }
     this.#render();
+  }
+
+  #whole() {
+    const f = this.#fold;
+    f.sync(this.#scroller.scrollTop, this.#max());
+    f.returned = f.last > 0;
+    f.held = null;
+    f.dir = 0;
+    f.run = 0;
   }
 
   #measure() {
     if (!this.#on) { return; }
     const v = this.#view;
-    if (this.#top.offsetHeight === 0) { return; }
+    if (this.#top.offsetHeight === 0) { this.#gone = true; return; }
+    // The session shown again (a row chosen, or the browser's Back or Forward): the header whole,
+    // as it is back from another tab, and the conversation where it was left.
+    if (this.#gone) {
+      this.#gone = false;
+      if (!this.#paused) { this.#whole(); }
+    }
     // On another tab the conversation is not drawn and its scroller has no height; the header still
     // floats over that tab, whose top padding is --head-h, so the header alone is measured.
     const stageH = this.#scroller.clientHeight;
@@ -370,13 +382,17 @@ export class CollapsingHeader {
     this.#render();
   }
 
+  // Read before the hold, which keeps the header whole: what was hidden, or fading out under reduced
+  // motion, comes back with the collapse motion (its cross-fade under reduced motion), not at once.
   #focusIn() {
+    const before = this.#hidden();
+    const fading = this.#fading;
+    if (fading) { this.#endFade(); }
     this.#focusInside = true;
     if (this.#paused) { return; }
-    const before = this.#hidden();
     this.#fold.returned = this.#fold.last > 0;
     this.#fold.held = null;
-    if (before > 0) { this.#animate(timing('collapse').duration); }
+    if (before > 0 || fading) { this.#animate(timing('collapse').duration); }
     this.#render();
   }
 

@@ -867,8 +867,10 @@ test.describe('a pending approval as delegates come and go above it', () => {
   const THREE = [['d-one', 'Read the logs'], ['d-two', 'Run the suite'], ['d-three', 'Check the docs']];
   const CASES = [
     { title: 'the first delegate starting brings the strip and a "Started" line',
+      phone: 'the first delegate starting brings the Delegates tab count and a "Started" line',
       before: () => [], after: (now) => [running('d-new', 'Write the fix', now)] },
     { title: 'a delegate listed with no start time brings the strip alone', stripOnly: true,
+      phone: 'a delegate listed with no start time changes the Delegates tab count alone',
       before: () => [], after: () => [running('d-new', 'Write the fix', null)] },
     { title: 'three delegates reporting back add three lines',
       before: (now, ago) => THREE.map(([id, name]) => running(id, name, ago)),
@@ -883,7 +885,7 @@ test.describe('a pending approval as delegates come and go above it', () => {
 
   for (const size of [{ name: 'on a phone', width: 390, height: 844 }, { name: 'at three panes', width: 1440, height: 900 }]) {
     for (const k of CASES) {
-      test(`${size.name}, ${k.title}: a tap at Deny's old place sends nothing`, async ({ page }) => {
+      test(`${size.name}, ${(size.width < 760 && k.phone) || k.title}: a tap at Deny's old place sends nothing`, async ({ page }) => {
         await page.setViewportSize({ width: size.width, height: size.height });
         await openDemo(page);
         const c = card(page);

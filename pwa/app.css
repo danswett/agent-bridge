@@ -1364,7 +1364,8 @@ form.reply, form.answer { container: receipt / inline-size; }
     padding-top: calc(var(--head-h, 0px) + var(--ab-space-4));
     scroll-padding-top: calc(var(--covered, 0px) + var(--ab-space-2));
   }
-  .inspector { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); }
+  /* The header is whole over the other tabs, so what focus scrolls to there stays clear of all of it. */
+  .inspector { padding-top: calc(var(--head-h, 0px) + var(--ab-space-4)); scroll-padding-top: calc(var(--head-h, 0px) + var(--ab-space-2)); }
   /* The header scrolls within itself, so the tabs, its last row, keep room below them for a
      focus ring's 5 px (3 px outline and 2 px offset), and the chosen tab's line keeps to the border. */
   .session-top .view-tabs { padding-bottom: var(--ab-space-1); }

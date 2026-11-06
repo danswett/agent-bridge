@@ -575,6 +575,93 @@ test.describe('on a phone, with the person\'s settings', () => {
     await expect.poll(async () => (await read(v)).ty).toBe(0);
   });
 
+  for (const reduced of [false, true]) {
+    test(`focus coming into a folded header brings it back with the collapse motion${reduced ? ', under reduced motion its cross-fade, not the slide' : ''}`, async ({ page }) => {
+      const v = await session(page);
+      if (reduced) { await page.emulateMedia({ reducedMotion: 'reduce' }); }
+      await folded(v, 300);
+      await rested(v);
+      // In the first frame after focus comes in.
+      const back = await v.evaluate((el) => new Promise((resolve) => {
+        const top = el.querySelector('.session-top');
+        el.querySelector('.session-bar .back').focus();
+        requestAnimationFrame(() => {
+          const s = getComputedStyle(top);
+          resolve({
+            animating: el.classList.contains('animating'),
+            slides: /transform|all/.test(s.transitionProperty) && parseFloat(s.transitionDuration) > 0,
+            fades: s.animationName === 'head-cross-fade',
+            time: s.animationName === 'head-cross-fade' ? s.animationDuration : s.transitionDuration,
+          });
+        });
+      }));
+      expect(back).toEqual(reduced
+        ? { animating: true, slides: false, fades: true, time: '0.083s' }
+        : { animating: true, slides: true, fades: false, time: '0.167s' });
+      await expect.poll(async () => (await read(v)).ty).toBe(0);
+    });
+  }
+
+  test('under reduced motion, focus coming into the header as it fades out stops the fade and fades it back in', async ({ page }) => {
+    const v = await session(page);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await folded(v, 300);
+    await rested(v);
+    await scrollTo(v, 230);
+    await rested(v);
+    const at = await v.evaluate((el) => new Promise((resolve) => {
+      const sc = el.querySelector('.stream-scroll');
+      sc.addEventListener('scroll', () => requestAnimationFrame(() => {
+        const fading = el.classList.contains('fading');
+        el.querySelector('.session-bar .back').focus();
+        resolve({ fading, after: { fading: el.classList.contains('fading'), animating: el.classList.contains('animating') } });
+      }), { once: true });
+      sc.scrollTo({ top: 262, behavior: 'instant' });
+    }));
+    expect(at).toEqual({ fading: true, after: { fading: false, animating: true } });
+    await rested(v);
+    expect((await read(v)).ty).toBe(0);
+    await expect(v.locator('.session-top')).toHaveCSS('opacity', '1');
+  });
+
+  test('a session the browser\'s Back and Forward show again has its whole header, where it was left', async ({ page }) => {
+    const v = await session(page);
+    await folded(v, 300);
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await page.goForward();
+    await expect(v).toBeVisible();
+    // Shown again, the view is measured at its next frame.
+    await expect.poll(async () => (await read(v)).ty).toBe(0);
+    await settle(v);
+    const m = await read(v);
+    expect(m.scroll).toBe(300);
+    expect(m.ty).toBe(0);
+    await wholeHeader(v);
+  });
+
+  test('on another tab, what focus scrolls to stays clear of the whole header', async ({ page }) => {
+    const v = await session(page);
+    await v.getByRole('tab', { name: 'Tools' }).click();
+    const inspector = v.locator('.inspector:visible').first();
+    await inspector.evaluate((el) => {
+      const b = document.createElement('button');
+      b.id = 'probe';
+      b.textContent = 'Probe';
+      el.prepend(b);
+      const pad = document.createElement('div');
+      pad.style.height = '2000px';
+      el.append(pad);
+      el.scrollTop = 600;
+    });
+    await v.locator('#probe').focus();
+    const { probe, full } = await v.evaluate((el) => ({
+      probe: el.querySelector('#probe').getBoundingClientRect().top - el.getBoundingClientRect().top,
+      full: el.querySelector('.session-top').offsetHeight,
+    }));
+    expect(probe).toBeGreaterThanOrEqual(full);
+  });
+
   test('a window widened from a phone\'s leaves nothing of the collapse behind', async ({ page }) => {
     const v = await session(page);
     await folded(v);
