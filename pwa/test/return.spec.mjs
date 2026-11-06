@@ -102,6 +102,53 @@ test('the relay link down when the grace ends puts a strip in the title row at i
   expect((await head.boundingBox()).height).toBe(height);
 });
 
+test('a question held for a return is aria-disabled at once, a press says Updating… that stays through 600 ms, and nothing is sent', async ({ page }) => {
+  await openDemo(page);
+  await open(page, ASK, LAPTOP);
+  const v = sv(page, ASK);
+  await comeBack(page);
+  await setOnline(page, false);
+  await page.clock.runFor(10);
+  const choice = v.locator('.question .choice').first();
+  await expect(choice).toHaveAttribute('aria-disabled', 'true');
+  await expect(v.locator('.question .send')).toHaveAttribute('aria-disabled', 'true');
+  expect(await choice.evaluate((b) => b.disabled)).toBe(false);
+  await page.clock.runFor(290);
+  await choice.evaluate((b) => b.click());
+  await expect(v.locator('.answer-updating')).toHaveText('Updating…');
+  await v.locator('.question .send').evaluate((b) => b.click());
+  await page.clock.runFor(400);
+  await expect(v.locator('.question')).toHaveAttribute('data-hold', 'drawn');
+  await expect(v.locator('.answer-updating')).toHaveText('Updating…');
+  await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveCount(0);
+  expect(await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].answerLog.length)).toBe(0);
+});
+
+test('End session held for a return is aria-disabled at once, a press says Updating… and ends nothing', async ({ page }) => {
+  await openDemo(page);
+  await open(page, IDLE, LAPTOP);
+  const v = sv(page, IDLE);
+  await comeBack(page);
+  await setOnline(page, false);
+  await page.clock.runFor(10);
+  const end = v.locator('.end-button');
+  await expect(end).toHaveAttribute('aria-disabled', 'true');
+  await end.evaluate((b) => b.click());
+  await expect(v.locator('.stop-updating')).toHaveText('Updating…');
+  await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveCount(0);
+  expect(await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].stopLog.length)).toBe(0);
+});
+
+test('focus on the sort control when the strip takes the title row goes to the strip, never to the page', async ({ page }) => {
+  await openDemo(page);
+  await page.locator('.sessions-head select').first().focus();
+  await comeBack(page);
+  await page.evaluate(() => { window.agentBridgeDemo.connection.ready = false; window.agentBridgeDemo.page.refresh(); });
+  await page.clock.runFor(3100);
+  await expect(page.locator('#connection-strip')).toBeVisible();
+  await expect(page.locator('#connection-strip')).toBeFocused();
+});
+
 test('an offline machine\'s line takes the place of the reply box\'s actions and focus on one goes to it', async ({ page }) => {
   await openDemo(page);
   await open(page, IDLE, LAPTOP);

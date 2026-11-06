@@ -1403,7 +1403,8 @@ export class SessionCard {
     const held = staleNote(ctx?.stale, this.machineName, 'answered');
     // An approval the host escaped anything in (#803): how Approve is given for it from here.
     const escapedMode = q && answerable ? escapedApprove(q, ctx.capabilities) : null;
-    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, holdKey(held), escapedMode])) { return; }
+    // A quiet hold turning drawn changes the controls only: the panel stays, with what it says.
+    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held?.updating ? 'updating' : holdKey(held), escapedMode])) { this.#panel?.setHeld(held); return; }
     // Drawn by the app, not by the person typing in it: whatever this moves counts.
     this.#moves?.notOwn();
     // A new question while the last one's answer is still on its way: that answer goes on as a receipt.

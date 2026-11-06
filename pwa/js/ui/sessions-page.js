@@ -835,9 +835,14 @@ export class SessionsPage {
     const strip = away && !connection.ready && this.#wasReady && !!hosts.selection;
     const stripEl = this.$('connection-strip');
     if (stripEl.hidden === strip) {
+      const head = stripEl.closest('.sessions-head');
+      const active = head.ownerDocument.activeElement;
+      // The head's controls are hidden under the strip: focus on one goes to the strip, not the page.
+      const moveFocus = strip && !!active && head.contains(active);
       stripEl.hidden = !strip;
       stripEl.textContent = strip ? 'Reconnecting to the relay…' : '';
       stripEl.closest('.sessions-head').dataset.strip = strip ? 'true' : 'false';
+      if (moveFocus) { stripEl.tabIndex = -1; stripEl.focus(); }
     }
     this.#drawCount(hosts.sessions.size);
   }

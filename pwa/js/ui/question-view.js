@@ -272,8 +272,7 @@ export class QuestionPanel {
     e.held.hidden = !text;
     if (hold.offline) { e.held.tabIndex = -1; } else { e.held.removeAttribute('tabindex'); }
     e.actions.hidden = hold.offline;
-    e.updating.hidden = true;
-    e.updating.textContent = '';
+    if (!hold.updating) { e.updating.hidden = true; e.updating.textContent = ''; }
     this.element.dataset.held = text ? 'true' : 'false';
     this.element.dataset.hold = hold.updating ? (hold.drawn ? 'drawn' : 'quiet') : 'none';
     this.#show(this.entry);
