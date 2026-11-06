@@ -35,6 +35,9 @@ public sealed class HostSupervisor
     // forgetting such a stop: a launcher starting is itself a start on purpose.
     public Func<bool> Stopped { get; init; } = () => false;
     public Action ClearStopped { get; init; } = () => { };
+    // Before each start of the host, ahead of the look for a stop: the launcher makes itself
+    // findable by the app (its record, #420).
+    public Action BeforeStart { get; init; } = () => { };
 
     public async Task<int> RunAsync(CancellationToken ct = default)
     {
@@ -42,6 +45,12 @@ public sealed class HostSupervisor
         var crashes = 0;
         while (true)
         {
+            BeforeStart();
+            // A Stop that came once this launcher had cleared the last one, and found it neither by
+            // its pipe nor its record, not yet made: the app writes the marker before it looks for
+            // the launcher, and this looks for the marker only once findable, so either the app
+            // finds this launcher or this sees the stop (#420's review).
+            if (Stopped()) { return Stop(0); }
             var started = Time.GetTimestamp();
             var code = await RunHost(ct);
             // A Stop from the app while the host was ending, crashing or starting, or while this

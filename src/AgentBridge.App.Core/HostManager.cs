@@ -44,12 +44,18 @@ public interface IProcesses
     int Start(string path, IReadOnlyList<string> arguments);
     bool IsRunning(int pid);
     void Kill(int pid);
+    // Takes on a process another run of this app started, if pid is still that process (it
+    // started at startedTicks, UTC): from then on IsRunning and Kill ask that process itself.
+    bool Adopt(int pid, long startedTicks);
 }
 
 public sealed class SystemProcesses : IProcesses
 {
-    // The processes this started, by handle: whether one runs, and ending it, are asked of the
-    // process itself, never of whatever has its pid by then (a launcher long gone, its pid reused).
+    // The processes this started or took on, by handle: whether one runs, and ending it, are asked
+    // of the process itself, never of whatever has its pid by then. Kept after they exit, since
+    // Windows never gives a pid to another process while a handle to the old one is open: a pid
+    // this tracked stays that process's, so a Kill after it exited ends nothing (#420's review).
+    // A launcher or two a run of the app, so nothing to speak of.
     readonly System.Collections.Concurrent.ConcurrentDictionary<int, Process> started = new();
 
     public int Start(string path, IReadOnlyList<string> arguments)
@@ -63,15 +69,31 @@ public sealed class SystemProcesses : IProcesses
 
     public bool IsRunning(int pid)
     {
-        if (started.TryGetValue(pid, out var mine))
-        {
-            if (!mine.HasExited) { return true; }
-            if (started.TryRemove(pid, out _)) { mine.Dispose(); }
-            return false;
-        }
+        if (started.TryGetValue(pid, out var mine)) { return !mine.HasExited; }
         try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
         catch (ArgumentException) { return false; }
         catch (InvalidOperationException) { return false; }
+    }
+
+    public bool Adopt(int pid, long startedTicks)
+    {
+        if (started.TryGetValue(pid, out var mine)) { return !mine.HasExited && mine.StartTime.ToUniversalTime().Ticks == startedTicks; }
+        Process p;
+        try { p = Process.GetProcessById(pid); }
+        catch (ArgumentException) { return false; }
+        try
+        {
+            // The handle first, then the start time through it: the process checked is the one kept.
+            _ = p.SafeHandle;
+            if (!p.HasExited && p.StartTime.ToUniversalTime().Ticks == startedTicks)
+            {
+                started[pid] = p;
+                return true;
+            }
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        p.Dispose();
+        return false;
     }
 
     public void Kill(int pid)
@@ -191,6 +213,9 @@ public sealed class HostManager
     public TimeProvider Time { get; init; } = TimeProvider.System;
     // Whether this app runs elevated; tests pretend.
     public Func<bool> Elevated { get; init; } = PeerPolicy.SelfElevated;
+    // Where the app's log is: what it could not do that no caller is told (the stop marker
+    // written without its lock).
+    public Action<string> Log { get; init; } = _ => { };
 
     public InstallLayout Layout => layout;
     public string TaskName => LogonTaskXml.TaskName(layout.Profile, userSid);
@@ -248,7 +273,50 @@ public sealed class HostManager
     // elevated app never starts it directly: the host would be elevated too, unable to type
     // into ordinary agent windows and refusing the app once it runs unelevated again. The
     // task always runs it unelevated.
+    //
+    // One Start or Stop at a time (lifecycle), and a Stop cancels a Start already under way or
+    // waiting before it writes its marker: the app's launch-time Start runs unawaited, with Stop
+    // still enabled, and Program's callers are separate again. Otherwise a Start waiting on a
+    // launcher the Stop then ended started a fresh one, which cleared the Stop's marker as older
+    // than itself and started the host after Stop had said it was stopped (#478 review). A Start
+    // asked for after a Stop waits for it, then runs: the later one wins either way. Each takes
+    // its place in the queue under the same lock as the Stop's token, and SemaphoreSlim serves
+    // waiters in the order they queued: a Stop that let go of the lock before it queued let a
+    // Start asked for after it go first, report the host started, and then be stopped (#478
+    // review, Copilot 4487576706).
     public async Task StartAsync(CancellationToken ct = default)
+    {
+        CancellationToken stop;
+        CancellationTokenSource both;
+        Task turn;
+        lock (lifecycle)
+        {
+            stop = stopping.Token;
+            both = CancellationTokenSource.CreateLinkedTokenSource(ct, stop);
+            turn = lifecycle.WaitAsync(both.Token);
+        }
+        using var linked = both;
+        try
+        {
+            await turn;
+            try { await StartNowAsync(both.Token); }
+            finally { lifecycle.Release(); }
+        }
+        // Whatever the cancelled wait ended with: a look at the pipe cancelled mid-way can end in
+        // the pipe's own error, not a cancellation.
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException) && stop.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(StoppedWhileStarting);
+        }
+    }
+
+    const string StoppedWhileStarting = "a stop was asked for while the host was starting";
+
+    readonly SemaphoreSlim lifecycle = new(1, 1);
+    // Cancelled by each Stop, and replaced, so Starts under way or waiting give way to it.
+    CancellationTokenSource stopping = new();
+
+    async Task StartNowAsync(CancellationToken ct)
     {
         // Whatever starts it now, a stop asked for earlier is over (#106).
         ClearStopped();
@@ -256,30 +324,122 @@ public sealed class HostManager
         if (!HostInstalled) { throw new InvalidOperationException($"the host is not beside the app ({layout.HostExe})"); }
         if (tasks.Exists(TaskName)) { await RunTaskAsync(ct); return; }
         if (Elevated()) { throw new InvalidOperationException("this app is running as administrator, so it will not start the host; turn on starting the host at sign-in, or open the app normally"); }
-        // A launcher this app started is still there, between crash restarts: the host it brings
-        // up next is waited for, as the task path waits for the task's run, rather than a second
-        // launcher started beside it and the first one's pid lost (#106 review).
-        if (launcher is not { } pid || !processes.IsRunning(pid)) { launcher = processes.Start(layout.LauncherExe, layout.ServeArguments); }
-        await WaitAsync(running: true, StartTimeout, ct);
+        // A launcher this app (or an earlier run of it) started is still there, between crash
+        // restarts: the host it brings up next is waited for, as the task path waits for the task's
+        // run, rather than a second launcher started beside it and the first one's pid lost (#106
+        // review, #420).
+        var adopted = LauncherAlive();
+        if (!adopted) { StartLauncher(); }
+        await WaitForLauncherAsync(started: !adopted, ct);
     }
 
-    // The launcher this app started directly (no logon task), which the task cannot end.
+    // Starts a launcher unless a stop marker is there, the look and the start under the marker's
+    // lock. Start cleared the marker as it began, so one there now is a later Stop's from another
+    // process (Program's, or a second app), which this one cannot cancel. Unlocked, that Stop
+    // could write its marker after the look but before the launcher existed: the launcher then
+    // cleared it as older than itself, the Stop found no launcher recorded yet and said the host
+    // was stopped, and the host started (#478 review). Under the lock that Stop either wrote first,
+    // and nothing starts, or writes once the launcher exists, which keeps it. Held only while the
+    // process is created, and let go as Start returns: the launcher waits for it (2 s) to clear an
+    // earlier marker. Not had within 2 s, nothing starts.
+    void StartLauncher() => UnlessStopped(() => launcher = processes.Start(layout.LauncherExe, layout.ServeArguments));
+
+    // The look for a marker and the start, under the marker's lock, as above.
+    void UnlessStopped(Action start)
+    {
+        using var held = HostLauncherContract.LockStopMarker(layout.ProfileFolder, StopMarkerLockWait);
+        if (held is null)
+        {
+            Log($"the host was not started: its stop marker's lock ({HostLauncherContract.StopMarkerLock}) was held for {StopMarkerLockWait.TotalSeconds:0} s");
+            throw new InvalidOperationException($"the host was not started: {HostLauncherContract.StopMarkerLock} was held by another process for {StopMarkerLockWait.TotalSeconds:0} s; try again");
+        }
+        if (File.Exists(StopMarker)) { throw new OperationCanceledException(StoppedWhileStarting); }
+        start();
+    }
+
+    bool LauncherAlive() => CurrentLauncher() is { } pid && processes.IsRunning(pid);
+
+    // Waits for the host a launcher brings up. One taken on may already have decided to end
+    // without starting another (it saw a Stop, or its host ended on purpose), and polling the pipe
+    // alone then only ran out the timeout: so once no launcher is left before a host answers, one
+    // is started and given the whole timeout of its own, as RunTaskAsync does for the task's run
+    // (#478 review, Copilot 4486726168). One this started that ends is a failed start, not retried.
+    async Task WaitForLauncherAsync(bool started, CancellationToken ct)
+    {
+        var deadline = Time.GetUtcNow() + StartTimeout;
+        while (!await IsRunningAsync(ct))
+        {
+            if (!started && !LauncherAlive())
+            {
+                ct.ThrowIfCancellationRequested();
+                StartLauncher();
+                started = true;
+                deadline = Time.GetUtcNow() + StartTimeout;
+            }
+            else if (Time.GetUtcNow() > deadline) { throw new TimeoutException("the host did not start; see its log"); }
+            await Task.Delay(Poll, ct);
+        }
+    }
+
+    // The launcher this app started directly (no logon task), which the task cannot end, or one
+    // an earlier run of the app started, found by its record.
     int? launcher;
+
+    // That launcher, while it runs; else one found by its record now, as one that had ended may
+    // since have been replaced by another (#420's review).
+    int? CurrentLauncher()
+    {
+        if (launcher is not { } pid || !processes.IsRunning(pid)) { launcher = RecordedLauncher(); }
+        return launcher;
+    }
+
+    // A launcher an earlier run of this app started, by the record it keeps of itself
+    // (HostLauncherContract.LauncherRecord): with no logon task, nothing else knows it (#420).
+    // Read sharing everything, since the launcher holds it open for writing and deletion.
+    int? RecordedLauncher()
+    {
+        string text;
+        try
+        {
+            using var record = new FileStream(Path.Combine(layout.ProfileFolder, HostLauncherContract.LauncherRecord), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(record);
+            text = reader.ReadToEnd();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        return HostLauncherContract.TryParseLauncher(text, out var pid, out var started) && processes.Adopt(pid, started) ? pid : null;
+    }
 
     // The launcher's stop marker (HostLauncherContract.StopMarker): while it is there, a launcher
     // that is between crash restarts, or whose host has just ended, starts no host (#106).
     string StopMarker => Path.Combine(layout.ProfileFolder, HostLauncherContract.StopMarker);
 
+    // Written under the marker's lock (HostLauncherContract.StopMarkerLock), which a launcher
+    // clears an earlier marker under, so its delete never takes this one (#478 review, Copilot
+    // 4470090733). A lock not had within 2 s (a launcher holds it only for a look and a delete)
+    // is written past, and logged: writing it never starts a host, and only a launcher still in
+    // the middle of clearing an earlier marker all that time could then delete it. So the lock is
+    // waited for once more, and a marker gone by then is written again under it.
     void MarkStopped()
     {
         try
         {
             Directory.CreateDirectory(layout.ProfileFolder);
+            using var held = HostLauncherContract.LockStopMarker(layout.ProfileFolder, StopMarkerLockWait);
             File.WriteAllText(StopMarker, "");
+            if (held is not null) { return; }
+            Log($"the host's stop marker was written without its lock ({HostLauncherContract.StopMarkerLock} was held for {StopMarkerLockWait.TotalSeconds:0} s)");
+            using var later = HostLauncherContract.LockStopMarker(layout.ProfileFolder, StopMarkerLockWait);
+            if (later is not null && !File.Exists(StopMarker))
+            {
+                File.WriteAllText(StopMarker, "");
+                Log("the host's stop marker had gone meanwhile, and was written again under its lock");
+            }
         }
         // The launcher is still ended below; the marker only spares it being ended by force.
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
+
+    static readonly TimeSpan StopMarkerLockWait = TimeSpan.FromSeconds(2);
 
     void ClearStopped()
     {
@@ -304,7 +464,11 @@ public sealed class HostManager
         {
             if (!ran && !tasks.IsRunning(TaskName))
             {
-                tasks.Run(TaskName);
+                // As the direct path does (UnlessStopped): a marker there now is another process's
+                // Stop since this Start cleared it, and the task's run is not started past it. The
+                // launcher the run starts comes later, by Task Scheduler, so a Stop just after this
+                // can still be cleared by it as older (#478 review: accepted).
+                UnlessStopped(() => tasks.Run(TaskName));
                 ran = true;
                 deadline = Time.GetUtcNow() + StartTimeout;
             }
@@ -411,6 +575,28 @@ public sealed class HostManager
     // The 2026-10-29 review found an agent could run this through the app's uninstall hook.
     public async Task StopAsync(CancellationToken ct = default)
     {
+        CancellationTokenSource starts;
+        Task turn;
+        lock (lifecycle)
+        {
+            (starts, stopping) = (stopping, new CancellationTokenSource());
+            turn = lifecycle.WaitAsync(ct);
+        }
+        StopQueued?.Invoke();
+        // Outside the lock: cancelling runs a Start's continuations here.
+        starts.Cancel();
+        await turn;
+        try { await StopNowAsync(ct); }
+        finally { lifecycle.Release(); }
+    }
+
+    // For a test alone: a Start asked for just after a Stop has let go of the lock it replaced the
+    // token that cancels Starts under, which is where one queued before the Stop once it queued
+    // only then. Nothing in the app sets it.
+    internal Action? StopQueued { get; set; }
+
+    async Task StopNowAsync(CancellationToken ct)
+    {
         // A stop on purpose: the launcher must not start the host again after it (#106). Before
         // the stop itself, so a host that crashes while stopping is not started again either.
         MarkStopped();
@@ -425,6 +611,40 @@ public sealed class HostManager
             ClearStopped();
             throw;
         }
+        // Failed otherwise (timed out, cancelled) with the host or its launcher still there: not
+        // stopped either, so no marker left to keep the launcher from restarting it after a crash
+        // or a host.restart (#420). A host that refuses this app's connection is there too. Once
+        // both have gone the marker stays: the stop got that far.
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            if (await StillThereAsync()) { ClearStopped(); }
+            throw;
+        }
+    }
+
+    // After a stop that failed: whether the host or its launcher is still there. Each is looked
+    // for on its own, so one that cannot be (Task Scheduler unavailable, say) does not hide the
+    // others; a host whose pipe takes a connection is there, whether or not it answers, and the
+    // look is bounded on its own, so a cancelled stop is reported promptly (#420's review).
+    // Unknown is gone, keeping the marker, which at worst spares a launcher's restart the person
+    // can still make.
+    async Task<bool> StillThereAsync()
+    {
+        if (Looks(() => tasks.Exists(TaskName) && tasks.IsRunning(TaskName)) || Looks(() => CurrentLauncher() is not null)) { return true; }
+        using var bound = new CancellationTokenSource(StopTimeout, Time);
+        try
+        {
+            await using var ch = await connect(bound.Token);
+            return true;
+        }
+        catch (LocalRefusedException) { return true; }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { return false; }
+    }
+
+    static bool Looks(Func<bool> look)
+    {
+        try { return look(); }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { return false; }
     }
 
     // Through the host's pipe, as above.
@@ -458,11 +678,10 @@ public sealed class HostManager
     // restarts (3, 6, 12 s), or with the host it restarted still starting, before its pipe opens.
     // Neither answers on the pipe, so a stop through it alone "succeeded" and the launcher then
     // brought the host back (#106's independent review). With the marker written it stops at its
-    // next look; a host it was still starting is stopped through its pipe once that opens, or, if
-    // this has stopped waiting by then (a launcher from an earlier run of the app, which this cannot
-    // see; one ended below), stops itself, since a host the launcher runs looks for the marker once
-    // its pipe is open (HostHandover.StoppedFromTheApp). One still there after the start timeout is
-    // ended.
+    // next look; a host it was still starting is stopped through its pipe once that opens. One
+    // still there after the start timeout is ended, and the host with it, which is in the
+    // launcher's kill-on-close job (#420). A launcher an earlier run of the app started is found by
+    // its record.
     async Task EndLauncherAsync(CancellationToken ct)
     {
         var deadline = Time.GetUtcNow() + StartTimeout;
@@ -472,6 +691,7 @@ public sealed class HostManager
             {
                 if (tasks.Exists(TaskName)) { tasks.Stop(TaskName); }
                 if (launcher is { } pid) { processes.Kill(pid); }
+                await EndedAsync(ct);
                 break;
             }
             if (await AnswersAsync(ct))
@@ -484,8 +704,27 @@ public sealed class HostManager
         launcher = null;
     }
 
-    bool LauncherRunning() =>
-        tasks.Exists(TaskName) && tasks.IsRunning(TaskName) || launcher is { } pid && processes.IsRunning(pid);
+    // After ending the launcher: waits, up to the stop timeout, for it and the host in its job to
+    // be gone, so a Start or Restart after this never takes the answer of a host on its way out
+    // for one that runs (#420's review).
+    async Task EndedAsync(CancellationToken ct)
+    {
+        var deadline = Time.GetUtcNow() + StopTimeout;
+        while (LauncherRunning() || await AnswersAsync(ct))
+        {
+            if (Time.GetUtcNow() > deadline) { throw new TimeoutException("the host's launcher did not stop"); }
+            await Task.Delay(Poll, ct);
+        }
+    }
+
+    // The logon task's run, and a launcher this app or an earlier run of it started, each looked
+    // for every time: both can be there at once (#420's review), and both are ended at the
+    // deadline.
+    bool LauncherRunning()
+    {
+        var task = tasks.Exists(TaskName) && tasks.IsRunning(TaskName);
+        return CurrentLauncher() is not null || task;
+    }
 
     // Restarting is stopping first, so a refused stop starts nothing either.
     public async Task RestartAsync(CancellationToken ct = default)

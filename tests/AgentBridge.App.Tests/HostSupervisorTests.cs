@@ -16,6 +16,8 @@ public sealed class HostSupervisorTests
     bool stopped;
     Action? duringWait;
     Action? duringRun;
+    // What happens as the launcher makes itself findable, before each start.
+    Action? beforeStart;
 
     // Each run of the host lasts `ran`, then exits with the next code.
     HostSupervisor Supervising(Queue<int> codes, TimeSpan? ran = null, Func<int, TimeSpan>? lasted = null, bool windows = true)
@@ -36,7 +38,22 @@ public sealed class HostSupervisorTests
             Windows = windows,
             Stopped = () => stopped,
             ClearStopped = () => stopped = false,
+            BeforeStart = () => beforeStart?.Invoke(),
         };
+    }
+
+    [Fact]
+    public async Task A_stop_from_the_app_before_the_launcher_could_be_found_starts_no_host()
+    {
+        var codes = new Queue<int>([0]);
+        // The app's Stop lands after the launcher cleared the last one, before its record was held.
+        beforeStart = () => stopped = true;
+
+        var exit = await Supervising(codes).RunAsync();
+
+        Assert.Equal(0, exit);
+        Assert.Single(codes);
+        Assert.Contains($"the host was stopped from the {Product.App}; not starting it again", logged);
     }
 
     [Fact]

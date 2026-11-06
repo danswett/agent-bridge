@@ -19,9 +19,13 @@ public sealed class HostHandoverTests : IDisposable
     }
 
     // A replacement takes the lock or stands back (serve's exit 3). It looks once: by the time it
-    // does, a lock wait of any length has run out under a shutdown that outlasts it.
-    void StartReplacement()
+    // does, a lock wait of any length has run out under a shutdown that outlasts it. And whether
+    // it was told to look for the app's stop itself.
+    readonly List<bool> checkingStop = [];
+
+    void StartReplacement(bool checkStop)
     {
+        checkingStop.Add(checkStop);
         if (HostLock.TryAcquire(profile, TimeSpan.Zero) is { } taken) { serving.Add(taken); }
     }
 
@@ -93,17 +97,25 @@ public sealed class HostHandoverTests : IDisposable
     }
 
     [Fact]
-    public async Task A_host_under_the_launcher_that_the_app_stopped_while_it_was_starting_does_not_serve_but_one_started_by_hand_does()
+    public async Task A_host_its_launcher_cannot_vouch_for_looks_for_the_apps_stop_itself_and_any_other_does_not()
     {
-        bool? beforeStop = null, underLauncher = null, byHand = null;
-        await HostHandover.RunAsync(h => { beforeStop = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: true);
         File.WriteAllText(Path.Combine(profile, AgentBridge.Local.HostLauncherContract.StopMarker), "");
+        bool? unvouched = null, held = null;
 
-        await HostHandover.RunAsync(h => { underLauncher = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: true);
-        await HostHandover.RunAsync(h => { byHand = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement);
+        await HostHandover.RunAsync(h => { unvouched = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: false, checkStop: true);
+        await HostHandover.RunAsync(h => { held = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: true);
 
-        Assert.False(beforeStop);
-        Assert.True(underLauncher);
-        Assert.False(byHand);
+        Assert.True(unvouched);
+        Assert.False(held);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_host_its_launcher_could_not_vouch_for_hands_its_look_for_the_apps_stop_to_its_replacement(bool checkStop)
+    {
+        await HostHandover.RunAsync(h => { h.Request(); return Task.FromResult(0); }, StartReplacement, supervised: false, checkStop: checkStop);
+
+        Assert.Equal([checkStop], checkingStop);
     }
 }
