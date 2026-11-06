@@ -27,6 +27,13 @@ export function sameQuestion(mine, q) {
   return mine.askedAt != null && mine.folder === q.folder && mine.agent === q.agent && mine.askedAt === q.askedAt;
 }
 
+// The first message in the box is still the one a launch sent: a box of only spaces counts as
+// empty both ways, as nothing is sent then.
+export function samePrompt(box, sent) {
+  const text = (s) => (s?.trim() ? s : null);
+  return text(box) === text(sent);
+}
+
 export class LaunchFollow {
   #timer = null;
   // The newest listed question's two minutes were already up when the timer was last set: what

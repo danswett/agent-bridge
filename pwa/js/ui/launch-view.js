@@ -22,7 +22,7 @@
 // choice (../transfer.js); otherwise it says to answer at the machine, and how to allow it.
 import { h } from './dom.js';
 import { ASK, ALLOW_ALL, MAX_PROMPT, TRUST, checkLaunch } from '../launch.js';
-import { LaunchFollow, sameQuestion } from '../launch-follow.js';
+import { LaunchFollow, sameQuestion, samePrompt } from '../launch-follow.js';
 
 export const APPROVE_HINT = 'agent-bridge-host workspace add <folder>';
 const AGENT_DEFAULT = '';
@@ -755,11 +755,9 @@ export class LaunchPanel {
 
   #asked = new Map();
 
-  // A first message sent, unchanged since (a box of only spaces counts as empty, as nothing was
-  // sent then), goes from the box.
+  // A first message sent, unchanged since, goes from the box.
   #clearPrompt(sent) {
-    const now = this.els.prompt.value.trim() ? this.els.prompt.value : null;
-    if (now !== (sent ?? null)) { return; }
+    if (!samePrompt(this.els.prompt.value, sent)) { return; }
     this.els.prompt.value = '';
     this.#drawCount();
   }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LaunchFollow, sameQuestion, BUSY_FOR_MS, BUSY_SLACK_MS, BUSY_AT_LEAST_MS, LATE_FOLLOW_FOR_MS } from '../../js/launch-follow.js';
+import { LaunchFollow, sameQuestion, samePrompt, BUSY_FOR_MS, BUSY_SLACK_MS, BUSY_AT_LEAST_MS, LATE_FOLLOW_FOR_MS } from '../../js/launch-follow.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const T0 = Date.parse('2026-05-01T12:00:00.000Z');
@@ -294,6 +294,15 @@ test('the same question is the same id, or the same folder, agent and time asked
   assert.equal(sameQuestion(question({ askedAt: null }), question({ id: 'q2', askedAt: null })), false);
   assert.equal(sameQuestion(q, null), false);
   assert.equal(sameQuestion(null, q), false);
+});
+
+test('a box of only spaces counts as empty both ways when checking the message sent is unchanged', () => {
+  assert.equal(samePrompt('  ', null), true);
+  assert.equal(samePrompt('', ' \n '), true);
+  assert.equal(samePrompt('Fix it', 'Fix it'), true);
+  assert.equal(samePrompt('Fix it ', 'Fix it'), false);
+  assert.equal(samePrompt('  ', 'Fix it'), false);
+  assert.equal(samePrompt('Fix it', '   '), false);
 });
 
 test('Trust answered here for the launch\'s question hands the launch back, by id or asked again under a new one', () => {
