@@ -197,18 +197,37 @@ public sealed class ReleaseDiscovery : IDisposable
         }
     }
 
-    // A list of releases, each an object: `[null]` would read as no releases, so "up to date", and
-    // `[1]` would fail every check for the interval, so either is an answer that couldn't be read.
+    // A list of releases, each an object whose fields the adapters read (Velopack's GithubRelease)
+    // have their types: `[null]` would read as no releases, so "up to date", and `[1]` or
+    // `[{"prerelease":{}}]` would be kept as a success that then failed every check for the
+    // interval, so each is an answer that couldn't be read. A field left out is the default.
     static bool IsList(string body)
     {
         try
         {
             using var doc = JsonDocument.Parse(body);
             return doc.RootElement.ValueKind == JsonValueKind.Array
-                && doc.RootElement.EnumerateArray().All(r => r.ValueKind == JsonValueKind.Object);
+                && doc.RootElement.EnumerateArray().All(IsRelease);
         }
         catch (JsonException) { return false; }
     }
+
+    static bool IsRelease(JsonElement release) =>
+        release.ValueKind == JsonValueKind.Object
+        && Is(release, "tag_name", JsonValueKind.String) && Is(release, "name", JsonValueKind.String)
+        && Is(release, "prerelease", JsonValueKind.True, JsonValueKind.False)
+        && (!release.TryGetProperty("published_at", out var published) || published.ValueKind == JsonValueKind.Null
+            || published.ValueKind == JsonValueKind.String && published.TryGetDateTimeOffset(out _))
+        && Is(release, "assets", JsonValueKind.Array)
+        && (!release.TryGetProperty("assets", out var assets) || assets.ValueKind == JsonValueKind.Null
+            || assets.EnumerateArray().All(a => a.ValueKind == JsonValueKind.Object
+                && Is(a, "url", JsonValueKind.String) && Is(a, "browser_download_url", JsonValueKind.String)
+                && Is(a, "name", JsonValueKind.String) && Is(a, "content_type", JsonValueKind.String)));
+
+    // Absent, or of one of these kinds; null only where the adapters' type takes it (not a bool).
+    static bool Is(JsonElement o, string name, params JsonValueKind[] kinds) =>
+        !o.TryGetProperty(name, out var v) || kinds.Contains(v.ValueKind)
+        || v.ValueKind == JsonValueKind.Null && !kinds.Contains(JsonValueKind.True);
 
     // How long GitHub asked to be left alone: Retry-After (seconds or a date), else the primary
     // limit's reset once none of it remains.
@@ -243,23 +262,7 @@ public sealed class ReleaseDiscovery : IDisposable
             Problems.Unexpected => "GitHub's answer to the update check could not be read.",
             _ => "GitHub turned the update check away.",
         };
-        var last = state.FetchedAt is { } fetched ? $" The last successful check was at {When(fetched)}." : "";
-        return new ReleaseDiscoveryException($"{what} {Product.Name} will check again after {When(at)}.{last}", at, state.Problem == Problems.Limited);
-    }
-
-    // In this machine's own zone, as the product shows times to the person at it (docs/status.md,
-    // 11-04), with the zone's offset from UTC: the words also reach the account's other devices and
-    // Home Assistant as text (UpdateState's reason), which may be in another zone. The offset, as
-    // .NET has no portable zone abbreviation (Windows names only "Pacific Standard Time").
-    string When(DateTimeOffset at)
-    {
-        var zone = time.LocalTimeZone;
-        var local = TimeZoneInfo.ConvertTime(at, zone);
-        var today = TimeZoneInfo.ConvertTime(time.GetUtcNow(), zone).Date;
-        var offset = local.Offset;
-        var utc = offset == TimeSpan.Zero ? "UTC"
-            : $"UTC{(offset < TimeSpan.Zero ? "-" : "+")}{Math.Abs(offset.Hours)}{(offset.Minutes != 0 ? $":{Math.Abs(offset.Minutes):00}" : "")}";
-        return local.ToString(local.Date == today ? "HH:mm" : "MMM d HH:mm", CultureInfo.InvariantCulture) + " " + utc;
+        return new ReleaseDiscoveryException(what, at, state.Problem == Problems.Limited, state.FetchedAt);
     }
 
     // The processes take turns through a file none of them shares while it holds it. A folder
@@ -279,7 +282,7 @@ public sealed class ReleaseDiscovery : IDisposable
             catch (IOException) when (waited.Elapsed < LockWait) { await Task.Delay(100, cancellationToken); }
             catch (IOException)
             {
-                throw new ReleaseDiscoveryException("Another update check on this machine is taking a long time; try again in a minute.", time.GetUtcNow() + FirstBackoff, false);
+                throw new ReleaseDiscoveryException("Another update check on this machine is taking a long time.", time.GetUtcNow() + FirstBackoff, false);
             }
         }
     }
@@ -351,10 +354,28 @@ public sealed class ReleaseDiscovery : IDisposable
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal sealed partial class ReleaseDiscoveryJson : JsonSerializerContext;
 
-// A check that could not ask GitHub now, and when it next will. Its message is meant to be shown
-// as it is: a status, not an alarm.
-public sealed class ReleaseDiscoveryException(string message, DateTimeOffset retryAt, bool limited) : Exception(message)
+// A check that could not ask GitHub now, and when it next will. It carries its times as instants
+// (RetryAt, LastSuccess), and its message says them in the local time of the process that reads
+// it, where it is shown (Settings' status), as the product shows times (docs/status.md, 11-04):
+// a status, not an alarm.
+public sealed class ReleaseDiscoveryException(string what, DateTimeOffset retryAt, bool limited, DateTimeOffset? lastSuccess = null) : Exception(what)
 {
+    public string What { get; } = what;
     public DateTimeOffset RetryAt { get; } = retryAt;
     public bool Limited { get; } = limited;
+    public DateTimeOffset? LastSuccess { get; } = lastSuccess;
+
+    public override string Message => Describe(TimeZoneInfo.Local, DateTimeOffset.UtcNow, CultureInfo.CurrentCulture);
+
+    public string Describe(TimeZoneInfo zone, DateTimeOffset now, IFormatProvider culture)
+    {
+        var today = TimeZoneInfo.ConvertTime(now, zone).Date;
+        string When(DateTimeOffset at)
+        {
+            var local = TimeZoneInfo.ConvertTime(at, zone);
+            return local.ToString(local.Date == today ? "t" : "g", culture);
+        }
+        var last = LastSuccess is { } fetched ? $" The last successful check was at {When(fetched)}." : "";
+        return $"{What} {Product.Name} will check again after {When(RetryAt)}.{last}";
+    }
 }

@@ -280,9 +280,9 @@ into one folder with one version. An app update is a host update, so they never 
   `[{"prerelease":{}}]`) is backed off from a minute, doubling up to an hour, and such an answer
   is never kept. A backoff in force
   is said even when a clock put back makes the last list look fresh again. Until then a check fails at once, with
-  no request, saying when it will next try and when the last good check was (in the machine's
-  own zone with its UTC offset, such as "01:50 UTC+5:30", since the words also reach other
-  devices and Home Assistant as text). Settings shows that
+  no request, saying when it will next try and when the last good check was. Those times are
+  carried as instants (`ReleaseDiscoveryException.RetryAt`, `LastSuccess`) and said in the local
+  time of the process that shows them. Settings shows that
   as the update status rather than as an error, and a failure is never reported as "up to date".
   What the account's other devices are told the app last checked (`UpdateState.CheckedAt`) is
   when GitHub last answered, not when the shared copy was read.

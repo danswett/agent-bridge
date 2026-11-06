@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using AgentBridge.Host.Core.Updates;
 using AgentBridge.Protocol;
@@ -16,10 +17,11 @@ public sealed class ReleaseDiscoveryTests : IDisposable
     readonly FakeTimeProvider time = new(Now);
     readonly FakeGitHub github = new();
 
-    // The machine's own zone, whatever the runner's: one with a half-hour offset, an hour ahead of
-    // UTC's date at Now, so the words can only come from it.
-    public ReleaseDiscoveryTests() =>
-        time.SetLocalTimeZone(TimeZoneInfo.CreateCustomTimeZone("Test+05:30", new TimeSpan(5, 30, 0), "Test", "Test"));
+    // Where the words are shown, in a zone that isn't the runner's or Pacific: a half-hour offset,
+    // already the next day at Now, so the times can only come from it.
+    static readonly TimeZoneInfo Shown = TimeZoneInfo.CreateCustomTimeZone("Test+05:30", new TimeSpan(5, 30, 0), "Test", "Test");
+
+    string Said(ReleaseDiscoveryException e) => e.Describe(Shown, time.GetUtcNow(), CultureInfo.InvariantCulture);
 
     public void Dispose()
     {
@@ -73,7 +75,7 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.True(limited.Limited);
         Assert.Equal(reset, limited.RetryAt);
-        Assert.Equal($"GitHub is limiting how often this network can check for updates. {Product.Name} will check again after 01:50 UTC+5:30.", limited.Message);
+        Assert.Equal($"GitHub is limiting how often this network can check for updates. {Product.Name} will check again after 01:50.", Said(limited));
 
         // Clicks before the reset are answered at once, with the same words, and ask nothing.
         time.Advance(TimeSpan.FromMinutes(19));
@@ -99,8 +101,10 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.True(limited.Limited);
         Assert.Equal(time.GetUtcNow() + TimeSpan.FromMinutes(5), limited.RetryAt);
-        // The machine's zone, with its offset: 20:00 UTC on 4 November 2026 is 01:30 on the 5th there.
-        Assert.EndsWith("The last successful check was at 01:30 UTC+5:30.", limited.Message);
+        // Carried as the instant, and said in the zone it is shown in: 20:00 UTC on 4 November
+        // 2026 is 01:30 on the 5th there.
+        Assert.Equal(Now, limited.LastSuccess);
+        Assert.EndsWith("The last successful check was at 01:30.", Said(limited));
 
         time.Advance(TimeSpan.FromMinutes(4));
         await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
@@ -206,6 +210,23 @@ public sealed class ReleaseDiscoveryTests : IDisposable
 
         var failed = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.StartsWith("GitHub's answer to the update check could not be read.", failed.Message);
+    }
+
+    [Fact]
+    public async Task A_release_with_a_field_of_the_wrong_type_is_an_answer_that_could_not_be_read_and_is_not_kept()
+    {
+        using var discovery = Discovery();
+        github.Answer = _ => Ok("""[{"prerelease":{}}]""", "\"v1\"");
+
+        var failed = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
+        Assert.StartsWith("GitHub's answer to the update check could not be read.", failed.Message);
+        Assert.Equal(Now + ReleaseDiscovery.FirstBackoff, failed.RetryAt);
+
+        // Backed off, then asked again in full: nothing of that answer was kept.
+        time.Advance(ReleaseDiscovery.FirstBackoff);
+        github.Answer = _ => Ok(Releases, "\"v2\"");
+        Assert.Equal(Releases, await discovery.ReleasesAsync(Url, CancellationToken.None));
+        Assert.Equal((2, null), (github.Requests.Count, github.Requests[1].IfNoneMatch));
     }
 
     [Fact]
