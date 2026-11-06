@@ -220,6 +220,28 @@ public class ContractTests
     }
 
     [Fact]
+    public void An_escaped_approval_a_budget_cuts_keeps_the_marks_still_in_it_and_the_digest_of_what_is_sent()
+    {
+        // The confirmation names the digest of what was read (#803): one kept from the whole message
+        // would describe text the device never got.
+        var (shown, marks) = ShownText.RevealMarked("echo \u202E" + new string('x', 7_000) + "\u2066 tail", rightToLeft: true);
+        var options = Enumerable.Range(0, 400).Select(i => new Option($"v{i}", new string('o', 190))).ToList();
+        var question = new Question
+        {
+            Id = "q", Kind = QuestionKind.Approval, Message = shown, AskedAt = DateTimeOffset.UnixEpoch,
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = options }],
+            Escaped = EscapedApproval.For(shown, marks, EscapedApproval.Confirm),
+        };
+        var s = SessionBudget.Fit(Big("q", new string('r', 30_000), question: question));
+
+        var cut = s.Question!;
+        Assert.True(cut.Truncated);
+        Assert.True(cut.Message.Length < shown.Length);
+        Assert.Equal(EscapedApproval.Shown(cut.Message), cut.Escaped!.Shown);
+        Assert.Equal([5, 6], Assert.Single(cut.Escaped.Marks));
+    }
+
+    [Fact]
     public void The_documented_session_with_sub_agents_reads_into_the_records_and_writes_back_unchanged()
     {
         var json = Example("session-subagents.json");

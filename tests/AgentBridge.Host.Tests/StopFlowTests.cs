@@ -153,6 +153,23 @@ public sealed class StopFlowTests : IAsyncLifetime
         Assert.Empty(control.Terminated);
     }
 
+    // A session whose launch here has not seen its window ready may be asking whether to trust its
+    // folder, where /exit's Enter would answer "Yes": it is terminated, nothing typed.
+    [Fact]
+    public async Task A_session_whose_launch_has_not_seen_its_window_ready_is_terminated_without_typing_exit()
+    {
+        var stopper = Stopper();
+        stopper.LaunchHeld = id => id == Id ? "Copilot was started here and its window has not been seen ready" : null;
+        Serve(stopper);
+        var ch = await OpenAsync();
+
+        var result = await StopAsync(ch);
+
+        Assert.Equal(("ended", (bool?)true), (result.Outcome_, result.Forced));
+        Assert.Empty(injector.Plans);
+        Assert.Single(control.Terminated);
+    }
+
     [Fact]
     public async Task An_idle_session_ends_on_one_press_with_exit_typed_into_its_console_shows_as_ending_and_is_then_removed()
     {

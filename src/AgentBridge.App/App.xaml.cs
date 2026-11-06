@@ -100,7 +100,9 @@ public partial class App : Application
 
         // A machine's cards and toasts, whichever machine it is: everything they do goes to that
         // machine's own host.
-        Machine Build(string key, HostConnection conn, FoldStore folds, Func<string?> readOnlyWhy, IBlobStore? blobs = null)
+        // signer: another machine's fleet link, which signs an escaped approval's confirmation for it
+        // (#803); none for this machine, whose host never takes one through its pipe.
+        Machine Build(string key, HostConnection conn, FoldStore folds, Func<string?> readOnlyWhy, IBlobStore? blobs = null, IFleetLink? signer = null)
         {
             Machine? m = null;
             var cards = new CardContext
@@ -123,6 +125,7 @@ public partial class App : Application
                 },
                 FetchDelegate = (id, agent) => Attribution.FetchDelegateAsync(conn, id, agent),
                 Ui = ui,
+                SignEscaped = signer is null ? null : (session, question, shown, request, pressed) => signer.SignEscapedApproval(conn.PeerKey, key, session, question, shown, request, pressed),
             };
             var planner = new ToastPlanner(sink)
             {
@@ -152,7 +155,7 @@ public partial class App : Application
         // demo's is a second pretend host). Remote folds are not kept across restarts.
         IFleetLink? link = null;
         Machine Remote(FleetHost h) =>
-            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5), RefusedRetryDelay = Fleet.RefusedRetryDelay }, new FoldStore(null), () => null, link!.Blobs);
+            Build(h.Id, new HostConnection(ct => link!.OpenAsync(h.Id, ct), ui, AppLog.Write) { RetryDelay = TimeSpan.FromSeconds(options.Demo ? 0.5 : 5), RefusedRetryDelay = Fleet.RefusedRetryDelay }, new FoldStore(null), () => null, link!.Blobs, link);
         if (options.Demo)
         {
             remoteDemo = DemoHost.Start(version, remote: true);

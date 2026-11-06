@@ -121,6 +121,10 @@ relay at that moment (below).
 }
 ```
 
+`target` may also carry `question` and `shown`: only an escaped approval's confirmation
+(`session.approve:escaped`, [v1-sessions.md](v1-sessions.md#escaped-approvals)) names them, after
+`machine` and `session` in that order, and no other command does.
+
 The source acts on a command only if all of these hold, and says which did not:
 
 * `body`, `by`, `mac` are base64url within 2048, 96 and 64 characters; `by` is a point on

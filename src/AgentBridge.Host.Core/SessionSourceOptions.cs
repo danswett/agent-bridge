@@ -60,6 +60,10 @@ public sealed class SessionSourceOptions
     // to other devices to approve or deny. Off, they show as answered only at the machine.
     public bool CopilotRemoteApproval { get; init; } = true;
 
+    // The host's permissions.escapedApproval (#803): how Approve is given for an approval the host
+    // escaped anything in, EscapedApproval.Confirm or .Machine, said on each as EscapedText.Approve.
+    public string EscapedApproval { get; init; } = AgentBridge.Protocol.EscapedApproval.Confirm;
+
     // On first sight only this much of the end of a transcript is parsed. The rest is
     // skimmed for counts and the first user message, never parsed as JSON wholesale:
     // a Copilot events.jsonl of 18 MB is ordinary and some reach hundreds.

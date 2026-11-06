@@ -575,7 +575,9 @@ public sealed class MarkdownTests
     // #493: WinUI's text layout failed on about 32,000 characters with nowhere to break, after
     // other text, and the app ended. Drawn in pieces of at most LongWords.Max between breaks.
     // The runs as drawn: each run's pieces joined by a break ("|"), the runs joined by nothing.
-    static string Drawn(params string[] runs)
+    // Not an overload of the approval helper Drawn(string): a single run bound to that one, so a
+    // check of one run never reached LongWords (#946).
+    static string DrawnRuns(params string[] runs)
     {
         var pieces = LongWords.Pieces(runs);
         Assert.Equal(runs, pieces.Select(p => string.Concat(p)));
@@ -603,15 +605,15 @@ public sealed class MarkdownTests
     {
         var prose = Repeat("All 47 tests pass. ", 400);
 
-        Assert.Equal(prose, Drawn(prose));
-        Assert.Equal(prose + "\n" + prose, Drawn(prose, "\n", prose));
+        Assert.Equal(prose, DrawnRuns(prose));
+        Assert.Equal(prose + "\n" + prose, DrawnRuns(prose, "\n", prose));
     }
 
     [Fact]
     public void A_word_continued_in_the_next_run_is_counted_as_one()
     {
         // "aaaa**bbbb**cccc": one word on screen, in three runs, none alone over the limit.
-        var drawn = Drawn(new string('a', 6000), new string('b', 6000), new string('c', 6000));
+        var drawn = DrawnRuns(new string('a', 6000), new string('b', 6000), new string('c', 6000));
 
         Assert.InRange(Longest(drawn), 1, LongWords.Max);
     }
@@ -635,7 +637,7 @@ public sealed class MarkdownTests
         Assert.All(Assert.Single(LongWords.Pieces([Repeat("e\u0301", 10000)])).Skip(1), p => Assert.StartsWith("e", p, StringComparison.Ordinal));
         Assert.All(Assert.Single(LongWords.Pieces([Repeat("\U0001F600", 10000)])), p => Assert.True(char.IsHighSurrogate(p[0]) && !char.IsHighSurrogate(p[^1])));
         // An accent in a run of its own, its letter at the end of the run before: still one cluster.
-        var split = Drawn(new string('a', LongWords.Max - 1) + "e", "\u0301", new string('a', 100));
+        var split = DrawnRuns(new string('a', LongWords.Max - 1) + "e", "\u0301", new string('a', 100));
         Assert.Contains("e\u0301", split, StringComparison.Ordinal);
         // One cluster longer than the limit: cut inside it rather than not at all.
         var cluster = "e" + new string('\u0301', 20000);
@@ -650,9 +652,9 @@ public sealed class MarkdownTests
         var before = new string('x', LongWords.Max - 10);
         var after = new string('y', LongWords.Max);
 
-        Assert.Equal(before + "\n" + after, Drawn(before, "\n", after));
+        Assert.Equal(before + "\n" + after, DrawnRuns(before, "\n", after));
         // Without it, the two are one word, and one break goes in.
-        Assert.Equal(1, Drawn(before, after).Count(c => c == '|'));
+        Assert.Equal(1, DrawnRuns(before, after).Count(c => c == '|'));
     }
 }
 // #493: what a host sends is held to the protocol's limits on receipt, so a broken, remote or
