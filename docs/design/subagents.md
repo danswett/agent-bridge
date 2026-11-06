@@ -11,7 +11,8 @@ client shows, and the additive protocol that carries it. It supersedes #20.
 contract is [v1-sessions.md](../protocol/v1-sessions.md). S5 (#175) implements §7's Home
 Assistant and shadow parts. S2 (#174) reads Claude's and Codex's delegates (§3), verified
 against recorded transcripts. §6's conversation events (#661) and the history they sit in
-(#292) were decided by the owner on 2026-11-04.*
+(#292) were decided by the owner on 2026-11-04 and are proposed: not yet built (#661 and #292
+build them).*
 
 **Words.** The UI says *delegate*; specs and code say *sub-agent*. The *main agent* is the
 session's own agent.
@@ -163,7 +164,8 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
   agent by its id alone, never by its `name`. End session ends everything.
 - **No action may reach the main agent while appearing to target a sub-agent.** Every
   sub-agent action is labelled with "main agent".
-- **A sub-agent's events in the conversation are a past-tense record (#661).** The main
+- **A sub-agent's events in the conversation are a past-tense record (#661; proposed, not
+  yet built).** The main
   agent's own delegates starting and reporting back sit between messages by time, one line per
   delegate per gap, every delegate named, runs of more than 3 folded, and older events in one
   "Earlier" line until history loads (#292). The strip, the Delegates tab and the chips are

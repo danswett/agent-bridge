@@ -18,7 +18,8 @@ and the boards are in [proposals/519-collaborators.md](proposals/519-collaborato
 accessibility contract (§9.1) gathers the accessibility rules already decided here and the WCAG
 requirements they rest on, each with the check that enforces it, and the rules the owner
 approved for it on 2026-11-04 (#707). Delegate events in the conversation (§6.4, #661) and the
-history beside them (#292) were decided by the owner on 2026-11-04.* The
+history beside them (#292) were decided by the owner on 2026-11-04 and are proposed: not yet
+built (#661 and #292 build them).* The
 owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench", and
 proposals wait for the owner's sign-off in the private design studio
 ([design/README.md](../../design/README.md#owner-sign-off)).
@@ -909,8 +910,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   own. "Main agent" only where the host says whose the words are (`activity.source`, `own`
   or a delegate list); otherwise the label is the agent's name ("Claude"), as such a host may
   send a delegate's words as the response.
-- **Delegate events** (#661, decided by the owner on 2026-11-04): a past-tense record of the
-  main agent's own delegates starting and reporting back. The strip, the Delegates tab and
+- **Delegate events** (#661). *Proposed: decided by the owner on 2026-11-04, not yet built;
+  #661 builds it. No client draws these lines yet.* A past-tense record of the main agent's own delegates starting and reporting back. The strip, the Delegates tab and
   the chips (§6.3) are the present tense and the only live status, and the
   inspector holds the detail, so a line never says a delegate is working and never shows the
   working glyph. A fold's "still working" count (D3, below) is the one exception: a live count
@@ -952,6 +953,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       Counts of 0 are left out ("5 delegates · 3 reported back, 1 failed › 1 still working").
       They change in place as state arrives. At 0 still working the link goes, and the line is
       the button alone.
+    - **Focus when the link goes (§9.1 A4):** if the "still working" link has focus when it
+      goes, focus moves to the delegate event line that replaces it, the report-back line of
+      the delegate that ended the count. That line takes focus programmatically (`tabindex="-1"`;
+      on Windows, focused by code without becoming a tab stop) and is read once (A6). If that
+      line isn't there (the fold is closed, so its lines aren't drawn), focus goes to the
+      conversation's newest message instead, taken the same way. If focus is elsewhere, it
+      stays where it is.
     - **Two sibling targets, never one inside the other:** the fold's button, then the "1 still
       working" link after it in the tab order.
     - **The chevron is the button's.** It ends the button's text, inside its target and focus
@@ -1113,9 +1121,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
   tool's name and arguments in mono). Not while the session waits on a question: the card says
   what is happening.
-- **History** (#292). *Decided by the owner on 2026-11-04, each as recommended
-  ([proposals/661-delegate-events.md](proposals/661-delegate-events.md) §3).* The Windows app
-  shows only the latest exchange. With history, a session's whole conversation is the one
+- **History** (#292). *Proposed: decided by the owner on 2026-11-04, each as recommended
+  ([proposals/661-delegate-events.md](proposals/661-delegate-events.md) §3), not yet built;
+  #292 builds it.* Today the Windows app shows only the latest exchange. With history, a session's whole conversation is the one
   column, oldest at the top, in the app and the PWA alike.
   - **H0 A turn** is one prompt and everything until the next: the prompt (the person's, or a
     scheduled or agent-sent one, marked as A prompt you didn't type says, above), the main
@@ -2136,10 +2144,13 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
     and Highlight and HighlightText when pressed). The `needs` glyph is Highlight with
     HighlightText ink, swapped on the pressed toggle's Highlight fill so its disc still shows.
     The Tools link is a system hyperlink.
-- **Delegate events (#661):** a fold of delegate events is a disclosure button named for its
-  whole summary, with `aria-expanded` (Windows: ExpandCollapse) for open or closed. Its "1 still
-  working" link is a sibling after it in the tab order, never nested in the button, and opens
-  that delegate. With none still working, there is only the button (§6.4).
+- **Delegate events (#661, proposed, not yet built):** a fold of delegate events is a
+  disclosure button named for its whole summary, with `aria-expanded` (Windows: ExpandCollapse)
+  for open or closed. Its "1 still working" link is a sibling after it in the tab order, never
+  nested in the button, and opens that delegate. With none still working, there is only the
+  button (§6.4). If the link had focus when it went, focus moves to the delegate event line
+  that replaces it (`tabindex="-1"`, read once), or, if that line isn't there, to the
+  conversation's newest message; focus elsewhere stays put (A4).
 - **A question card (#773):** each field is named for its title. A required field says so
   where the role supports it: on a radio group (`radiogroup` with `aria-required`) and on a
   text or number field (`required`; `IsRequiredForForm` on Windows, on the radio list or the
