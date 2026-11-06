@@ -79,9 +79,10 @@ public sealed class DepartureWatchdog : IDisposable
     }
 }
 
-// The host's default: one fixed line, then the existing host.restart path (HostHandover: a
-// supervised host exits for its launcher to restart, an unsupervised one starts its replacement
-// after it has stopped). No exception text or path is logged. Once the host is already stopping
+// The host's default: one fixed line, then the existing host.restart path (SettledRestart: probes
+// settled, then HostHandover: a supervised host exits for its launcher to restart, an
+// unsupervised one starts its replacement after it has stopped). No exception text or path is
+// logged; a stop asked for meanwhile wins (SettledRestart). Once the host is already stopping
 // (a committed stop, shutdown or sign-out whose teardown outlasts the bound) it only logs:
 // host.restart then would bring back a host the user or the OS asked to stop.
 public sealed class RestartingDepartureStuckHandler(Action<string> log, Action? restart, Func<bool>? stopping = null) : IDepartureStuckHandler

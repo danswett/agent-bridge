@@ -77,6 +77,26 @@ public sealed class DepartureWatchdogTests
     }
 
     [Fact]
+    public async Task A_stop_asked_for_while_the_watchdogs_restart_settles_probes_is_never_turned_into_a_restart()
+    {
+        var time = new FakeTimeProvider();
+        using var stopping = new CancellationTokenSource();
+        var settling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handovers = 0;
+        var restart = new SettledRestart((_, _) => { settled.TrySetResult(); return settling.Task; }, () => handovers++, stopping.Cancel, stopping.Token);
+        Task? running = null;
+        using var watchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(_ => { }, () => running = restart.RunAsync(), () => stopping.IsCancellationRequested), time);
+        await Committed(time, watchdog);
+        time.Advance(DepartureWatchdog.DefaultBound);
+        await settled.Task.WaitAsync(Bound);
+
+        stopping.Cancel();
+        await running!.WaitAsync(Bound);
+        Assert.Equal(0, handovers);
+    }
+
+    [Fact]
     public async Task A_disposed_watchdog_never_fires_even_for_a_later_commit()
     {
         var time = new FakeTimeProvider();

@@ -571,15 +571,10 @@ async Task<int> ServeAsync(HostHandover handover)
         }, stop.Token);
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
-    // host.restart, also used by the committed-departure watchdog (#805 N1).
-    // Done with any usage probe tied to this host before it stops, so a standalone Codex probe
-    // is not cut mid-refresh (#238); the replacement starts once it has (HostHandover).
-    void RestartHost() => _ = Task.Run(async () =>
-    {
-        if (usageMonitor is not null) { await usageMonitor.SettleProbesAsync(TimeSpan.FromSeconds(90)); }
-        handover.Request();
-        stop.Cancel();
-    });
+    // host.restart's one way out, also the committed-departure watchdog's (#805 N1): probes
+    // settled first (#238), and a stop asked for meanwhile is never turned into a restart.
+    var restart = new SettledRestart(usageMonitor is null ? null : (t, ct) => usageMonitor.SettleProbesAsync(t, ct), handover.Request, stop.Cancel, stop.Token);
+    void RestartHost() => _ = Task.Run(restart.RunAsync);
     using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
     var control = new HostControl(new HostControlOptions
     {

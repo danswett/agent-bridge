@@ -103,18 +103,24 @@ would leave the host refusing deliveries for ever. `DepartureWatchdog` notices t
   Stuck never reopens deliveries in this process.
 - `ServeAsync`'s default, `RestartingDepartureStuckHandler`, logs one fixed line
   (`departure stuck: committed departure did not exit; restarting the host`, with
-  no exception text or path) and calls the host's **existing `host.restart` path**
-  (`HostHandover.Request()` then the serve stop token): a host under the logon
-  task's launcher exits with `HostLauncherContract.Restart` for the launcher to
-  restart; an unsupervised one starts its replacement after it has stopped and
-  let go of its lock. No new restart or exit path is added. This is not
+  no exception text or path) and calls the host's **existing `host.restart` path**,
+  `SettledRestart`: it first waits up to 90 s for a usage probe tied to the host to
+  settle (#238), then `HostHandover.Request()`, then the serve stop token. A host
+  under the logon task's launcher exits with `HostLauncherContract.Restart` for the
+  launcher to restart; an unsupervised one starts its replacement after it has
+  stopped and let go of its lock. No new restart or exit path is added. This is not
   `WatchdogRecovery`/forced recovery: commit required no accepted work in flight,
   and the fence has refused new work since, so the restart carries no input.
   With no restart action the handler only logs that deliveries stay refused. If the
   host is already stopping when the bound passes (a committed `RemoteStop`,
   `Shutdown` or `SignOut` whose teardown runs past 2 minutes; one usage-monitor
   disposal alone can wait 90 s), it only logs, so a requested stop is never turned
-  into a restart. A disposed watchdog (the serve loop has ended) never fires.
+  into a restart. That holds through the probe settle too, for the watchdog and
+  `host.restart` alike: a stop asked for during the settle ends the wait, and
+  `SettledRestart` reads the stop token again just before the handover and never
+  hands over once it is set. The one window left is the few instructions between
+  that read and `HostHandover.Request()` (a single volatile write), since nothing
+  can withdraw a handover. A disposed watchdog (the serve loop has ended) never fires.
 - `LifecycleCoordinator.Departure` and `HostControl.Departure` expose
   `DepartureStatus(State: None | Committed | Stuck, CommittedAt, Reason)` to the
   host's status/health readers. It is **not** added to `HostStatus` (the local-pipe
