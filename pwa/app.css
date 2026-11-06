@@ -707,15 +707,23 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
    The glyph draws in its role's colour; the active colour turns to agent while an agent
    drives the session, and the diamond over it is agent too. Forced colours keep the roles'
    system colours rather than the browser's text colour, as tokens.css maps them. */
-.glyph { flex: none; color: var(--ab-neutral); overflow: visible; forced-color-adjust: none; }
+.glyph { flex: none; color: var(--ab-neutral); overflow: visible; forced-color-adjust: none; display: inline-block; position: relative; width: 16px; height: 16px; }
+.glyph[data-size="12"] { width: 12px; height: 12px; }
+.glyph[data-size="14"] { width: 14px; height: 14px; }
+.glyph[data-size="20"] { width: 20px; height: 20px; }
+.glyph[data-size="24"] { width: 24px; height: 24px; }
+/* Its layers (js/ui/glyph.js), one over another on the glyph's box. */
+.glyph > * { position: absolute; inset: 0; overflow: visible; }
+.glyph svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .glyph[data-glyph="needs"] { color: var(--ab-needs); }
 .glyph[data-glyph="working"], .glyph[data-glyph="delegating"] { color: var(--ab-active); }
 .glyph.driven[data-glyph="working"], .glyph.driven[data-glyph="delegating"] { color: var(--ab-agent); }
 .glyph[data-glyph="failed"] { color: var(--ab-danger); }
 .glyph .glyph-badge { color: var(--ab-agent); }
 /* The moving part turns about the glyph's centre: working's arc once per 1.2 s, delegating's
-   satellites once per 8 s. Nothing else on a card moves on its own. */
-.glyph .glyph-spin, .glyph .glyph-orbit { transform-box: view-box; transform-origin: 50% 50%; }
+   satellites once per 8 s. Nothing else on a card moves on its own. An HTML box turning, so the
+   compositor turns it and the page's style and layout are left alone each frame (#610). */
+.glyph .glyph-spin, .glyph .glyph-orbit { transform-origin: 50% 50%; }
 .glyph .glyph-spin { animation: glyph-turn 1.2s linear infinite; }
 .glyph .glyph-orbit { animation: glyph-turn 8s linear infinite; }
 @keyframes glyph-turn { to { transform: rotate(360deg); } }
