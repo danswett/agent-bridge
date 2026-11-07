@@ -82,6 +82,13 @@ public sealed class SessionSourceOptions
     // results can be megabytes; nothing the host shows needs a line this long.
     public int MaxLineBytes { get; init; } = 32 * 1024 * 1024;
 
+    // Where the key that seals session.history's cursors is kept (docs/protocol/v1-history.md, The
+    // cursor), so a client's cursor outlives the host's restarts. Null: a key for this run only.
+    public string? HistoryKeyFile { get; init; }
+
+    // How hard one session.history request may look; tests make them small.
+    internal Conversation.HistoryBudgets HistoryBudgets { get; init; } = new();
+
     // The defaults for the current user, as each agent resolves them: COPILOT_HOME,
     // CLAUDE_CONFIG_DIR and CODEX_HOME when set, else the dot folder in the profile. The
     // registration roots are agent-ha-bridge's: its runtime folder for an installation

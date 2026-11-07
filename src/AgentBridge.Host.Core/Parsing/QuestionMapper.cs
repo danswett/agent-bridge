@@ -95,7 +95,9 @@ internal static class QuestionMapper
     // Schema form); older ones passed `question` and a `choices` list, sometimes as a
     // JSON string. Without reading both, a multiple choice became a free-text box titled
     // "needs your input".
-    public static Question FromCopilotAskUser(string id, JsonElement arguments, DateTimeOffset askedAt)
+    // patterns: the budget the caller's patterns share when it reads more than one ask_user: a
+    // history request gave each its own, and a page of them ran for minutes (review of #686).
+    public static Question FromCopilotAskUser(string id, JsonElement arguments, DateTimeOffset askedAt, PatternBudget? patterns = null)
     {
         var message = Json.Str(arguments, "message") ?? Json.Str(arguments, "question") ?? "";
         IReadOnlyList<Field> fields = [];
@@ -118,7 +120,7 @@ internal static class QuestionMapper
         }
         else if (Json.Get(arguments, "requestedSchema") is { } schema)
         {
-            (fields, var drivable) = SchemaForm(schema);
+            (fields, var drivable) = SchemaForm(schema, patterns);
             // Every Copilot option list ends in "Other (type your answer)", but words reach
             // it only in a question that is that one list: the Down past its last option
             // opens Other there, and in a tabbed form or a checkbox list it does not.
@@ -148,10 +150,11 @@ internal static class QuestionMapper
             var text = v.GetString() ?? "";
             try
             {
-                using var doc = JsonDocument.Parse(text);
+                using var doc = JsonDocument.Parse(Json.Repaired(System.Text.Encoding.UTF8.GetBytes(text)));
                 return ChoiceList(doc.RootElement);
             }
-            catch (JsonException) { return string.IsNullOrWhiteSpace(text) ? [] : [text]; }
+            // Half a surrogate pair is the replacement character (Json.Repaired); a backstop reads text that still can't be decoded as JSON that isn't.
+            catch (Exception e) when (e is JsonException or InvalidOperationException) { return string.IsNullOrWhiteSpace(text) ? [] : [text]; }
         }
         if (v.ValueKind != JsonValueKind.Array) { return []; }
         return [.. v.EnumerateArray().Select(c => c.ValueKind == JsonValueKind.String ? c.GetString() ?? "" : c.GetRawText()).Where(c => !string.IsNullOrWhiteSpace(c))];
@@ -165,23 +168,23 @@ internal static class QuestionMapper
     // with constraints the host can check. Each property is read once, and its patterns share one
     // budget for the whole ask_user: read twice with 250 ms a match, 200 slow patterns stalled the
     // refresh of every session for minutes (#844 review).
-    static (IReadOnlyList<Field> Fields, bool Drivable) SchemaForm(JsonElement schema)
+    static (IReadOnlyList<Field> Fields, bool Drivable) SchemaForm(JsonElement schema, PatternBudget? budget = null)
     {
         if (schema.ValueKind == JsonValueKind.String)
         {
             try
             {
-                using var doc = JsonDocument.Parse(schema.GetString() ?? "");
-                return SchemaForm(doc.RootElement);
+                using var doc = JsonDocument.Parse(Json.Repaired(System.Text.Encoding.UTF8.GetBytes(schema.GetString() ?? "")));
+                return SchemaForm(doc.RootElement, budget);
             }
-            catch (JsonException) { return ([], true); }
+            catch (Exception e) when (e is JsonException or InvalidOperationException) { return ([], true); }
         }
         var whole = CopilotFieldConstraints.FormUnchecked(schema) is null;
         if (Json.Obj(schema, "properties") is not { } properties) { return ([], whole); }
         var required = Json.Arr(schema, "required") is { } r
             ? r.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToHashSet(StringComparer.Ordinal)
             : [];
-        var patterns = new PatternBudget();
+        var patterns = budget ?? new PatternBudget();
         var fields = new List<Field>();
         var drivable = whole;
         foreach (var property in properties.EnumerateObject())

@@ -100,7 +100,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsApprove, offered);
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability], await CapabilitiesAsync(ch));
 
         probe.Reason = null;
         Assert.Contains(Capabilities.SessionsAnswer, await CapabilitiesAsync(ch));
@@ -138,7 +138,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Serve(new UnsupportedPlatformAnswerer());
         var ch = await OpenAsync();
 
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability], await CapabilitiesAsync(ch));
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal(("refused", true), (outcome, reason!.Contains("platform")));
 

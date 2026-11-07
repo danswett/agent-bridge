@@ -46,6 +46,15 @@ public interface ISessionSource : IAsyncDisposable
     // or has no sub-agent by that id, or from a source that lists none.
     Task<Subagent?> GetAgentAsync(string id, string agent, CancellationToken cancellationToken = default) => Task.FromResult<Subagent?>(null);
 
+    // Whether HistoryAsync reads anything: the sessions.history capability.
+    bool ServesHistory => false;
+
+    // session.history (docs/protocol/v1-history.md): a page of the session's turns before the
+    // cursor, newest of them last; HistoryResult.Gone once the session is not listed, StaleCursor
+    // for a before it cannot continue from, and NotAvailable when it keeps no history of it.
+    Task<HistoryResult> HistoryAsync(string id, string? before, int limit, CancellationToken cancellationToken = default) =>
+        Task.FromResult(HistoryResult.NotAvailable("this machine keeps no history"));
+
     // Where a live session's files are, for a host that types into it and then reads what
     // the agent recorded: its transcript and, for Claude and Codex, agent-ha-bridge's hook
     // registration. Null once it has gone, or from a source that does not know.

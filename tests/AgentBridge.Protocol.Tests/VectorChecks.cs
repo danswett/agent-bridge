@@ -17,6 +17,7 @@ public static class VectorChecks
     public const string Transfer = "TransferProtocol.Check";
     public const string TransferResult = "TransferLimits.CheckResult";
     public const string Patches = "SessionPatches.Apply";
+    public const string History = "HistoryProtocol.Check";
 
     // Null when the check takes it; otherwise why not. context is the vector's own: the question
     // an answer answers, the most a channel takes, the most a machine takes of a bundle.
@@ -36,6 +37,7 @@ public static class VectorChecks
         },
         TransferResult => TransferLimits.CheckResult((AgentBridge.Protocol.TransferResult)record, context?["maxBytes"]?.GetValue<long>() ?? TransferProtocol.DefaultMaxBytes),
         Patches => PatchCheck((SessionPatch)record, context),
+        History => HistoryProtocol.Check((HistoryRequest)record),
         _ => throw new ArgumentException($"no check is called {check}"),
     };
 
