@@ -34,6 +34,8 @@ public sealed partial class MainWindow : Window
     // The UI thread's, taken while on it: the change arrives on another.
     readonly DispatcherQueue ui = DispatcherQueue.GetForCurrentThread();
     bool closed;
+    bool feedbackDialogOpen;
+    bool feedbackWhenLoaded;
 
     internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest, string? placementFile = null)
     {
@@ -69,6 +71,7 @@ public sealed partial class MainWindow : Window
         Root.Loaded += (_, _) =>
         {
             if (Root.XamlRoot is { } x) { x.Changed += (_, _) => KeepSmallest(); }
+            if (feedbackWhenLoaded) { feedbackWhenLoaded = false; _ = ShowFeedbackAsync(); }
         };
         Root.SizeChanged += (_, e) => FitSearch(e.NewSize.Width);
         AppWindow.Changed += OnWindowChanged;
@@ -92,6 +95,7 @@ public sealed partial class MainWindow : Window
         if (viewModel.Settings is { } s)
         {
             SettingsPane.ViewModel = s;
+            SettingsPane.FeedbackRequested += () => _ = ShowFeedbackAsync();
             s.PropertyChanged += (_, _) => DrawSettingsDot(s);
             DrawSettingsDot(s);
             // The first launch with no agent set up opens on Get started (#384).
@@ -162,6 +166,40 @@ public sealed partial class MainWindow : Window
 
     internal void ShowPage(string tag) =>
         Nav.SelectedItem = Nav.MenuItems.Concat(Nav.FooterMenuItems).OfType<NavigationViewItem>().First(i => (string)i.Tag == tag);
+
+    // The tray's Send feedback: the window may be hidden in the notification area.
+    internal void FeedbackFromTray()
+    {
+        ShowInFront();
+        _ = ShowFeedbackAsync();
+    }
+
+    internal bool FeedbackOpen => feedbackDialogOpen;
+
+    internal async Task ShowFeedbackAsync()
+    {
+        if (feedbackDialogOpen) { return; }
+        if (Root.XamlRoot is not { } root) { feedbackWhenLoaded = true; return; }
+        feedbackDialogOpen = true;
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = root,
+                Title = "Send feedback",
+                Content = "Feedback isn't available in the Windows app yet.",
+                CloseButtonText = "Close",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            AutomationProperties.SetAutomationId(dialog, "FeedbackUnavailable");
+            await dialog.ShowAsync();
+        }
+        catch (Exception e) when (e is COMException or InvalidOperationException)
+        {
+            AppLog.Write($"feedback: cannot open dialog: {e.Message}");
+        }
+        finally { feedbackDialogOpen = false; }
+    }
 
     void OnNavigate(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {

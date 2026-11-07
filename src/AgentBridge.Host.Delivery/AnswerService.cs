@@ -720,9 +720,11 @@ public sealed class AnswerService : ISessionAnswerer
                     return new(went, why, null, false);
                 }
                 var rows = await ReadRowsAsync(pid);
-                if (rows is null || !Enumerable.Range(0, form.Fields.Count).Any(i => CopilotFormScreen.Showing(rows, form, i) is null))
+                // Esc only where the hints say it cancels: on Copilot CLI 1.0.106 a text or number
+                // field holding words says "esc clear", and Esc there empties the field instead.
+                if (rows is null || !Enumerable.Range(0, form.Fields.Count).Any(i => CopilotFormScreen.Cancels(rows, form, i)))
                 {
-                    log($"the part-answered form in {Short(session.Id)} (pid {pid}) is not on its screen to be reset; nothing is pressed");
+                    log($"the part-answered form in {Short(session.Id)} (pid {pid}) is not on its screen to be reset by esc (gone, or esc would only clear a field); nothing is pressed");
                     trace.Resume(CopilotAnswerTrace.ResumeHeld);
                     return new(went, stop ?? "the screen did not show the form again", null, false);
                 }

@@ -19,4 +19,8 @@ internal sealed class GateTrackedInjector(IConsoleInjector inner, DeliveryGate g
     // here made one transient launch follow-up read block quiet acquisition until restart.
     public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
         inner.ReadScreenAsync(processId, cancellationToken);
+
+    // --widen sends no keys either.
+    public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+        inner.WidenAsync(processId, createdAt, columns, cancellationToken);
 }

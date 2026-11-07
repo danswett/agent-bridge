@@ -28,10 +28,16 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //     it holds every label and more, so each heading, drawn in the same column, fits on its
 //     row too; and a title the console draws other than as written (a line break, a character
 //     it shows otherwise) is drawn so in the bar too, and refused there. Windowed, it vouches
-//     for none of the hidden titles, so it is refused, named, with nothing typed.
+//     for none of the hidden titles, so it is refused, named, with nothing typed. Copilot CLI
+//     1.0.106 draws it as `_l`: whole where it fits the console less four columns, else the
+//     most labels that fit around the selected one (`kHi`, any such run), else that label
+//     alone however long it is, wrapped onto as many rows as it takes (Wrapped), all refused
+//     as windows. Above the form, 1.0.106 may draw its own strip ("Current Sessions Issues
+//     ..."), outside the frame and not read.
 //   * Under it, the key hints (`Ft`, joined by " · ", wrapping): "enter accept", "tab next"
 //     unless at the last field, "shift+tab prev" unless at the first, "ctrl+d decline",
-//     "esc cancel".
+//     "esc cancel"; from 1.0.106, "esc clear" in its place while a text or number field holds
+//     something (Esc then empties the field; Cancels).
 //   * A permission prompt is a numbered list with a plain "1. Yes", drawn bare or inside a
 //     box's sides (docs/host-answers.md), one of its options under the pointer; a form's
 //     options are never numbered. `cxo` draws one prompt at a time in the session's prompt
@@ -50,10 +56,11 @@ public enum FormCheck
     Under,
     // The rows under the heading do not read as the question's message.
     Message,
-    // The tab bar does not name the fields.
+    // The tab bar does not name the fields as the CLI draws them at this field.
     Bar,
     // The tab bar is the one the CLI draws at this field, but too wide for the console, so it
-    // hides some of the fields' titles, and the form cannot be told from another one.
+    // hides some of the fields' titles (or wraps the one it shows), and the form cannot be told
+    // from another one.
     BarWindow,
     // The form has no such field, or one the host cannot say how it is headed.
     Field,
@@ -117,6 +124,15 @@ public static partial class CopilotFormScreen
     // for stopping before the next key. The parts are looked for in the order the CLI draws
     // them, each below the last.
     public static string? Showing(IReadOnlyList<string> rows, CopilotForm form, int index) => Locate(rows, form, index, out _, out _);
+
+    // Whether the rows show this form at field `index` (Showing) with Esc's hint "esc cancel":
+    // there one Esc cancels the form. Where it says "esc clear" (Copilot CLI 1.0.106, a text or
+    // number field holding something), Esc only empties the field, so a reset's Esc is not sent.
+    public static bool Cancels(IReadOnlyList<string> rows, CopilotForm form, int index)
+    {
+        var found = new Found();
+        return Find(rows, form, index, found) is null && found.Cancels;
+    }
 
     // Showing's reason, with the check that gave it and the screen's outline for the log: where
     // its rules and headings are and the row the check failed at, never what any row says.
@@ -288,6 +304,7 @@ public static partial class CopilotFormScreen
     sealed class Found
     {
         public int Heading = -1, Hints = -1, Row = -1;
+        public bool Cancels;
         public FormCheck Check = FormCheck.Shown;
 
         public string Fail(FormCheck check, int row, string reason)
@@ -299,7 +316,11 @@ public static partial class CopilotFormScreen
 
     const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
     const string NotForm = "the session's screen no longer showed the question's form";
-    const string Narrow = "the session's window is too narrow for the question's form to show every field's title, so the host cannot tell it is this question; answer it at the machine, or widen the window and answer again";
+    const string Narrow = "the session's window is too narrow for phone answers to this question (its form cannot show every field's title to check); widen it and answer again, or answer it at the machine";
+    // The tab bar under the question names other fields, or reads as no bar the CLI draws at
+    // this field. A form at this point has its own heading and the question's message, so this
+    // is seldom a form gone; it was said so, and a bar too long for its row was read as one (#1123).
+    const string Unchecked = "this window is too narrow, or the question's titles too long, to check which field is open; answer at the machine";
     const string Under = "something other than the question's form was drawn under it on the session's screen";
 
     static string? Find(IReadOnlyList<string> rows, CopilotForm form, int index, Found found)
@@ -357,21 +378,28 @@ public static partial class CopilotFormScreen
             // brackets in a title included, its spaces and the gaps between labels too, so two
             // titles are never read as one ("Now here" is not "Nowhere"), nor one as two. The
             // bar fits itself to the console's width less four columns (`$fn`), within the
-            // frame, so it is drawn on one row; one read across rows is not taken. Too wide for
-            // the console, it shows only the labels around the field being answered, between
-            // arrows, and is refused below.
+            // frame, so it is drawn on one row; one read across rows is not taken as the bar.
+            // Too wide for the console, it shows only the labels around the field being
+            // answered, between arrows, and is refused below. Copilot CLI 1.0.106's bar (`_l`,
+            // window `kHi`) shows the field's label alone where not even two fit, however long
+            // it is, and a title wider than the row wraps onto as many rows as it takes, the
+            // arrows beside its middle row (Wrapped): always a window, and refused as one; read
+            // as one row, it was no form at all, and the reason said the form had gone (#1123).
             at = Next(rows, at);
-            if (at >= rows.Count || !Bars([.. form.Fields.Select(f => f.Label!)], index).TryGetValue(rows[at].Trim(' '), out var windowed))
+            string[] labels = [.. form.Fields.Select(f => f.Label!)];
+            if (at < rows.Count && Bars(labels, index).TryGetValue(rows[at].Trim(' '), out var windowed))
             {
-                return found.Fail(FormCheck.Bar, at, NotForm);
+                // Windowed, the bar hides some titles, and a form that differs from this question
+                // only in a hidden title reads the same: its message, the labels shown, the
+                // field's heading and hints. Each field's own heading is read before its keys,
+                // but a field typed into stays so, so the keys could fill a form that is not this
+                // question before the one title that tells them apart showed (#1137 review).
+                // Named, it is refused with nothing typed, for the machine, rather than read as
+                // no form at all (#1123).
+                if (windowed) { return found.Fail(FormCheck.BarWindow, at, Narrow); }
             }
-            // Windowed, the bar hides some titles, and a form that differs from this question only
-            // in a hidden title reads the same: its message, the labels shown, the field's heading
-            // and hints. Each field's own heading is read before its keys, but a field typed into
-            // stays so, so the keys could fill a form that is not this question before the one
-            // title that tells them apart showed (#1137 review). Named, it is refused with nothing
-            // typed, for the machine, rather than read as no form at all (#1123).
-            if (windowed) { return found.Fail(FormCheck.BarWindow, at, Narrow); }
+            else if (at < rows.Count && Wrapped(rows, at, labels, index)) { return found.Fail(FormCheck.BarWindow, at, Narrow); }
+            else { return found.Fail(FormCheck.Bar, at, Unchecked); }
             at++;
         }
         // The heading as drawn, its spaces read as they are: with no tab bar (a form of one
@@ -379,8 +407,11 @@ public static partial class CopilotFormScreen
         // review).
         at = Next(rows, at);
         if (at >= rows.Count || rows[at].Trim(' ') != heading) { return found.Fail(FormCheck.FieldHeading, at, off); }
-        if (Hints(rows, at + 1, index, form.Fields.Count) is not var (start, end)) { return found.Fail(FormCheck.Hints, at + 1, off); }
-        (found.Heading, found.Hints) = (at, start);
+        if (Hints(rows, at + 1, index, form.Fields.Count, form.Fields[index].Kind is CopilotFieldKind.Text or CopilotFieldKind.Number) is not var (start, end, cancels))
+        {
+            return found.Fail(FormCheck.Hints, at + 1, off);
+        }
+        (found.Heading, found.Hints, found.Cancels) = (at, start, cancels);
         // A permission prompt drawn against the form: one ending just above its frame, read by
         // its structure (CopilotPermissionScreen.Ends), not by any row of the session's output
         // above it reading "1. Yes", which refused every answer to a form under an agent's
@@ -420,8 +451,11 @@ public static partial class CopilotFormScreen
     // and " →" after it when on the right. A window is one of these alone: the selected field in
     // it, the arrows saying exactly which ends are hidden, and the labels in it in the form's
     // order; read so, it is named (bar-window) rather than refused as no form at all. Six long
-    // titles at 102 columns showed two and "→" (#1123). A label with an arrow of its own could
-    // read as a window it is not, so such a form's bar is taken only whole.
+    // titles at 102 columns showed two and "→" (#1123). Copilot CLI 1.0.106's bar (`_l`) picks
+    // its window (`kHi`) as the most labels that fit, trying starts outward from the centred one,
+    // so any run of labels holding the selected one may be drawn: each is listed. A label with
+    // an arrow of its own could read as a window it is not, so such a form's bar is taken only
+    // whole.
     static Dictionary<string, bool> Bars(IReadOnlyList<string> labels, int index)
     {
         string Run(int start, int end, bool mark) =>
@@ -431,17 +465,66 @@ public static partial class CopilotFormScreen
             [Run(0, labels.Count, false).Trim(' ')] = false,
             [Run(0, labels.Count, true).Trim(' ')] = false,
         };
-        if (labels.Any(l => l.Contains('\u2190', StringComparison.Ordinal) || l.Contains('\u2192', StringComparison.Ordinal))) { return bars; }
+        if (Arrowed(labels)) { return bars; }
         for (var n = 1; n < labels.Count; n++)
         {
-            var start = Math.Clamp(index - n / 2, 0, labels.Count - n);
-            var end = start + n;
-            foreach (var mark in new[] { false, true })
+            for (var start = Math.Max(0, index - n + 1); start <= Math.Min(index, labels.Count - n); start++)
             {
-                bars.TryAdd(((start > 0 ? "\u2190 " : "") + Run(start, end, mark) + (end < labels.Count ? " \u2192" : "")).Trim(' '), true);
+                var end = start + n;
+                foreach (var mark in new[] { false, true })
+                {
+                    bars.TryAdd(((start > 0 ? "\u2190 " : "") + Run(start, end, mark) + (end < labels.Count ? " \u2192" : "")).Trim(' '), true);
+                }
             }
         }
         return bars;
+    }
+
+    static bool Arrowed(IReadOnlyList<string> labels) =>
+        labels.Any(l => l.Contains('\u2190', StringComparison.Ordinal) || l.Contains('\u2192', StringComparison.Ordinal));
+
+    // Whether the rows from `at` up to the next blank row are Copilot CLI 1.0.106's bar at field
+    // `index` showing its label alone, wider than its row (`kHi` falls back to the selected label
+    // however long it is): the label (`[<label>]` without colour) wrapped onto two rows or more,
+    // "← " on one of them exactly when fields come before it, and " →" ending one exactly when
+    // fields come after it (Ink centres the arrows beside the label's rows). Each row's words in
+    // order, a space or none where a row breaks (a word longer than the row is cut anywhere). It
+    // only names the refusal: such a bar is a window, never taken as the bar, and nothing is
+    // typed on it, so reading a space at a break either way cannot make a key go. 120 columns
+    // and three titles of full sentences showed it, the reason saying the form had gone (#1123).
+    static bool Wrapped(IReadOnlyList<string> rows, int at, IReadOnlyList<string> labels, int index)
+    {
+        if (Arrowed(labels)) { return false; }
+        var pieces = new List<string>();
+        var (lefts, rights) = (0, 0);
+        // The bar's rows are read up to a blank row, or to any row after which they read so: the
+        // heading may follow with no blank row between.
+        for (var r = at; r < rows.Count && rows[r].Trim().Length > 0; r++)
+        {
+            var piece = rows[r].Trim(' ');
+            if (piece.StartsWith('\u2190')) { (piece, lefts) = (piece[1..].TrimStart(' '), lefts + 1); }
+            if (piece.EndsWith('\u2192')) { (piece, rights) = (piece[..^1].TrimEnd(' '), rights + 1); }
+            if (piece.Length == 0) { return false; }
+            pieces.Add(piece);
+            if (pieces.Count >= 2 && lefts == (index > 0 ? 1 : 0) && rights == (index < labels.Count - 1 ? 1 : 0)
+                && (Reads(pieces, labels[index]) || Reads(pieces, $"[{labels[index]}]")))
+            {
+                return true;
+            }
+        }
+        return false;
+
+        static bool Reads(List<string> pieces, string text)
+        {
+            var p = 0;
+            for (var i = 0; i < pieces.Count; i++)
+            {
+                if (i > 0 && p < text.Length && text[p] == ' ') { p++; }
+                if (pieces[i].Length > text.Length - p || string.CompareOrdinal(text, p, pieces[i], 0, pieces[i].Length) != 0) { return false; }
+                p += pieces[i].Length;
+            }
+            return p == text.Length;
+        }
     }
 
     // The field's heading as drawn (CopilotFieldSchema.Heading).
@@ -455,21 +538,28 @@ public static partial class CopilotFormScreen
             ? $"two of this question's fields are headed \"{form.Fields[i].Label}\", and the host cannot tell on screen which of them the form is at; answer it at the machine"
             : null;
 
-    // The form's key hints, below `from`: accept, decline and cancel always, and with more than
+    // The form's key hints, below `from`: accept, decline and Esc's always, and with more than
     // one field, next and prev as the field's place says. Read from the hints row alone, never
     // from the question or what is typed into the field, either of which may say "tab next".
-    // The hints row's last row, or null when the hints do not say this field.
-    static (int Start, int End)? Hints(IReadOnlyList<string> rows, int from, int index, int count)
+    // Esc's is "esc cancel", or from Copilot CLI 1.0.106 on "esc clear" while a text or number
+    // field holds something (`Dwt`: Esc then empties the field, and cancels nothing). Read as
+    // "esc cancel" alone, every typed answer's Enter was withheld on 1.0.106, its words on
+    // screen (#1123). `typed`: whether the field is a text or number box, the only kind that
+    // says "esc clear". The hints row's first and last rows, and whether Esc cancels the form,
+    // or null when the hints do not say this field.
+    static (int Start, int End, bool Cancels)? Hints(IReadOnlyList<string> rows, int from, int index, int count, bool typed)
     {
         if (HintParts(rows, from) is not ({ } parts, var start, var end)) { return null; }
-        if (!parts.Contains("enter accept") || !parts.Contains("ctrl+d decline") || !parts.Contains("esc cancel")) { return null; }
-        return count <= 1 || (parts.Contains("tab next") == index < count - 1 && parts.Contains("shift+tab prev") == index > 0) ? (start, end) : null;
+        var (cancel, clear) = (parts.Contains("esc cancel"), parts.Contains("esc clear"));
+        if (!parts.Contains("enter accept") || !parts.Contains("ctrl+d decline") || cancel == clear || (clear && !typed)) { return null; }
+        return count <= 1 || (parts.Contains("tab next") == index < count - 1 && parts.Contains("shift+tab prev") == index > 0) ? (start, end, cancel) : null;
     }
 
     // What `Ft` can say under the form (`Uxn`'s hints), each "<key> <action>".
     static readonly HashSet<string> HintItems = new(
     [
-        "\u2191/\u2193 select", "\u2191/\u2193 adjust", "space toggle", "enter accept", "tab next", "shift+tab prev", "ctrl+d decline", "esc cancel",
+        "\u2191/\u2193 select", "\u2191/\u2193 adjust", "space toggle", "enter accept", "tab next", "shift+tab prev",
+        "ctrl+d decline", "esc cancel", "esc clear",
     ], StringComparer.Ordinal);
 
     // The hints row's parts: the last row below `from` whose rows up to three above it end the
@@ -485,7 +575,7 @@ public static partial class CopilotFormScreen
         {
             if (rows[end].Trim().Length == 0) { continue; }
             var first = Math.Max(from, end - 3);
-            if (Hint(Joined(rows, first, end).Split('\u00B7')[^1]) != "esc cancel") { continue; }
+            if (Hint(Joined(rows, first, end).Split('\u00B7')[^1]) is not ("esc cancel" or "esc clear")) { continue; }
             for (var start = first; start <= end; start++)
             {
                 if (rows[start].Trim().Length == 0) { continue; }

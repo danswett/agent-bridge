@@ -263,6 +263,283 @@ public sealed class HostUpdatesTests : IDisposable
         }
     }
 
+    // #927: the release list from the CDN first while the switch is on, and from GitHub whenever
+    // the CDN's can't be trusted. Releases name their feeds under this repository's GitHub releases.
+    static string Downloaded(string version, string file) => $"{ReleaseDiscovery.DownloadPrefix}v{version}/{file}";
+
+    static string Listed(string version, string? feed = null, string index = "releases.win.json", bool pre = true) => $$"""
+        {"tag_name":"v{{version}}","name":"Agent Bridge {{version}}","draft":false,"prerelease":{{(pre ? "true" : "false")}},"published_at":"2026-11-07T18:00:00Z","assets":[
+          {"name":"{{index}}","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/1","browser_download_url":"{{feed ?? Downloaded(version, index)}}","content_type":"application/json"}]}
+        """;
+
+    static string ChannelFeed(string version) =>
+        $$"""{"Assets":[{"PackageId":"AgentBridgeApp","Version":"{{version}}","Type":"Full","FileName":"AgentBridgeApp-{{version}}-full.nupkg","SHA1":"0000000000000000000000000000000000000000","SHA256":"0000000000000000000000000000000000000000000000000000000000000000","Size":1}]}""";
+
+    static HttpResponseMessage Listing(string json)
+    {
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) };
+    }
+
+    // The CDN's answer, saying how old its copy is, as it must for it to be used.
+    static HttpResponseMessage Relayed(string json, TimeSpan age = default)
+    {
+        var answer = Listing(json);
+        answer.Headers.Age = age;
+        return answer;
+    }
+
+    const string Foreign = "https://example.com/releases.win.json";
+
+    // What an installed copy is offered through the shared source, its feeds served from here:
+    // each version's own, and one elsewhere offering 0.1.666, which no trusted list names.
+    async Task<string?> OfferedAsync(ReleaseDiscovery discovery, string installed = "0.1.600", bool prereleases = true)
+    {
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", installed, packages, null, null, null, "win");
+        var feeds = new FakeDownloads(new()
+        {
+            [Downloaded("0.1.599", "releases.win.json")] = ChannelFeed("0.1.599"),
+            [Downloaded("0.1.601", "releases.win.json")] = ChannelFeed("0.1.601"),
+            [Downloaded("0.1.602", "releases.win.json")] = ChannelFeed("0.1.602"),
+            [Downloaded("0.1.603", "releases.win.json")] = ChannelFeed("0.1.603"),
+            [Foreign] = ChannelFeed("0.1.666"),
+            ["https://github.com/someone/agent-bridge/releases/download/v0.1.666/releases.win.json"] = ChannelFeed("0.1.666"),
+            [Downloaded("0.1.665", "releases.win.json")] = ChannelFeed("0.1.666"),
+        });
+        var source = new DiscoveredGithubSource(VelopackHostUpdates.Repository, prereleases, discovery, feeds, () => installed);
+        return (await new UpdateManager(source, null, copy).CheckForUpdatesAsync())?.TargetFullRelease.Version.ToString();
+    }
+
+    sealed class FakeWeb : HttpMessageHandler
+    {
+        public Func<HttpResponseMessage> Cdn = () => new(HttpStatusCode.ServiceUnavailable);
+        public Func<HttpResponseMessage> GitHub = () => new(HttpStatusCode.InternalServerError);
+        public int CdnRequests;
+        public int GitHubRequests;
+        public string? CdnUrl;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.Host == "releases.slipgates.com")
+            {
+                Interlocked.Increment(ref CdnRequests);
+                CdnUrl = request.RequestUri.AbsoluteUri;
+                return Task.FromResult(Cdn());
+            }
+            Interlocked.Increment(ref GitHubRequests);
+            return Task.FromResult(GitHub());
+        }
+    }
+
+    [Fact]
+    public async Task With_the_switch_on_the_release_list_is_read_from_the_cdn_first_and_github_is_not_asked()
+    {
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.602")},{Listed("0.1.601")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var said = new List<string>();
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, log: said.Add, cdn: true);
+
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+
+        Assert.Equal((1, 0), (web.CdnRequests, web.GitHubRequests));
+        Assert.Equal(ReleaseDiscovery.CdnList, web.CdnUrl);
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
+        Assert.Contains(said, line => line.StartsWith("update check: the release list came from the CDN", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.Found)]
+    [InlineData(HttpStatusCode.NotFound)]
+    public async Task A_cdn_that_answers_with_anything_but_a_list_falls_back_to_github(HttpStatusCode status)
+    {
+        var web = new FakeWeb { Cdn = () => new HttpResponseMessage(status), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var said = new List<string>();
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, log: said.Add, cdn: true);
+
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+        Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
+        Assert.Contains($"update check: the CDN's release list was not used, as the CDN answered {(int)status}; asking GitHub", said);
+    }
+
+    [Theory]
+    [InlineData(Foreign)]
+    [InlineData("https://github.com/someone/agent-bridge/releases/download/v0.1.666/releases.win.json")]
+    [InlineData("https://github.com/danswett/agent-bridge/releases/download/v0.1.665/releases.win.json")]
+    public async Task A_cdn_list_naming_a_download_outside_this_projects_github_releases_is_refused_and_github_is_used(string feed)
+    {
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.666", feed)},{Listed("0.1.601")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: true);
+
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    [Fact]
+    public async Task A_cdn_list_older_than_the_version_installed_here_is_refused_and_github_is_used()
+    {
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.599")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: true);
+
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    // A failed read, never "nothing newer": an empty list, one cut short, or one with no feed to install from.
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("""[{"tag_name":"v0.1.602","name":"Agent Bridge 0.1.602","draft":false,"prerelease":true,"assets":[]}]""")]
+    [InlineData("""[{"tag_name":"v0.1.602","name":"Agent Bridge 0.1.602","draft":false,"prerelease":true,"assets":[""")]
+    public async Task An_empty_cut_short_or_uninstallable_list_from_the_cdn_is_a_failed_read_and_github_is_asked(string list)
+    {
+        var web = new FakeWeb { Cdn = () => Relayed(list), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: true);
+
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    [Fact]
+    public async Task A_cdn_copy_counts_as_old_as_the_cdn_says_and_does_not_end_githubs_backoff()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero));
+        var web = new FakeWeb { GitHub = () => new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(30)) } } };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, time, random: () => 0, cdn: true);
+        Assert.True((await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => OfferedAsync(discovery))).Limited);
+
+        time.Advance(TimeSpan.FromMinutes(5));
+        web.Cdn = () => Relayed($"[{Listed("0.1.602")}]", TimeSpan.FromMinutes(3));
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+        Assert.Equal(time.GetUtcNow() - TimeSpan.FromMinutes(3), discovery.FetchedAt);
+
+        // The CDN's copy gone stale and the CDN down: GitHub's refusal still holds, unasked.
+        time.Advance(ReleaseDiscovery.Interval);
+        web.Cdn = () => new HttpResponseMessage(HttpStatusCode.BadGateway);
+        Assert.True((await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => OfferedAsync(discovery))).Limited);
+        Assert.Equal((3, 1), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    [Fact]
+    public async Task With_the_switch_off_the_cdn_is_never_asked()
+    {
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.602")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0);
+
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+
+        Assert.Equal((0, 1), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    // Review 6711939053: a copy of unknown age could be any age, so it is not used.
+    [Fact]
+    public async Task A_cdn_list_that_does_not_say_how_old_it_is_is_not_used_and_github_is_asked()
+    {
+        var web = new FakeWeb { Cdn = () => Listing($"[{Listed("0.1.602")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var said = new List<string>();
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, log: said.Add, cdn: true);
+
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+        Assert.Contains("update check: the CDN's release list was not used, as the CDN didn't say how old its copy is; asking GitHub", said);
+    }
+
+    // Review 6711939053: judged by what this machine's channel would be offered, not by the newest
+    // tag anywhere: a forged newer release carrying only another channel's index, beside a genuine
+    // older Windows one, is a list that would take this machine back.
+    [Fact]
+    public async Task A_cdn_list_whose_newest_release_carries_only_another_channels_feed_is_refused_below_githubs_last_list()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero));
+        var web = new FakeWeb { GitHub = () => Listing($"[{Listed("0.1.602")},{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, time, random: () => 0, cdn: true);
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+
+        time.Advance(ReleaseDiscovery.Interval);
+        web.Cdn = () => Relayed($"[{Listed("0.1.999", index: "releases.linux.json")},{Listed("0.1.601")}]");
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+
+        Assert.Equal((2, 2), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    // Review 6711939053: only GitHub's own list sets the floor, so a relay's list naming a release
+    // GitHub doesn't have (its feed can't be read, so the check fails) can't make later genuine
+    // relay lists look old.
+    [Fact]
+    public async Task A_forged_newer_release_from_the_cdn_does_not_make_its_later_genuine_lists_look_old()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero));
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.999")},{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, time, random: () => 0, cdn: true);
+        await Assert.ThrowsAnyAsync<Exception>(() => OfferedAsync(discovery));
+
+        time.Advance(ReleaseDiscovery.Interval);
+        web.Cdn = () => Relayed($"[{Listed("0.1.602")},{Listed("0.1.601")}]");
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+
+        Assert.Equal((2, 0), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    // Review 6712185589: a list kept from the relay is judged again for each caller. One a
+    // pre-release caller took (a pre-release above GitHub's floor, beside an older stable release)
+    // would take a stable caller below the stable floor GitHub set.
+    [Fact]
+    public async Task A_cdn_list_kept_for_a_pre_release_check_is_not_served_to_a_stable_check_below_githubs_floor()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero));
+        var web = new FakeWeb { GitHub = () => Listing($"[{Listed("0.1.602", pre: false)},{Listed("0.1.601", pre: false)}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, time, random: () => 0, cdn: true);
+        Assert.Equal("0.1.602", await OfferedAsync(discovery, prereleases: false));
+
+        time.Advance(ReleaseDiscovery.Interval);
+        web.Cdn = () => Relayed($"[{Listed("0.1.603")},{Listed("0.1.601", pre: false)}]");
+        Assert.Equal("0.1.603", await OfferedAsync(discovery));
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
+
+        Assert.Equal("0.1.602", await OfferedAsync(discovery, prereleases: false));
+        Assert.Equal((2, 2), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    // Review 6712407884: a kept relay copy is judged by its age when it is served, not only when
+    // it was fetched, so one taken just under the hour isn't served past it.
+    [Fact]
+    public async Task A_kept_cdn_copy_is_served_until_it_is_an_hour_old_and_not_after()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero));
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.602")}]", TimeSpan.FromMinutes(58)), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, time, random: () => 0, cdn: true);
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+        Assert.Equal((1, 0), (web.CdnRequests, web.GitHubRequests));
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    [Fact]
+    public async Task A_feed_txt_wins_over_the_cdn_and_github()
+    {
+        var feed = Directory.CreateDirectory(Path.Combine(root, "releases")).FullName;
+        File.WriteAllText(Path.Combine(feed, "releases.win.json"), ChannelFeed("0.1.605"));
+        File.WriteAllText(Path.Combine(Directory.CreateDirectory(Path.Combine(root, "app")).FullName, "feed.txt"), feed);
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.602")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: true);
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
+        var updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
+
+        Assert.Equal("0.1.605", (await updates.CheckAsync(CancellationToken.None))?.Version);
+
+        Assert.Equal((0, 0), (web.CdnRequests, web.GitHubRequests));
+    }
+
     [Fact]
     public void Pre_releases_follow_the_apps_setting_for_the_profile_read_as_the_app_reads_it()
     {
