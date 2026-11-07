@@ -284,6 +284,7 @@ static partial class SelfTest
             await CheckDividers(window, main, Check, outFile);
             await CheckMachineTabs(window, main, Check, outFile);
             await CheckDelegates(window, main, demo, Check, outFile);
+            await CheckSessionDetails(window, main, demo, Check, outFile);
             await CheckAnswerMoves(window, main, Check, outFile);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.
@@ -1017,6 +1018,7 @@ static partial class SelfTest
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
             await PictureYoursInHighContrast(window, check, outFile);
             await PictureFoldInHighContrast(window, main, check, outFile);
+            await PictureDetailsInHighContrast(window, main, demo, check, outFile);
             await PictureAgentRows(window, main, outFile, "highcontrast");
             await PictureRowsTheAppCantActOn(window, main, demo, outFile, [ElementTheme.Default]);
             await ProgressGallery(window, main, demo, check, outFile, result, "highcontrast");

@@ -26,10 +26,10 @@
 // Status is a glyph and the words of ui.md §2.2 (js/status.js): no coloured edge or glow (#178).
 import { h } from './dom.js';
 import { designIcon, drivenBadge, glyph, setGlyph } from './glyph.js';
-import { ago, duration, localTime } from './time.js';
+import { ago, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
-import { ATTENTION_RULES, rowAt, sessionStatus, silentSince, statusLabel } from '../status.js';
-import { clockTime } from '../auth-state.js';
+import { ATTENTION_RULES, rowAt, sessionStatus, statusLabel } from '../status.js';
+import { awayWords, detailRows } from '../details-rows.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
 import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, receiptLive } from './receipt.js';
 import { answerability } from '../answers.js';
@@ -49,6 +49,8 @@ import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js'
 import { holdKey } from './hold.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
+// The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
+const CLOCK_ROWS = new Set(['status', 'since', 'started', 'updated']);
 // Each session's delegate events as the person left them (ui.md §6.4): its fold (D3) open or
 // closed, and the shared lines opened to name everyone. By machine and session, so a card drawn
 // again (a machine back online, a list sent again) keeps them, for as long as the page is open.
@@ -386,7 +388,6 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
   };
 }
 
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // An answer whose panel stays once its question has gone (SessionCard #leave): one on its way, and
 // any outcome §6.5 draws on the panel. Busy and refused, which would offer its options again for a
 // question that has gone, resolve to the card's receipt at once.
@@ -437,6 +438,10 @@ export class SessionCard {
   // the words that said so when last drawn, which move on with the clock.
   #stale = null;
   #shownStale = null;
+  // Details' value cells by row, and the status words the header shows, which its Status row says.
+  #factCells = null;
+  #detailsStatus = null;
+  #detailsAway = false;
   // The row's name but for its age, as #nameRow puts it together: { drawn, unsaid }.
   #rowName = { drawn: [], unsaid: [] };
   // The question last drawn (undefined before the first drawing), and whether a finger or a
@@ -743,6 +748,8 @@ export class SessionCard {
     }
     const away = stale?.join(' \u00b7 ');
     const words = stale ? { ...state, glyph: 'failed', driven: false, facts: stale, text: away, tone: 'muted', spoken: away.charAt(0).toLowerCase() + away.slice(1) } : state;
+    this.#detailsStatus = stale ? words.text : null;
+    this.#detailsAway = !!stale;
 
     // The row.
     e.rowTitle.textContent = title;
@@ -829,9 +836,14 @@ export class SessionCard {
     // prompt you didn't type is no bubble of yours and never rises.
     if (!first && echoed && !e.user.hidden) { enter(e.user, 'acknowledge', { dy: 1 }); }
 
-    if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId, s.attention?.message, silentSince(s)])) {
-      this.#renderFacts(s);
+    // The rows, as the shared table sets them. What moves with the clock is drawn again by the
+    // tick, in place, so only the rest, and which rows there are, decide a redraw. Started's own time
+    // is in the key: another start is another <time>.
+    const rows = detailRows(s, { status: stale ? words.text : null, machine: this.machineName || null, away: !!stale });
+    if (this.#changed('facts', rows.map((r) => (CLOCK_ROWS.has(r.kind) ? [r.kind, r.at] : [r.kind, r.text])))) {
+      this.#renderFacts(rows);
     }
+    this.#tickFacts(s, Date.now());
     this.#bringQuestion(atEnd);
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
@@ -1091,36 +1103,44 @@ export class SessionCard {
     if (origin) { e.promptToggle.setAttribute('aria-label', disclosureName(origin, open)); }
   }
 
-  // Details (ui.md §6.2): everything the row leaves out, as a property list.
-  #renderFacts(s) {
+  // Details (ui.md §6.2): everything the row leaves out, as a property list, its rows and their
+  // order the shared table's (details-rows.js). Not responding since is the time it went silent,
+  // which the row's age counts from (§6.13); Message is the bridge's sentence for what is wrong
+  // (#800), plain text, never a link and never the agent's own words, and only here.
+  #renderFacts(list) {
     const e = this.els;
-    const rows = [];
-    const add = (term, value, cls) => {
-      if (value === null || value === undefined || value === '') { return; }
-      rows.push(h('div', { class: `fact${cls ? ` fact-${cls}` : ''}` }, h('dt', null, term), h('dd', null, value)));
+    const cells = new Map();
+    const value = (row) => {
+      switch (row.kind) {
+        case 'agent': return h('span', { class: 'agent-name' }, row.text);
+        case 'branch': return h('span', { class: 'branch' }, row.text);
+        case 'folder': return pathView(row.text);
+        case 'attention': return h('span', { class: 'attention-message', dir: 'ltr' }, row.text);
+        case 'pid': case 'id': return h('span', { class: 'mono' }, row.text);
+        case 'started': return h('time', { datetime: row.at, title: localTime(row.at) }, row.text);
+        default: return row.text;
+      }
     };
-    const b = s.activity.background;
-    add('Agent', h('span', { class: 'agent-name' }, AGENT_NAME[s.agent]), 'agent');
-    add('Machine', this.machineName || null, 'machine');
-    add('Repository', s.repository, 'repo');
-    add('Branch', s.branch ? h('span', { class: 'branch' }, s.branch) : null, 'branch');
-    add('Folder', s.cwd ? pathView(s.cwd) : null, 'folder');
-    add('Model', s.model, 'model');
-    add('Started', s.startedAt ? h('time', { datetime: s.startedAt, title: localTime(s.startedAt) }, localTime(s.startedAt)) : null, 'started');
-    e.since = h('span', { class: 'since' });
-    add('In this state', e.since, 'since');
-    add('Background', [b?.agents ? plural(b.agents, 'background agent', 'background agents') : null, b?.shells ? plural(b.shells, 'background command', 'background commands') : null].filter(Boolean).join(' \u00b7 ') || null, 'background');
-    add('Turns', s.activity.turnCount !== null && s.activity.turnCount !== undefined ? `${s.activity.turnCount} turns` : null, 'turns');
-    add('Compactions', s.activity.compactions ? plural(s.activity.compactions, 'compaction', 'compactions') : null, 'compactions');
-    add('Process', s.processId !== null && s.processId !== undefined ? `pid ${s.processId}` : null, 'pid');
-    // What the agent said went wrong (#800): plain text, revealed and cut short by auth-state.js,
-    // never a link, and only here, never on its row.
-    // The host's sentence for what is wrong (6649775484), as it is: never the agent's own text.
-    add('Message', s.attention?.message ? h('span', { class: 'attention-message', dir: 'ltr' }, s.attention.message) : null, 'attention');
-    // Not responding: the time it went silent, which the row's age counts from (ui.md §6.13).
-    add('Not responding since', clockTime(silentSince(s)) || null, 'silent');
+    const rows = list.map((row) => {
+      const dd = h('dd', null, value(row));
+      cells.set(row.kind, dd);
+      return h('div', { class: `fact fact-${row.kind}` }, h('dt', null, row.term), dd);
+    });
+    this.#factCells = cells;
     e.facts.replaceChildren(...rows);
     this.refreshTimes();
+  }
+
+  // The values that move with the clock (and the status words, which "last seen 2m ago" is one of
+  // while the machine is away), changed where they are, so a selection in another row stays.
+  #tickFacts(s, now) {
+    if (!this.#factCells?.size) { return; }
+    for (const row of detailRows(s, { status: this.#detailsStatus, machine: this.machineName || null, away: this.#detailsAway, now })) {
+      const dd = CLOCK_ROWS.has(row.kind) ? this.#factCells.get(row.kind) : null;
+      // Started's words are in its <time>, which keeps its datetime and its full timestamp's tooltip.
+      const at = row.kind === 'started' ? dd?.firstElementChild ?? dd : dd;
+      if (at && at.textContent !== row.text) { at.textContent = row.text; }
+    }
   }
 
   // What the session's machine is called, and whether its row says so. What is sent from the
@@ -1143,17 +1163,9 @@ export class SessionCard {
     if (this.#s) { this.update(this.#s); }
   }
 
-  // ui.md §2.2 (#269), as facts: "Offline · last seen 2m ago" while its machine is away,
-  // "Reconnecting…" while it has no open channel and is still tried; null otherwise, including
-  // while its snapshot is still coming (its rows say what that snapshot says, and still take
-  // nothing) and for a machine that no longer offers sessions (its host line says so).
+  // ui.md §2.2 (#269), as facts (details-rows.js's awayWords).
   #staleText(now = Date.now()) {
-    const stale = this.#stale;
-    // On a return the row is as it was last seen: the away states wait for the grace to end (#950).
-    if (!stale || stale.grace || stale.reason === 'confirming' || stale.reason === 'unsupported') { return null; }
-    if (stale.reason === 'reconnecting') { return ['Reconnecting…']; }
-    const seen = ago(stale.since, now);
-    return seen ? ['Offline', `last seen ${seen}`] : ['Offline'];
+    return awayWords(this.#stale, now);
   }
 
   // Activity since the session was last on screen (session-order.js): semibold, and the 6 px
@@ -1780,12 +1792,7 @@ export class SessionCard {
   refreshTimes(now = Date.now()) {
     const s = this.#s;
     const e = this.els;
-    // Idle needs no clock; delegating does, since it is waiting on something.
-    const since = sessionStatus(s).view === 'idle' ? '' : duration(s.statusSince, now);
-    if (e.since) {
-      e.since.textContent = since ? `for ${since}` : '';
-      e.since.closest('.fact')?.toggleAttribute('hidden', !since);
-    }
+    this.#tickFacts(s, now);
     e.rowAge.textContent = ago(rowAt(s), now);
     this.#nameRow();
     e.agentAge.textContent = ago(mainVoice(s).at ?? s.updatedAt, now);
