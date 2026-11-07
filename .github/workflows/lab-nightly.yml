@@ -155,7 +155,7 @@ jobs:
           ci_run=''
           # Velopack's installer names (build/app-channels.ps1): x64's `win` channel has no suffix.
           for role in win-x64 win-arm64; do
-            if [ "$role" = win-x64 ]; then asset=AgentBridgeApp-win-Setup.exe; else asset=AgentBridgeApp-win-arm64-Setup.exe; fi
+            if [ "$role" = win-x64 ]; then asset=Slipgates-win-Setup.exe; else asset=Slipgates-win-arm64-Setup.exe; fi
             gh release download "$tag" -R "$REPO" -D "$dir/$role" -p "$asset"
             # Attested by main's ci.yml at this commit (ci.yml attest), or it isn't a cut.
             gh attestation verify "$dir/$role/$asset" -R "$REPO" --signer-workflow "$REPO/.github/workflows/ci.yml" \

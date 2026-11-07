@@ -20,8 +20,10 @@ public sealed class AppPackagesTests : IDisposable
     // Engineering's Claude-family review of #719 (6677216492), HIGH: built from the delta, the
     // package was never the full package's bytes, so the app's own check (DownloadMark) failed
     // every such update.
-    [Fact]
-    public async Task A_release_with_a_delta_from_the_installed_one_is_downloaded_as_its_full_package_matching_the_feeds_checksum()
+    [Theory]
+    [InlineData("Slipgates")]
+    [InlineData("AgentBridgeApp")]
+    public async Task A_release_with_a_delta_from_the_installed_one_is_downloaded_as_its_full_package_matching_the_feeds_checksum(string downloadName)
     {
         var feed = Directory.CreateDirectory(Path.Combine(root, "feed")).FullName;
         var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
@@ -29,6 +31,8 @@ public sealed class AppPackagesTests : IDisposable
         var delta = RandomNumberGenerator.GetBytes(64);
         File.WriteAllBytes(Path.Combine(feed, "AgentBridgeApp-0.1.601-full.nupkg"), full);
         File.WriteAllBytes(Path.Combine(feed, "AgentBridgeApp-0.1.601-delta.nupkg"), delta);
+        File.WriteAllBytes(Path.Combine(feed, $"{downloadName}-win-Setup.exe"), RandomNumberGenerator.GetBytes(64));
+        File.WriteAllBytes(Path.Combine(feed, $"{downloadName}-win-Portable.zip"), RandomNumberGenerator.GetBytes(64));
         // The installed version's full package, the base a delta applies to.
         File.WriteAllBytes(Path.Combine(packages, "AgentBridgeApp-0.1.600-full.nupkg"), RandomNumberGenerator.GetBytes(4096));
         var assets = VelopackAssetFeed.FromJson($$"""

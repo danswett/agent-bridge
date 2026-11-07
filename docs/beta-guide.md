@@ -22,12 +22,12 @@ are.
 
    | PC | Installer |
    |---|---|
-   | Intel or AMD (most PCs) | `AgentBridgeApp-win-Setup.exe` |
-   | Windows on Arm (Snapdragon and similar) | `AgentBridgeApp-win-arm64-Setup.exe` |
+   | Intel or AMD (most PCs) | `Slipgates-win-Setup.exe` |
+   | Windows on Arm (Snapdragon and similar) | `Slipgates-win-arm64-Setup.exe` |
 
    Not sure? Open Settings > System > About and look at "System type". "x64-based processor"
-   means the first file; "ARM-based processor" means the second. The installer files are named
-   `AgentBridgeApp`, but the app itself is called Slipgates.
+   means the first file; "ARM-based processor" means the second. Older releases may still have
+   installer filenames beginning `AgentBridgeApp`; download links use each release's actual files.
 3. Run it. Windows shows a blue box, **Windows protected your PC**. This is expected: the beta
    installer is not signed yet, and Windows warns about any installer it does not recognize.
    Click **More info**, then **Run anyway**.

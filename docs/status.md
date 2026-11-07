@@ -459,8 +459,8 @@ agent-ha-bridge releases from this work:
 ## 8. Operating notes
 
 - **Install on a new machine.** Download the installer for its architecture from the newest
-  [release](https://github.com/danswett/agent-bridge/releases): `AgentBridgeApp-win-Setup.exe`
-  on an x64 PC, `AgentBridgeApp-win-arm64-Setup.exe` on Windows on Arm (DSWETT-ARM8; Settings,
+  [release](https://github.com/danswett/agent-bridge/releases): `Slipgates-win-Setup.exe`
+  on an x64 PC, `Slipgates-win-arm64-Setup.exe` on Windows on Arm (DSWETT-ARM8; Settings,
   System, About, "System type" says which). They are all pre-releases, so `releases/latest`
   does not work. Run it, then sign in from the app. Each copy updates only from its own
   architecture's channel ([app-windows.md](app-windows.md#releases-and-updates-every-merge-to-main-is-a-pre-release)).

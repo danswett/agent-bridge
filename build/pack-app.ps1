@@ -157,6 +157,7 @@ if ($ReleaseNotes) { $more += @('--releaseNotes', [IO.Path]::GetFullPath($Releas
 if ($Runtime -ne 'win-x64') { $more += @('--runtime', $Runtime) }
 & vpk pack -u $packId -v $Version -c $target.Channel -p $publish -e AgentBridge.exe -o $releases --packTitle $AppProductName --icon (Join-Path $publish $AppIconFile) @more
 if ($LASTEXITCODE) { throw 'vpk pack failed' }
+Set-AppDownloadNames $releases $target.Channel
 if ($RequireSignature) {
     $check = Test-AppReleaseSignature $releases $target.Channel $Version $SignerEku (Join-Path $Out 'signature-check')
     if ($check.Problems) { throw "signing is required, but the packed release is not signed as it must be:`n  $($check.Problems -join "`n  ")" }

@@ -181,17 +181,23 @@ public sealed class HostUpdatesTests : IDisposable
     // GitHub's own shape, as the API lists releases: the adapter keeps each release's assets, so
     // Velopack finds the channel's feed among them, and leaves pre-releases out when they are off.
     [Theory]
-    [InlineData(true, "0.1.602")]
-    [InlineData(false, "0.1.601")]
-    public async Task A_release_GitHub_lists_is_offered_from_its_channel_feed_and_a_pre_release_only_when_they_are_on(bool prereleases, string offered)
+    [InlineData(true, "0.1.602", "Slipgates")]
+    [InlineData(false, "0.1.601", "Slipgates")]
+    [InlineData(true, "0.1.602", "AgentBridgeApp")]
+    [InlineData(false, "0.1.601", "AgentBridgeApp")]
+    public async Task A_release_GitHub_lists_is_offered_from_its_channel_feed_and_a_pre_release_only_when_they_are_on(bool prereleases, string offered, string downloadName)
     {
         var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
         var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
         static string Download(string version, string file) => $"https://github.com/danswett/agent-bridge/releases/download/v{version}/{file}";
-        static string Release(string version, bool pre, string published) => $$"""
+        string Release(string version, bool pre, string published) => $$"""
             {"name":"Agent Bridge {{version}}","prerelease":{{(pre ? "true" : "false")}},"published_at":"{{published}}","assets":[
               {"name":"releases.win.json","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/1","browser_download_url":"{{Download(version, "releases.win.json")}}","content_type":"application/json"},
-              {"name":"AgentBridgeApp-{{version}}-full.nupkg","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/2","browser_download_url":"{{Download(version, $"AgentBridgeApp-{version}-full.nupkg")}}","content_type":"application/octet-stream"}]}
+              {"name":"AgentBridgeApp-{{version}}-full.nupkg","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/2","browser_download_url":"{{Download(version, $"AgentBridgeApp-{version}-full.nupkg")}}","content_type":"application/octet-stream"},
+              {"name":"{{downloadName}}-win-Setup.exe","browser_download_url":"{{Download(version, $"{downloadName}-win-Setup.exe")}}","content_type":"application/octet-stream"},
+              {"name":"{{downloadName}}-win-Portable.zip","browser_download_url":"{{Download(version, $"{downloadName}-win-Portable.zip")}}","content_type":"application/zip"},
+              {"name":"{{downloadName}}-win-arm64-Setup.exe","browser_download_url":"{{Download(version, $"{downloadName}-win-arm64-Setup.exe")}}","content_type":"application/octet-stream"},
+              {"name":"{{downloadName}}-win-arm64-Portable.zip","browser_download_url":"{{Download(version, $"{downloadName}-win-arm64-Portable.zip")}}","content_type":"application/zip"}]}
             """;
         static string Feed(string version) =>
             $$"""{"Assets":[{"PackageId":"AgentBridgeApp","Version":"{{version}}","Type":"Full","FileName":"AgentBridgeApp-{{version}}-full.nupkg","SHA1":"0000000000000000000000000000000000000000","SHA256":"0000000000000000000000000000000000000000000000000000000000000000","Size":1}]}""";

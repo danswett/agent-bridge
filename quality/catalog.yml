@@ -190,7 +190,7 @@ suites:
     project: tests/AgentBridge.Host.Tests
     # CallerGuardTests reads the app's AssemblyName and pack-app.ps1's -e, and PushVectorTests and
     # SignedCommandVectorTests the shared vectors (#454), none of which the graph can see.
-    triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/pack-app.ps1, docs/protocol/vectors/**, docs/protocol/connector-read*]
+    triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/app-channels.ps1, build/pack-app.ps1, docs/protocol/vectors/**, docs/protocol/connector-read*]
     # Bounded by the MigrationTests and LaunchFlow classes, each split for parallelism (#496).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
     where: ci.yml product
