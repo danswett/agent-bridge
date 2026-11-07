@@ -5,6 +5,7 @@ using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Delivery.Claude;
 using AgentBridge.Host.Delivery.Codex;
 using AgentBridge.Host.Delivery.Copilot;
+using System.Security.Cryptography;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery;
@@ -23,7 +24,9 @@ public interface ISessionAnswerer
     // watch: hears the delivery's stages as it goes (DeliveryWatch), for a caller that reports them.
     // confirmed: the confirmation an answer carried, as the host's relay path checks it (#803); only
     // there is one made, so Approve on an approval the host escaped anything in goes from nowhere else.
-    Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null);
+    // sender: who asked (the channel's peer, or the connector). Only the one who sent a prompt's
+    // first answer is given its outcome again for the same answer under a new request (#1093).
+    Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null);
 }
 
 // A person's confirmation of an approval the host escaped anything in (#803), as the host that took
@@ -95,7 +98,9 @@ public sealed class AnswerOptions
 //     DeliveryGate, and one request is typed at most once: its outcome is remembered and
 //     returned again for a resend.
 //   * One prompt is typed into at most once, whatever the request: the claim is written to
-//     the AttemptLedger before the first key, and kept unless nothing was typed.
+//     the AttemptLedger before the first key, and kept unless nothing was typed. The same
+//     answer sent again under another request UUID is that request resent: it gets the first
+//     outcome (read again if unconfirmed) and types nothing; a different answer is refused (#1093).
 //   * Immediately before typing, the agent's own record must still show that very prompt
 //     unanswered, by its id (stale otherwise, and nothing is typed); a record that cannot
 //     be read types nothing.
@@ -144,15 +149,154 @@ public sealed class AnswerService : ISessionAnswerer
 
     public bool ApprovesPermissions => Available && options.CopilotRemoteApproval;
 
-    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null)
+    // Test-only: run once a call has registered as its prompt's first answer, and before it is
+    // admitted to the request cache, to hold it there while another identical call arrives (#1100).
+    internal Action? AfterRegistered { get; set; }
+
+    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key))
         {
             return Task.FromResult(Refused("request must be a UUID"));
         }
-        return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "answer", key, log), t => DeliverAsync(request, key, t, confirmed), result =>
-            log($"answer {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}"),
-            Recheck(key));
+        // The same answer to the same prompt under another request UUID (the phone reloaded, the
+        // first one's record gone), from the same sender, is that first request sent again: it is
+        // given the first outcome and nothing is typed (#1093). Its own UUID stays unknown. From
+        // another sender, or saying anything else, it goes the usual way and is refused the same.
+        // A request UUID belongs to the sender, session and question it was admitted for: any
+        // other asking for it, whether the first's record is still held or not, is a request of
+        // its own under a new UUID, so that no outcome, stage or progress is given to it.
+        var prompt = (request.Id, request.Question);
+        Task<AnswerResult> AsAnother() => AnswerAsync(request with { Request = Guid.NewGuid().ToString("D") }, cancellationToken, watch, confirmed, sender);
+        // Finding the prompt's first answer, registering this one as it, and admitting it to the
+        // request cache are one step: a second identical call cannot land between them and start
+        // a delivery of its own beside the registered one, so there is one delivery per prompt, a
+        // later identical call joins it, and its outcome is saved against the right record.
+        lock (firstGate)
+        {
+            var first = SameAnswerBefore(prompt, key, AnswerDigest.Of(request), sender, out var foreign);
+            if (foreign) { return AsAnother(); }
+            if (first is null) { AfterRegistered?.Invoke(); }
+            if (first is not null)
+            {
+                log($"answer {key.ToString()[..8]} to {Short(request.Id)}: the outcome of {first.Request.ToString()[..8]}, the same answer, is returned and nothing is typed");
+                if (!requests.Knows(first.Request)) { return ReadAgain(first, true); }
+            }
+            var flow = first?.Request ?? key;
+            var outcome = requests.Once(flow, watch, () => new DeliveryTimeline(options.Time, "answer", flow, log),
+                t => first is null ? DeliverAsync(request, key, t, confirmed) : Task.FromResult(AsRetried(first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed), true)),
+                result =>
+                {
+                    log($"answer {flow.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
+                    Settled(prompt, flow, result);
+                },
+                Recheck(flow), (sender, request.Id, request.Question), AsAnother, result => AsRetried(result, true));
+            // Refused to start (the host is departing): nothing ran, so nothing is the first.
+            if (first is null && !requests.Knows(key) && firstAnswers.TryGetValue(prompt, out var mine) && mine.Request == key) { firstAnswers.Remove(prompt); }
+            return outcome;
+        }
+    }
+
+    // The first answer's outcome once its request has been forgotten: an unconfirmed one is read
+    // again from the session, as a resend within the request's memory is, so it turns delivered
+    // when the session has recorded it since, however long after. Nothing is typed.
+    async Task<AnswerResult> ReadAgain(FirstAnswer first, bool retry)
+    {
+        var last = first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed);
+        Func<Task<AnswerResult?>>? read;
+        lock (firstGate) { read = first.Read; }
+        if (last.Outcome == AnswerOutcome.Unconfirmed && read is not null)
+        {
+            AnswerResult? later = null;
+            try { later = await read(); }
+            catch (Exception) { }
+            if (later is not null)
+            {
+                lock (firstGate)
+                {
+                    first.Last = later;
+                    if (later.Outcome == AnswerOutcome.Delivered) { first.Read = null; }
+                }
+                last = later;
+            }
+        }
+        return AsRetried(last, retry);
+    }
+
+    // Typed, and nothing recorded for it since: the first attempt's own words (what was typed
+    // and what was held back, or what the session recorded instead) are not the retry's to say;
+    // it only knows nothing was typed again. Whatever the stage, which still says how far the
+    // first got.
+    static AnswerResult AsRetried(AnswerResult result, bool retry) =>
+        retry && result.Outcome == AnswerOutcome.Unconfirmed ? result with { Reason = DeliveryReasons.AnswerNotConfirmed } : result;
+
+    // What each prompt's first answer was, by session and question: kept as long as the ledger
+    // keeps the prompt's claim, in memory only. A host that restarts forgets it and refuses a
+    // second request for a prompt it typed into, as the ledger alone does.
+    readonly Dictionary<(string Session, string Question), FirstAnswer> firstAnswers = [];
+    readonly Lock firstGate = new();
+
+    sealed class FirstAnswer(Guid request, byte[] digest, string? sender, DateTimeOffset at)
+    {
+        public Guid Request { get; } = request;
+        public byte[] Digest { get; } = digest;
+        // Who sent it (the channel's peer, or the connector): only that sender is given its
+        // outcome for the same answer, so no other can learn what a first answer said by
+        // guessing it under a new request.
+        public string? Sender { get; } = sender;
+        public DateTimeOffset At { get; } = at;
+        // What it came to once typed: delivered or unconfirmed, and as read again since.
+        public AnswerResult? Last;
+        // How to read the session's record of that same call again, without typing, while it
+        // is unconfirmed; kept as long as the answer is.
+        public Func<Task<AnswerResult?>>? Read;
+    }
+
+    // The prompt's first answer when this request, from the same sender, says the same, to be
+    // given its outcome (this request's own UUID included, once the request's memory has
+    // forgotten it); null when this is the prompt's first request, a resend the request's own
+    // memory answers, or another sender or a different answer, which goes the usual way and is
+    // refused by the ledger once anything was typed: the same refusal for both, so a guess
+    // cannot be told from a miss. A request seen first is recorded as the prompt's first.
+    FirstAnswer? SameAnswerBefore((string Session, string Question) prompt, Guid key, byte[] digest, string? sender, out bool foreign)
+    {
+        foreign = false;
+        lock (firstGate)
+        {
+            var now = options.Time.GetUtcNow();
+            foreach (var old in firstAnswers.Where(a => now - a.Value.At > AttemptLedger.Keep).Select(a => a.Key).ToList()) { firstAnswers.Remove(old); }
+            // A UUID is the sender's, for the prompt it was first admitted for, whatever question
+            // or sender comes with it now and however long ago the request's own record went.
+            foreach (var (admitted, owner) in firstAnswers)
+            {
+                if (owner.Request == key && (admitted != prompt || !string.Equals(owner.Sender, sender, StringComparison.Ordinal))) { foreign = true; return null; }
+            }
+            if (firstAnswers.TryGetValue(prompt, out var known))
+            {
+                // Both compared, whatever the first says, and the digests in constant time.
+                var sameSender = string.Equals(known.Sender, sender, StringComparison.Ordinal);
+                var same = CryptographicOperations.FixedTimeEquals(known.Digest, digest) & sameSender;
+                if (known.Request == key) { return known.Last is not null && !requests.Knows(key) ? known : null; }
+                if (!same) { return null; }
+                // Still known, or settled and forgotten with its outcome kept.
+                if (requests.Knows(known.Request) || known.Last is not null) { return known; }
+                // Never run, or forgotten before its outcome was kept: no longer the first.
+                firstAnswers.Remove(prompt);
+            }
+            if (!requests.Knows(key)) { firstAnswers[prompt] = new FirstAnswer(key, digest, sender, now); }
+            return null;
+        }
+    }
+
+    // A first answer that was typed keeps its outcome, and as it is read again; one that was not
+    // (refused, stale, busy) leaves the prompt open to be answered afresh.
+    void Settled((string Session, string Question) prompt, Guid flow, AnswerResult result)
+    {
+        lock (firstGate)
+        {
+            if (!firstAnswers.TryGetValue(prompt, out var known) || known.Request != flow) { return; }
+            if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { known.Last = result; } else { firstAnswers.Remove(prompt); }
+        }
     }
 
     // A resend of a request already settled unconfirmed: what the session has recorded since,
@@ -174,7 +318,14 @@ public sealed class AnswerService : ISessionAnswerer
     {
         var now = options.Time.GetUtcNow();
         foreach (var (old, _) in rechecks.Where(r => now - r.Value.At > options.RememberFor).ToList()) { rechecks.TryRemove(old, out _); }
-        rechecks[Guid.Parse(request.Request)] = (read, now);
+        var key = Guid.Parse(request.Request);
+        rechecks[key] = (read, now);
+        // The prompt's first answer keeps it for as long as it keeps the outcome, past the
+        // request's own memory, so a retry long after still reads the record again.
+        lock (firstGate)
+        {
+            if (firstAnswers.TryGetValue((request.Id, request.Question), out var known) && known.Request == key) { known.Read = read; }
+        }
     }
 
     async Task<AnswerResult> DeliverAsync(AnswerRequest request, Guid key, DeliveryTimeline timeline, IEscapedConfirmation? confirmed)
@@ -1218,6 +1369,6 @@ public sealed class UnsupportedPlatformAnswerer : ISessionAnswerer
 {
     public bool Available => false;
 
-    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null) =>
+    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null) =>
         Task.FromResult(new AnswerResult(AnswerOutcome.Refused, "answering is not supported on this platform yet; answer at the machine"));
 }

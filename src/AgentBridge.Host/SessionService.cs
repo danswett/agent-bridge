@@ -380,7 +380,7 @@ public sealed class SessionService
         // A confirmation is checked as coming from the device on the other end of a channel through
         // the relay, and from nowhere else: on this machine's pipe it is none, and refused as such.
         var confirmed = channel is SecureChannel secure && EscapedApprovals is { } escaped ? escaped.For(secure.PeerId, request) : null;
-        var result = await answers.AnswerAsync(request, watch: watch, confirmed: confirmed);
+        var result = await answers.AnswerAsync(request, watch: watch, confirmed: confirmed, sender: channel.PeerId);
         // Typed from this device: it needs no notification that the question was answered.
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {

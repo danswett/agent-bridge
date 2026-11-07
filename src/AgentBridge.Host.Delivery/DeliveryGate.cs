@@ -207,6 +207,19 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
         // What a read-only recheck has made of the settled outcome since (#467): the latest one,
         // finished or still reading, which a repeat then gets.
         public Task<T>? Rechecked;
+        // Who admitted it, and for what (an answer's sender, session and question): a lookup by
+        // the request's UUID is a repeat only when it says the same, decided under the lock.
+        public object? Owner;
+    }
+
+    // Whether the request is remembered now, pending or settled. Reads only: nothing is started.
+    public bool Knows(Guid key)
+    {
+        lock (gate)
+        {
+            Forget();
+            return requests.ContainsKey(key);
+        }
     }
 
     // For a request with no stages to report (a stop, a launch).
@@ -219,15 +232,21 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
     // the session recorded late, #467); it must never act, only read, and what it says is kept as
     // the request's outcome from then on. It may take a bounded moment, and a repeat meanwhile
     // gets that same recheck's outcome.
+    // owner: what the request was admitted for. A UUID already remembered for another owner is
+    // not a repeat: nothing of its outcome is given, no watch is attached, and foreign (which
+    // must start a request of its own under another UUID) answers instead.
+    // repeated: how a repeat's outcome is said, applied to every call that is not the one
+    // admission, decided under the same lock as the admission.
     public Task<T> Once(Guid key, DeliveryWatch? watch, Func<DeliveryTimeline> timeline, Func<DeliveryTimeline, Task<T>> deliver, Action<T> settled,
-        Func<T, Task<T?>>? recheck = null) =>
-        Run(key, watch, timeline, t => deliver(t!), settled, recheck);
+        Func<T, Task<T?>>? recheck = null, object? owner = null, Func<Task<T>>? foreign = null, Func<T, T>? repeated = null) =>
+        Run(key, watch, timeline, t => deliver(t!), settled, recheck, owner, foreign, repeated);
 
     Task<T> Run(Guid key, DeliveryWatch? watch, Func<DeliveryTimeline>? timeline, Func<DeliveryTimeline?, Task<T>> deliver, Action<T> settled,
-        Func<T, Task<T?>>? recheck = null)
+        Func<T, Task<T?>>? recheck = null, object? owner = null, Func<Task<T>>? foreign = null, Func<T, T>? repeated = null)
     {
-        Entry entry;
-        bool repeat;
+        Entry entry = null!;
+        bool repeat = false;
+        bool divert = false;
         IDisposable? delivery = null;
         Task<T>? rechecked = null;
         // A recheck started by this repeat waits for its watch: one that reads the late record
@@ -238,28 +257,37 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
         {
             Forget();
             repeat = requests.TryGetValue(key, out var known);
-            if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery()) is null)
+            if (repeat && foreign is not null && !Equals(known!.Owner, owner)) { divert = true; }
+            else
             {
-                return Task.FromResult(blocked is null ? throw new InvalidOperationException("no departure refusal was supplied") : blocked());
-            }
-            try { entry = known ?? (requests[key] = new Entry(timeline?.Invoke())); }
-            catch { delivery?.Dispose(); throw; }
-            if (repeat && recheck is not null && entry.Settled is not null)
-            {
-                var latest = entry.Rechecked ?? entry.Outcome.Task;
-                // One still reading is the answer to this repeat too; a finished one is read again.
-                if (latest.IsCompletedSuccessfully)
+                if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery()) is null)
                 {
-                    watching = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                    rechecked = entry.Rechecked = Recheck(recheck, latest.Result, watching.Task);
+                    return Task.FromResult(blocked is null ? throw new InvalidOperationException("no departure refusal was supplied") : blocked());
                 }
-                else { rechecked = entry.Rechecked = latest; }
+                try { entry = known ?? (requests[key] = new Entry(timeline?.Invoke()) { Owner = owner }); }
+                catch { delivery?.Dispose(); throw; }
+                if (repeat && recheck is not null && entry.Settled is not null)
+                {
+                    var latest = entry.Rechecked ?? entry.Outcome.Task;
+                    // One still reading is the answer to this repeat too; a finished one is read again.
+                    if (latest.IsCompletedSuccessfully)
+                    {
+                        watching = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        rechecked = entry.Rechecked = Recheck(recheck, latest.Result, watching.Task);
+                    }
+                    else { rechecked = entry.Rechecked = latest; }
+                }
             }
         }
+        if (divert) { return foreign!(); }
         // Outside the lock: a repeat's watch may hear a stage already reached, at once.
         entry.Timeline?.Watch(watch, first: !repeat);
         watching?.SetResult();
-        if (repeat) { return rechecked ?? entry.Rechecked ?? entry.Outcome.Task; }
+        if (repeat)
+        {
+            var said = rechecked ?? entry.Rechecked ?? entry.Outcome.Task;
+            return repeated is null ? said : Said(said, repeated);
+        }
         _ = Task.Run(async () =>
         {
             try
@@ -293,6 +321,8 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
             return later;
         }
     }
+
+    static async Task<T> Said(Task<T> outcome, Func<T, T> repeated) => repeated(await outcome);
 
     void Forget()
     {
