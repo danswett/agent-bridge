@@ -197,6 +197,32 @@ Check 'A failed role fails the cut, and a pass with a step not passed or no real
     }
 }
 
+Check 'A claimed pass is invalid when either role omits any mandatory v1 step' {
+    foreach ($targetRole in 'win-x64', 'win-arm64') {
+        foreach ($missingStep in 'launch', 'reply', 'answer', 'stop', 'update') {
+            $dir = Write-Results {
+                param($role, $r)
+                if ($role -ceq $targetRole) { $r.steps = @($r.steps | Where-Object { $_.name -cne $missingStep }) }
+            }
+            $v = Get-Verdict $dir
+            Assert ($v.outcome -ceq 'invalid' -and ($v.reasons -join ';') -clike "*$targetRole claims pass*($missingStep)*") "missing $targetRole/$missingStep gave $($v.outcome): $($v.reasons -join '; ')"
+        }
+    }
+}
+
+Check 'A claimed pass is invalid when either role repeats any mandatory v1 step' {
+    foreach ($targetRole in 'win-x64', 'win-arm64') {
+        foreach ($duplicateStep in 'launch', 'reply', 'answer', 'stop', 'update') {
+            $dir = Write-Results {
+                param($role, $r)
+                if ($role -ceq $targetRole) { $r.steps = @($r.steps) + @((Step $r $duplicateStep)) }
+            }
+            $v = Get-Verdict $dir
+            Assert ($v.outcome -ceq 'invalid' -and ($v.reasons -join ';') -clike "*$targetRole claims pass*($duplicateStep)*") "duplicate $targetRole/$duplicateStep gave $($v.outcome): $($v.reasons -join '; ')"
+        }
+    }
+}
+
 Check "Without the cut's verified CI run and both roles' digests there is no verdict at all" {
     $dir = Write-Results
     $good = @{ ResultsDir = $dir; RunId = $runId; CutId = $cutId; Sha = $sha; Relay = 'staging'; CiRun = $ciRun; X64Digest = $cutDigests['win-x64']; Arm64Digest = $cutDigests['win-arm64'] }

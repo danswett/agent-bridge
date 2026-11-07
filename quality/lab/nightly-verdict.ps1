@@ -13,7 +13,8 @@ Both roles of a nightly run test one cut, against one relay digest (#849's quali
   run than the one cut verified (source.run.id), or its build.digests lack the role's installer
   digest cut verified; a role's run is
   invalid; the relay's digest changed during a run or differs between the roles; or a run
-  claims pass without every step passing and an update between two versions. Invalid is never
+  claims pass without each v1 step (launch, reply, answer, stop, update) exactly once and passing,
+  or without an update between two versions. Invalid is never
   admission or promotion evidence; a cut gets at most one diagnosed retry, as a new run.
 - fail when no role is invalid and either failed.
 - pass only when both roles passed.
@@ -113,11 +114,18 @@ foreach ($role in $Architectures.Keys) {
         }
         'pass' {
             $notPassed = @($steps | Where-Object { (Get-Field $_ @('outcome')) -cne 'pass' } | ForEach-Object { Get-Field $_ @('name') })
+            $wrongCount = @(foreach ($name in 'launch', 'reply', 'answer', 'stop', 'update') {
+                $occurrences = @($steps | Where-Object {
+                    $stepName = Get-Field $_ @('name')
+                    $stepName -is [string] -and $stepName -ceq $name
+                })
+                if ($occurrences.Count -ne 1) { $name }
+            })
             $from = Get-Field $result @('updatePair', 'from', 'version')
             $to = Get-Field $result @('updatePair', 'to', 'version')
-            $updated = @($steps | Where-Object { (Get-Field $_ @('name')) -ceq 'update' -and (Get-Field $_ @('outcome')) -ceq 'pass' }).Count -eq 1
-            if ($steps.Count -eq 0 -or $notPassed.Count) { $invalid.Add("$role claims pass, but not every step passed ($($notPassed -join ', '))") }
-            elseif (-not $updated -or [string]::IsNullOrEmpty($from) -or [string]::IsNullOrEmpty($to) -or "$from" -ceq "$to") {
+            if ($wrongCount.Count) { $invalid.Add("$role claims pass without each mandatory v1 step exactly once ($($wrongCount -join ', '))") }
+            elseif ($notPassed.Count) { $invalid.Add("$role claims pass, but not every step passed ($($notPassed -join ', '))") }
+            elseif ([string]::IsNullOrEmpty($from) -or [string]::IsNullOrEmpty($to) -or "$from" -ceq "$to") {
                 $invalid.Add("$role claims pass without an update between two versions ($from to $to)")
             }
         }
