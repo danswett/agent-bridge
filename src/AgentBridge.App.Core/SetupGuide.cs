@@ -28,7 +28,7 @@ public static class SetupGuide
     {
         var installed = agents.Where(a => a.IsInstalled).ToList();
         var toSetUp = installed.Where(a => a.ShowSetUp).ToList();
-        var connected = toSetUp.Count == 0 && installed.Any(a => a.Setup == HookSetup.Completed || a.HooksWorking);
+        var connected = installed.Any(a => a.Setup == HookSetup.Completed || a.HooksWorking);
         var tested = installed.Any(a => a.HooksWorking);
 
         var steps = new List<(string Id, string Title, bool Done, string Todo, string Done_)>

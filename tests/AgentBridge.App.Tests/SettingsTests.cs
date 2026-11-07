@@ -629,6 +629,14 @@ public sealed class SettingsTests : IAsyncLifetime
 
         var working = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Working, hooksDetail: "owned setup record"))], false);
         Assert.Equal("Done", Mark(working, "session"));
+
+        var heard = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record") with { LastHookHandledAt = DateTimeOffset.UtcNow })], false);
+        Assert.Equal("Done", Mark(heard, "session"));
+
+        var one = SetupGuide.Steps(true, [
+            Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record")),
+            Row(Agent("codex", "Codex", ReadinessState.NeedsAction))], false);
+        Assert.Equal(("Done", "Next"), (Mark(one, "hooks"), Mark(one, "session")));
     }
 
     [Fact]
