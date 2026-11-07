@@ -168,7 +168,7 @@ final class HostStore: Identifiable {
                 cleanDeliveredReplyDraft(attempt.operation, result: result)
             }
             onMutationResult?(attempt.operation, result)
-        } catch { attempts[slot]?.error = "Delivery was not confirmed. Check the session before trying again. \(error.localizedDescription)" }
+        } catch { attempts[slot]?.error = "Delivery was not confirmed. Check the session before trying again." }
         attempts[slot]?.isSending = false
     }
 
@@ -233,7 +233,7 @@ final class HostStore: Identifiable {
         do { _ = try await call("usage.get", data: ["shared": .bool(capabilities.contains("usage.shared"))]) }
         catch {
             if token == connectionID {
-                status = error.localizedDescription
+                status = BridgeShownError.sentence(for: error)
             }
         }
     }
@@ -254,7 +254,7 @@ final class HostStore: Identifiable {
         }
         do {
             let response = try await transport.send(.init(id: id, op: op, data: data), timeout)
-            guard response.ok == true else { throw RelayError.refused(response.error ?? "The host refused the request.") }
+            guard response.ok == true else { throw RelayError.refused(BridgeShownError.refused) }
             return response.result ?? .null
         } catch {
             // A previous connection's late failure must not remove a reused request ID.
@@ -398,7 +398,7 @@ final class HostStore: Identifiable {
                 isLive = false
                 isConnecting = false
                 onDisconnected?()
-                status = Task.isCancelled ? "Disconnected" : "\(error.localizedDescription) Reconnecting…"
+                status = Task.isCancelled ? "Disconnected" : "\(BridgeShownError.sentence(for: error)) Reconnecting…"
                 connectionID = UUID()
             }
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
@@ -410,7 +410,7 @@ final class HostStore: Identifiable {
         let id = allocate()
         state.expectSubscription(id)
         let response = try await transport.send(.init(id: id, op: "sessions.subscribe"), .seconds(15))
-        guard response.ok == true else { throw RelayError.refused(response.error ?? "Subscription was refused.") }
+        guard response.ok == true else { throw RelayError.refused(BridgeShownError.refused) }
         try Task.checkCancellation()
         guard token == generation else { throw CancellationError() }
         status = "Synchronizing…"
