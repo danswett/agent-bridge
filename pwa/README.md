@@ -218,6 +218,10 @@ sessions and never moves their rows. An entry leaves when its question does.
 * **A form**, or a question this machine won't take from the phone, opens its session (the
   title), where the card says what it asks.
 * **A prompt marked `answerAtMachine`** says "Answer at the machine", with nothing to press.
+  Only `answerAtMachineReason: "shape"` adds "This kind of question can only be answered at
+  the machine." after "Answer at the machine · *machine*", in Needs you's text colour.
+  Both lines are accessible text, not a live region. Missing or unknown reasons retain the
+  current single line. Row status and attention do not change.
 
 The lane's count is the app's badge on the Home Screen or taskbar, where the browser has the
 Badging API (`navigator.setAppBadge`), and nothing where it hasn't.

@@ -130,7 +130,9 @@ self.addEventListener('fetch', (e) => {
 // notification, even one that cannot be read: iOS revokes notifications from an app whose
 // pushes show nothing.
 // signIn (#800): a machine's sessions need sign-in; it alerts, as a question does.
-const KINDS = ['question', 'finished', 'resolved', 'signIn'];
+// group (#913): one notice for several questions on a machine, tagged <machine>:~needsyou and
+// withdrawn by a resolved under that tag; it alerts unless the host says silent.
+const KINDS = ['question', 'finished', 'resolved', 'signIn', 'group'];
 const CLASSES = ['needsYou', 'done', 'fyi'];
 const WITHDRAWN_TAG = 'agent-bridge-withdrawn';
 
@@ -175,6 +177,10 @@ function notice(message) {
     lang: text(n.lang) ?? 'en',
     data: { url: inApp(text(n.navigate)), kind, machine: text(d.machine), session: text(d.session), question: text(d.question) },
   };
+  // How many questions a group stands for, and a question's one reminder (#913): kept for the page.
+  if (cls) { options.data.class = cls; }
+  if (Number.isInteger(d.sessions) && d.sessions > 0) { options.data.sessions = d.sessions; }
+  if (d.reminder === true) { options.data.reminder = true; }
   if (tag) {
     // Every notice about a session replaces the one before it, never beside it. A newer question
     // alerts again; a finished turn (without a class, as before) too; a silent one changes quietly.

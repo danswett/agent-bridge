@@ -298,6 +298,38 @@ public sealed class CardTests : IAsyncLifetime
         Assert.False(q.ShowReadOnlyFields);
     }
 
+    [Theory]
+    [InlineData("shape", true)]
+    [InlineData(null, false)]
+    [InlineData("future", false)]
+    public void Only_the_hosts_shape_reason_adds_an_explanation_to_an_at_machine_card(string? reason, bool explains)
+    {
+        var question = Make.Choice() with { AnswerAtMachine = true, AnswerAtMachineReason = reason };
+        var q = Question(question);
+
+        Assert.False(q.Answerable);
+        Assert.False(q.ShowReadOnlyFields);
+        Assert.Equal(explains ? "Answer at the machine · Test PC" : "This prompt can only be answered at the machine on Test PC.", q.ReadOnlyNote);
+        Assert.Equal(explains ? "This kind of question can only be answered at the machine." : null, q.AtMachineExplanation);
+        Assert.Null(Question(question with { AnswerAtMachine = null }).AtMachineExplanation);
+        q.Detach();
+    }
+
+    [Fact]
+    public void A_reason_added_or_removed_under_the_same_question_id_rebuilds_the_card()
+    {
+        var question = Make.Choice() with { AnswerAtMachine = true };
+        var card = new SessionCardViewModel(Make.Session(question: question), Context());
+        var first = card.Question;
+        card.Update(card.Session with { Question = question with { AnswerAtMachineReason = "shape" } });
+
+        Assert.NotSame(first, card.Question);
+        Assert.Equal("This kind of question can only be answered at the machine.", card.Question!.AtMachineExplanation);
+        card.Update(card.Session with { Question = question });
+        Assert.Null(card.Question!.AtMachineExplanation);
+        card.Detach();
+    }
+
     // An older host's approval can still hold a live bidi control, a zero-width character or
     // right-to-left letters (#220): the card shows them as escapes, and Approve once is still
     // offered (#253, decision 3).
