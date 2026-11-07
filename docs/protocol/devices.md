@@ -382,7 +382,10 @@ Both messages are text frames from an admitted device of any kind, counted again
 * `roster-get` is `{"error":"unavailable"}` too when the store cannot be reached. A stored log that does not decode or rebuild is never added to: an append says `unavailable`. So does an append that finds more than four others waiting on the account, and a request while the connection already has two roster requests running. Offering only entries already kept answers `duplicate` without replaying the log.
 * The log is bounded at 224 KiB stored; an append that would pass it is refused `cap`.
 * The relay judges time by its own clock. That is defence in depth: a host applies the same rules on its own clock.
-## Vectors
+
+## Pinned person devices
+
+A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and Daily's lists. It returns each person device the verifier serves (active and not held, §3.5; hosts are left out), in id order, as `id`, `name`, `kind`, `platform`, `presence`, `confirmed` and `quarantined`. `presence` is the declared level; only `key` and `webauthn` prove a person verified (§4.6), and `none` is listed so a client can say why a device cannot be offered. A Windows device stays `none` until R4 proves its mechanism. The query changes nothing and enforces nothing; the host verifier (OFF mode) that feeds it is slice A3.## Vectors
 
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:
 
