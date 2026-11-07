@@ -603,30 +603,5 @@
       ]
     }
   },
-  "knownDifferences": [
-    {
-      "vector": "PushNoticeData/group",
-      "issue": 913,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "reads kind group: questions of several sessions as one notice, opening Needs you",
-      "pwa": "reads it as a question, an unknown kind, naming no session: it opens the machine"
-    },
-    {
-      "vector": "PushNotification/group",
-      "issue": 913,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "reads kind group: questions of several sessions as one notice, opening Needs you",
-      "pwa": "reads it as a question, an unknown kind, naming no session: it opens the machine"
-    },
-    {
-      "vector": "PushNoticeData/a-reminder",
-      "issue": 913,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "reads reminder: true",
-      "pwa": "does not read reminder: it shows the question's notice as it is"
-    }
-  ]
+  "knownDifferences": []
 }
