@@ -1112,6 +1112,27 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   the package (`build/publish-prerelease.ps1
   -DryRun`) and uploads `Setup.exe` and the packages as an artifact, which the `publish` job
   publishes for a push to main.
+* Distribution notices (#744): `build/app-notices.ps1` copies the project's `LICENSE` verbatim
+  to `LICENSE.txt`, creates `SOURCE.txt` with exact-commit source/archive/build/install links,
+  and bundles restored, version-specific NuGet licence/copyright/notice files under
+  `ThirdPartyNotices/packages/`, indexed by `THIRD-PARTY-NOTICES.txt`. Its hashed manifest binds
+  those files, including the existing font OFLs, to the build version, architecture and commit.
+  Dependency identities come from the published `.deps.json` files, not a global cache sweep.
+  Missing package metadata, declared licence files or all notice material fails packing.
+  A pack-only signing operation verifies this bundle without regenerating it or requiring
+  restored packages on the credential-bearing signer.
+  CI checks the actual portable and full-package entries, and the silently installed copy,
+  byte-for-byte against the notice inventory. `app-self-test-<runtime>` includes
+  `installed/distribution-evidence.json`: the installer and archive SHA-256 values, exact archive
+  file lists, installed file hashes and source identity. The SBOM step adds package-declared
+  SPDX expressions or verbatim declared licence-file text where present, and the project's
+  verbatim AGPL text for its published project entries; it retains existing fields and warns
+  rather than inventing a licence for an unmatched component.
+  These checks are packaging evidence, not compatibility certification, an exhaustive native
+  redistribution audit, or invitation clearance. The final candidate still needs Compliance's
+  actual redistributed-file/terms and corresponding-source disposition. In particular, CI's
+  installed proof is of its unsigned installer; it must not be relabelled as proof of the
+  subsequently signed installer described in **Signing** above.
 * The `product` job runs the tests on Linux, Windows x64 and Windows on Arm, including the
   NativeAOT injector typing into a real console and the NativeAOT hook, each built for the
   runner's own architecture.

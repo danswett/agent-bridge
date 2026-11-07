@@ -48,6 +48,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'app-channels.ps1')
+. (Join-Path $PSScriptRoot 'app-notices.ps1')
 if ($PackOnly -and $NoPack) { throw '-PackOnly packs the folder already there, and -NoPack packs nothing' }
 if ($RequireSignature) {
     # Before building anything: a signed release that cannot be signed must not become an unsigned one.
@@ -84,6 +85,10 @@ if ($PackOnly) {
     Publish 'src/AgentBridge.Injector/AgentBridge.Injector.csproj' @()
     Publish 'src/AgentBridge.Hook/AgentBridge.Hook.csproj' @()
     Publish 'src/AgentBridge.App/AgentBridge.App.csproj' @()
+
+    $commit = & git -C $root rev-parse HEAD
+    if ($LASTEXITCODE) { throw 'cannot identify the source commit for distribution notices' }
+    New-AppNotices -RepositoryRoot $root -Publish $publish -Version $Version -Runtime $Runtime -Commit $commit
 }
 
 # The .pri carries the compiled XAML: without it the installed app fails at startup with
@@ -108,6 +113,7 @@ if ($foreign) { throw "not built for $($target.Machine): $($foreign -join ', ')"
 $identity = & (Join-Path $PSScriptRoot 'host-identity.ps1') (Join-Path $publish 'agent-bridge-host.dll')
 $wanted = if ($Release) { 'release' } else { 'dev' }
 if ($identity -ne $wanted) { throw "the host was built as a $identity build, not a $wanted build" }
+$null = Get-AppNotices -Publish $publish -Version $Version -Runtime $Runtime
 Write-Host "$(if ($PackOnly) { "checked $Version ($identity build, $Runtime) in" } else { "published $Version ($identity build, $Runtime) to" }) $publish"
 
 if ($NoPack) { return }

@@ -652,6 +652,8 @@ jobs:
             if ($machine -ne $expected[$file]) { Write-Error "$file is $machine, not $($expected[$file])"; $bad++ }
           }
           if ($bad) { exit 1 }
+          . ./build/app-notices.ps1
+          Write-AppDistributionEvidence -Publish '${{ matrix.out }}/publish' -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
           ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds ${{ matrix.runtime == 'win-arm64' && 480 || 360 }}
           exit $LASTEXITCODE
       - name: The release would publish (dry run)
@@ -677,6 +679,8 @@ jobs:
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/sbom" | Out-Null
           trivy fs --format cyclonedx --output "$env:RUNNER_TEMP/sbom/agent-bridge-windows-${{ matrix.runtime }}-$env:APP_VERSION.cdx.json" "${{ matrix.out }}/publish"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          . ./build/app-notices.ps1
+          Add-AppSbomLicences -Publish '${{ matrix.out }}/publish' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Sbom "$env:RUNNER_TEMP/sbom/agent-bridge-windows-${{ matrix.runtime }}-$env:APP_VERSION.cdx.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom-${{ matrix.runtime }}-${{ env.APP_VERSION }}
