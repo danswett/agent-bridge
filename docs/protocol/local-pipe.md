@@ -146,7 +146,31 @@ ancestry is read only in part, is anything else of the user's. An agent that sta
 detached from itself gets past this as it could past the app's check; restarting is the only
 thing it gains.
 
-## Management ops
+## Agent principals: `agent.hello`
+
+Windows only, pipe only; other hosts refuse it. An agent session holds a credential the host
+issued for it (`abat1_` and 32 random bytes in base64url, 49 characters). The host stores only
+the token's SHA-256 with what it is bound to (session, root process id and start time, scope,
+expiry), in `agent-credentials.json` in the profile folder, so credentials survive a host
+restart. A file that exists but can't be read stops the host issuing or accepting any: unreadable
+is not empty.
+
+```json
+{ "id": 1, "op": "agent.hello", "data": { "token": "abat1_..." } }
+```
+
+It is accepted only when the token matches a live credential (compared in constant time), the
+caller's ancestry was read in full, and the credential's root process, with the same start time,
+is among the caller's ancestors. Anything else is refused, and a token presented from outside its
+session is logged as `credential presented from outside its session`. `AGENT_BRIDGE_SESSION` is
+never proof. The reply is `{ "principal": "agent:<machine>/<session>", "scope": "read" }`.
+
+This is a safety rail, not a boundary: a same-user process that spoofs its parent or joins the
+session's Job object gets through (design/agent-principals.md §3.4). A new credential for a
+session replaces its old one, so a resumed session's old token is dead. This slice only proves who
+holds a credential; what each scope may do, and minting at launch, follow in later slices. Until
+then an agent connection is refused the acting ops exactly as before.
+
 
 Local only: a relay channel answers each of these with `unknown op`. All but `host.status`
 and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).

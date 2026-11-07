@@ -563,6 +563,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();
+    var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log) : null;
     var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, CallerGuard.AppExecutable) : null,
         hostImage: OperatingSystem.IsWindows() ? Environment.ProcessPath : null);
     // On a machine migrated from agent-ha-bridge, the hooks hand their events to this host
@@ -688,7 +689,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // The roster changing changes who the app's Settings lists (#972).
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
