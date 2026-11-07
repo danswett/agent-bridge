@@ -177,8 +177,9 @@ public sealed record EnvelopeBody(
         // conversation that began earlier.
         if (chain.Prev is null && (chain.Root != request || chain.Messages != 1 || chain.Via.Count != 1)) { throw new EnvelopeException(Refusal.Chain, "chain"); }
         if (chain.Prev is not null && chain.Root == request) { throw new EnvelopeException(Refusal.Chain, "chain.root"); }
-        var sender = chain.Via[^1];
-        if (sender.Account != account || sender.Machine != principal.Machine || sender.Session != principal.Session) { throw new EnvelopeException(Refusal.Chain, "chain.via"); }
+        // `via` lists distinct senders in first-seen order, so in A->B->A->B the sender (A) is not
+        // the last entry: it need only be one of them.
+        if (!chain.Via.Any(s => s.Account == account && s.Machine == principal.Machine && s.Session == principal.Session)) { throw new EnvelopeException(Refusal.Chain, "chain.via"); }
 
         return new EnvelopeBody(request, account, generation, heads, principal, chain, provenance, action, target, dataSha256, issuedAt, expiresAt);
     }
