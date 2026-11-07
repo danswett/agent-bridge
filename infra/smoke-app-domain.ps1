@@ -11,7 +11,9 @@
 [CmdletBinding()]
 param(
   [string] $Origin = 'https://app.slipgates.com',
-  [string] $Relay = 'https://relay.bad-duck.com'
+  [string] $Relay = 'https://relay.bad-duck.com',
+  # Only the relay's CORS answer for -Origin's site: the check that says the relay is ready, before the address exists.
+  [switch] $RelayOnly
 )
 $ErrorActionPreference = 'Stop'
 $Origin = $Origin.TrimEnd('/')
@@ -32,6 +34,14 @@ function Get-Page([string] $url) {
   Invoke-WebRequest -Uri $url -UseBasicParsing -MaximumRedirection 0 -SkipHttpErrorCheck
 }
 
+Check 'the relay accepts this origin (CORS preflight)' {
+  $r = Invoke-WebRequest -Uri "$Relay/v1/push/key" -Method Options -UseBasicParsing -SkipHttpErrorCheck -Headers @{
+    Origin = $siteOrigin; 'Access-Control-Request-Method' = 'GET' }
+  $allowed = "$($r.Headers['Access-Control-Allow-Origin'])"
+  if ($allowed -ne $siteOrigin) { throw "Access-Control-Allow-Origin is '$allowed'" }
+}
+
+if (-not $RelayOnly) {
 Check 'the app loads at the root' {
   $r = Get-Page "$Origin/"
   if ($r.StatusCode -ne 200) { throw "status $($r.StatusCode)" }
@@ -54,13 +64,6 @@ Check 'the service worker is JavaScript' {
   if ("$($r.Headers['Content-Type'])" -notmatch 'javascript') { throw "content type $($r.Headers['Content-Type'])" }
 }
 
-Check 'the relay accepts this origin (CORS preflight)' {
-  $r = Invoke-WebRequest -Uri "$Relay/v1/push/key" -Method Options -UseBasicParsing -SkipHttpErrorCheck -Headers @{
-    Origin = $siteOrigin; 'Access-Control-Request-Method' = 'GET' }
-  $allowed = "$($r.Headers['Access-Control-Allow-Origin'])"
-  if ($allowed -ne $siteOrigin) { throw "Access-Control-Allow-Origin is '$allowed'" }
-}
-
 if ($siteOrigin -eq 'https://app.slipgates.com') {
   Check 'the spikes stay under /s2/ and /s4/' {
     foreach ($p in 's2', 's4') {
@@ -74,6 +77,8 @@ if ($siteOrigin -eq 'https://app.slipgates.com') {
     $js = Get-Page "$siteOrigin/app/redirect.js"
     if ($js.Content -notmatch 'location\.replace') { throw 'no redirect script' }
   }
+}
+
 }
 
 if ($failures) { Write-Host "$failures check(s) failed."; exit 1 }

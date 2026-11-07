@@ -11,11 +11,16 @@ included: the PWA becomes the root, and `/s2/` and `/s4/` stay where they are. E
 approved (owner, 2026-11-03, 4:23 PM PT). Production changes go through the usual staging, then
 production approval.
 
+**Before starting:** the change that makes `PAGES_APP_AT_ROOT` do anything (#1071, in
+`.github/workflows/pages.yml`) and the relay allow-list change (#1066) must both be on `main`.
+Without #1071 the variable is ignored and the new address would show the spikes' index page.
+
 1. **Relay first.** Deploy the relay with `https://app.slipgates.com` in `allowedOrigins`
    (`infra/regions/westus2.bicepparam`, see `docs/relay-deploy.md`): staging, then production. Both
    origins stay allowed, so the current app keeps working.
-2. **Smoke the relay**: `pwsh infra/smoke-app-domain.ps1` fails on its last check until step 1 is
-   live in production; that is the signal.
+2. **Check the relay is ready:** `pwsh infra/smoke-app-domain.ps1 -RelayOnly`. It asks only whether
+   the relay's CORS answer allows `https://app.slipgates.com`, which works before the address
+   exists. It fails until step 1 is live in production.
 3. **In one sitting:**
    - DNS: add `app` as a CNAME to `danswett.github.io`, DNS only (no proxy).
    - Repository settings, Pages: set the custom domain `app.slipgates.com`; once the certificate is
@@ -29,11 +34,16 @@ production approval.
 
 ### Rollback
 
-Remove the custom domain in Pages settings, delete the DNS record, and set `PAGES_APP_AT_ROOT` to
-`false` (or delete it), then run Pages again. The site returns to
-`danswett.github.io/agent-bridge/` with the app at `/app/`. The relay needs no change: the old origin
-was never removed from `allowedOrigins`. Anyone who moved keeps their data at the new origin, which
-simply stops being reachable.
+Do these in this order, so the site is never half-moved:
+
+1. Set `PAGES_APP_AT_ROOT` to `false` (or delete it) and run the Pages workflow again. The site is
+   back to the PWA at `/app/` and the spikes' index at the root.
+2. Remove the custom domain in Pages settings.
+3. Delete the DNS record.
+
+The site is then at `danswett.github.io/agent-bridge/` with the app at `/app/`. The relay needs no
+change: the old origin was never removed from `allowedOrigins`. Anyone who moved keeps their data at
+the new origin, which simply stops being reachable.
 
 ## What changes for people who already installed the app
 
