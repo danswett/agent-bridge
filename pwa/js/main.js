@@ -746,7 +746,7 @@ function begin(account) {
       $('feedback-status').textContent = `Thanks. Sent at ${sentAt}.`;
       feedbackDialog.close();
     } catch (e) {
-      feedbackError.textContent = feedbackFailureMessage(e, BRAND);
+      feedbackError.textContent = feedbackFailureMessage(e, BRAND.name);
       feedbackError.hidden = false;
       feedbackError.dataset.kind = 'send';
       feedbackSend.textContent = 'Retry';

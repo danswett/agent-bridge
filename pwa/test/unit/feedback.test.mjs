@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FeedbackDiagnostics, FeedbackError, feedbackFailureMessage, isSensitiveFeedbackText, sealFeedbackEnvelope, sendFeedbackBundle, serializeFeedbackBundle } from '../../js/feedback.js';
 import { toBase64url } from '../../js/blobs.js';
+import { BRAND } from '../../js/brand.js';
 
 const decodeBase64url = (value) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=')), (c) => c.charCodeAt(0));
 
@@ -155,8 +156,10 @@ test('feedback send failures expose safe categories without relaying raw errors'
 });
 
 test('feedback failure copy is plain-language and never includes raw error text', () => {
-  assert.equal(feedbackFailureMessage(new FeedbackError('unreachable'), 'Slipgates'), "Can't reach Slipgates right now. Try again in a moment.");
-  assert.equal(feedbackFailureMessage(new FeedbackError('too-large'), 'Slipgates'), 'Too much to send. Shorten your note and try again.');
-  assert.equal(feedbackFailureMessage(new FeedbackError('unavailable'), 'Slipgates'), "Feedback isn't available on this connection yet.");
-  assert.equal(feedbackFailureMessage(new Error('raw server response'), 'Slipgates'), "Feedback isn't available on this connection yet.");
+  const unreachable = feedbackFailureMessage(new FeedbackError('unreachable'), BRAND.name);
+  assert.equal(unreachable, `Can't reach ${BRAND.name} right now. Try again in a moment.`);
+  assert.doesNotMatch(unreachable, /\[object Object\]/);
+  assert.equal(feedbackFailureMessage(new FeedbackError('too-large'), BRAND.name), 'Too much to send. Shorten your note and try again.');
+  assert.equal(feedbackFailureMessage(new FeedbackError('unavailable'), BRAND.name), "Feedback isn't available on this connection yet.");
+  assert.equal(feedbackFailureMessage(new Error('raw server response'), BRAND.name), "Feedback isn't available on this connection yet.");
 });
