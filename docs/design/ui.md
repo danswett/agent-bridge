@@ -1826,8 +1826,12 @@ Checking and the glyphs are **Not built yet (#384 slice 1)**, and Finish (§6.10
 machine's name, Relay and sign-in, "Agents on this machine" (each agent's row, below), "Your
 devices" with the two answer toggles of Workspaces and trust, this app's toggles, and the
 Host log. The host section's "Restore sessions after a reboot or crash" switch (§6.12) is
-**Not built yet (#780)**. The sectioned pane below, its table and the card for an agent
-installed later are **Not built yet (#384 slice 5)**. The PWA's Settings also has Text size
+**Not built yet (#780)**. The sectioned pane below and its table are **Not built yet (#384
+slice 5)**. The card for an agent installed later (#231, slice 1) ships on that page, at its top,
+with its grey dot on the rail's Settings item, "Settings, new agent found", until the Agents item
+exists. It is offered only for Copilot CLI, Claude Code and Codex whose version was read: an
+agent whose version couldn't be read has no card, and its row keeps its Set up. Removing an
+agent's connection also holds its card at that version. The PWA's Settings also has Text size
 (§4.4), on this device only.
 
 **An agent's row today** (the creative director's #784 words; #705's per-row names and

@@ -12,11 +12,15 @@ namespace AgentBridge.App;
 // of their own, a row shows one verb for its hooks' state (the demo's Copilot CLI to set up, Claude
 // Code to repair, Codex set up but not tested yet, as a healthy agent reads on a real host, with none), and a setup's result is said on its own row, as a
 // polite live region, a failure in Danger. Narrator's names for the rows' buttons are kept in the
-// result as the list it reads.
+// result as the list it reads. The demo's Copilot CLI is also offered a card (CheckAgentOffer), whose
+// Not now gives its row the Set up checked here.
 static partial class SelfTest
 {
     static async Task CheckAgentRows(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
+        // The demo's Copilot CLI is installed and never set up, so Settings offers it a card, whose Not now
+        // gives the row the Set up it is checked for below.
+        await CheckAgentOffer(window, main, check, outFile, result);
         window.ShowPage("settings");
         var view = window.SettingsPage;
         var settings = main.Settings;
