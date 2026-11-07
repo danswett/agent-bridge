@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/AgentBridge.App.Core/AgentBridge.App.Core.csproj" />
+    <Project Path="src/AgentBridge.FeedbackEnvelope/AgentBridge.FeedbackEnvelope.csproj" />
     <Project Path="src/AgentBridge.FeedbackInbox/AgentBridge.FeedbackInbox.csproj" />
     <Project Path="src/AgentBridge.HomeAssistant/AgentBridge.HomeAssistant.csproj" />
     <Project Path="src/AgentBridge.Hook/AgentBridge.Hook.csproj" />
