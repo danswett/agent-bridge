@@ -282,7 +282,6 @@ static partial class SelfTest
             await CheckPanes(window, main, Check, outFile);
             await CheckDividers(window, main, Check, outFile);
             await CheckMachineTabs(window, main, Check, outFile);
-            await CheckHeldBanners(window, main, demo, remote, Check, outFile);
             await CheckDelegates(window, main, Check, outFile);
             await CheckAnswerMoves(window, main, Check, outFile);
 

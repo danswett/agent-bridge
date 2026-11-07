@@ -198,48 +198,6 @@ public sealed partial class MainWindow : Window
     void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
     void OnForgetMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Offline?.Press();
 
-    // A machine's Discovery held banner (#293). Its close button is the InfoBar's own, named here
-    // for what it closes; and, as Motion.Banner, it comes in from above, but not as the window
-    // first draws.
-    void OnHeldLoaded(object sender, RoutedEventArgs e)
-    {
-        if (sender is not InfoBar { Tag: HeldNotice notice } bar) { return; }
-        if (CloseButtonOf(bar) is { } close)
-        {
-            AutomationProperties.SetName(close, notice.DismissName);
-            AutomationProperties.SetAutomationId(close, notice.DismissId);
-            ToolTipService.SetToolTip(close, "Dismiss");
-        }
-        if (drawn) { Motion.Enter(bar, "Toast", new Vector2(0, -1)); }
-    }
-
-    internal static Button? CloseButtonOf(InfoBar bar) => Descendants(bar).OfType<Button>().FirstOrDefault(b => b.Name == "CloseButton");
-
-    static IEnumerable<DependencyObject> Descendants(DependencyObject root)
-    {
-        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
-        {
-            var child = VisualTreeHelper.GetChild(root, i);
-            yield return child;
-            foreach (var below in Descendants(child)) { yield return below; }
-        }
-    }
-
-    // Focus on the closing banner would go with it, to the window (ui.md §9.1 A4): it moves first
-    // to what Tab reaches next, the next banner's close button or the page under them.
-    void OnHeldClosing(InfoBar sender, InfoBarClosingEventArgs args)
-    {
-        if (FocusManager.GetFocusedElement(sender.XamlRoot) is not DependencyObject focused || !Motion.Within(focused, sender)) { return; }
-        var next = FocusManager.FindNextElement(FocusNavigationDirection.Next, new FindNextElementOptions { SearchRoot = sender.XamlRoot.Content });
-        if (next is not null && !Motion.Within(next, sender)) { _ = FocusManager.TryFocusAsync(next, FocusState.Programmatic); }
-    }
-
-    // Only how it is shown: nothing goes to the host, whose hold stands.
-    void OnHeldClosed(InfoBar sender, InfoBarClosedEventArgs args)
-    {
-        if (sender.Tag is HeldNotice notice) { ViewModel.Dismiss(notice); }
-    }
-
     // The banner's Restart to update (#516): warned, just before the host stops, when a session here is busy.
     async void OnRestartToUpdate(object sender, RoutedEventArgs e)
     {

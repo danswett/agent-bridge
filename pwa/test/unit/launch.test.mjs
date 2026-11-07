@@ -154,6 +154,14 @@ test('what a launch says matches its outcome, and a started session says where i
   assert.match(describeLaunch({ state: 'sending' }, { machineName: 'Desk' }).text, /on Desk/);
 });
 
+test('a resume the machine holds back while its discovery is held shows the waiting form, and another busy launch does not', () => {
+  const held = 'Held: session discovery is waiting on an unrecognised copilot process (pid 4120), so whether that session is still running cannot be told yet. Try again in a minute or two.';
+  const done = (answer, reason) => ({ state: 'done', outcome: 'busy', answer, reason });
+  assert.deepEqual(describeLaunch(done({ resume: 's1' }, held), { machineName: 'Desk' }), { text: 'Waiting for Desk · it resumes once discovery finishes', tone: 'progress' });
+  assert.match(describeLaunch(done({ workspace: 'B' }, held), { machineName: 'Desk' }).text, /^Not launched: Held:/);
+  assert.match(describeLaunch(done({ resume: 's1' }, 'another launch is running'), { machineName: 'Desk' }).text, /^Not launched: another launch/);
+});
+
 test('a folder-trust question is read whole from options and from a launch it met, and nothing unreadable is shown', () => {
   const q = { id: 'q1', agent: 'codex', kind: 'codex', label: 'Codex', workspace: 'Bridge', folder: 'C:\\Users\\me\\repos\\bridge\\web', root: 'c:\\users\\me\\repos\\bridge', rootNote: 'Note: …root:', warning: 'Trust this folder? …', askedAt: '2026-10-31T16:31:30Z', answerable: true };
   const o = readLaunchOptions({ agents: [], workspaces: [], resumable: [], defaults: {}, trust: [q, { id: 'no folder' }, 'junk'] });

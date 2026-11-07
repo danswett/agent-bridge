@@ -7,7 +7,8 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace AgentBridge.App;
 
-// A held machine's row on the Machines page (#788; ui.md §6.6): "Discovery held" in line 2's flag,
+// A held machine's row on the Machines page (#788, #1064; ui.md §6.6): "Discovery held" in line 2's flag
+// once the hold has lasted two minutes,
 // the host's reason as the line's tooltip and accessible description and never on the row, and
 // the line's name the words shown (§9.1 A1). The hold is put in the store as discovery.changed
 // would, so the demo host stays as it is.
@@ -21,6 +22,9 @@ static partial class SelfTest
             return;
         }
         const string reason = "an unrecognised copilot process (pid 4120)";
+        // The two minutes a hold must last are not waited out here; the unit tests hold the real figure.
+        var after = main.HeldRowAfter;
+        main.HeldRowAfter = TimeSpan.FromSeconds(1);
         window.ShowPage("machines");
         TextBlock? Facts() => Find<Grid>(window.RootElement)
             .Where(g => AutomationProperties.GetAutomationId(g) == "MachineRow" && g.ActualHeight > 0 && ById<TextBlock>(g, "MachineName")?.Text == remote.MachineName)
@@ -49,6 +53,7 @@ static partial class SelfTest
         finally
         {
             machine.Host.Sessions.SetHeld(null);
+            main.HeldRowAfter = after;
         }
         var cleared = await Until(() => Facts() is { } f && !f.Text.Contains("Discovery held", StringComparison.Ordinal) && ToolTipService.GetToolTip(f) is null, TimeSpan.FromSeconds(5));
         check(cleared, $"drops \"Discovery held\" and its reason from the row once the hold clears ({Facts()?.Text})");
