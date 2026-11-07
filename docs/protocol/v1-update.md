@@ -88,15 +88,15 @@ review, Low). A client sends it only to a machine whose state says `canUpdateNow
 | `available` | string? | The newer release the last check found, from a device's press, the app's own schedule or its Settings; still there if its download failed, gone once a check finds nothing newer or the app's Include pre-releases changes. Before any check, or while the feed refuses, a release an earlier run of the app downloaded |
 | `notes` | string? | Its release notes |
 | `checkedAt` | time? | When the app last checked |
-| `phase` | `idle` `checking` `downloading` `waiting` `installing` | `waiting`: a release is downloaded and will install, because a device asked, once the host is idle. One downloaded and waiting for the person at the machine is `idle`, with `available` set |
+| `phase` | `idle` `checking` `downloading` `waiting` `installing` | `waiting`: a release is downloaded and will install, because a device asked, once the host is idle; for an Update now (`requestNow`), at the next quiet moment within its 15 minutes, else `last` says `refused` with code `expired` ([The confirmation](#the-confirmation)). One downloaded and waiting for the person at the machine is `idle`, with `available` set |
 | `progress` | int? | 0–100 while downloading |
 | `waiting` | string? | While waiting: for what (a session busy, another profile running). Also, in any phase, once a release has waited more than six hours (held by the machine, or downloaded and not restarted into): "Needs you: the update to X has waited since T because Y" (#800, a reminder; nothing installs because of it) |
 | `request` | string? | The press being carried out now, if one is |
 | `automatic` | bool | Whether the app installs updates without being asked. From #516 on, `true` only on a machine set to "Install between turns" (#689), whose phase is then `waiting` while a release waits for a gap between turns |
 | `last` | `UpdateResult`? | How the last update asked for, or installed by itself, ended |
-| `canUpdateNow` | bool | **#1159, not built.** Whether Update now can be pressed here: the app running, installed and new enough to carry it out, `permissions.remoteManage` on, the machine not read-only, no agent sign-in under way, no other Update now downloading or leaving, the restart cap not spent. Absent reads as false |
+| `canUpdateNow` | bool | **#1159, not built.** Whether Update now can be pressed here: the app running, installed and new enough to carry it out, `permissions.remoteManage` on, the machine not read-only, no agent sign-in under way, no other Update now downloading or leaving, and a restart slot free (its own allowance or the shared cap, settled Q7). Absent reads as false |
 | `updateNowWhy` | string? | **#1159, not built.** With `available` set and `canUpdateNow` false: why, as a code (`disabled`, `read-only`, `old-app`, `unavailable`, `sign-in`, `busy`, `restart-cap`), which a client words itself ([What the person sees](#what-the-person-sees)). A read-only machine serves no `update.*` at all; `read-only` is for a state a client already holds when the machine turns read-only, or one served in the moment before it notices |
-| `updateNowAt` | time? | **#1159, not built.** With `updateNowWhy` `restart-cap`: when it can be pressed again |
+| `updateNowAt` | time? | **#1159, not built.** With `updateNowWhy` `restart-cap`: when the first slot frees, of its own allowance or the shared cap |
 | `busy` | `UpdateBusy`? | **#1159, not built.** Only with `canUpdateNow`: what Update now would go over, from the host's own session snapshot ([What the phone sees](#what-the-phone-sees-before-the-press)) |
 | `requestNow` | bool | **#1159, not built.** The press in `request` is an Update now |
 | `waitingCode` | string? | **#1159, not built.** With phase `waiting`: why, as a code a client words itself (`turn-running`, `question-waiting`, `unknown`), never showing `waiting`'s text ([The confirmation](#the-confirmation)) |
@@ -251,7 +251,7 @@ Update now interrupts what Install would wait for.
 | The app not running, a build folder rather than an installed copy, or an app too old for Update now | `unavailable`, `old-app` | Nothing would carry it out. An old app is told apart, since Install still works there |
 | #800's agent sign-in entrypoint on | `sign-in` | A restart cancels a pending sign-in, as for `manage.restart` (Connection, Q-C8) |
 | More than 3 presses of Update now from one device in 10 minutes; 8 presses waiting already; another Update now downloading or leaving on the machine | `rate-limited`, `busy` | As today. Update now is its own kind for the per-device limit, so Install stays usable. An Update now **waiting for a quiet moment** is not "under way": a new press replaces it, keeping its download (decision 3) |
-| More than **2 committed restarts in 6 hours** on the machine, counted together with `manage.restart` (6 an hour once #55's roster is enforced) | `restart-cap` | An Update now is a restart the person caused; its cap is #801's, shared, so the two can't be added up. The words say when it works again |
+| Update now's **own allowance** (1 committed restart per machine in 6 hours) **and** the **shared cap** (2 committed restarts in 6 hours, counted together with `manage.restart`; 6 an hour once #55's roster is enforced) both used | `restart-cap` | The owner's ruling (settled Q7): an Update now spends its own allowance first, and only when that is used does it spend a slot of the shared cap, so it adds at most one restart in 6 hours beyond what `manage.restart` may do. `manage.restart` never spends Update now's allowance. The words say when it works again |
 | The same press sent again | (none) | The same-press rule: one request is one press. The host's durable record of verified `request`s, kept 15 minutes from `issuedAt` plus `Skew` across its own restart ([The press](#the-press)), decides it; the app's record of its last 32 is a second line |
 | The release offered is no longer `args.release` | `release-changed` | The person confirmed one version |
 | More busy than the person accepted | (outcome `confirm`) | [The confirmation](#the-confirmation) |
@@ -326,7 +326,7 @@ waiting. A quiet machine updates on one press.
 * **A press lives 15 minutes from its `issuedAt`** (security review, Medium 1), whatever it is
   doing then: downloading, waiting for a quiet moment, or trying the lease. A press that hasn't
   committed by then is dropped: `last` says `refused` with code `expired`, nothing restarts, it
-  spends no slot of the restart cap and cancels no pending agent sign-in, and a fresh press with
+  spends no restart slot (its own or a shared one) and cancels no pending agent sign-in, and a fresh press with
   a fresh confirmation is needed. The download is never discarded for it: the release stays
   ready, offered as before (Install, Update now, or Restart to update at the machine). So a
   forgotten press can't restart the bridge hours later, unwatched.
@@ -387,7 +387,7 @@ host's own text (#826). "Bridge", never "host".
   | `changed` | something changed on the machine; try again |
   | `release-changed` | a newer update arrived; try again |
   | `rate-limited` | too many presses just now; try again in a few minutes |
-  | `restart-cap` | it has restarted as often as allowed for now; try after *time* |
+  | `restart-cap` | Update now has used its restarts for the last 6 hours; try after *time* |
   | `busy` | another update or restart is under way there |
   | `sign-in` | an agent sign-in is under way there |
   | `announce-failed` | the bridge couldn't tell your devices it was restarting |
@@ -436,10 +436,11 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
    check, outside the lease's conditions: the lease still adds no idle test. It then announces the
    planned departure (`reason: update`, expected back in 90 s), reads the `Update` purpose's
    eligibility again (read-only, `permissions.remoteManage`, the sign-in entrypoint, another
-   profile's host), and commits. **The restart cap is checked and spent with the commit**, under
-   the same lock `ManageService` keeps its committed restarts in, so a `manage.restart`
-   committed while the update downloaded can't make it three in six hours: such a press is
-   refused `restart-cap` there. Any step failing ends it there, with `announce-failed`,
+   profile's host), and commits. **The two counters are checked and spent with the commit**,
+   under the same lock `ManageService` keeps its committed restarts in: Update now's own
+   allowance if a slot is free, else a slot of the shared cap, else refused `restart-cap` there.
+   So a `manage.restart` committed while the update downloaded can't push the shared cap past
+   two. Any step failing ends it there, with `announce-failed`,
    `changed` (a lease that ran out), `restart-cap` or the eligibility's reason, and the host
    serves on.
 4. Committed, the host refuses new deliveries until it exits (`DepartureGuard`), answers the app
@@ -466,10 +467,12 @@ That transport isn't built yet (`UnnegotiatedPlannedStateTransport`), and #805 l
 person's `RemoteRestart` and `RemoteStop` leave on a `Legacy` receipt without it; an automatic
 update never may. **Until it lands, a signed Update now leaves on a `Legacy` receipt too, as a
 remote restart does** (SRE, settled decision 2), and no automatic update ever does. That
-replaces only the announcement: the quiet lease, the check against the person's confirmation
-and the shared cap, checked when it commits, all stay. `Legacy` sends no planned state, so the
-host writes one fixed line to its own log, "restart for update: *from* to *to*, asked from
-*device*", and the owner's other devices get the quiet notice above; relay and fleet monitoring
+replaces only the announcement, never the quiet check: it still waits for #805's quiet lease and
+for what is busy to be covered by the person's confirmation, and it still counts against the
+shared cap of 2 restarts in 6 hours, checked when the update commits (Update now's own extra
+allowance of 1 in 6 hours, the owner's, is on top: settled Q7). The old way carries no reason a
+restart could be traced to an update by (`Legacy` sends no planned state), so the host writes
+one fixed line to its own log, "restart for update: *from* to *to*, asked from *device*", and the owner's other devices get the quiet notice above; relay and fleet monitoring
 already expect a drop from a remote restart, so no false offline alert. **Switch-over:** once
 #815's planned announcement is negotiated, Update now announces through it (`reason: update`)
 and the `Legacy` path for Update now is deleted in that same PR. Meanwhile the clients bridge
@@ -520,10 +523,12 @@ to the device that sent it, not to an approved person (as for `manage.*`).
 | Needs | The account's token, claiming `pwa` | The same, plus signing each press with a key it connected (it can make one); `permissions.remoteManage` on |
 | What it can make happen | The machine installs the newest release from **its own feed**, once no session has been busy for two minutes: what the app offers anyway | The same release, **now**: the bridge restarts over running turns and waiting questions, for about a minute |
 | What it can't | Pick the release or the feed, downgrade, type anything, read anything new | The same; and it can't skip the lease, so it can't cut a delivery or have an answer typed twice; it can't approve a tool call (the hook never does); it can't replay a press, even across the host's restart (the host's durable record); and a press can't go off later than 15 minutes after it was signed |
-| How often | 3 presses a device in 10 minutes; no restart cap (it waits for quiet) | 3 a device in 10 minutes, and **2 committed restarts a machine in 6 hours**, shared with `manage.restart`, spent only at the commit |
+| How often | 3 presses a device in 10 minutes; no restart cap (it waits for quiet) | 3 a device in 10 minutes; at most **1 committed restart a machine in 6 hours of its own**, then slots of the **2 in 6 hours** shared with `manage.restart`, all spent only at the commit |
 | Who sees it | `last` on every device | `last`, the owner's other devices' quiet notice naming the device, and the app's log |
 
-So the new exposure is availability: at most two bridge restarts a machine every six hours,
+So the new exposure is availability: at most three bridge restarts a machine every six hours
+from Update now (its own one and the two it shares with `manage.restart`), and never more than
+three from both together,
 each about a minute, during which replies and questions wait, and an approval the host carried
 may have to be answered at the machine (until #954). The agents' own work keeps running. The
 remedy is the one #801 has: `permissions.remoteManage` off, and #55's roster.
@@ -536,8 +541,8 @@ so they need one too.
 
 1. **Host and protocol.** `Update.cs`: `now` on the command, `canUpdateNow`, `busy`,
    `requestNow`, `waitingCode`, outcome `confirm`, `code`. `UpdateService` verifies `now` through the same
-   signed-command check as `ManageService` (one shared gate, not a copy), counts the restart cap
-   with it, computes `busy`, and passes `now` asks to the app. The app-only departure op takes
+   signed-command check as `ManageService` (one shared gate, not a copy), keeps Update now's own
+   allowance beside the shared cap it counts with `ManageService`, computes `busy`, and passes `now` asks to the app. The app-only departure op takes
    the lease, announces and commits; the `Update` purpose's conditions are registered at
    composition (read-only and `remoteManage`, the sign-in entrypoint, another profile's host).
    The #870 lane owns the departure step's contract and Daily owns the Update now caller; a
@@ -555,8 +560,10 @@ so they need one too.
    app nothing"; "Update now goes over no busy session the confirmation didn't list"; "Update
    now is refused on a read-only machine, reads included"; "Update now is refused with remote
    management off"; "Update now from this machine's own app is refused"; "an Update now signed
-   more than two minutes ago is refused"; "Update now and a remote restart share one cap of two
-   in six hours"; "a remote restart committed while an Update now downloads leaves the Update now
+   more than two minutes ago is refused"; "Update now spends its own slot before a shared one";
+   "an Update now is refused when its own slot is spent and a remote restart and an Update now took the shared ones";
+   "a remote restart never spends Update now's own slot"; "a remote restart committed while an
+   Update now downloads, taking the last shared slot with the own slot spent, leaves the Update now
    refused restart-cap"; "busy names a waiting approval as an approval and never carries any text"; "the departure is refused
    while an answer is being typed, and nothing is typed twice"; "an Update now press with no
    signed request is refused, never taken as an Install"; "a plain Install can't be replayed as an
@@ -603,14 +610,16 @@ Order: 1, then 2, then 3 and 4 together.
    the Update now caller. If the step changes, both PRs get reviewed together." Automatic
    installs (Restart to update, Install, Install between turns) move to the step only once
    #815's planned announcement exists, since they may never take `Legacy`.
-- **Q2. Announcing the old way until the planned announcement exists** (SRE, 2026-11-07, on #1161):
-   "Update now may announce the old way (as a remote restart does) until the planned-update
-   announcement exists." Its conditions: the restart "still counts against the shared cap of 2
-   in 6 hours, checked when the update commits"; "It still waits for the #805 quiet lease or the
-   person's confirmation. The old announcement replaces only the announcement, never the quiet
-   check"; "Mark the announcement so it can be traced to an update, if the old way allows a
-   reason. If it cannot, record a 'restart for update' line in the host's own log"; and "When
-   the planned announcement lands, switch over and delete the old path in the same PR."
+- **Q2. Announcing the old way until the planned announcement exists** (SRE, 2026-11-07, on #1161,
+   comment 6711994130): "Update now may announce the old way (as a remote restart does) until
+   the planned-update announcement exists." Its conditions: the restart "still counts against
+   the shared cap of 2 in 6 hours, checked when the update commits" (Update now's own extra
+   allowance of 1 in 6 hours is on top, settled Q7); "It still waits for the #805 quiet lease or
+   the person's confirmation. The old announcement replaces only the announcement, never the
+   quiet check"; "Mark the announcement so it can be traced to an update, if the old way allows a
+   reason. If it cannot, record a 'restart for update' line in the host's own log" (it cannot:
+   `Legacy` sends nothing, so the host logs the line); and "When the planned announcement lands,
+   switch over and delete the old path in the same PR."
    Specified in [Announced as planned](#announced-as-planned-498).
 - **Q3. A machine that turns busy during the download** (Product, 2026-11-07, on #1161): "finish the
    download but do NOT install. The phone shows 'Update ready - waiting for the current turn to
@@ -635,10 +644,21 @@ Order: 1, then 2, then 3 and 4 together.
    confirmation names it; if it cannot tell, treat the machine as busy and show the
    confirmation. Err toward warning." Specified in [What the person sees](#what-the-person-sees)
    and [Questions and answers across the restart](#questions-and-answers-across-the-restart).
+- **Q7. The cap** (owner, 2026-11-07, on #1161): "Update now gets its OWN extra allowance of 1
+   restart per 6 hours, on top of the shared cap of 2 per 6 hours (manage.restart and automatic
+   restarts keep the shared 2)." Confirmed by the owner on #689 (comment 6712104700). The extra
+   allowance is Update now's alone: `manage.restart` never spends it, and an automatic install,
+   which waits for quiet and counts against no cap today, gains none. An Update now spends its own slot first, then a shared one;
+   with both used it is refused `restart-cap`, worded "Not updated: Update now has used its
+   restarts for the last 6 hours; try after *time*". #55's roster changes the shared cap only.
+   This refines SRE's Q2 condition that an Update now counts against the shared cap: it does,
+   once its own slot is used, and both are checked when the update commits.
+   Specified in [What still refuses](#what-still-refuses-and-why) and
+   [Going](#going-the-lease-and-the-departure) step 3.
 
 ### Open questions
 
-Labelled as first raised; Q1, Q2, Q3, Q6 and Q8 are settled above.
+Labelled as first raised; Q1, Q2, Q3, Q6, Q7 and Q8 are settled above.
 
 - **Q4. An answer's outcome across the restart.** Persist the first-outcome record with the attempt
    ledger, so a retry after the restart is told "delivered" or "unconfirmed" rather than the
@@ -647,8 +667,6 @@ Labelled as first raised; Q1, Q2, Q3, Q6 and Q8 are settled above.
 - **Q5. Usage probes.** An install waits up to 11 minutes for a Codex usage probe (#238). Keep that
    for Update now, or bound it lower and accept the Codex sign-out risk? Proposed: keep it; the
    line says why it waits.
-- **Q7. The cap.** Two committed restarts in six hours, shared with `manage.restart`, may be too few
-   on a coordinator VM that also gets restarted remotely. Keep it until #55, as proposed? Owner.
 
 ## Between the host and its app
 

@@ -477,7 +477,8 @@ into one folder with one version. An app update is a host update, so they never 
     the next quiet moment, using the settled gap, or when the person confirms again (Product, on
     #1161), within the press's 15 minutes from its signature; after that the press is dropped and
     the release stays ready. A press signed on that device within two minutes, `permissions.remoteManage` on, and
-    at most two such restarts in six hours, shared with a remote restart.
+    one restart in six hours of its own, then the two in six hours it shares with a remote restart
+    (owner, #1161).
   * **Ready:** a banner over every page, "Version *v* is ready. Restart to update." with
     **Restart to update** (an `InfoBar` with no close button, like the other app banners, so it
     stays while the release waits), and the same line and button in Settings. No toast: toasts

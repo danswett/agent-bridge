@@ -1291,7 +1291,8 @@ presses **Update now** for, and for nothing else: that press waits for its downl
 minute for the same lease, never goes over a busy session its confirmation didn't cover (a
 machine that became busier meanwhile keeps the download and installs at its next quiet moment;
 Product, #1161), lives at most 15 minutes from its signature (then it is dropped, spending no
-restart and cancelling no sign-in), is still never forced past the lease, and counts against the same cap
+restart and cancelling no sign-in), is still never forced past the lease, and has its own
+allowance of 1 restart in 6 hours (owner, #1161), spent first, then counts against the same cap
 below ([v1-update.md](v1-update.md#update-now-1159-design-not-built-yet); design, not built).
 At most **2 committed restarts
 every 6 hours** per machine until #55 (`rate-limited`), and 3 presses of each kind per device
