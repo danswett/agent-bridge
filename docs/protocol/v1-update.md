@@ -66,12 +66,15 @@ read-only. The pipe never offers it.
 | `update.get` | none | `UpdateState` |
 | `update.subscribe` | none | `UpdateState`, then an `update.state` event (data: `UpdateState`) whenever it changes. Nothing is sent ahead of the response |
 | `update.check` | `{ "request": "<uuid>" }` | `UpdateCommandResult` |
-| `update.install` | `{ "request": "<uuid>", "now"?: SignedCommand }` | `UpdateCommandResult` |
+| `update.install` | `{ "request": "<uuid>" }`, or for Update now `{ "now": SignedCommand }` | `UpdateCommandResult` |
 
 `request` is the device's UUID for one press; the same press sent again is the same ask.
 `update.check` and `update.install` without one fail with an error. `now` is **Update now**
-([below](#update-now-1159-design-not-built-yet)): designed, not built; a host that doesn't know
-it ignores the field, so a client sends it only to a machine whose state says `canUpdateNow`.
+([below](#update-now-1159-design-not-built-yet)): designed, not built. Its press carries the
+request **only inside the signed command**, never beside it, so a host that doesn't know `now`
+finds no `request` and refuses the press with that error: it can never fall back to a plain
+Install (Connection, settled decision 6). A client sends it only to a machine whose state says
+`canUpdateNow`.
 
 ### `UpdateState`
 
@@ -154,18 +157,24 @@ update path with #819 (fleet convergence) and #801 (remote host management).
 **What it is.** Install, without the app's wait for a quiet machine. It skips:
 
 * the two-minute idle wait (`AutoUpdater.IdleFor`) a device's Install waits for, however long;
-* the Install between turns gap and its six-hour backstop, which skips while a question waits;
+* Install between turns' six-hour backstop, which skips while a question waits;
 * the "Restart to update now?" dialog at the machine: nobody is there, and the phone's
   confirmation stands in for it.
+
+It waits for nothing the person confirmed. If, when it is ready to go, the machine is busier
+than the person confirmed, it keeps the download and waits for the next quiet moment (Install
+between turns' five-second settled gap, with no backstop), or for a fresh confirmation (Product,
+settled decision 3).
 
 It skips nothing else. In particular it never skips **#805's quiet lease**
 ([host-lifecycle.md](../host-lifecycle.md)): the host still leaves only through
 `TryAcquireQuiet`, `AnnouncePlanned` and `CommitDeparture`, so it never stops while an answer,
 a reply or a stop is being typed or delivered, and no answer is ever typed twice. That lease
 looks at deliveries and typing only; it never looks at running turns or waiting questions, and
-neither Update now nor #819 adds an idle test or a second fence to it. "Mid-turn" and "a
-question waiting" are what the person is **told** and **confirms**, never what the bridge waits
-for. There is no force flag. `ForcedRecovery` and `WatchdogRecovery` are #805's slice 2 (a
+neither Update now nor #819 adds an idle test or a second fence to it. Running turns and
+waiting questions are what the person is **told** and **confirms**, and what the host compares
+with that confirmation when it acts ([Going](#going-the-lease-and-the-departure)); they are
+never a lease condition. There is no force flag. `ForcedRecovery` and `WatchdogRecovery` are #805's slice 2 (a
 durable input journal and a recovered queue), are refused `JournalUncertain` today, and are
 never a person's skip; the `departure-stuck` watchdog restarts a host only after a graceful
 commit, which needed no accepted work in flight. Update now takes the lease as
@@ -178,26 +187,32 @@ Install, Restart to update and Install between turns stop the host over the pipe
 when the lease cannot be had, never forced, never carried out later" (owner, Q-O7; ManageService,
 [v1-sessions.md](v1-sessions.md#managing-a-machine)). The owner's 2026-11-07 decision above
 supersedes the "never carried out later" part for an update a person asks to go **now**: the
-download comes first and may take minutes, and the lease is tried for a bounded minute
-([Going](#going-the-lease-and-the-departure)). "Never forced" still holds: no lease, no
+download comes first and may take minutes, the lease is tried for a bounded minute
+([Going](#going-the-lease-and-the-departure)), and a machine that became busier meanwhile
+installs at its next quiet moment (decision 3). "Never forced" still holds: no lease, no
 departure. `manage.restart` keeps Q-O7 exactly.
 
 ### The press
 
 `update.install` with `now`: a [signed command](v1-transfer.md) the pressing device made for this
-machine, as `manage.*` takes ([v1-sessions.md](v1-sessions.md#managing-a-machine)):
+machine, as `manage.*` takes ([v1-sessions.md](v1-sessions.md#managing-a-machine)), and nothing
+else, not even `request`:
 
 ```json
-{ "request": "7d0f3a2e-1c4b-4d5e-8f60-112233445566",
-  "now": { "body": "<base64url>", "by": "<base64url>", "mac": "<base64url>" } }
+{ "now": { "body": "<base64url>", "by": "<base64url>", "mac": "<base64url>" } }
 ```
 
-Its body's `action` is `update.install.now`, its `request` the same UUID as the press's, its
-`target.machine` this machine; it lives at most **2 minutes** from `issuedAt`, as a manage
-command does. Its `args`, signed with the rest:
+**What the signature binds** (Connection, settled decision 6): its body's `action` is
+`update.install.now` and its `args` carry `"now": true`, both required; its `request` is the
+press's UUID (the one the host dedupes on, and `last` answers with); its `args.release` is the
+target version; its `target.machine` is this machine. So a plain Install, which is unsigned,
+can't be replayed as a forced one, nor an Update now for one release or machine as another. It
+lives at most **2 minutes** from `issuedAt`, as a manage command does. Its `args`, signed with
+the rest:
 
 | Arg | | |
 |---|---|---|
+| `now` | `true` | Required. Anything else is refused `bad-args` |
 | `release` | string | The release the person was shown (`available`). Anything else at the press, or at the departure, is refused `release-changed` |
 | `accept` | `UpdateBusy`? | What the person confirmed it may go over. Absent: the one-press case, valid only while the machine is quiet |
 
@@ -223,7 +238,7 @@ Update now interrupts what Install would wait for.
 | Another profile's app or host running from the same installation | `other-profile` (the app's, in `last`) | Velopack stops every process in the package, busy or not, and restarts only the profile that installed. The app refuses at once, before anything is downloaded, and again just before the host stops |
 | The app not running, a build folder rather than an installed copy, or an app too old for Update now | `unavailable`, `old-app` | Nothing would carry it out. An old app is told apart, since Install still works there |
 | #800's agent sign-in entrypoint on | `sign-in` | A restart cancels a pending sign-in, as for `manage.restart` (Connection, Q-C8) |
-| More than 3 presses of Update now from one device in 10 minutes; 8 presses waiting already; another Update now under way on the machine | `rate-limited`, `busy` | As today. Update now is its own kind for the per-device limit, so Install stays usable |
+| More than 3 presses of Update now from one device in 10 minutes; 8 presses waiting already; another Update now downloading or leaving on the machine | `rate-limited`, `busy` | As today. Update now is its own kind for the per-device limit, so Install stays usable. An Update now **waiting for a quiet moment** is not "under way": a new press replaces it, keeping its download (decision 3) |
 | More than **2 committed restarts in 6 hours** on the machine, counted together with `manage.restart` (6 an hour once #55's roster is enforced) | `restart-cap` | An Update now is a restart the person caused; its cap is #801's, shared, so the two can't be added up. The words say when it works again |
 | The same press sent again | (none) | The same-press rule: one request is one press, before and for ten minutes after the app took it, and the app remembers the last 32 across restarts; the signed command's `request` is acted on once |
 | The release offered is no longer `args.release` | `release-changed` | The person confirmed one version |
@@ -270,12 +285,14 @@ waiting. A quiet machine updates on one press.
   `waiting` both 0 and not `unknown`, the press goes at once, with no `accept`. Otherwise,
   `unknown` included (Product: "if it cannot tell, treat the machine as busy"), it shows the
   confirmation (below), and the press carries `accept`: the counts the person saw.
-* **The host checks.** At the press, from its snapshot then: a press with no `accept` goes only
-  if the machine is quiet and its sessions are known; one with `accept` goes if `working` and `waiting` are each no more
+* **The host checks, twice.** At the press, from its snapshot then, as an early answer: a press with no `accept` is taken only
+  if the machine is quiet and its sessions are known; one with `accept` if `working` and `waiting` are each no more
   than accepted, and, if the host is unsure now, only if `accept.unknown` was set. Otherwise
   the outcome is `confirm`, nothing is asked of the app, and `state.busy` says what is busy now;
-  the client shows the confirmation again with the new counts. The check is the host's, as
-  `session.stop`'s is, so an old or careless client can't skip the person; it is a seatbelt,
+  the client shows the confirmation again with the new counts. The check that decides is the
+  same comparison made again **when the host acts**, with the lease held (Connection, decision
+  6; [Going](#going-the-lease-and-the-departure) step 3). Both are the host's, as
+  `session.stop`'s is, so an old or careless client can't skip the person; they are a seatbelt,
   not the security boundary, which is the signature and the caps.
 * **After the press: never over a turn nobody confirmed** (Product, settled decision 3). When the
   download is done and checked, the app looks at the machine again. It leaves at once if the
@@ -314,8 +331,8 @@ host's own text (#826). "Bridge", never "host".
   (#1142), and also whenever the bridge can't tell (Product: err toward warning). Title
   "Update *machine* now?" Body: each busy session from `busy.sessions`, by the name the client
   shows for it, with its state in words, "Mid-turn", "Question waiting" or "Approval waiting"; a
-  session the client has no name for yet reads "A session". If `unknown`: "The bridge can't tell
-  yet whether a session there is busy." Then one line: "They pause while the bridge restarts,
+  session the client has no name for yet reads "A session". If `unknown`: "Some sessions there
+  haven't reported yet." (Creative.) Then one line: "They pause while the bridge restarts,
   usually under a minute." (The time is one the bridge backs up: planned update restarts came
   back in 20 to 25 s in #498's logs, and #815 announces 90 s as the most it expects.) Until #954
   lands, and only when a question or approval is waiting or the bridge can't tell, one more
@@ -331,6 +348,9 @@ host's own text (#826). "Bridge", never "host".
   words for its own restart ([app-windows.md](../app-windows.md#updates-velopack-one-version-for-app-and-host)),
   kept through the restart ([Announced as planned](#announced-as-planned-498)). Never
   "Updating…", which means the screen refreshing after a machine comes back (#950).
+  **Screen readers** (Creative): the download line is a polite live region, announced when the
+  download starts and when it finishes, never at each percent; "Restarting to update…" is
+  announced once.
 * **Afterwards, on the machine row, in words:** "Updated to *v*", or "Not updated: *reason*",
   the reason fixed by its `code` (in the press's result, or in `last`):
 
@@ -366,15 +386,21 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
 2. The app takes it, refuses at once what it refuses today (another profile, a build folder),
    then downloads and checks the package **outside the lease** (`DownloadMark`, and #984's
    per-profile copy). It holds the usage probes (#238) as every install does. It does not wait
-   for a quiet machine unless the machine is busier than the person confirmed, or the press is
-   15 minutes old by then (a download that slow): then it keeps the download and waits for the
-   next quiet moment ([After the press](#the-confirmation)), never going on sessions nobody
-   confirmed it for.
+   for a quiet machine unless, when it is ready, the machine is busier than the person
+   confirmed, or the press is 15 minutes old by then (a download that slow): then it keeps the
+   download and waits for the next quiet moment ([After the press](#the-confirmation)), never
+   going on sessions nobody confirmed it for.
 3. The app asks the host to leave: one app-only pipe op (proposed `host.update.depart`,
    `{ "request" }`), the seam #819's installs will use too ([open question 1](#open-questions)). The
    host takes #805's lease, purpose `Update`, waiting up to 10 s. If an answer, a reply or a stop
    is being typed or delivered, it doesn't get it; it tries again, up to 6 times (about a
-   minute), then refuses `not-quiet`, having interrupted nothing. It then announces the
+   minute), then refuses `not-quiet`, having interrupted nothing. **With the lease held, it
+   compares its session snapshot then with the press** (Connection: busy and question state are
+   checked when the host acts, not only when the person pressed): `busy` no more than `accept`,
+   or quiet and known for a press without one. It does so before announcing and again just
+   before committing; a failure aborts the lease (cancelling any announcement) and sends the
+   press back to `waiting` with its download, never a refusal. This is the update consumer's own
+   check, outside the lease's conditions: the lease still adds no idle test. It then announces the
    planned departure (`reason: update`, expected back in 90 s), reads the `Update` purpose's
    eligibility again (read-only, `permissions.remoteManage`, the sign-in entrypoint, another
    profile's host), and commits. **The restart cap is checked and spent with the commit**, under
@@ -479,11 +505,15 @@ so they need one too.
    more than two minutes ago is refused"; "Update now and a remote restart share one cap of two
    in six hours"; "a remote restart committed while an Update now downloads leaves the Update now
    refused restart-cap"; "busy names a waiting approval as an approval and never carries any text"; "the departure is refused
-   while an answer is being typed, and nothing is typed twice"; "a committed update departure
+   while an answer is being typed, and nothing is typed twice"; "an Update now press with no
+   signed request is refused, never taken as an Install"; "a plain Install can't be replayed as an
+   Update now"; "a turn started after the press sends the Update now back to waiting, with its
+   download, when the host acts"; "a committed update departure
    refuses new deliveries until the host exits".
 2. **App.** `AutoUpdater` takes a `now` ask: refuses another profile or a build folder at once,
-   downloads and checks, holds the probes, skips `IdleFor`, the settled gap and the backstop,
-   leaves through the departure op, and reports `last` with the host's words. It reports that it
+   downloads and checks, holds the probes, skips `IdleFor` and the backstop (using the settled
+   gap only while waiting for a quiet moment), leaves through the departure op, and reports
+   `last` with its code. It reports that it
    can carry Update now. Tests: "an Update now ask installs without waiting for the machine to be
    idle"; "an Update now ask with another profile running is refused before anything is
    downloaded"; "a refused departure starts nothing and keeps the release offered"; "a quiet
@@ -523,10 +553,19 @@ Order: 1, then 2, then 3 and 4 together.
    confirmation names it; if it cannot tell, treat the machine as busy and show the
    confirmation. Err toward warning." Specified in [What the person sees](#what-the-person-sees)
    and [Questions and answers across the restart](#questions-and-answers-across-the-restart).
+6. **The op's shape** (Connection, 2026-11-07, on #1161): use `now` on `update.install` as
+   drafted, not a new signed op. Connection's conditions: "the SignedCommand must bind the
+   request uuid, the target version and the `now` flag, so a plain Install cannot be replayed
+   as a forced one; the host re-checks busy/question state at the moment it acts (not at press
+   time); a relay or older host that does not know `now` must refuse, never fall back to a plain
+   Install." No new relay work: the relay carries the Noise channel's bytes and reads no
+   `update.*`. Specified in [Ops](#ops) (the request only inside the signature, so an older
+   host refuses), [The press](#the-press) (what the signature binds) and
+   [Going](#going-the-lease-and-the-departure) step 3 (the check when the host acts).
 
 ### Open questions
 
-Numbered as first raised; 3 and 8 are settled above.
+Numbered as first raised; 3, 6 and 8 are settled above.
 
 1. **One departure seam with #819.** #870 (#819's host-only convergence draft) also has to
    leave through `Update`; which lands the pipe op and the `Update` registrations, and does
@@ -546,9 +585,6 @@ Numbered as first raised; 3 and 8 are settled above.
 5. **Usage probes.** An install waits up to 11 minutes for a Codex usage probe (#238). Keep that
    for Update now, or bound it lower and accept the Codex sign-out risk? Proposed: keep it; the
    line says why it waits.
-6. **The op's shape.** A `now` field on `update.install` (proposed: one update state, one `last`,
-   one app path) or a new signed `manage.update` op (one authorization surface). Engineering
-   accepted either; Connection to confirm.
 7. **The cap.** Two committed restarts in six hours, shared with `manage.restart`, may be too few
    on a coordinator VM that also gets restarted remotely. Keep it until #55, as proposed? Owner.
 

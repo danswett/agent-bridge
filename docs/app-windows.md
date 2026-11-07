@@ -468,13 +468,15 @@ into one folder with one version. An app update is a host update, so they never 
   * **Update now, from another device** (#1159; design in
     [v1-update.md](protocol/v1-update.md#update-now-1159-design-not-built-yet), not built): the
     person's phone, or this app on another machine, asks for the release ready here to go now,
-    accepting about a minute of downtime. The app then skips its two-minute wait, the settled gap,
-    the backstop and its own "Restart to update now?" dialog (the phone's confirmation stands in),
-    but nothing else: another profile running, a build folder, the probes' hold and the checked
-    package copy all apply, and it leaves only through the host's #805 quiet lease, so it never
-    stops the host while an answer or reply is being typed. A press signed on that device within
-    two minutes, `permissions.remoteManage` on, and at most two such restarts in six hours,
-    shared with a remote restart.
+    accepting about a minute of downtime. The app then skips its two-minute wait, the backstop
+    and its own "Restart to update now?" dialog (the phone's confirmation stands in), but nothing
+    else: another profile running, a build folder, the probes' hold and the checked package copy
+    all apply, and it leaves only through the host's #805 quiet lease, so it never stops the host
+    while an answer or reply is being typed. If the machine is busier than the person confirmed
+    when it is ready (a turn started during the download), it keeps the download and installs at
+    the next quiet moment, using the settled gap, or when the person confirms again (Product, on
+    #1161). A press signed on that device within two minutes, `permissions.remoteManage` on, and
+    at most two such restarts in six hours, shared with a remote restart.
   * **Ready:** a banner over every page, "Version *v* is ready. Restart to update." with
     **Restart to update** (an `InfoBar` with no close button, like the other app banners, so it
     stays while the release waits), and the same line and button in Settings. No toast: toasts
