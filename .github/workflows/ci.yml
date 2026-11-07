@@ -919,9 +919,7 @@ jobs:
           $json = gh api "repos/$env:REPOSITORY/releases/tags/$env:MANIFEST_TAG"
           if ($LASTEXITCODE) { throw "couldn't read the published Beta metadata ($LASTEXITCODE)" }
           $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
-          ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json
-          gh release upload $env:MANIFEST_TAG out/beta-release.json --repo $env:REPOSITORY --clobber
-          if ($LASTEXITCODE) { throw "Beta manifest upload failed ($LASTEXITCODE)" }
+          ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json -Publish
 
   attest:
     # Build provenance and an SBOM attestation for each package publish uploaded (quality/README.md
