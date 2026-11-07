@@ -373,6 +373,8 @@ Both messages are text frames from an admitted device of any kind, counted again
 * One append carries 1 to 16 entries, offered in the order given (a parent before its child). Anything else is `{"error":"bad-request"}`; a store that could not be reached is `{"error":"unavailable"}` and nothing was kept.
 * The first entry kept for an account must be a genesis whose `account` is the account's id; its `generation` then fixes the log. Any other first entry is refused `genesis`, a genesis for another account `account`.
 * An entry that does not parse is refused with its parse code and an empty `hash`. Accepted and quarantined entries are kept; refused and duplicate ones are not.
+* An entry over a signer's budget or a cap is refused for now. A later removal in the same append that needs it as evidence (§3.3) brings it in: it is kept, ahead of the removal, and its result becomes `accepted` with reason `evidence`. So send such ancestors and the removal in one append, parent first.
+* `roster-get` is `{"error":"unavailable"}` too when the store cannot be reached. A stored log that does not rebuild is never added to: an append says `unavailable`.
 * The log is bounded at 224 KiB stored; an append that would pass it is refused `cap`.
 * The relay judges time by its own clock. That is defence in depth: a host applies the same rules on its own clock.
 ## Vectors

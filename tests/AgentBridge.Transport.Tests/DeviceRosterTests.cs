@@ -1,4 +1,5 @@
 using AgentBridge.Relay;
+using AgentBridge.Roster;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -101,6 +102,44 @@ public class DeviceRosterTests
         var r = await roster.AppendAsync(RosterFixture.Account, [Wire(w, "evil")]);
         Assert.Equal("refused", r![0].Verdict);
         Assert.Single((await roster.GetAsync(RosterFixture.Account))!.Entries);
+    }
+
+    [Fact]
+    public async Task A_removal_is_kept_with_the_over_budget_entries_it_brought_as_evidence()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+H", "G", "H", "G");
+        for (var i = 0; i < RosterVerifier.SignerBudget + 1; i++) { w.Add($"+N{i}", "H", $"N{i}", "+H"); }
+        w.Remove("R", "G", "+H", $"+N{RosterVerifier.SignerBudget}");
+        var store = new MemoryRosterStore();
+        var roster = Make(w, store);
+        var wire = w.Labels.Select(l => Wire(w, l)).ToList();
+        for (var i = 0; i < wire.Count; i += DeviceRoster.MaxPerAppend)
+        {
+            await roster.AppendAsync(RosterFixture.Account, [.. wire.Skip(i).Take(DeviceRoster.MaxPerAppend)]);
+        }
+        var again = Make(w, store);
+        var s = await again.GetAsync(RosterFixture.Account);
+        Assert.Equal(wire.Count, s!.Entries.Count);
+        // Rebuilt from the store, the removal and its evidence are all still there.
+        var r = await again.AppendAsync(RosterFixture.Account, [wire[^1], wire[^2]]);
+        Assert.Equal(["duplicate", "duplicate"], r!.Select(x => x.Verdict));
+    }
+
+    [Fact]
+    public void A_stored_roster_needs_a_token_key_so_names_survive_a_restart()
+    {
+        var store = new AzureRosterStoreStub();
+        Assert.Throws<InvalidOperationException>(() =>
+            new DeviceRoster(new RelayOptions(), null!, NullLogger<DeviceRoster>.Instance, store));
+    }
+
+    sealed class AzureRosterStoreStub : IRosterStore
+    {
+        public Task<StoredRoster?> ReadAsync(string name, CancellationToken ct) => Task.FromResult<StoredRoster?>(null);
+        public Task<string?> WriteAsync(string name, byte[] body, string? etag, CancellationToken ct) => Task.FromResult<string?>(null);
+        public Task<bool> DeleteAsync(string name, string etag, CancellationToken ct) => Task.FromResult(false);
     }
 
     [Fact]
