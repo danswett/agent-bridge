@@ -71,7 +71,7 @@ public enum BridgeNotificationActions {
             guard current.question == request.notice.questionSnapshot, let raw = current.question,
                   let question = BridgeQuestion(json: raw) else { throw BridgeOperationError("The question changed. Review it in the session.") }
             // A notification delivered by an older build may still carry Approve Once or Deny.
-            guard !question.isApproval else { throw BridgeOperationError("Open the session to decide this approval.") }
+            guard !question.isApproval else { throw BridgeOperationError("Not sent. Review the approval in the session.") }
             let values: [String: JSONValue]
             let text: String?
             if case let .choice(field, value) = request.action.kind {
