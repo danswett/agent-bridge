@@ -15,21 +15,23 @@ sealed unsafe partial class TrayIcon : IDisposable
     const uint WmLButtonUp = 0x202, WmRButtonUp = 0x205, WmContextMenu = 0x7B;
     const uint MfString = 0, MfSeparator = 0x800;
     const uint TpmReturnCmd = 0x100, TpmRightButton = 2;
-    const int CmdOpen = 1, CmdQuit = 2;
+    const int CmdOpen = 1, CmdQuit = 2, CmdFeedback = 3;
 
     static TrayIcon? current;
     readonly nint hwnd;
     readonly nint icon;
     readonly uint taskbarCreated;
     readonly Action open;
+    readonly Action feedback;
     readonly Action quit;
     string tip = MainViewModel.TrayTip(0);
     bool added;
 
-    public TrayIcon(nint hwnd, string iconPath, Action open, Action quit)
+    public TrayIcon(nint hwnd, string iconPath, Action open, Action feedback, Action quit)
     {
         this.hwnd = hwnd;
         this.open = open;
+        this.feedback = feedback;
         this.quit = quit;
         icon = LoadImageW(0, iconPath, 1, GetSystemMetrics(49), GetSystemMetrics(50), 0x10);
         taskbarCreated = RegisterWindowMessageW("TaskbarCreated");
@@ -85,6 +87,7 @@ sealed unsafe partial class TrayIcon : IDisposable
     {
         var menu = CreatePopupMenu();
         AppendMenuW(menu, MfString, CmdOpen, $"Open {Product.Name}");
+        AppendMenuW(menu, MfString, CmdFeedback, "Send feedback");
         AppendMenuW(menu, MfSeparator, 0, null);
         AppendMenuW(menu, MfString, CmdQuit, "Quit (the host keeps running)");
         GetCursorPos(out var at);
@@ -93,6 +96,7 @@ sealed unsafe partial class TrayIcon : IDisposable
         var cmd = TrackPopupMenu(menu, TpmReturnCmd | TpmRightButton, at.X, at.Y, 0, hwnd, 0);
         DestroyMenu(menu);
         if (cmd == CmdOpen) { open(); }
+        else if (cmd == CmdFeedback) { feedback(); }
         else if (cmd == CmdQuit) { quit(); }
     }
 

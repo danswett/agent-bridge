@@ -98,6 +98,7 @@ static partial class SelfTest
             await Write(outFile, result, checks, failures, "a word too long for WinUI's text layout");
             await CheckLongWords(window, Check);
             await Write(outFile, result, checks, failures, null);
+            await CheckFeedbackEntry(window, Check);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
             await CheckCurrentTools(window, main, Check);
@@ -715,6 +716,26 @@ static partial class SelfTest
     // box; the compact rail with every page and its 3×16 selection pill in Bridge; the pages on a
     // layer with an 8 px top-left radius; WinUI's accent controls in Bridge in both themes; and the
     // window no smaller than 360×600.
+    static async Task CheckFeedbackEntry(MainWindow window, Action<bool, string> check)
+    {
+        window.ShowPage("settings");
+        var button = ById<Button>(window.SettingsPage, "SendFeedback");
+        check(button is { IsEnabled: true, Content: "Send feedback" }, "offers Send feedback in Settings");
+        if (button is null) { return; }
+        ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
+        ContentDialog? Dialog() => VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot)
+            .Select(p => p.Child).Where(c => c is not null)
+            .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)[d] : Find<ContentDialog>(c))
+            .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) == "FeedbackUnavailable");
+        var opened = await Until(() => Dialog() is not null, TimeSpan.FromSeconds(5));
+        var dialog = Dialog();
+        check(opened && dialog is { Title: "Send feedback", Content: "Feedback isn't available in the Windows app yet.", CloseButtonText: "Close", PrimaryButtonText: "" },
+            "says feedback is unavailable without offering a send");
+        dialog?.Hide();
+        await Until(() => Dialog() is null, TimeSpan.FromSeconds(5));
+        window.ShowPage("sessions");
+    }
+
     static async Task CheckShell(MainWindow window, MainViewModel main, Action<bool, string> check)
     {
         static string Colour(object? b) => b is SolidColorBrush s ? s.Color.ToString() : b?.GetType().Name ?? "none";
