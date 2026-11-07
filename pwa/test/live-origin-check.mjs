@@ -26,8 +26,13 @@ const get = (url) => {
   return context.request.get(url, { maxRedirects: 0 });
 };
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ timeout: 30000 });
 const context = await browser.newContext();
+// Playwright's own waits (goto, reload, evaluate, direct requests) all give up after 15 s, so a
+// check that cannot finish fails with a message; the timer below is a last resort for the run.
+context.setDefaultTimeout(15000);
+context.setDefaultNavigationTimeout(15000);
+setTimeout(() => { console.log('FAIL  the run took longer than 3 minutes'); process.exit(1); }, 180000).unref();
 const blocked = [];
 await context.route('**/*', (route) => {
   const url = route.request().url();
@@ -45,7 +50,11 @@ await check('first load at the root is 200 HTML titled Slipgates', async () => {
 });
 
 await check('the service worker registers with scope /', async () => {
-  const scope = await page.evaluate(async () => (await navigator.serviceWorker.ready).scope);
+  const scope = await page.evaluate(async () => {
+    const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 15000));
+    return (await Promise.race([navigator.serviceWorker.ready, timeout]))?.scope ?? null;
+  });
+  expect(scope !== null, 'service worker did not become ready in 15 s');
   expect(scope === `${origin}/`, `scope ${scope}`);
   return scope;
 });
@@ -110,7 +119,7 @@ await check('relay-style paths are not intercepted by the worker', async () => {
   const seen = await page.evaluate(async () => {
     const out = {};
     for (const p of ['/v1/push/key', '/v1/anything', '/health']) {
-      const r = await fetch(p, { credentials: 'include', headers: { authorization: 'Bearer not-a-real-token' } });
+      const r = await fetch(p, { signal: AbortSignal.timeout(15000), credentials: 'include', headers: { authorization: 'Bearer not-a-real-token' } });
       out[p] = { status: r.status, type: r.headers.get('content-type') };
     }
     return out;
