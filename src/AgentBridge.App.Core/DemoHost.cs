@@ -385,6 +385,8 @@ public sealed partial class DemoHost : IAsyncDisposable
 
     // What the next signin.code says: GitHub's, unless a test sets a spoof.
     public string NextUserCode { get; set; } = "WDJB-MJHT";
+    // A host whose discovery is held holds a resume back (#1064): set, resumes come back busy with this reason.
+    public string? ResumeHeldReason { get; set; }
     public string NextVerificationUri { get; set; } = "https://github.com/login/device";
     // How long the next code lives, and how long the next start's result takes (its code comes first).
     public TimeSpan NextCodeLife { get; set; } = TimeSpan.FromMinutes(15);
@@ -629,6 +631,7 @@ public sealed partial class DemoHost : IAsyncDisposable
             if (launches.TryGetValue(r.Request, out var again)) { return again; }
             var choices = LaunchChoices();
             if (LaunchProtocol.Check(r) is { } problem) { return launches[r.Request] = new LaunchResult(LaunchOutcome.Refused, problem); }
+            if (r.Resume is not null && ResumeHeldReason is { } held) { return new LaunchResult(LaunchOutcome.Busy, $"Held: session discovery is waiting on {held}, so whether that session is still running cannot be told yet. Try again in a minute or two."); }
             var agent = choices.Agents.FirstOrDefault(a => a.Id == (r.Agent ?? "copilot"));
             if (agent is null) { return launches[r.Request] = new LaunchResult(LaunchOutcome.Refused, $"{r.Agent} is not installed on this machine"); }
             var resumed = r.Resume is { } id ? resumable.FirstOrDefault(x => x.Id == id) : null;
