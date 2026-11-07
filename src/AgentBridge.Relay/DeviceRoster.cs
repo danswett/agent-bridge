@@ -24,12 +24,17 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     const int Retries = 5;
 
     readonly ConcurrentDictionary<string, SemaphoreSlim> locks = new();
-    readonly byte[] nameKey = DeriveKey(o);
+    readonly byte[] nameKey = DeriveKey(o, store);
 
     public bool Enabled => store is not null;
 
-    static byte[] DeriveKey(RelayOptions o)
+    static byte[] DeriveKey(RelayOptions o, IRosterStore? store)
     {
+        if (store is not null and not MemoryRosterStore && string.IsNullOrEmpty(o.TokenKey))
+        {
+            // Names from a per-process key could never be found again after a restart.
+            throw new InvalidOperationException("Relay:TokenKey is required for a stored device roster");
+        }
         var root = string.IsNullOrEmpty(o.TokenKey) ? RandomNumberGenerator.GetBytes(32) : Convert.FromBase64String(o.TokenKey);
         return HMACSHA256.HashData(root, "agent-bridge device roster name v1"u8);
     }
@@ -96,7 +101,15 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                     return null;
                 }
                 var stored = Decode(read);
-                var (results, next) = Apply(accountId, stored, wrappers);
+                IReadOnlyList<Result> results;
+                Stored? next;
+                try { (results, next) = Apply(accountId, stored, wrappers); }
+                catch (InvalidOperationException e)
+                {
+                    metrics.Roster("devices-append", "corrupt");
+                    log.LogError(e, "device roster failed to reconstruct");
+                    return null;
+                }
                 if (next is null)
                 {
                     metrics.Roster("devices-append", "none");
@@ -106,7 +119,7 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                 if (body.Length > MaxStoredBytes)
                 {
                     metrics.Roster("devices-append", "full");
-                    return [.. wrappers.Select(w => new Result(HashOf(w), "refused", Invalid.Cap))];
+                    return [.. results.Select(r => r.Verdict is "accepted" or "quarantined" ? r with { Verdict = "refused", Reason = Invalid.Cap } : r)];
                 }
                 try
                 {
@@ -163,12 +176,15 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         }
         var verifier = new RosterVerifier(accountId, generation, () => o.Roster.Time.GetUtcNow() - DateTimeOffset.UnixEpoch);
         var kept = new List<string>(stored?.Entries ?? []);
-        foreach (var w in kept)
-        {
-            // Stored entries were valid when kept; offering them again rebuilds the same state.
-            verifier.Offer(Entry.Parse(Encoding.UTF8.GetBytes(w)));
-        }
+        var replay = kept.Select(w => Entry.Parse(Encoding.UTF8.GetBytes(w))).ToList();
+        // Stored entries were valid when kept; offering them again rebuilds the same state. One
+        // that no longer holds means the copy cannot be trusted, so nothing is added to it.
+        verifier.Offer(replay);
+        if (replay.Any(e => !verifier.Holds(e.Hash))) { throw new InvalidOperationException("stored device roster does not reconstruct"); }
         var changed = false;
+        // Entries set aside over a budget or cap: a later removal in this append may need them as
+        // evidence, and then they are kept with it, ahead of it.
+        var aside = new List<(int Index, Entry Entry)>();
         foreach (var (index, entry) in parsed)
         {
             var offered = verifier.Offer(entry)[0];
@@ -176,8 +192,21 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
             results[index] = new Result(Codec.Base64Url(offered.Hash), verdict, offered.Reason);
             if (offered.Verdict is Verdict.Accepted or Verdict.Quarantined)
             {
+                if (entry.Body.Op == EntryOp.Remove)
+                {
+                    foreach (var (ai, ae) in aside.Where(a => verifier.Holds(a.Entry.Hash)).ToList())
+                    {
+                        kept.Add(ae.Canonical());
+                        results[ai] = new Result(Codec.Base64Url(ae.Hash), "accepted", Invalid.Evidence);
+                        aside.RemoveAll(a => a.Index == ai);
+                    }
+                }
                 kept.Add(entry.Canonical());
                 changed = true;
+            }
+            else if (offered.Verdict == Verdict.Refused && verifier.Graph.Find(entry.Hash) is not null)
+            {
+                aside.Add((index, entry));
             }
         }
         return (results, changed ? new Stored(1, generation, kept) : null);
@@ -187,11 +216,5 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     {
         foreach (var (index, entry) in parsed) { results[index] = new Result(Codec.Base64Url(entry.Hash), "refused", reason); }
         return results;
-    }
-
-    static string HashOf(string wrapper)
-    {
-        try { return Codec.Base64Url(Entry.Parse(Encoding.UTF8.GetBytes(wrapper)).Hash); }
-        catch (RosterFormatException) { return ""; }
     }
 }
