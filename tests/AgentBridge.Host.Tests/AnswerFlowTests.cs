@@ -2856,6 +2856,32 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Attempts);
     }
 
+    [Theory]
+    // Spaces typed at the machine into an empty box do not show on a screen read (its rows are
+    // trimmed), so the box reads as untouched; once the answer's words follow them they do, and
+    // the words' Enter is not pressed: " 0" is not "0" (#1123 review, Sol on 0f12d819). The CLI
+    // records a number box as Number(text), which ignores the spaces, but it is held the same.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Words_typed_after_spaces_left_in_an_empty_box_at_the_machine_get_no_Enter(bool number)
+    {
+        object answer = number ? new { n = 7 } : new { data = "7" };
+        if (number) { await AskFieldsAsync(new { n = new { type = "integer" } }, 1, answer); }
+        else { await AskDataAsync(); }
+        bool Typed() => injector.Plans.Any(p => p.Plan.Sends.Any(s => s.Text == "7"));
+        injector.Screen = () => number
+            ? Framed("Tell me", ["n"], 0, ["Field: n", .. Input(Typed() ? "  7" : "  ")], colon: false)
+            : DataScreen(Typed() ? "  7" : "  ");
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Equal(0, Enters());
+        Assert.Single(injector.Plans, p => p.Plan.Sends.Any(s => s.Text == "7"));
+        lock (logged) { Assert.Contains(logged, m => m.Contains("do not start its field's input", StringComparison.Ordinal)); }
+    }
+
     [Fact]
     public async Task A_next_field_already_showing_words_typed_at_the_machine_gets_none_of_the_answers_words()
     {

@@ -205,6 +205,23 @@ public static partial class CopilotFormScreen
         return Drawn(drawn, ref at, text, width, caret + 2) && drawn.Skip(at).All(r => r.Trim(' ').Length == 0);
     }
 
+    // Whether the text or number field `index` shows its input starting with `words`, read from
+    // the column right after the caret's "❯ " (#1123 review): spaces typed at the machine into
+    // an empty box do not show on a screen read (rows are trimmed), so the box passes Untouched,
+    // but once the words are typed after them they do, and the words no longer start there. As
+    // much of the words as the box's first row shows is compared, character for character; no
+    // key is known to clear a box (CopilotPlanner), so a first pass withholds the Enter on any
+    // other start. False for any other field or layout, and when the first row shows none of
+    // the words (scrolled, say).
+    public static bool Begins(IReadOnlyList<string> rows, CopilotForm form, int index, string words)
+    {
+        if (words.Length == 0 || !Box(rows, form, index, out var box, out var caret, out _)) { return false; }
+        var first = box[0].TrimEnd(' ');
+        if (first.Length < caret + 3 || first[caret + 1] != ' ') { return false; }
+        var shown = first[(caret + 2)..];
+        return shown.Length <= words.Length && string.CompareOrdinal(shown, 0, words, 0, shown.Length) == 0;
+    }
+
     // Whether field `index` is drawn as it opens, nothing typed into it at the machine, before the
     // first key goes into it (#1123 review): keys typed into a box add to what is there, so a
     // local "9" and a remote "0" submitted "90". A text or number box must show its caret alone,

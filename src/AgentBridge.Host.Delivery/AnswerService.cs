@@ -1179,6 +1179,13 @@ public sealed class AnswerService : ISessionAnswerer
                     return (new InjectionResult(InjectionStatus.Typed, "ok"), $"the words did not show on the session's screen within {options.WordsWait.TotalSeconds:0.#} seconds");
                 }
                 showing = shown;
+                // Spaces typed at the machine into an empty box show only once the words follow
+                // them: the words must start the input, or their Enter is not pressed (Begins).
+                if (form.Fields[Field()].Kind is (CopilotFieldKind.Text or CopilotFieldKind.Number) && !CopilotFormScreen.Begins(shown, form, Field(), send.Text))
+                {
+                    log($"the words typed into {Short(sessionId)} (pid {pid}) do not start its field's input: something typed at the machine is before them; their Enter is not pressed");
+                    return (new InjectionResult(InjectionStatus.Typed, "ok"), "the field the words went to shows something typed at the machine before them, so their Enter was not pressed");
+                }
             }
             // Shown in the field's input (Shows reads only the form at that field), the words
             // were typed into this form at this field.

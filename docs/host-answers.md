@@ -239,7 +239,16 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     resume nothing is typed, and the form is reset as below). An option list or a Yes/No
     needs no such check: its keys walk from the top whatever row the pointer was left on,
     and nothing typed stays in it. A checkbox list's ticks are not read (see "What no plan
-    can see").
+    can see"). Spaces typed at the machine into an empty box are the one thing this check
+    cannot see: a screen read trims each row, so a box holding only spaces reads as its
+    "❯ " alone. No key is known to clear a box (none has been proven against the CLI, so none
+    is guessed at, Ctrl+U included), so instead, once the answer's words show in the box, a
+    first pass presses their Enter only if they start the input at the column right after
+    the "❯ " (`CopilotFormScreen.Begins`): spaces before them show then, and the words are
+    left unsubmitted (`unconfirmed`; a resume's whole-contents check refuses them too, so the
+    form is reset). This holds for a number box as well, although the CLI records one as
+    `Number(text)`, which would ignore the spaces and record the same number. Only spaces
+    after the words stay unseen (above).
   * Not resumed within `ResumeWait` (or after three resumes that each stopped again), the form
     is reset: one Esc (the form's own `esc cancel`), held to rows that show this very form at
     one of its fields; a screen showing anything else gets nothing, not even the Esc, and the
