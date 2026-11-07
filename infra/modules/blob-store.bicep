@@ -20,6 +20,9 @@ param allowedOrigins array
 param tags object
 
 var container = 'blobs'
+// Beta feedback (docs/protocol/feedback.md): sealed bundles the relay can only create, kept
+// for the 30-day retention the owner chose in #731. Reading them is the feedback lead's role.
+var feedbackContainer = 'feedback'
 
 var roles = {
   // Read, write and delete blobs: given on the one container only.
@@ -82,7 +85,13 @@ resource blobs 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-0
   properties: { publicAccess: 'None' }
 }
 
-// The backstop behind the relay's own deletes and its 24-hour tickets: every blob goes a day
+resource feedback 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: feedbackContainer
+  properties: { publicAccess: 'None' }
+}
+
+// Write-once for the retention: a blob in this container cannot be overwritten or deleted by\n// anyone, the relay included, until its 30 days are up. (The condition on the relay's role below\n// covers read, list and delete; this covers overwrite, which no role condition can express.)\nresource feedbackRetention 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01' = {\n  parent: feedback\n  name: 'default'\n  properties: {\n    immutabilityPeriodSinceCreationInDays: 30\n    allowProtectedAppendWrites: false\n  }\n}\n\n// The backstop behind the relay's own deletes and its 24-hour tickets: every blob goes a day
 // after it was written. Lifecycle runs once a day, so a blob lasts 1 to 2 days at most.
 resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
   parent: account
@@ -95,8 +104,18 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
           enabled: true
           type: 'Lifecycle'
           definition: {
-            filters: { blobTypes: ['blockBlob'] }
+            // Scoped to the blob container: feedback must outlive this rule.
+            filters: { blobTypes: ['blockBlob'], prefixMatch: ['${container}/'] }
             actions: { baseBlob: { delete: { daysAfterCreationGreaterThan: 1 } } }
+          }
+        }
+        {
+          name: 'delete-feedback-after-31-days'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: { blobTypes: ['blockBlob'], prefixMatch: ['${feedbackContainer}/'] }
+            actions: { baseBlob: { delete: { daysAfterCreationGreaterThan: 31 } } }
           }
         }
       ]
@@ -108,6 +127,21 @@ resource dataAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(blobs.id, relayPrincipalId, roles.blobDataContributor)
   scope: blobs
   properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
+    principalId: relayPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// The relay only ever creates feedback: the same role as above, but a condition takes away
+// read, list and delete (and tags), so a compromised relay cannot read or destroy what the
+// testers sent. The relay holds the bytes only while it checks their size and writes them.
+resource feedbackAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(feedback.id, relayPrincipalId, roles.blobDataContributor)
+  scope: feedback
+  properties: {
+    conditionVersion: '2.0'
+    condition: '((!(ActionMatches{\'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read\'}) AND !(ActionMatches{\'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete\'}) AND !(ActionMatches{\'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read\'}) AND !(SubOperationMatches{\'Blob.List\'})))'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
     principalId: relayPrincipalId
     principalType: 'ServicePrincipal'
@@ -126,3 +160,4 @@ resource delegator 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 
 output accountUrl string = account.properties.primaryEndpoints.blob
 output container string = container
+output feedbackContainer string = feedbackContainer
