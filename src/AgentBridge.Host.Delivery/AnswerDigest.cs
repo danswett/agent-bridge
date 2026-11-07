@@ -1,6 +1,7 @@
+using System.Globalization;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text.Json;
-using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery;
@@ -56,11 +57,10 @@ internal static class AnswerDigest
                 writer.WriteEndArray();
                 break;
             case JsonValueKind.Number:
-                // Compared exactly, as the Copilot planner compares numbers: 3, 3.0 and 3e0 are
-                // one answer, and 1e-29 and 2e-29 are two. Read through decimal both were 0 (#1100).
-                // A number that cannot be put in that form is kept as written.
+                // Compared exactly: 3, 3.0 and 3e0 are one answer, and 1e-29 and 2e-29 are two.
+                // Read through decimal both were 0 (#1100).
                 var raw = value.GetRawText();
-                if (CopilotFieldSchema.ExactNumber(raw) is { } exact) { writer.WriteStringValue("n"); writer.WriteStringValue(exact); }
+                if (Canonical(raw) is { } exact) { writer.WriteStringValue("n"); writer.WriteStringValue(exact); }
                 else { writer.WriteStringValue("r"); writer.WriteStringValue(raw); }
                 break;
             case JsonValueKind.String:
@@ -72,5 +72,48 @@ internal static class AnswerDigest
                 break;
         }
         writer.WriteEndArray();
+    }
+
+    // A JSON number's exact value in one form, for any spelling of it: its significant digits
+    // (leading and trailing zeros dropped) and the power of ten that scales them, so 100e-2, 1
+    // and 0.1e1 read alike, and zero is zero whatever its sign or exponent. The number is never
+    // expanded: only the exponent is added to, as an integer of any size, so 1e1000000001 and
+    // 10e1000000000 are one value and no power of ten is ever built. The planner's
+    // CopilotFieldSchema.ExactNumber gives the same form wherever it gives one; it declines
+    // exponents beyond a billion, where this does not, since a resend of an answer must be
+    // recognised however it is spelled. Null only for text that is not a JSON number.
+    internal static string? Canonical(string raw)
+    {
+        var s = raw.AsSpan();
+        var negative = s.Length > 0 && s[0] == '-';
+        if (negative) { s = s[1..]; }
+        var e = s.IndexOfAny('e', 'E');
+        var mantissa = e >= 0 ? s[..e] : s;
+        var dot = mantissa.IndexOf('.');
+        var whole = dot >= 0 ? mantissa[..dot] : mantissa;
+        var fraction = dot >= 0 ? mantissa[(dot + 1)..] : ReadOnlySpan<char>.Empty;
+        if (whole.Length == 0 || !All(whole) || (dot >= 0 && (fraction.Length == 0 || !All(fraction)))) { return null; }
+        BigInteger exponent = 0;
+        if (e >= 0)
+        {
+            var written = s[(e + 1)..];
+            var exponentNegative = written.Length > 0 && written[0] == '-';
+            if (written.Length > 0 && (written[0] == '-' || written[0] == '+')) { written = written[1..]; }
+            if (written.Length == 0 || !All(written)) { return null; }
+            var trimmed = written.TrimStart('0');
+            exponent = trimmed.Length == 0 ? BigInteger.Zero : BigInteger.Parse(trimmed, NumberStyles.None, CultureInfo.InvariantCulture);
+            if (exponentNegative) { exponent = -exponent; }
+        }
+        var digits = string.Concat(whole, fraction).AsSpan().TrimStart('0');
+        if (digits.Length == 0) { return "0"; }
+        var significant = digits.TrimEnd('0');
+        exponent += digits.Length - significant.Length - fraction.Length;
+        return $"{(negative ? "-" : "")}{significant}e{exponent.ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    static bool All(ReadOnlySpan<char> digits)
+    {
+        foreach (var c in digits) { if (c is < '0' or > '9') { return false; } }
+        return true;
     }
 }

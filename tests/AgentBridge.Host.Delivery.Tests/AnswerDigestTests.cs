@@ -38,8 +38,65 @@ public sealed class AnswerDigestTests
     [InlineData("-2.50", "-25e-1")]
     [InlineData("0", "-0.0")]
     [InlineData("1e400", "10e399")]
+    [InlineData("0", "0e2000000000")]
+    [InlineData("0", "-0")]
+    [InlineData("-0e5", "0e-99999999999999999999")]
+    [InlineData("1e1000000001", "10e1000000000")]
+    [InlineData("1e-1000000001", "0.1e-1000000000")]
+    [InlineData("1e99999999999999999999999", "10e99999999999999999999998")]
+    [InlineData("100e-2", "1")]
+    [InlineData("0.5e1", "5")]
+    [InlineData("1E+2", "100")]
     public void The_same_number_in_other_spellings_is_one_answer(string a, string b) =>
         Assert.Equal(Digest(a), Digest(b));
+
+    [Theory]
+    [InlineData("1e1000000001", "1e1000000002")]
+    [InlineData("1e1000000001", "-1e1000000001")]
+    [InlineData("1e-1000000001", "1e1000000001")]
+    [InlineData("0", "1e-2000000000")]
+    public void Numbers_beyond_any_exponent_bound_are_still_told_apart(string a, string b) =>
+        Assert.NotEqual(Digest(a), Digest(b));
+
+    // The number is never expanded: a very long significand or exponent costs only its own length.
+    [Fact]
+    public void An_absurdly_long_number_is_canonicalised_in_time_and_equal_spellings_still_match()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var zeros = new string('0', 200_000);
+        var nines = new string('9', 200_000);
+        var minus = new string('9', 199_999) + "8";
+
+        Assert.Equal(Digest($"1{zeros}"), Digest("1e200000"));
+        Assert.Equal(Digest("1"), Digest($"0.{zeros}1e200001"));
+        Assert.Equal(Digest($"1e{nines}"), Digest($"10e{minus}"));
+        Assert.NotEqual(Digest($"1{zeros}1"), Digest($"1{zeros}2"));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), $"took {clock.Elapsed}");
+    }
+
+    // Text that is not a JSON number has no canonical form; the digest keeps it tagged, as written.
+    [Theory]
+    [InlineData("")]
+    [InlineData("abc")]
+    [InlineData("1e")]
+    [InlineData("1.")]
+    [InlineData(".5")]
+    [InlineData("--1")]
+    [InlineData("1e+")]
+    public void Text_that_is_not_a_number_has_no_canonical_form(string text) => Assert.Null(AnswerDigest.Canonical(text));
+
+    // Wherever the planner's exact form exists, the digest agrees with it.
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-0.0")]
+    [InlineData("1")]
+    [InlineData("-2.50")]
+    [InlineData("25e-1")]
+    [InlineData("1e-29")]
+    [InlineData("12345678901234567890123456789012345678901234567890")]
+    [InlineData("0.000100")]
+    public void The_canonical_form_is_the_planners_exact_form_where_it_has_one(string number) =>
+        Assert.Equal(AgentBridge.Host.Core.Parsing.CopilotFieldSchema.ExactNumber(number), AnswerDigest.Canonical(number));
 
     [Fact]
     public void Text_and_the_order_of_fields_are_part_of_the_answer()
