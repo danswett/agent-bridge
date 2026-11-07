@@ -55,7 +55,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     // resume: a form left part answered is finished, or reset, as a host does (ResumeWait); off,
     // it is left as it was, which the tests of a form stopped partway look at.
-    AnswerService Answerer(bool platform = true, bool remoteApproval = true, TimeProvider? time = null, bool resume = false, TimeSpan? resumeWait = null) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
+    AnswerService Answerer(bool platform = true, bool remoteApproval = true, TimeProvider? time = null, bool resume = false, TimeSpan? resumeWait = null, DeliveryGate? gate = null) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
@@ -68,7 +68,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         ResetWait = TimeSpan.FromMilliseconds(1500),
         FormRecheck = resume ? TimeSpan.FromMilliseconds(300) : TimeSpan.FromSeconds(2),
         WordsWait = resume ? TimeSpan.FromMilliseconds(500) : TimeSpan.FromSeconds(3),
-    }, m => { lock (logged) { logged.Add(m); } });
+    }, m => { lock (logged) { logged.Add(m); } }, gate);
 
     // What the answer service logged, for its timing lines.
     readonly List<string> logged = [];
@@ -3005,7 +3005,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [InlineData("helper")]
     public async Task A_part_answered_form_waits_out_a_recorded_permission_prompt_and_is_finished_after_it(string? agent)
     {
-        Serve(Answerer(resume: true, resumeWait: TimeSpan.FromSeconds(5)));
+        // The typing slot, held by the test while it answers the prompt, so that no read of the
+        // recovery's falls between the transcript saying so and the listing being refreshed.
+        var gate = new DeliveryGate();
+        Serve(Answerer(resume: true, resumeWait: TimeSpan.FromSeconds(30), gate: gate));
         await AskFieldsAsync(TwoLists, 2, TwoPicked);
         // The prompt is recorded once only (the first Enter); showing is what the screen draws, and
         // is cleared when the prompt is answered, so the resume's own keys record nothing more.
@@ -3029,12 +3032,20 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         await Wait.UntilAsync(() => showing, "the permission prompt over the form", Patience);
         await source.RefreshAsync();
         Assert.True(source.Get(Id)?.Question is { Id: not "q2" } or { AnswerAtMachine: true });
-        await Task.Delay(TimeSpan.FromMilliseconds(800));
+        // Several of the recovery's reads made since the listing changed, and still waiting
+        // (before #1152, the first of them gave the form up as gone).
+        var checks = probe.Checks;
+        await Wait.UntilAsync(() => probe.Checks >= checks + 3 || answering.IsCompleted, "the recovery reading the session again", Patience);
         Assert.False(answering.IsCompleted);
         // Answered at the machine: the form is listed again, and the rest of it goes.
-        Fixture.Append(events, Copilot.PermissionDone("r1", "c9", "approved", second++), Copilot.ToolDone("c9", second++));
-        showing = false;
-        await source.RefreshAsync();
+        await gate.WaitToTypeAsync();
+        try
+        {
+            Fixture.Append(events, Copilot.PermissionDone("r1", "c9", "approved", second++), Copilot.ToolDone("c9", second++));
+            showing = false;
+            await source.RefreshAsync();
+        }
+        finally { gate.DoneTyping(); }
         var result = await answering;
 
         Assert.Equal("delivered", result.GetProperty("outcome").GetString());
@@ -3227,7 +3238,15 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         // Thrown by every check while set: a check that cannot be made.
         public Exception? Fails;
 
-        public string? Active() => Fails is { } fails ? throw fails : Answers is { Count: > 0 } queue ? queue.Dequeue() : Reason;
+        // How many checks have been made: each of a recovery's reads begins with one.
+        public int Checks => Volatile.Read(ref checks);
+        int checks;
+
+        public string? Active()
+        {
+            Interlocked.Increment(ref checks);
+            return Fails is { } fails ? throw fails : Answers is { Count: > 0 } queue ? queue.Dequeue() : Reason;
+        }
     }
 
     sealed class NoGuard : ITargetGuard
