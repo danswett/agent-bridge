@@ -5,6 +5,13 @@ for await (const chunk of process.stdin) input += chunk;
 const fixture = JSON.parse(input);
 const crypto = webcrypto.subtle;
 const label = Buffer.from('slipgates feedback envelope v1');
+const bucket = n => {
+  if (n <= 4096) return 4096;
+  if (n > 1048576) return Math.ceil(n / 1048576) * 1048576;
+  let size = 4096;
+  while (size < n) size *= 2;
+  return size;
+};
 
 if (fixture.mode === 'seal') {
   const keyId = Buffer.from(fixture.keyId, 'ascii');
@@ -22,7 +29,7 @@ if (fixture.mode === 'seal') {
   const length = Buffer.alloc(4);
   length.writeUInt32BE(ciphertext.length);
   const header = Buffer.concat([Buffer.from('SGBF'), Buffer.from([1, keyId.length]), keyId, id, ephemeralPublic, salt, nonce, length]);
-  const result = Buffer.alloc(4096);
+  const result = Buffer.alloc(bucket(header.length + ciphertext.length));
   header.copy(result);
   ciphertext.copy(result, header.length);
   process.stdout.write(result.toString('base64'));
@@ -37,6 +44,8 @@ if (fixture.mode === 'seal') {
   const salt = stored.subarray(at, at += 32);
   const nonce = stored.subarray(at, at += 12);
   const length = stored.readUInt32BE(at); at += 4;
+  if (length < 16 || at + length > stored.length || stored.length !== bucket(at + length)
+      || stored.subarray(at + length).some(byte => byte !== 0)) throw new Error('Invalid synthetic envelope.');
   const shared = await crypto.deriveBits({ name: 'X25519', public: ephemeral }, recipient, 256);
   const material = await crypto.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
   const context = Buffer.concat([label, keyId, id]);

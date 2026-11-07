@@ -32,10 +32,12 @@ public sealed class FeedbackEnvelopeSharedTests
     }
 
     [Theory]
+    [InlineData(6)]
     [InlineData(6 + 10)]
     [InlineData(6 + 10 + 16)]
     [InlineData(6 + 10 + 16 + 32)]
     [InlineData(6 + 10 + 16 + 32 + 32)]
+    [InlineData(6 + 10 + 16 + 32 + 32 + 12)]
     [InlineData(6 + 10 + 16 + 32 + 32 + 12 + 4)]
     public void Authenticated_fields_cannot_be_modified(int offset)
     {
@@ -75,15 +77,18 @@ public sealed class FeedbackEnvelopeSharedTests
         Assert.Throws<ArgumentException>(() => FeedbackEnvelopeV1.Seal(new byte[8 * 1024 * 1024], KeyId, pub, id));
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(100)]
+    [InlineData(4000)]
+    [InlineData(1_048_576)]
     [Trait("Category", "Process")]
-    public async Task Synthetic_vectors_interoperate_with_independent_webcrypto()
+    public async Task Synthetic_vectors_interoperate_with_independent_webcrypto(int size)
     {
         using var recipient = NewRecipient();
         var privateKey = recipient.Export(KeyBlobFormat.RawPrivateKey);
         var publicKey = recipient.PublicKey.Export(KeyBlobFormat.RawPublicKey);
         var bundleId = RandomNumberGenerator.GetBytes(16);
-        var plaintext = "synthetic feedback vector"u8.ToArray();
+        var plaintext = RandomNumberGenerator.GetBytes(size);
         try
         {
             var browser = await RunWebCrypto(new

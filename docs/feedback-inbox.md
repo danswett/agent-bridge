@@ -59,3 +59,7 @@ The key ID and bundle ID are authenticated alongside the label
 `slipgates feedback envelope v1`; their concatenation is both HKDF info and AES-GCM AAD.
 The envelope uses 4 KiB-to-8 MiB canonical zero-padded buckets and matches the client v1
 format. This library does not select or persist keys, send feedback, or enable the inbox.
+`FeedbackEnvelopeSharedTests.Synthetic_vectors_interoperate_with_independent_webcrypto`
+exercises both directions across bucket boundaries with freshly generated, synthetic
+keys; no fixture private key is checked in. Run the process-category test explicitly
+when validating interoperability, since the local fast ring excludes process tests.
