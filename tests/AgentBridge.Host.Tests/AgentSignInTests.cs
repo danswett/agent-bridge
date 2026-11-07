@@ -13,7 +13,7 @@ public sealed class AgentSignInTests : IDisposable
     readonly Commands commands = new();
     int refreshes;
 
-    AgentSignInService Service(Action<string>? preflight = null, CancellationToken stopping = default,
+    AgentCliSignInService Service(Action<string>? preflight = null, CancellationToken stopping = default,
         bool? explicitClaude = null, bool defaultClaudeHome = false)
     {
         var roots = fixture.Options();

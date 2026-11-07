@@ -81,7 +81,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             AgentSetup = setup,
             AgentInstall = new AgentInstallService(profile, new SetupAgents(), () => { }, new NoCommands(),
                 () => throw new InvalidOperationException("an existing fixture CLI must not invoke WinGet"), _ => { }),
-            AgentSignIn = new AgentSignInService(profile,
+            AgentSignIn = new AgentCliSignInService(profile,
                 new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome),
                 new SetupAgents(), () => { }, new AgentSignInTests.Starter(), new SignInCommands(), _ => { }),
             Updates = updates,

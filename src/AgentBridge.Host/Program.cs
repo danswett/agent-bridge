@@ -627,7 +627,7 @@ async Task<int> ServeAsync(HostHandover handover)
         },
         CheckAgentMutation, stop.Token);
     var agentSignIn = OperatingSystem.IsWindows() && standaloneHooks is not null
-        ? new AgentSignInService(identity.Folder, agentHomes, agentLocator, agentLocator.Refresh,
+        ? new AgentCliSignInService(identity.Folder, agentHomes, agentLocator, agentLocator.Refresh,
             new WindowsAgentStarter(), agentProbes, CheckAgentMutation, stop.Token) : null;
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, agentProbes, ServeReadOnly, intake);

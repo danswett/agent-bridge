@@ -65,7 +65,7 @@ public sealed class HostControlOptions
     public AgentInstallService? AgentInstall { get; init; }
     // Host-only seam for graceful departures; it is not exposed as a pipe/relay operation.
     public LifecycleCoordinator? Lifecycle { get; init; }
-    public AgentSignInService? AgentSignIn { get; init; }
+    public AgentCliSignInService? AgentSignIn { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local

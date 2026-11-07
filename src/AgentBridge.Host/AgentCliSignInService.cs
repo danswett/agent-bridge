@@ -9,7 +9,7 @@ using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
-public sealed class AgentSignInService(
+public sealed class AgentCliSignInService(
     string profile, IntakeState.AgentHomes homes, IAgentLocator locator, Action refreshPaths,
     IAgentStarter starter, ICommandRunner commands, Action<string> preflight,
     CancellationToken stopping = default)
