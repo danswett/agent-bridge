@@ -20,6 +20,10 @@ env:
   # Repository variable PAGES_APP_AT_ROOT=true puts the PWA at the site's root, for app.slipgates.com
   # (docs/app-domain.md). Unset, the site is as it was: the PWA at /app/.
   APP_AT_ROOT: ${{ vars.PAGES_APP_AT_ROOT }}
+  # Public feedback recipient configuration. Until both repository variables are set, feedback
+  # preview remains available but uploads stay disabled.
+  FEEDBACK_KEY_ID: ${{ vars.FEEDBACK_KEY_ID }}
+  FEEDBACK_PUBLIC_KEY: ${{ vars.FEEDBACK_PUBLIC_KEY }}
 
 # Each job gets its own: the build runs the PWA's packages, so it holds no token that could publish
 # (#650); the deploy publishes what the build made, and runs nothing from the repository.
@@ -53,7 +57,7 @@ jobs:
           # output directory. APP_AT_ROOT is set only for the move to app.slipgates.com (#393), when
           # the PWA takes the site's root; until then it stays at /app/, where installed apps are.
           if [ "$APP_AT_ROOT" = 'true' ]; then app=_site; else app=_site/app; fi
-          node pwa/tools/build-site.mjs --out "$app" --relay "$S4_RELAY" --blob-origin "$BLOB_ORIGIN"
+          node pwa/tools/build-site.mjs --out "$app" --relay "$S4_RELAY" --blob-origin "$BLOB_ORIGIN" --version "$GITHUB_SHA" --feedback-key-id "$FEEDBACK_KEY_ID" --feedback-public-key "$FEEDBACK_PUBLIC_KEY"
           grep -q 'Content-Security-Policy' "$app/index.html"
           grep -q "$BLOB_ORIGIN" "$app/index.html"
           grep -q "$S4_RELAY" "$app/config.js"
