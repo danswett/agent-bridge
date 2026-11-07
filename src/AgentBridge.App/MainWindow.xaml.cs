@@ -283,7 +283,12 @@ public sealed partial class MainWindow : Window
 
     // Up to 400 px, centred; narrower with the window, so the mark, the name and the caption buttons
     // keep their room down to the smallest window.
-    void FitSearch(double width) => SearchBox.Width = Math.Clamp(width - 400, 120, 400);
+    // At every resize step; from 800 wide up the width is a constant, so it is not set again.
+    void FitSearch(double width)
+    {
+        var fit = Math.Clamp(width - 400, 120, 400);
+        if (SearchBox.Width != fit) { SearchBox.Width = fit; }
+    }
 
     internal void SearchFor(string text) => SearchBox.ItemsSource = ViewModel.Search(text);
 
