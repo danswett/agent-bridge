@@ -1310,6 +1310,28 @@ Check 'SBOM licences preserve custom terms and existing fields without guessing 
     Assert ($components[5].licenses[0].license.text.content -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $scratch 'publish' 'LICENSE.txt')))) 'project licence text missing'
 }
 
+Check 'SBOM file licences accept Windows casing and normalized relative paths without changing their bytes' {
+    foreach ($declared in 'LEGAL/TERMS.TXT', './legal/terms.txt') {
+        Reset
+        New-PpPublished
+        . (Join-Path $PSScriptRoot 'app-notices.ps1')
+        $publish = Join-Path $scratch 'publish'
+        $manifestPath = Join-Path $publish 'ThirdPartyNotices' 'manifest.json'
+        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json -AsHashtable
+        $package = @($manifest.packages | Where-Object { $_.id -ceq 'Notice.File' })[0]
+        $package.licenseValue = $declared
+        $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath
+        $sbom = Join-Path $scratch 'sbom.json'
+        @{ bomFormat = 'CycloneDX'; components = @(
+                @{ name = 'Notice.File'; version = '1.0.0'; purl = 'pkg:nuget/Notice.File@1.0.0' }
+            ) } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $sbom
+        Add-AppSbomLicences $publish '0.1.600' 'win-x64' $sbom
+        $content = (Get-Content $sbom -Raw | ConvertFrom-Json -AsHashtable).components[0].licenses[0].license.text.content
+        $path = Join-Path $publish 'ThirdPartyNotices' 'packages' 'Notice.File' '1.0.0' 'legal' 'terms.txt'
+        Assert ($content -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))) "declared licence bytes changed: $declared"
+    }
+}
+
 Check 'Distribution evidence checks portable, full and installed notices against their actual hashes' {
     Reset
     New-PpPublished

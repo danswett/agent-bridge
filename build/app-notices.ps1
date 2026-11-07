@@ -198,9 +198,10 @@ function Add-AppSbomLicences([string]$Publish, [string]$Version, [string]$Runtim
         if ($package.licenseType -eq 'expression' -and $package.licenseValue) {
             $component.licenses = @(@{ expression = $package.licenseValue })
         } elseif ($package.licenseType -eq 'file') {
-            $file = "ThirdPartyNotices/packages/$($package.id)/$($package.version)/$($package.licenseValue -replace '\\', '/')"
-            if ($package.files -cnotcontains $file) { throw "declared licence file is not in this package's notice inventory: $file" }
-            $path = Get-AppNoticePath $Publish $file
+            $packageRoot = Join-Path $Publish "ThirdPartyNotices/packages/$($package.id)/$($package.version)"
+            $path = Get-AppNoticePath $packageRoot $package.licenseValue
+            $file = [IO.Path]::GetRelativePath($Publish, $path) -replace '\\', '/'
+            if ($package.files -inotcontains $file) { throw "declared licence file is not in this package's notice inventory: $file" }
             $contentType = switch ([IO.Path]::GetExtension($path).ToLowerInvariant()) {
                 { $_ -in '', '.txt' } { 'text/plain'; break }
                 '.md' { 'text/markdown'; break }
