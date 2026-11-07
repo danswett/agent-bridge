@@ -3,10 +3,13 @@ namespace AgentBridge.App.Core;
 // One fact in a session's Details (ui.md §6.2): what rows never carry (§6.1). Mono for what is
 // code (§4.1, #215: paths, branches, ids, commands). A path is cut in the middle to the width it
 // is shown at, by the view (Words.Middle), keeping the end people tell paths apart by (#214), with
-// the whole of it in the tooltip.
-public sealed record DetailRow(string Label, string Value, bool Mono = false, bool Path = false)
+// the whole of it in the tooltip, or Full when a row's words are short for it (Started's date).
+public sealed record DetailRow(string Label, string Value, bool Mono = false, bool Path = false, string? Full = null)
 {
-    public string Tip => Value;
+    public string Tip => Full ?? Value;
+
+    // How a screen reader reads the row (ui.md §6.2): the row, then its value.
+    public string Spoken => $"{Label}, {Value}";
 }
 // What the window's panes show of a session (#180): its row in the list (§6.1), its header
 // (§6.2), its Details and its delegates' counts (Delegates lists them, §6.3).
@@ -76,7 +79,7 @@ public sealed partial class SessionCardViewModel
     // Also the delegate inspector's: its Model can arrive after its Kind and ID rows.
     internal static void SyncDetailRows(System.Collections.ObjectModel.ObservableCollection<DetailRow> rows, IReadOnlyList<DetailRow> want)
     {
-        // A fact that has gone (Background at zero, For once idle) goes first, by label: inserting
+        // A fact that has gone (Background at zero, In this state once idle) goes first, by label: inserting
         // before it instead made new copies of every row after it, the ID among them, and a
         // selection in one was lost to an ordinary update.
         var labels = want.Select(d => d.Label).ToHashSet();
@@ -96,28 +99,45 @@ public sealed partial class SessionCardViewModel
     List<DetailRow> CurrentDetails()
     {
         var now = ctx.Time.GetUtcNow();
-        var rows = new List<DetailRow> { new("Status", StatusText), new("Agent", AgentName) };
-        if (ctx.MachineName() is { Length: > 0 } m) { rows.Add(new("Machine", m)); }
-        if (session.Model is { Length: > 0 } model) { rows.Add(new("Model", model)); }
-        if (session.Repository is { Length: > 0 } repo) { rows.Add(new("Repository", repo)); }
-        if (session.Branch is { Length: > 0 } branch) { rows.Add(new("Branch", branch, Mono: true)); }
-        if (session.Cwd is { Length: > 0 } cwd) { rows.Add(new("Folder", cwd, Mono: true, Path: true)); }
-        if (Driven) { rows.Add(new("Driven by", DriverPrincipal ?? "an agent")); }
-        // The counts the host reports, beside the delegates the strip lists (or in place of them).
-        if (HasDelegates) { rows.Add(new("Background", DelegatesText)); }
-        if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", t.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
-        if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", c.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
-        if (session.ProcessId is { } pid) { rows.Add(new("Process", pid.ToString(System.Globalization.CultureInfo.InvariantCulture), Mono: true)); }
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        // The rows and their order are docs/design/session-details.json's, which a test reads too (#1087):
+        // a row with no value is left out, never drawn empty.
+        var rows = new List<DetailRow> { new("Status", StatusText) };
+        if (View != "idle") { rows.Add(new("In this state", $"for {Words.Duration(session.StatusSince, now)}")); }
         // What the agent said went wrong (#800): plain text, revealed and cut short by AuthState,
         // never a link, and only here, never on its row.
         // The host's sentence for what is wrong (6649775484), as it is: never the agent's own text.
-        if (AuthState.Of(session)?.Message is { } said) { rows.Add(new("Message", said)); }
+        if (AuthState.Of(session)?.Message is { Length: > 0 } said) { rows.Add(new("Message", said)); }
         // Not responding: the time it went silent, which the row's age counts from (ui.md §6.13).
         if (AuthState.Clock(SilentSince) is { } silent) { rows.Add(new("Not responding since", silent)); }
-        if (View != "idle") { rows.Add(new("For", Words.Duration(session.StatusSince, now))); }
+        if (Driven) { rows.Add(new("Driven by", DriverPrincipal ?? "an agent")); }
+        rows.Add(new("Agent", AgentName));
+        if (session.Model is { Length: > 0 } model) { rows.Add(new("Model", model)); }
+        if (ctx.MachineName() is { Length: > 0 } m) { rows.Add(new("Machine", m)); }
+        if (session.Repository is { Length: > 0 } repo) { rows.Add(new("Repository", repo)); }
+        if (session.Branch is { Length: > 0 } branch) { rows.Add(new("Branch", branch, Mono: true)); }
+        if (session.Cwd is { Length: > 0 } cwd) { rows.Add(new("Folder", cwd, Mono: true, Path: true)); }
+        if (session.StartedAt is { } started) { rows.Add(new("Started", StartedText(started, now), Full: started.ToLocalTime().ToString("G", System.Globalization.CultureInfo.CurrentCulture))); }
         rows.Add(new("Updated", Words.Ago(session.UpdatedAt, now)));
+        // The counts the host reports, beside the delegates the strip lists (or in place of them).
+        if (HasDelegates) { rows.Add(new("Background", DelegatesText)); }
+        if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", Words.Plural(t, "turn", "turns"))); }
+        if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", Words.Plural(c, "compaction", "compactions"))); }
+        if (session.ProcessId is { } pid) { rows.Add(new("Process", $"pid {pid.ToString(invariant)}", Mono: true)); }
         rows.Add(new("ID", session.Id, Mono: true));
         return rows;
+    }
+
+    // When it started, as a clock time in the viewer's zone; with the date once it was another day
+    // (or year) than now's.
+    string StartedText(DateTimeOffset at, DateTimeOffset now)
+    {
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+        var local = TimeZoneInfo.ConvertTime(at, ctx.Time.LocalTimeZone);
+        var today = TimeZoneInfo.ConvertTime(now, ctx.Time.LocalTimeZone);
+        var time = local.ToString("t", culture);
+        if (local.Date == today.Date) { return time; }
+        return $"{local.ToString(local.Year == today.Year ? "MMM d" : "MMM d, yyyy", culture)}, {time}";
     }
 
     // Who asks the question in the conversation (§6.4): the main agent, or the delegate the

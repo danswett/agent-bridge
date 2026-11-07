@@ -52,7 +52,7 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(copilot.locator('.facts')).toContainText('detached@5e59309');
   await expect(copilot.locator('.facts')).toContainText('claude-opus-5.5');
   await expect(copilot.locator('.status-text')).toHaveText('Waiting on you');
-  await expect(copilot.locator('.since')).toHaveText(/^for /);
+  await expect(copilot.locator('.fact-since dd')).toHaveText(/^for /);
   await expect(copilot.locator('.facts')).toContainText('412 turns');
   await expect(copilot.locator('.facts')).toContainText('1 compaction');
   await expect(copilot.locator('.facts')).toContainText('pid 39844');
@@ -91,13 +91,13 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(codex).toHaveAttribute('data-status', 'idle');
   await expect(codex.locator('.status-text')).toHaveText('Idle');
   await expect(codex.locator('.tool-line')).toBeHidden();
-  await expect(codex.locator('.since')).toHaveText('');
+  await expect(codex.locator('.fact-since')).toHaveCount(0);
 
   const delegating = card(page, DELEGATING);
   await expect(delegating).toHaveAttribute('data-status', 'idle');
   await expect(delegating).toHaveAttribute('data-view', 'delegating');
   await expect(delegating.locator('.status-text')).toHaveText('Delegating to 2 agents · details not reported');
-  await expect(delegating.locator('.since')).toHaveText(/^for /);
+  await expect(delegating.locator('.fact-since dd')).toHaveText(/^for /);
   await expect(delegating.locator('.fact-background dd')).toHaveText('2 background agents · 1 background command');
   await expect(delegating.locator('.fact-turns dd')).toHaveText('5 turns');
 
@@ -187,7 +187,7 @@ test('an idle session still waiting on background work is delegating: its own gl
   await expect(c).toHaveAttribute('data-view', 'idle');
   await expect(c.locator('.status-text')).toHaveText('Idle');
   await expect(glyphOf(page, DELEGATING)).toHaveAttribute('data-glyph', 'idle');
-  await expect(c.locator('.since')).toHaveText('');
+  await expect(c.locator('.fact-since')).toHaveCount(0);
 
   // A session working on its own turn is working, whatever it has in the background.
   await upsert(page, DELEGATING, { status: 'working', statusSince: later(), updatedAt: later(), activity: { background: { agents: 1, shells: 0 } } });

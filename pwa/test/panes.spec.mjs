@@ -3,6 +3,7 @@
 // 760 with Conversation and Tools as tabs, and one column below with the session pushed over the
 // list and the browser's own back. What a row and a header say, and how their facts wrap.
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { open, row, view } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
@@ -608,6 +609,29 @@ test('a row is two lines: the title, then the status and the repository, never t
   await expect(v.locator('.fact-model dd')).toHaveText('claude-opus-5.5');
   await expect(v.locator('.fact-branch dd')).toHaveText('detached@5e59309');
   await expect(v.locator('.fact-pid dd')).toHaveText('pid 39844');
+});
+
+// #1087: one set of rows, in one order, in both clients (docs/design/session-details.json).
+test('Details lists the shared table\'s rows in its order: Status, how long, Agent through Process, Updated and the ID', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const table = JSON.parse(readFileSync(new URL('../../docs/design/session-details.json', import.meta.url), 'utf8')).rows.map((r) => r.row);
+  const terms = await view(page, COPILOT).locator('.facts dt').allTextContents();
+  expect(terms).toEqual(['Status', 'In this state', 'Agent', 'Model', 'Machine', 'Repository', 'Branch', 'Folder', 'Started', 'Updated', 'Turns', 'Compactions', 'Process', 'ID']);
+  expect(terms.map((t) => table.indexOf(t))).toEqual(terms.map((t) => table.indexOf(t)).toSorted((a, b) => a - b));
+  expect(terms.every((t) => table.includes(t))).toBe(true);
+  const facts = view(page, COPILOT).locator('.facts');
+  await expect(facts.locator('.fact-status dd')).toHaveText('Waiting on you');
+  await expect(facts.locator('.fact-since dd')).toHaveText(/^for \d/);
+  await expect(facts.locator('.fact-updated dd')).toHaveText(/ago$|just now$/);
+  await expect(facts.locator('.fact-turns dd')).toHaveText('412 turns');
+  await expect(facts.locator('.fact-id dd')).toHaveText('02d9e5d5-6b35-49bd-b083-39572fbff648');
+  // A tick or an update that changes only the clocks leaves the other rows' nodes where they are,
+  // so a selection in the ID or the folder survives it.
+  const id = await facts.locator('.fact-id dd .mono').elementHandle();
+  await upsert(page, COPILOT, { updatedAt: later() });
+  await expect(facts.locator('.fact-updated dd')).toHaveText(/ago$|just now$/);
+  expect(await id.evaluate((n) => n.isConnected)).toBe(true);
 });
 
 test('the header\'s Pin pins the session, and its row goes to Pinned', async ({ page }) => {

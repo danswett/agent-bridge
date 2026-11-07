@@ -696,6 +696,16 @@ public sealed partial class DemoHost : IAsyncDisposable
     // arriving (#489), which nothing in the demo sends on its own.
     public Task Upsert(Session next) => Change(next);
 
+    // The same with what is wrong with it (#800), as a host sends the two together; null clears it.
+    // Stays as sent: no turn ends a moment later. For the self-test's Details (#1087).
+    public Task Upsert(Session next, JsonObject? attention)
+    {
+        SetAttention(next.Id, attention);
+        return Change(next, finishes: false);
+    }
+
+    public JsonObject? AttentionOf(string id) { lock (gate) { return attention.TryGetValue(id, out var a) ? (JsonObject)a.DeepClone() : null; } }
+
     // The pauses a change and a removal take, as a host's would; a test holds them to order a
     // removal against a turn finishing.
     internal Func<TimeSpan, Task> Pause { get; set; } = d => Task.Delay(d);

@@ -17,12 +17,12 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="core:DetailRow">
-                    <Grid ColumnSpacing="12" AutomationProperties.Name="{x:Bind Label}">
+                    <Grid ColumnSpacing="12" AutomationProperties.Name="{x:Bind Spoken}">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="96" />
+                            <ColumnDefinition Width="104" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Style="{StaticResource AbTypeMeta}" LineHeight="20" Foreground="{ThemeResource AbText2}" Text="{x:Bind Label}" />
+                        <TextBlock Style="{StaticResource AbTypeMeta}" LineHeight="20" TextWrapping="Wrap" Foreground="{ThemeResource AbText2}" Text="{x:Bind Label}" />
                         <TextBlock
                             Grid.Column="1"
                             Style="{x:Bind local:SessionDetails.ValueStyle(Mono)}"
