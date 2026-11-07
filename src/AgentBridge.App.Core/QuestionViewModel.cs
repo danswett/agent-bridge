@@ -239,10 +239,21 @@ public sealed partial class QuestionViewModel : Observable
         };
     }
 
-    public Question Question { get; }
+    public Question Question { get; private set; }
     public string Id => Question.Id;
     public bool Approval => Question.Kind == QuestionKind.Approval;
     public string Heading => Approval ? "Permission requested" : "Waiting on you";
+    // Copilot asked several permissions at once and shows them one at a time, this one first
+    // (#690): each is its own question, so an answer to this one never reaches the next.
+    public string? Queue => Approval && Question.Waiting is > 1 and var n ? $"1 of {n} permissions waiting" : null;
+
+    internal void UpdateWaiting(int? waiting)
+    {
+        if (Question.Waiting == waiting) { return; }
+        Question = Question with { Waiting = waiting };
+        Raise(nameof(Queue));
+    }
+
     // An approval's text with anything not drawn where it runs, and its right-to-left letters, as
     // visible escapes (#220): a host escapes them, and an older one's prompt is drawn so too. The card
     // draws it exactly as written, as one block nothing in it is read as Markdown in (#323,

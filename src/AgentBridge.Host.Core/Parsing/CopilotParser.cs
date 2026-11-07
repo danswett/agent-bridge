@@ -268,7 +268,20 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     {
         var before = S.Background.Version;
         Background(e, at);
-        return ApplyOwn(e, at) || S.Background.Version != before;
+        var changed = ApplyOwn(e, at) || S.Background.Version != before;
+        Prune();
+        return changed;
+    }
+
+    // A permission prompt's payload (everything Copilot was given for it, an edit's whole file
+    // and diff included) is kept only while its question is pending: an abort, a shutdown or a
+    // delegate's end drops the question without its completion, and the payload with it (#797).
+    // Delivery reads what is still waiting from the transcript itself, never from here.
+    void Prune()
+    {
+        if (S.Permissions.Count == 0) { return; }
+        foreach (var id in S.Permissions.Keys.Where(id => !S.Pending.Exists(q => q.Id == id)).ToList()) { S.Permissions.Remove(id); }
+        foreach (var (request, id) in _permissionQuestion.Where(p => !S.Permissions.ContainsKey(p.Value)).ToList()) { _permissionQuestion.Remove(request); }
     }
 
     void Background(JsonElement e, DateTimeOffset? at)
@@ -537,7 +550,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
             case "permission.completed":
                 {
                     var request = Json.Str(data, "requestId");
-                    if (request is not null && _permissionQuestion.Remove(request, out var question)) { S.Answer(question); }
+                    if (request is not null && _permissionQuestion.Remove(request, out var question)) { S.Answer(question); S.Permissions.Remove(question); }
                     break;
                 }
             default:
@@ -611,7 +624,15 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     {
         if (CopilotPermission.Describe(data) is not { } prompt) { return; }
         var id = prompt.QuestionId;
+        // Asked again under the same request, with what it asks now: the question it revises goes,
+        // or it is listed first, counted twice, and outlives the request (Copilot review of #769).
+        if (_permissionQuestion.TryGetValue(prompt.RequestId, out var was) && was != id)
+        {
+            S.Answer(was);
+            S.Permissions.Remove(was);
+        }
         _permissionQuestion[prompt.RequestId] = id;
+        S.Permissions[id] = prompt;
         var agent = stamped ?? (prompt.ToolCallId is { } call ? S.Tools.Find(call)?.Agent ?? S.Background.CallAgent(call) : null);
         // An agent asking is working, though a cold read may have seen nothing else of its run.
         if (agent is not null) { S.Background.AgentActive(agent, at); }

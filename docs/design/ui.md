@@ -412,9 +412,10 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
   bottom navigation gives way to it, and Back (the header's, or the platform's own) returns
   to the list.
 
-**Resizing (the Windows app, #297).** A divider between the list and the session, and between
-the session and the inspector, wherever both show. The widths above are the defaults; at two
-panes the app's list is 320 too, as long as the session keeps its narrowest.
+**Resizing (the Windows app, #297; the PWA, #1030).** A divider between the list and the
+session, and between the session and the inspector, wherever both show. The widths above are
+the defaults; at two panes the list is 320 too, as long as the session keeps its narrowest.
+Everything below holds in both clients; the PWA's differences are at the end.
 - **Limits** (`tokens.json` `layout.windows`): the list 264–480, so a row's two lines keep a
   title and its facts (§6.1); the inspector 280–560, so Details keeps its label column and a
   value beside it; and the session never under 440, about 50 characters of the Reading role
@@ -432,7 +433,24 @@ panes the app's list is 320 too, as long as the session keeps its narrowest.
   or focused from the keyboard; each is a system colour in high contrast. Left and Right move a
   focused divider 16 px, a screen reader sees a splitter whose value is its pane's width, and a
   double-click puts its pane back to its default.
-- **The PWA** keeps its fixed widths for now.
+- **The PWA** (`tokens.json` `layout.pwa`, the same defaults and limits) from 760 up; a phone
+  under 760 keeps its one column and has no divider.
+  - **Kept** in the browser's local storage, beside Your order, across reloads. Never sent to
+    a host, like the app's.
+  - **The divider** is an element with `role="separator"`, `aria-orientation="vertical"`,
+    `aria-valuenow` its pane's width in px and `aria-valuemin`/`aria-valuemax` its limits,
+    labelled "Resize the session list" or "Resize the delegate inspector". It is in the tab
+    order; Left and Right move it 16 px, as the app's do. It drags with pointer events, so a
+    mouse, a pen and a finger move it alike.
+  - **Touch:** the line stays a hairline, but its hit area is 44 wide (`dividerTouch`) under
+    a coarse pointer, centred on the line and over the panes' edges, and 8 (`divider`)
+    otherwise. Nothing is drawn wider for touch.
+  - **Reset:** a double-click or a double-tap puts its pane back to its default. Not a long
+    press: that is the browser's own (selection, the context menu) and nothing tells a person
+    it's there.
+  - **Colours** as the app's: clear at rest, `stroke2` while pointed at, Bridge while dragged
+    or focused (a visible focus ring, §9), and system colours under `forced-colors`.
+  - **Motion:** none. The pane follows the pointer; a reset jumps, under reduced motion or not.
 ### 5.3 Motion
 
 *Signed off by the owner on 2026-11-02 (#232). That includes three calls: platform
@@ -1206,13 +1224,32 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
         Deny, each its own press.
   - **One card per question id:** an update to the same question changes its card in place,
     and never adds a second.
+  - **Permissions asked together come one at a time** (#690): Copilot asks one for each of a
+    batch of parallel tool calls. The card shows the earliest, with "1 of *N* permissions
+    waiting" under its header (`question.waiting`), on every surface: the PWA, the Windows app
+    and Home Assistant's card. While others wait it is answered at the machine
+    (`answerAtMachine`: no controls, Deny included) whenever the host cannot tell it from them
+    on the session's screen: Copilot draws another ahead of it (a path request asked before a
+    shell one); its kind is not shell or path, whose dialogs the host knows; its own text has a
+    run of spaces that can wrap onto a blank row; any waiting request's text, its own included
+    (an argument's name too),
+    holds a hidden character, a right-to-left letter, a reference to one, a line-drawing
+    character or a tab; another waiting request has nothing drawn to check the screen against;
+    or another would be drawn the same. So an escaped approval among others is answered at the
+    machine until it waits alone, unless its only escapes are in a path request's access kind,
+    which its dialog never draws as written (v1-sessions.md, "Escaped approvals"). That can clear under the
+    same id as the others are answered. The next is a new question with its own id once this one
+    is answered, so a second tap or a stale button never answers it. A change only to the waiting
+    count refreshes the queue label, not the question's meaning: an answer already on its way
+    keeps its delivery state, and a failed answer keeps Try again for that original request.
   - **An approval is drawn as it runs,** since Approve once allows all of it: exactly as
     written, in the code face, never read as Markdown, with its hidden characters,
     right-to-left letters and bare carriage returns escaped and the code notes beside it, and
     no Copy ("An approval's card", below, #220). It wraps and is never cut, so a long command or a
     diff keeps Approve once. One the host escaped anything in is approved only through the
     confirmation sheet ("Escaped approvals", below, #803), which replaced the one-tap Approve
-    once of the owner's "escape and allow" (#253).
+    once of the owner's "escape and allow" (#253); while other Copilot permissions wait it is
+    almost always answered at the machine instead (#690, above).
   - **A host sends an approval's hidden characters and right-to-left letters as escapes**
     (`\u202E`, `\u05D0`, #220). The card's notes, and Needs you, which never offers such a
     prompt inline (§6.1), count a host's escape as the character it stands for.
@@ -1248,8 +1285,6 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       waiting", since the protocol doesn't say what was answered elsewhere.
   - **History:** a resolved question stays as a read-only item where it was asked, across later
     turns: the latest 20 per session, for as long as the client runs, none across a restart.
-  - **Several at once** (if a host ever sends them): one card each, in the order asked, with
-    "1 of N" in the heading.
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
   tool's name and arguments in mono). Not while the session waits on a question: the card says
   what is happening.
@@ -1402,6 +1437,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     the devices `config.json` lists by short id, or only at the machine.
   - **Home Assistant:** Deny only, under the line "Approve from the *app* or at the machine.", or
     "Approve at the machine." when `approve` is `machine` or `tooMany`. It has no device key, and its users include agents.
+  - **Among other Copilot permissions waiting** (#690): the approval is `answerAtMachine` until
+    it waits alone (unless its only escapes are in a path request's access kind), and that wins
+    over everything above on every surface: no "Approve once…", no sheet, and no Deny, Home
+    Assistant's included.
   - **Needs you, toasts, pushes:** no special case. Never an inline Approve (#202); a tap opens
     the card.
   - The Mac, iPhone and iPad app does not have the sheet yet: its Approve on one is refused by the

@@ -333,6 +333,26 @@ test.describe('on a phone', () => {
     expect((await log(page))[0]).toEqual({ id: COPILOT, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' }, progress: true });
   });
 
+  // Copilot asks a permission for each of a batch of parallel tool calls and shows them one at a
+  // time (#690): the card says how many wait, and the next comes as its own question.
+  test('permissions asked together are shown one at a time saying how many wait, each answered by its own id', async ({ page }) => {
+    await openDemo(page);
+    const q = await ask(page, { ...permission, waiting: 4 }, COPILOT);
+    await expect(q.locator('.note.queue')).toHaveText('1 of 4 permissions waiting');
+    await q.getByRole('button', { name: 'Approve once' }).tap();
+    await expect(q).toHaveCount(0);
+
+    const next = await ask(page, { ...permission, id: 'r2#fedcba9876543210', waiting: 3 }, COPILOT);
+    await expect(next.locator('.note.queue')).toHaveText('1 of 3 permissions waiting');
+    await next.getByRole('button', { name: 'Approve once' }).tap();
+    await expect(next).toHaveCount(0);
+    expect((await log(page)).map((a) => a.question)).toEqual(['r1#0123456789abcdef', 'r2#fedcba9876543210']);
+
+    // The last one waiting says nothing of a queue.
+    const last = await ask(page, { ...permission, id: 'r3#00112233aabbccdd' }, COPILOT);
+    await expect(last.locator('.note.queue')).toHaveCount(0);
+  });
+
   test('a Copilot permission prompt at a machine with approving turned off says so and offers nothing', async ({ page }) => {
     await openDemo(page, '&approve=0');
     const q = await ask(page, { ...permission, answerAtMachine: true }, COPILOT);

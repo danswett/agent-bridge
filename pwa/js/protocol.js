@@ -129,6 +129,8 @@ export function readQuestion(raw) {
     // What the host escaped in an approval (#803): null when it escaped nothing. Marks that do not
     // each cover exactly one escape in this message are not read as the host's (marksExact).
     escaped: exactMarks(readEscaped(q.escaped), str(q.message) ?? ''),
+    // How many permission prompts wait, this one first, when more than one does (#690).
+    waiting: Number.isInteger(q.waiting) && q.waiting > 1 ? q.waiting : null,
   };
 }
 

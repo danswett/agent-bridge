@@ -594,6 +594,11 @@ public sealed record Question
     // then takes the escaped-command confirmation, Deny does not (#803, EscapedApproval).
     [Strict(Strictness.Security)]
     public EscapedText? Escaped { get; init; }
+    // How many permission prompts the session has waiting, this one included, when more than
+    // one is: Copilot can ask several at once (parallel tool calls) and shows them one at a
+    // time, this one first (#690). A client says "1 of N permissions waiting"; the next one
+    // comes as a new question, with its own id, once this one is answered.
+    public int? Waiting { get; init; }
 }
 
 // What the host escaped in an approval's message, and how Approve is given for it (#803).

@@ -225,6 +225,10 @@ public static class ProtocolVectors
             .Valid("an-escaped-approval-held-at-the-machine", EscapedApprovalQuestion with { Escaped = EscapedApprovalQuestion.Escaped! with { Approve = EscapedApproval.Machine } })
             // More escapes than marks carry: whole, so Deny goes, and Approve is the machine's (#836 review).
             .Valid("an-escaped-approval-with-too-many-escapes-to-mark", EscapedApprovalQuestion with { Escaped = EscapedApprovalQuestion.Escaped! with { Approve = EscapedApproval.TooMany } })
+            .Valid("one-of-several-permissions-waiting", Approval with { Waiting = 3 })
+            // A path request asked first while a shell one waits, which Copilot draws ahead of it
+            // (#769): listed, and answered at the machine until the shell one is.
+            .Valid("a-path-permission-listed-while-copilot-draws-another-first", Approval with { Id = "req-42#7c1e", Message = "Allow path access?", Waiting = 2, AnswerAtMachine = true })
             .Reads("an-unknown-kind-reads-as-a-form", """{"id":"q","kind":"wizard","message":"m","fields":[],"askedAt":"2026-10-28T04:22:43.182Z"}""")
             // Never shown with a choice left out, or a choice without the words it was asked with.
             .Refused("a-choice-that-cannot-be-read", Broken(Approval, j => j["fields"]![0]!["options"]!.AsArray().Add(null)))
