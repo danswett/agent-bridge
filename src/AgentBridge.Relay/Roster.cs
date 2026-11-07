@@ -19,6 +19,10 @@ public sealed class RosterOptions
     // https://<account>.blob.core.windows.net, for the azure backend.
     public string? AccountUrl { get; set; }
     public string Container { get; set; } = "roster";
+    // The container for the signed device log (DeviceRoster.cs). Apart from Container because the
+    // storage account's lifecycle rule deletes what is untouched for 180 days, which is right for
+    // last-seen times and wrong for a log an account's trust rests on.
+    public string DevicesContainer { get; set; } = "devices";
     // The user-assigned identity to sign in as. Unset: DefaultAzureCredential (a dev machine).
     public string? ManagedIdentityClientId { get; set; }
     // Machines remembered per account. Online hosts are capped lower, by MaxDevicesPerAccount,
@@ -48,6 +52,8 @@ public sealed class RosterOptions
     public TimeProvider Time { get; set; } = TimeProvider.System;
     // Test only: the store to use, whatever Backend says (a restart keeping its rosters).
     public IRosterStore? Store { get; set; }
+    // Test only: the device log's store, likewise.
+    public IRosterStore? DevicesStore { get; set; }
 }
 
 // A machine the account has had: always a host, the only kind recorded.
@@ -124,13 +130,13 @@ public sealed class AzureRosterStore : IRosterStore
     const long MaxBytes = 256 * 1024;
     readonly BlobContainerClient container;
 
-    public AzureRosterStore(RosterOptions o)
+    public AzureRosterStore(RosterOptions o, string? containerName = null)
     {
         TokenCredential credential = string.IsNullOrEmpty(o.ManagedIdentityClientId)
             ? new DefaultAzureCredential()
             : new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(o.ManagedIdentityClientId));
         container = new BlobServiceClient(new Uri(o.AccountUrl ?? throw new InvalidOperationException("Relay:Roster:AccountUrl is required for the azure backend")), credential)
-            .GetBlobContainerClient(o.Container);
+            .GetBlobContainerClient(containerName ?? o.Container);
     }
 
     public async Task<StoredRoster?> ReadAsync(string name, CancellationToken ct)
