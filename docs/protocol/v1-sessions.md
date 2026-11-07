@@ -1284,7 +1284,15 @@ before a restart commits.
 (`not-quiet`, `busy`, `announce-failed`, `changed`) when any step fails, never forced or
 carried out later. It is refused `changed` when its quiet lease ran out before the commit (#885), and
 while the #800 agent sign-in entrypoint is on,
-since a restart cancels a pending sign-in (Connection, Q-C8). At most **2 committed restarts
+since a restart cancels a pending sign-in (Connection, Q-C8). The owner's 2026-11-07 decision on
+#1159 ("I need a way to force updates to happen from my phone ... I want to be able to accept the
+temporary downtime of an update") supersedes "never carried out later" for an update a person
+presses **Update now** for, and for nothing else: that press waits for its download (at most 15
+minutes), up to 2 minutes more if it was pressed on a quiet machine that has become busy since
+(open question 3 there), and up to a minute for the same lease; it is still never forced past
+the lease, and counts against the same cap
+below ([v1-update.md](v1-update.md#update-now-1159-design-not-built-yet); design, not built).
+At most **2 committed restarts
 every 6 hours** per machine until #55 (`rate-limited`), and 3 presses of each kind per device
 every 10 minutes. Once committed, the result is `accepted` with the planned-state
 `transition`; the host settles its usage probes (#238), then hands over to its replacement
