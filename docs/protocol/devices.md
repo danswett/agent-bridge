@@ -180,8 +180,9 @@ entry offered to it, in an order where every entry follows its parents. This is 
 §3.5; the scenarios of §10 are its tests and [vectors/roster-state.json](vectors/roster-state.json)
 its shared vectors. Each entry is judged in the **history state of its parents** alone (the
 state of the entries that are its ancestors, quarantine ignored), so what a verifier decides
-about it does not depend on what else it holds or on delivery order. The tests check both
-properties on every scenario: each of 12 random parent-first orders reaches the same state and the
+about it does not depend on what else it holds or on delivery order. The C# tests check both
+properties on the order-independent scenarios (not the quarantine ones, which depend on what a verifier held when an entry
+arrived): each of 12 random parent-first orders reaches the same state and the
 same verdicts (commutativity, convergence), and a verifier holding only an entry's ancestors
 judges it as one holding everything does (prefix reduction).
 
@@ -294,8 +295,9 @@ with its `devices` (name to id), its `entries` (label, hash, wrapper) and its `s
 `offer` of an entry with its `verdict` and refusal `reason`, `hours` that move the running-time
 clock first (alone, they record who is `serving` then and the `names` shown), or an `adopt` of a head. Its `state` is
 what the verifier then applies: the active devices with the add, confirmation and name shown of each (and a `pending` rename),
-the conflicted ids, the heads, the quarantined entries, the evidence and who is served. The PWA's
-port replays it in R1c.
+the conflicted ids, the heads, the quarantined entries, the evidence and who is served. A scenario with `limits` (`addCap`) runs a verifier with that
+cap shrunk so it can be reached. Every refusal `reason` the verifier can give has a scenario that shows it. The PWA's
+port replays the scenarios once R1c lands.
 
 ## Decided for the library
 
