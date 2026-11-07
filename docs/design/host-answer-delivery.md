@@ -358,10 +358,14 @@ The canary (section 6) and the soak tests (section 7) report the same numbers.
   machines or brute-forced against a dictionary off the machine.
 * **Retention:**
   * the local buffer: 7 days or 500 records;
-  * a manual feedback bundle: 30 days, the owner's decision for all feedback (#731 item 5, #732;
-    `docs/protocol/feedback.md` line 47);
-  * an automatic event: 30 days, including any derived copies, in the #741 pipeline (#732);
-  * the opt-in screen capture: only inside a feedback bundle, under the same 30 days.
+  * a manual feedback bundle: a 30-day hold with no deletion, then lifecycle deletion at day 31
+    (`docs/protocol/feedback.md` line 47; #731 item 5, #732). This is a different rule from the
+    telemetry maximum. It is not one blanket "30 days" promise, and it does not by itself delete
+    decrypted private issues or attachments. The #744 beta check covers the hold and testers'
+    rights.
+  * an automatic event: at most 30 days (proposed), including any derived copies, in the #741
+    pipeline, only once SRE has proved it (section 3.11.3);
+  * the opt-in screen capture: only inside a feedback bundle, under that bundle's rule.
 * **Who can read it:**
   * the tester, in the app's Diagnostics page (plain words, Pacific times);
   * the feedback inbox tool and its owners (#740, `docs/feedback-inbox.md`), and readers of the
@@ -407,14 +411,24 @@ posted at 04:37 PT; the same amendment is on #741 and #732). Two channels, kept 
   * Automatic diagnostics never go to the feedback repository or to a public issue.
   * **This design does not assume the pipeline is deployed.**
 * **Pseudonymous, not anonymous.** Records in both channels are pseudonymous. This document never
-  calls them anonymous, and neither may any notice or setting.
-* **Opt-in, default off.** The automatic event is sent only when a tester opts in to beta
-  diagnostics. It can be turned off in Settings at any time. Turning it off stops collection and
-  upload, and clears any records not yet sent. The build ships **default off**.
-* **Default-on is a separate, reviewed change (owner, 2026-11-07).** The owner has decided that
-  automatic diagnostics ship default off now. Turning them on by default is a separate, reviewed
-  change, made only after checks (a) and (b) pass (section 3.12). It is not designed for here.
-  Because the data is pseudonymous, the Feedback Team's gates apply.
+  calls them anonymous, and neither may any notice or setting. Compliance (#741 comment 6707151446)
+  treats them as personal data under EEA and UK GDPR. The install id allows singling out and
+  linking over time. The per-attempt correlation id can link a private report to an event. So no
+  notice, setting or document may say the ids are "joined to nothing else" while the manual-report
+  join (section 3.11.4) exists.
+* **Opt-in worldwide, default off (Product, 2026-11-07, 04:49 PT, #741 comment 6707151446).** This
+  supersedes every earlier default-on wording, including the owner's default-on wish and the
+  per-region idea.
+  * The automatic event is sent only after a tester chooses "Allow diagnostics". It is the same
+    rule everywhere: no region-based shortcut and no geolocation.
+  * While it is off, there is no collection, no queueing and no upload.
+  * Refusing costs nothing: the app works the same without diagnostics.
+  * Continued use is never taken as agreement, and consent is never bundled into the beta terms.
+  * Turning it off in Settings deletes unsent events. Turning it back on uploads nothing from the
+    time it was off.
+* **The owner's five decisions still hold** (section 10.1). Decision 1, "default off now", is now
+  the only design. Turning the default on would need a new Product and Compliance decision, and
+  this design does not plan for one.
 
 The triggers, the same for both channels: a delivery that ends in one of these:
 
@@ -463,40 +477,58 @@ A manual report is independent of telemetry and never needs telemetry consent.
 * **Inside the bundle.** The per-send correlation id of section 3.7 lives only inside the sealed
   bundle. It joins the phone's, relay's and machine's sides for triage.
 
-#### 3.11.3 The automatic event (buildable now; enabled only after checks (a) and (b))
+#### 3.11.3 The automatic event (buildable now; uploads enabled only after the gates)
 
-Product accepted the #741 amendment as written (11-07). Two checks must pass before the event is
-enabled anywhere:
+The slice is built now behind the off default: a kill switch in config, and no network call while
+off. **Uploads stay disabled until all of these have passed.** Each is a separate, recorded step.
+Compliance's finding approves local-only design work and an off-by-default build. It does not
+approve enabling uploads.
 
-* **(a) The #732 independent security review.** Two model families review the schema, the install
-  id, retention and the linking. Engineering is staffing it.
-* **(b) The EEA/UK personal-data question.** It has no owner yet; Product asks the owner in the
-  morning.
+* **(a) The #732 independent security review.** Two model families review the expanded schema, the
+  install id, retention and the linking. Engineering is staffing it.
+* **(b) A lawful basis and a truthful notice.** Counsel, chosen by the owner, confirms the basis and
+  notice for the opt-in tier. The attorney-only questions are consolidated on #744: EEA ePrivacy,
+  the UK PECR rules as they stand after 5 February 2026, controller and processors, and transfers.
+  These are not questions two model-family reviews can certify. The opt-in rule above does not wait
+  on them; only enabling uploads does.
+* **(c) The `docs/design.md` section 5.10 amendment, PR #1139** (drafted by the Feedback Team). Main's
+  section 5.10 does not yet allow this pseudonymous beta tier, so the tier does not ship until #1139
+  is reviewed and merged. This design does not repeat its text; #1139 is the authority.
+* **(d) SRE's proof of retention, exports and deletion** in the deployed pipeline:
+  * per-table and total retention;
+  * exports, support copies and derived copies;
+  * the SDK's metadata suppression;
+  * access, and deletion.
 
-Until both pass, the build ships **default off with no uploads**. The slice is built now behind that
-default. Further conditions (#1132, 11-07 04:38 PT):
+  Microsoft documents that a nominal 30-day Log Analytics workspace can keep data for 31 days unless
+  `immediatePurgeDataOn30Days` is on, and table overrides also count. So no "deleted within 30 days"
+  promise is made until the chosen pipeline is shown to meet it.
+* **(e) The owner's approval of #733's UX**, and the notice text with the verified retention
+  sentence and the controller's contact details (#762).
+* **Quality verifies** (a), (d) and the written disposition before admission (#1132, 11-07 04:38
+  PT).
 
-* **Quality verifies** both reviews and the actual retention and access controls before admission.
-* **Default-on may later be allowed per region.** Jurisdictions not cleared for default-on stay
-  opt-in.
-* **The install pseudonym is personal data.** It is pseudonymous personal data, not anonymous data.
-* **The issue edits are not the approval.** The #732 design amendment and the privacy notice still
-  need their own reviewed changes.
+**A local beta does not wait for this slice.** Slices 1 and 2, the local record and the "Report
+this" bundle, are independent of it.
 
 **Off is a tested invariant.** While diagnostics are off, whether by default, by the tester, or by
 the kill switch:
 
 * no event is built;
 * nothing is queued;
+* no install id exists (it is created only after opt-in);
 * no network call is made to the pipeline;
-* any queued events are cleared at the moment it turns off.
+* any queued events and the install id are deleted at the moment it turns off;
+* turning it on again uploads nothing from the time it was off.
 
-The slice includes two tests:
+The slice includes three tests:
 
-* One drives every failure trigger with diagnostics off. It asserts an empty queue and zero calls
-  on a fake transport.
-* The other turns diagnostics off with events queued. It asserts the queue is cleared and nothing is
-  sent.
+* One drives every failure trigger with diagnostics off. It asserts an empty queue, no install id
+  and zero calls on a fake transport.
+* One turns diagnostics off with events queued. It asserts the queue and the install id are deleted
+  and nothing is sent.
+* One turns diagnostics off, drives failures, and turns them on again. It asserts that nothing from
+  the off period is sent.
 
 There is one event per failed attempt, schema `delivery-failure/v1`. It is versioned and strictly
 allow-listed, and is a subset of the local record. The receiving pipeline rejects unknown fields,
@@ -518,11 +550,29 @@ and CI fails if a field is added that is not an enumeration or a bounded bucket.
 | `attempt` | 1, 2, 3+ |
 | `elapsed` | <1 s, 1–3 s, 3–15 s, 15–60 s, 60 s+ |
 | `correlation` | a random 128-bit id, fresh for this attempt and never reused |
-| `install` | #741's approved rotatable pseudonymous install id |
+| `install` | the diagnostic install id (rules below) |
+
+**The install id.**
+
+* It is cryptographically random and is created only after the tester chooses "Allow
+  diagnostics".
+* It is never derived from a device, account or machine id. The machine keeps no mapping from an
+  old id to a new one.
+* It is replaced at least every 30 days, on "Reset my diagnostics id", and on fresh consent after
+  withdrawal.
+* It is deleted when diagnostics are turned off.
+* A test checks that a support join (a report's correlation id) cannot link events across a
+  rotation, or keep them past their retention.
 
 **The correlation id.** It is random and minted per attempt. It encodes nothing about the user,
-session, screen or content. It is not derived from the install id or the per-send id, and it is
-never reused. Only the local record keeps the link between it and the per-send id.
+session, screen or content. It does not contain the install id and is not derived from it or from
+the per-send id. It is never reused. Only the local record keeps the link between it and the
+per-send id.
+
+**Errors use a finite, approved vocabulary.** The `reason` and `stage` enums are the only error
+fields. There are no exception types, stack frames or exception text, even where #741 lists "type
+and frames only": these can carry paths, source symbols and content. Raw crashes and screens stay on
+the machine unless the tester previews them and attaches them to a manual report.
 
 **A structural outline in the event.** This is allowed later, and is **off until approved**. The
 ruling allows an outline in the event only as finite, preapproved structural categories and bounded
@@ -543,7 +593,7 @@ No row hashes, no lengths beyond buckets, no words.
 * answer, reply, question, option or command text;
 * paths, user names, hostnames, account names or logins;
 * session ids or titles;
-* raw exceptions or payloads;
+* raw exceptions, exception types, stack frames or payloads;
 * arbitrary strings.
 
 The application SDK's automatic collection and identifying metadata are turned off. That covers
@@ -555,7 +605,8 @@ device name, user, IP-derived location, and auto-collected dependencies and exce
   type) per hour per install. Repeats only add to a count on the next event.
 * **Daily cap.** At most 20 events a day per install, under #741's daily cap.
 * **Offline.** Unsent events wait in a small queue: at most 50, none older than 24 hours, rebuilt
-  from the schema at send time. The queue never blocks a delivery.
+  from the schema at send time. Each event's age counts from when it was collected, and a retry
+  never restarts it. The queue never blocks a delivery.
 * **Kill switch.** `Diagnostics:DeliveryEvents=off`, set by machine policy or fleet config, stops
   collection and clears the queue.
 * **Triggers.** Only the host's own delivery outcomes trigger an event. Nothing a phone, relay,
@@ -563,23 +614,43 @@ device name, user, IP-derived location, and auto-collected dependencies and exce
 
 **Retention and access.**
 
-* Events, and any copies derived from them (exports, summaries, dashboards' stored queries), are
-  kept 30 days and then deleted (#732).
+* 30 days is a proposed maximum for events and any copies derived from them (exports, summaries,
+  dashboards' stored queries). It is not a verified setting. Expiry starts when the event was first
+  collected, and a retry, export, support join or derived copy never restarts it. The need for 30
+  days must be justified in the #732 amendment.
 * Access is least-privilege: named support staff only.
-* SRE must verify the actual destination, its access list and its retention before the event is
-  enabled anywhere.
+* SRE must prove the actual destination, access list, retention, exports and deletion (gate (d))
+  before any upload is enabled.
 
-**Consent UX** (subject to the owner's approval of #733's UX):
+**Consent UX.** This follows Compliance's wording (#741 comment 6707151446), subject to the owner's
+approval of #733's UX.
 
-* The opt-in is offered at first run and in Settings, in plain words. It shows one real event,
-  field by field, with no surprises:
-  "Send diagnostics when an answer or reply doesn't get through. Each note says which step failed
-  and a reason code, with a random id for this install. It is pseudonymous, not anonymous. It never
-  includes what you wrote, your files, your screen or your session names."
-* A "Diagnostics sent" list in Settings and the PWA menu shows each event's time (Pacific), its
+* **First run.** The heading is "Help improve Slipgates with optional diagnostics". The body is
+  Compliance's proposed text: it names what is sent (health events about setup, updates, delivery
+  failures and connection problems; versions and channel; bounded timing and count categories; a
+  random installation id and a random id for each attempt), where it goes (Microsoft Azure
+  Application Insights, for the Slipgates team), and that it is pseudonymous, not anonymous. It says
+  what is never included (prompts, answers, commands, code, session titles, paths, screen text,
+  screenshots), and that Send feedback is a separate choice.
+  * Two buttons, **"Not now"** and **"Allow diagnostics"**, with neither preselected and of equal
+    weight.
+  * A visible Privacy notice link.
+  * The verified retention sentence and the controller's contact details are added before release.
+  * The text is not broadened silently: any new event category is named.
+* **Settings.** The toggle is **"Send optional diagnostics"**, off at first.
+  * The helper text is Compliance's: turning it off stops collection and uploads and deletes unsent
+    events; it does not erase events already received; Send feedback works separately.
+  * There is a link to "What is sent and how to request deletion".
+  * The current state is always shown, and turning it off is as easy as turning it on.
+* **"Diagnostics sent".** A list in Settings and the PWA menu shows each event's time (Pacific), its
   reason, and the exact fields sent.
-* One-tap off stops collection and upload and clears pending records.
-* "Reset my diagnostics id" rotates the install id at once.
+* **"Reset my diagnostics id"** replaces the install id. It is never described as deleting records
+  already uploaded.
+* **Withdrawal and erasure** are explained separately. Erasure of received events goes through a
+  private rights route, which uses a reference the tester already has (a report or correlation id).
+  No extra identifying data is created just to find a requester.
+* **Consent evidence** is kept to a minimum and separately justified. No diagnostic payload is kept
+  just to prove consent.
 
 #### 3.11.4 How one failure is joined across channels
 
@@ -587,31 +658,34 @@ device name, user, IP-derived location, and auto-collected dependencies and exce
    queues the event, carrying a fresh random correlation id.
 2. The tester presses "Report this". The bundle carries the local record and outline. If the event
    was actually recorded, it also carries that correlation id, shown in the preview.
-3. Triage joins the private report and the pseudonymous event by correlation id. Inside the report,
-   the per-send id joins the phone's, relay's and machine's sides. Neither the id nor any
+3. Triage joins the private report and the pseudonymous event by correlation id. This join is
+   exactly why the ids are linkable personal data, and the notice and preview say so. Inside the
+   report, the per-send id joins the phone's, relay's and machine's sides. Neither the id nor any
    diagnostic content is ever copied into a public issue.
 
 ### 3.12 Privacy review
 
-This is a checklist that must be passed before the automatic event (slice 3) can be enabled. It is
-not legal advice, and this document claims no legal sign-off. Items marked **human/legal** need a
-person with authority to answer them. Product is asked (#741) to assign an owner for those items.
+This checklist must pass before uploads from the automatic event (slice 3) are enabled. The opt-in
+rule, default off worldwide, is already decided (Product, 2026-11-07, #741 comment 6707151446). This
+is not legal advice, and this document claims no legal sign-off. Compliance's finding is advisory
+and is not a merge receipt. Items marked **human/legal** need counsel, whom the owner chooses. The
+attorney-only questions are consolidated on #744.
 
 | # | Check | Who answers | Status |
 | --- | --- | --- | --- |
-| 1 | **Check (b).** The Feedback Team treats the random install pseudonym as pseudonymous personal data. Under what lawful basis may it be collected from testers in the EEA, the UK and elsewhere? Does default-on with a notice suffice there, or is opt-in required? | **human/legal**: a qualified reviewer that Product is to find (owner, 2026-11-07); not yet named | open, **gate** |
-| 2 | Default-on with a notice versus opt-in: is a first-run notice with an off switch enough anywhere, or is explicit consent needed by region? The build stays default off until this and check 1 are answered. Turning the default on is then a separate, reviewed change (owner, 2026-11-07). | **human/legal** | open |
+| 1 | **Gate (b).** Lawful basis and notice for the opt-in tier. Compliance treats the events as personal data under EEA and UK GDPR, and treats prior consent as the defensible rule. Open for counsel: EEA ePrivacy Article 5(3) by country; UK PECR regulation 6 and Schedule A1 (changed 5 February 2026); controller, processors and transfers. Nothing here is a region shortcut: the tier is opt-in everywhere. | **human/legal**: counsel chosen by the owner (#744) | open, **gate** |
+| 2 | **Gate (c).** `docs/design.md` section 5.10 amended for this pseudonymous tier: PR #1139 (Feedback), reviewed and merged | Feedback Team + reviewers of #1139 | open, **gate** |
 | 3 | IP address exposure at the endpoint: what does Application Insights (and anything in front of it) log or derive from the sender's IP? Is IP masking and location-off configured and verified? | SRE + #732 review | open |
-| 4 | Linkability over time: events from one install share an install id until it rotates. Is a 30-day rotation plus the tester's reset enough? Do the correlation ids and the dedupe counts add any further linking? | #732 review | open |
-| 5 | Linking to reports: a report that carries a correlation id ties a pseudonymous event to a signed-in tester's report. Is that acceptable under the notice, and is it shown plainly in the preview? | #732 review + owner (#733 UX) | open |
-| 6 | **Check (a).** Schema leakage, install id, retention and linking (checks 3–5 and 7 feed it). Every field is an enumeration or a bucket. Do the adversarial redaction tests pass for both schemas? Is the SDK's auto-collection off? Does the pipeline reject unknown fields? | the #732 independent security review, two model families; staffed by Engineering | open, **gate** |
-| 7 | Retention and deletion of 30 days for events and all derived copies, with least-privilege access, verified in the deployed resource | SRE | open |
-| 8 | Interaction with the owner's 11-04 opt-in decision (#731 item 3), his 11-07 default-on wish, and his 11-07 decision that the default stays off now and that turning it on is a separate, reviewed change. The amendment is recorded in #732's §5.10 change and the privacy notice (slipgates.com/privacy, #762). | owner via #732 | open |
-| 9 | The kill switch and the off switch: does turning it off clear pending records, and is that tested? | Quality | open |
-| 10 | Who can read the events, and how support reads them for one tester's report without browsing others' events | SRE + Feedback Team | open |
+| 4 | Linkability over time: is the install id created only after opt-in, replaced at least every 30 days and on reset or fresh consent, never derived from a device or account id, never inside the correlation id, and kept with no old-to-new mapping? Is there a test that a support join cannot defeat rotation or retention? | #732 review | open |
+| 5 | Linking to reports: a report that carries a correlation id ties a pseudonymous event to a signed-in tester's report. The notice and the exact preview say so, and nothing claims the ids are "joined to nothing else". | #732 review + owner (#733 UX) | open |
+| 6 | **Gate (a).** The #732 independent security review by two model families: schema leakage, the install id, retention and linking (items 3–5 and 7 feed it). Every field is an enumeration or a bucket; the error vocabulary is finite, with no exception types, frames or text; the adversarial redaction tests pass for both schemas; the SDK's auto-collection is off; the pipeline rejects unknown fields. | Engineering staffs it | open, **gate** |
+| 7 | **Gate (d).** SRE proves per-table and total retention, exports, support copies, metadata suppression, access and deletion, including the 31-day Log Analytics behaviour (`immediatePurgeDataOn30Days`, table overrides). No "deleted within 30 days" promise until then. | SRE; Quality verifies | open, **gate** |
+| 8 | **Gate (e).** The owner approves #733's UX. The notice (#762) carries the verified retention sentence and the controller's contact details, and the first-run and Settings text follows Compliance's wording (section 3.11.3). | owner; Feedback Team | open, **gate** |
+| 9 | The off invariant: off deletes unsent events and the install id, nothing is queued while off, and turning it on again uploads nothing from the off period. All three are tested. | Quality | open |
+| 10 | Who can read the events, and how support reads them for one tester's report without browsing others' events. A private route for erasure requests, which creates no extra identifying data. | SRE + Feedback Team | open |
+| 11 | Manual-report retention (a 30-day hold with no deletion, then deletion at day 31) is described separately from the telemetry maximum; the #744 beta check covers it. | Feedback Team (#744) | open |
 
 ---
-
 ## 4. One delivery state machine
 
 Every answer, reply and approval is in exactly one state, and the phone shows it in plain words:
@@ -813,7 +887,7 @@ Each slice is a single small PR.
 
 Observability comes first (slices 1–3), so that every later fix can be measured and any tester's
 report explains itself. Slices 1 and 2 are not gated on the privacy checks. Slice 3 can be built now
-but stays off.
+but stays off. **A beta does not wait for slice 3**: slices 1 and 2 ship on their own.
 
 **Already in review: PR #1137** (host fix for #1123, sensitive, two-family review). It names the
 failed form check, logs a word-free outline, re-reads for up to 2 s before a refusal, compares the
@@ -827,7 +901,7 @@ its re-read and retry, and slice 7 on its white-space-free matching.
 | 0 | This design | no | part of #1132 |
 | **1** | **The local record**, starting from #1137's `answer-attempt v=1` line and `FormCheck` names: allow-listed per-attempt record, reason keys, redacted outlines, ring buffer, the phone's and app's send ring, per-send id, triage recipe and tool, offer keys and counts, local health view (sections 3.1–3.10, 3.11.1). It can split into: 1a host record and keys (extends #1137's line to approvals, replies, Claude and Codex; reason keys use #1137's check names); 1b outlines; 1c client ring and per-send id (protocol); 1d health view. | yes (1a, 1b, 1c) | closes #1023; gives #998–#1014 their counts; part of #1128 |
 | **2** | **"Report this" bundle**: "Report this" on failed cards attaches that attempt's record and outline after the preview (section 3.11.2) | yes (client and host) | part of #733, #738 |
-| **3** | **The opt-in automatic event**, `delivery-failure/v1` (section 3.11.3). **Buildable now, enabled only after (a) and (b).** Default off. Kill switch. No network call while off. Tests that nothing is sent or queued while off. | **yes**: two-family review of the schema and linking | part of #741. **Gates before enabling:** (a) the #732 independent security review (staffed by Engineering); (b) the EEA/UK personal-data answer (no owner yet). Also #732's §5.10 amendment and notice, the owner's approval of #733's UX, and SRE's check of the destination and retention. |
+| **3** | **The opt-in automatic event**, `delivery-failure/v1` (section 3.11.3). Opt-in worldwide, default off. **Buildable now; uploads enabled only after gates (a)–(e).** Kill switch. Install id created only after opt-in. No collection, queue or network call while off; off deletes unsent events; re-enabling uploads nothing from the off period, all tested. Compliance's first-run and Settings wording. Finite error vocabulary. | **yes**: the #732 two-family review of schema, install id, retention and linking | part of #741. **Gates before enabling uploads:** (a) the #732 two-family security review (Engineering); (b) lawful basis and notice from counsel (#744); (c) the `docs/design.md` section 5.10 amendment, PR #1139; (d) SRE's proof of retention, exports and deletion, including the 31-day Log Analytics behaviour; (e) the owner's approval of #733's UX and the notice (#762). |
 | 4 | Failing-first tests: the three-field choice, text, choice form (#1101's ask), output streaming during a form (#1123), narrow window (#910), mid-word wrap (#848), tall form, markdown message. #1137 already adds the hyphen and mid-word wraps (04:21), wrapped hints (#910), a mid-redraw read and a retry after a scroll; slice 4 adds the rest. | no (tests) | groundwork for #1123, #910, #848 |
 | 5 | Real-screen corpus and replay test, seeded first from #1137's test screens, then #510 and slice 1's outlines (section 6) | no | part of #1132 |
 | 6 | Hold keys to the form's frame, and settle on the frame (sections 5.1–5.2), building on #1137's re-read and retry. **Approved by the owner (2026-11-07); ships only once Trust agrees** that the frame plus "nothing below it" is enough identity | **yes** (injector; Trust's agreement before merge) | with slice 8, closes #1123 and #1012 |
@@ -901,10 +975,9 @@ Design, trust, feedback and privacy issues:
 
 ### 10.1 Decided by the owner on 2026-11-07 (about 04:48 Pacific)
 
-1. **Automatic diagnostics ship default off now.** Turning the default on is a separate, reviewed
-   change, made only after check (a), the #732 two-family security review, and check (b), the
-   EEA/UK personal-data question, have both passed (sections 3.11.3 and 3.12). Product is to find
-   the legal reviewer for check (b).
+1. **Automatic diagnostics ship default off now.** Product's later decision (2026-11-07, 04:49 PT,
+   #741 comment 6707151446) settles the rest: opt-in worldwide, default off, with no region
+   shortcut. This supersedes the earlier default-on path, so no default-on change is planned.
 2. **Part-answered forms: resume first, then reset.** The host resumes at the next field not yet
    committed. If that fails, it presses Esc to cancel the form and redoes the answer once. Both steps
    happen only when the screen is positively that exact form (section 4, rule 2; slice 8).
@@ -919,9 +992,9 @@ Design, trust, feedback and privacy issues:
 
 1. **Trust's agreement to narrowing the key check** (decision 3). Does the frame plus "nothing
    below it" identify the question well enough for keys? Slice 6 does not merge without it.
-2. **A legal reviewer for the EEA/UK question** (decision 1; check (b), section 3.12, item 1).
-   Is a pseudonymous install id personal data there, and does it need opt-in? This needs a human or
-   legal answer that we cannot give. Product is to find a reviewer; none is named yet.
+2. **Counsel for the opt-in tier** (gate (b); section 3.12, item 1). The owner chooses counsel to
+   confirm the lawful basis and notice. The questions are consolidated on #744. We cannot answer
+   them, and the safe default (off, opt-in) does not wait on them; only enabling uploads does.
 3. **A structural outline in the automatic event** (section 3.11.3): yes, once #732 approves the
    exact fields, or never?
 4. **Tall forms** (section 5.4): is a form whose heading has scrolled off answerable?
