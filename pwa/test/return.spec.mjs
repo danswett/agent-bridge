@@ -3,6 +3,7 @@
 // disabled after 600 ms; a list not whole after 1 s says "Updating…" in the title row's slot; and at
 // 3 s the away states show in place, with a strip if the client's own link is down. The page's
 // clock is the test's, so each point lands where the test puts it.
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 import { open } from './nav.mjs';
 
@@ -174,6 +175,45 @@ test('a lane entry held for a return is aria-disabled at once, a press says Upda
   await page.clock.runFor(4000);
   await expect(approve).not.toHaveAttribute('aria-disabled', 'true');
   await expect(entry.locator('.needs-updating')).toBeHidden();
+});
+
+test('a second event inside the grace leaves a held control drawn disabled, with no snap back to quiet', async ({ page }) => {
+  await openDemo(page);
+  await open(page, ASK, LAPTOP);
+  const v = sv(page, ASK);
+  await comeBack(page);
+  await setOnline(page, false);
+  await page.clock.runFor(800);
+  await expect(v.locator('.question')).toHaveAttribute('data-hold', 'drawn');
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.clock.runFor(10);
+  await expect(v.locator('.question')).toHaveAttribute('data-hold', 'drawn');
+  await page.clock.runFor(2200);
+  await expect(v.locator('.question')).not.toHaveAttribute('data-hold', /quiet|drawn/);
+});
+
+test('a hold that starts while the escaped-approval sheet is open stops its confirmation from being sent', async ({ page }) => {
+  const escaped = JSON.parse(readFileSync(new URL('../../docs/protocol/vectors/sessions.json', import.meta.url), 'utf8')).records.Question.valid.find((v) => v.name === 'an-escaped-approval').json;
+  await openDemo(page);
+  await page.evaluate((question) => {
+    const m = window.agentBridgeDemo.machines['demo-laptop'];
+    const t = new Date(Date.now() + 1000).toISOString();
+    m.upsert({ ...m.get('laptop-ask-1'), status: 'waiting', statusSince: t, updatedAt: t, question: { ...question, askedAt: t } });
+  }, escaped);
+  await open(page, ASK, LAPTOP);
+  await sv(page, ASK).getByRole('button', { name: 'Approve once…' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Approve a command with hidden characters?' });
+  const confirm = sheet.getByRole('button', { name: "Approve once: I've read the escaped command" });
+  await expect(confirm).toBeEnabled({ timeout: 8000 });
+  await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].holdSigning());
+  await confirm.click();
+  await comeBack(page);
+  await setOnline(page, false);
+  await page.clock.runFor(10);
+  await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].releaseSigning());
+  await expect(sheet.locator('.sheet-error')).toContainText('Updating…');
+  await expect(sheet).toBeVisible();
+  expect(await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].answerLog.length)).toBe(0);
 });
 
 test('an offline machine\'s line takes the place of the reply box\'s actions and focus on one goes to it', async ({ page }) => {

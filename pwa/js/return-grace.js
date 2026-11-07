@@ -51,8 +51,10 @@ export class ReturnGrace {
     };
   }
 
-  // A return begins, or the one on is counted from again: the connections have a new reason to catch up.
+  // A return begins. One already on is left alone: another event in its 3 s (a visibility flip, then
+  // the network back) must not snap a drawn control back to quiet or push the away states later.
   start() {
+    if (this.#since !== null) { return; }
     this.#cancel();
     this.#since = this.now();
     for (const ms of [HELD_MS, CUE_MS]) { this.#timers.push(this.#setTimeout(() => this.#emit(), ms)); }

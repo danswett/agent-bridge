@@ -424,11 +424,14 @@ export class QuestionPanel {
         const stale = () => Date.now() - pressed >= COMMAND_LIFETIME_S * 1000;
         const expired = () => new Error(`Not sent: this confirmation is more than ${COMMAND_LIFETIME_S / 60} minutes old. Press again`);
         if (stale()) { throw expired(); }
+        // A return's hold that began while the sheet was open: nothing is signed or sent until it lifts (#950).
+        if (this.#quiet) { throw new Error(`${UPDATING} Press again in a moment`); }
         const request = globalThis.crypto.randomUUID();
         const confirm = await this.escaped.sign({ session: sessionId, question: q.id, shown, request, now: pressed });
         // Closed while it was signed: the confirmation is dropped, and nothing is sent (#836 review).
         if (cancelled()) { return false; }
         if (stale()) { throw expired(); }
+        if (this.#quiet) { throw new Error(`${UPDATING} Press again in a moment`); }
         // The machine's route gone while it was signed (#269's gate): nothing is queued, so the sheet
         // must not close as if it went. It stays open saying so, its button the Try again, which
         // signs afresh once the machine is back (#836 review 5780082443).

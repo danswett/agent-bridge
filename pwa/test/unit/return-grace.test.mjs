@@ -62,17 +62,18 @@ test('a held control is drawn only after 600 ms and the slot cue comes after 1 s
   assert.equal(changes, 3);
 });
 
-test('a second return counts the grace again from its own start', () => {
+test('a second event inside the grace leaves it running from its first start, and one after it starts a new grace', () => {
   const c = clock();
   const g = new ReturnGrace(c);
   g.start();
-  c.tick(2000);
+  c.tick(800);
   g.start();
-  c.tick(2000);
-  assert.equal(g.active, true);
   assert.equal(g.drawn, true);
-  c.tick(1000);
+  c.tick(2200);
   assert.equal(g.active, false);
+  g.start();
+  assert.equal(g.active, true);
+  assert.equal(g.drawn, false);
 });
 
 test('the page shown again, restored from the cache, or the network back is a return; hidden and a plain pageshow are not', () => {

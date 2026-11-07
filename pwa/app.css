@@ -1414,8 +1414,8 @@ summary {
   color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line);
 }
 .sessions-head .connection-strip {
-  grid-column: 1 / -1; grid-row: 1; align-self: stretch; display: flex; align-items: center;
-  margin: 0; color: var(--ab-text2); font-size: var(--type-meta); background: var(--ab-layer);
+  grid-column: 1 / -1; grid-row: 1 / -1; align-self: stretch; display: flex; align-items: center;
+  margin: 0; padding: 0; color: var(--ab-text2); font-size: var(--type-meta);
 }
 .sessions-head .connection-strip[hidden] { display: none; }
 .sessions-head[data-strip="true"] > :not(.connection-strip) { visibility: hidden; }
