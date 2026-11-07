@@ -24,7 +24,18 @@ public interface IConsoleInjector
     // the screen is not typed.
     Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
         Task.FromResult(new ConsoleScreen(null, "this host cannot read the session's screen; answer at the machine"));
+
+    // A process's console made at least `columns` wide (its screen buffer, the width an agent in
+    // it draws to), typing nothing, and only while the id is still the process created at
+    // `createdAt` (so never a later process given the same id); the width read back after, or
+    // why not. NotYet: the console could not be reached, as before a process just started has
+    // one, so it may be asked again.
+    Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ConsoleWidth(null, "this host cannot widen a session's console", false));
 }
+
+// The width a console was left at, or why it is not known.
+public sealed record ConsoleWidth(int? Columns, string? Problem, bool NotYet);
 
 // Rows, or why there are none.
 public sealed record ConsoleScreen(IReadOnlyList<string>? Rows, string? Problem);

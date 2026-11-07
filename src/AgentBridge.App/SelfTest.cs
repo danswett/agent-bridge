@@ -98,6 +98,7 @@ static partial class SelfTest
             await Write(outFile, result, checks, failures, "a word too long for WinUI's text layout");
             await CheckLongWords(window, Check);
             await Write(outFile, result, checks, failures, null);
+            await CheckFeedbackEntry(window, Check);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
             await CheckCurrentTools(window, main, Check);
@@ -711,6 +712,47 @@ static partial class SelfTest
         }
         else { check(false, "finds Needs you and a second session to scroll the list to"); }
     }
+
+    // Send feedback (#738), from Settings and from the tray's menu: both open the one dialog that
+    // says feedback isn't available yet, and nothing offers to send. The tray's menu is Win32's
+    // and can't be clicked here, so its choice goes through the same dispatch (TrayIcon.Run) and
+    // the same action the app gives the tray, from a window hidden in the notification area.
+    static async Task CheckFeedbackEntry(MainWindow window, Action<bool, string> check)
+    {
+        ContentDialog? Dialog() => VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot)
+            .Select(p => p.Child).OfType<UIElement>()
+            .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)[d] : Find<ContentDialog>(c))
+            .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) == "FeedbackUnavailable");
+        async Task Unavailable(string from)
+        {
+            var opened = await Until(() => Dialog() is not null, TimeSpan.FromSeconds(5));
+            var dialog = Dialog();
+            check(opened && dialog is { Title: "Send feedback", Content: "Feedback isn't available in the Windows app yet.", CloseButtonText: "Close", PrimaryButtonText: "", SecondaryButtonText: "" },
+                $"says feedback is unavailable without offering a send, from {from}");
+            dialog?.Hide();
+            check(await Until(() => Dialog() is null && !window.FeedbackOpen, TimeSpan.FromSeconds(5)), $"closes the feedback dialog opened from {from}");
+        }
+
+        window.ShowPage("settings");
+        // Settings was collapsed until now: its controls come only with the next layout pass.
+        Button? button = null;
+        await Until(() => (button = ById<Button>(window.SettingsPage, "SendFeedback")) is not null, TimeSpan.FromSeconds(10));
+        check(button is { IsEnabled: true, Content: "Send feedback" }, "offers Send feedback in Settings");
+        if (button is not null)
+        {
+            ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
+            await Unavailable("Settings");
+        }
+        window.ShowPage("sessions");
+
+        window.AppWindow.Hide();
+        var wrong = false;
+        TrayIcon.Run(TrayIcon.CmdFeedback, () => wrong = true, window.FeedbackFromTray, () => wrong = true);
+        check(!wrong && window.AppWindow.IsVisible, "shows the window from the tray's Send feedback, and only that");
+        await Unavailable("the tray");
+        window.ShowInFront();
+    }
+
     // The Windows shell (ui.md §7, #180): the 48 px title bar with the mark, the name and the search
     // box; the compact rail with every page and its 3×16 selection pill in Bridge; the pages on a
     // layer with an 8 px top-left radius; WinUI's accent controls in Bridge in both themes; and the

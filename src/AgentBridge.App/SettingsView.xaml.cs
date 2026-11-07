@@ -15,6 +15,10 @@ public sealed partial class SettingsView : UserControl
 
     public SettingsView() => InitializeComponent();
 
+    internal event Action? FeedbackRequested;
+
+    void OnSendFeedback(object sender, RoutedEventArgs e) => FeedbackRequested?.Invoke();
+
     public SettingsViewModel ViewModel
     {
         get => viewModel!;

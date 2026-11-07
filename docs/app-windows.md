@@ -934,7 +934,11 @@ entry that starts the app with `--background` into the notification area, so toa
 arriving after a restart. The app needs no restart-on-failure and nothing more than
 Explorer's startup list, so a `Run` entry is enough for it. Either can be turned off in
 Settings, and stays off. Closing the window keeps the app in the notification area; its
-menu quits it, which leaves the host running.
+menu opens the window, quits it (which leaves the host running), or offers Send feedback
+(#738). Send feedback, there and at the top of Settings, opens one dialog saying feedback
+isn't available in the Windows app yet, with only Close: nothing is collected or sent, and
+there is no plaintext fallback until the encrypted upload lands. The self-test opens it from
+both (the tray's choice through `TrayIcon.Run`, from a hidden window).
 
 An elevated app (for example one started by an elevated installer) never starts the host
 directly: the host would be elevated too, unable to type into ordinary consoles and
