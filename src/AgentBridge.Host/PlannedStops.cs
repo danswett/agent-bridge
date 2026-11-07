@@ -35,9 +35,16 @@ sealed class PlannedStops(DeliveryGate gate, TimeSpan timeout, Action<string> lo
         }
         try
         {
-            interrupt.Cancel();
+            // The restart is interrupted only once this stop holds the fence: a stop that is then
+            // refused (a delivery outlasting the timeout) must leave a waiting restart to go on.
+            // Meanwhile `stopping` keeps the restart from committing its handover, and a restart
+            // already holding the fence gives it up when that commit is refused.
             var lease = await gate.PrepareStopAsync(timeout);
-            if (lease is not null) { return new StopLease(this, lease); }
+            if (lease is not null)
+            {
+                interrupt.Cancel();
+                return new StopLease(this, lease);
+            }
             log("the host was not stopped: a delivery or typing is still in progress");
             Release();
             return null;
@@ -53,7 +60,8 @@ sealed class PlannedStops(DeliveryGate gate, TimeSpan timeout, Action<string> lo
     {
         lock (state)
         {
-            restart = new CancellationTokenSource();
+            // A refused stop never cancelled the token a waiting restart holds, so it stays.
+            if (restart.IsCancellationRequested) { restart = new CancellationTokenSource(); }
             stopping = false;
         }
     }

@@ -38,18 +38,77 @@ public sealed class DeliveryQuietTests
     }
 
     [Fact]
-    public async Task A_recovery_stop_is_granted_after_a_journal_uncertainty_once_nothing_is_in_flight()
+    public async Task A_recovery_stop_is_granted_after_a_journal_uncertainty_once_nothing_is_in_flight_and_the_failed_worker_is_proven_gone()
     {
         var gate = new DeliveryGate();
         var delivery = gate.TryEnterDelivery();
         Assert.NotNull(delivery);
-        gate.MarkJournalUncertain();
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var injector = new GateTrackedInjector(new FailingInjector(new InjectorWorkerException(new IOException("pipe broke"), exited.Task)), gate);
+        await Assert.ThrowsAsync<InjectorWorkerException>(() => injector.InjectAsync(100, null!));
         var stop = gate.PrepareStopAsync(Bound);
         Assert.False(stop.IsCompleted);
         delivery.Dispose();
+        Assert.False(stop.IsCompleted);
+        exited.SetResult();
         using var lease = await stop.WaitAsync(Bound);
         Assert.NotNull(lease);
         Assert.Null(gate.TryEnterDelivery());
+    }
+
+    [Fact]
+    public async Task A_stop_is_refused_while_a_failed_injector_worker_is_still_running_and_granted_once_it_exits()
+    {
+        var gate = new DeliveryGate();
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var injector = new GateTrackedInjector(new FailingInjector(new InjectorWorkerException(new IOException("pipe broke"), exited.Task)), gate);
+        await Assert.ThrowsAsync<InjectorWorkerException>(() => injector.InjectAsync(100, null!));
+
+        Assert.Null(await gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50)));
+        // The refusal released the fence: deliveries go on while the host keeps running.
+        using (var next = gate.TryEnterDelivery()) { Assert.NotNull(next); }
+        exited.SetResult();
+        using var lease = await gate.PrepareStopAsync(Bound);
+        Assert.NotNull(lease);
+    }
+
+    [Fact]
+    public async Task A_stop_is_refused_after_an_injector_failure_that_cannot_prove_its_worker_ended()
+    {
+        var gate = new DeliveryGate();
+        var injector = new GateTrackedInjector(new FailingInjector(new InvalidOperationException("worker termination could not be confirmed")), gate);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => injector.InjectAsync(100, null!));
+        Assert.Null(await gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50)));
+
+        var other = new DeliveryGate();
+        var failed = new GateTrackedInjector(new FailingInjector(new InjectorWorkerException(new IOException("pipe broke"),
+            Task.FromException(new InvalidOperationException("no handle")))), other);
+        await Assert.ThrowsAsync<InjectorWorkerException>(() => failed.InjectAsync(100, null!));
+        Assert.Null(await other.PrepareStopAsync(Bound));
+    }
+
+    [Fact]
+    public async Task A_request_refused_by_a_stop_that_is_then_abandoned_is_delivered_when_sent_again()
+    {
+        var gate = new DeliveryGate();
+        var receipts = new Dictionary<Guid, int>();
+        var memory = new OutcomeMemory<int>(TimeProvider.System, TimeSpan.FromMinutes(15), gate, () => -1,
+            key => receipts.TryGetValue(key, out var known) ? (true, known) : (false, 0),
+            (key, result) => receipts[key] = result);
+        var key = Guid.NewGuid();
+        var stop = await gate.PrepareStopAsync(Bound);
+        Assert.NotNull(stop);
+        Assert.Equal(-1, await memory.Once(key, () => Task.FromResult(8), _ => { }));
+        Assert.Empty(receipts);
+
+        stop.Dispose();
+        Assert.Equal(8, await memory.Once(key, () => Task.FromResult(8), _ => { }).WaitAsync(Bound));
+        Assert.Equal(8, receipts[key]);
+    }
+
+    sealed class FailingInjector(Exception failure) : IConsoleInjector
+    {
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) => Task.FromException<InjectionResult>(failure);
     }
 
     [Fact]

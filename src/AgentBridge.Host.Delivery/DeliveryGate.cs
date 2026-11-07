@@ -15,6 +15,8 @@ public sealed class DeliveryGate
     int deliveries;
     bool isTyping;
     bool uncertain;
+    // The end of each injector worker that failed by exception, which may still be sending keys.
+    readonly List<Task> failedWorkers = [];
     Exclusion? exclusion;
     StopLease? stopping;
 
@@ -23,6 +25,19 @@ public sealed class DeliveryGate
     public enum Blocker { Typing, DeliveryInFlight, LifecycleInProgress, JournalUncertain }
 
     public void MarkJournalUncertain() { lock (state) { uncertain = true; } }
+
+    // An injector that threw may have left its worker typing. exited completes once the worker is
+    // proven gone (InjectorWorkerException); null, or a faulted task, means nobody can tell, and
+    // no planned stop is granted after it: a stopped or restarted host could otherwise leave the
+    // old worker sending keys into a question asked after it.
+    public void MarkWorkerUncertain(Task? exited)
+    {
+        lock (state)
+        {
+            uncertain = true;
+            failedWorkers.Add(exited ?? Task.FromException(new InvalidOperationException("the injector worker's end cannot be observed")));
+        }
+    }
 
     // Admission must precede OutcomeMemory's Task.Run, not just the later session claim.
     public IDisposable? TryEnterDelivery()
@@ -70,7 +85,8 @@ public sealed class DeliveryGate
 
     // Blocks new deliveries immediately, but leaves admitted deliveries free to finish their
     // typing and confirmation. A timeout refuses the stop; it must not abandon an injector.
-    // A latched journal uncertainty does not refuse it once nothing is in flight or typing.
+    // A latched journal uncertainty does not refuse it once nothing is in flight or typing and
+    // every injector worker that failed is proven gone; one whose end cannot be proven refuses it.
     public async Task<IDisposable?> PrepareStopAsync(TimeSpan timeout, CancellationToken cancellation = default)
     {
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
@@ -93,11 +109,15 @@ public sealed class DeliveryGate
                 if (released is not null) { await released.WaitAsync(limit.Token); }
             }
             await mine.Quiet.Task.WaitAsync(limit.Token);
+            Task[] workers;
+            lock (state) { workers = [.. failedWorkers]; }
+            try { await Task.WhenAll(workers).WaitAsync(limit.Token); }
+            catch (Exception e) when (e is not OperationCanceledException) { return null; }
             lock (state)
             {
                 // Uncertainty forbids a graceful departure, not a recovery stop: with new deliveries
-                // blocked and none in flight, nothing can type again.
-                if (!isTyping)
+                // blocked, none in flight and every failed worker gone, nothing can type again.
+                if (!isTyping && failedWorkers.TrueForAll(w => w.IsCompletedSuccessfully))
                 {
                     var lease = mine;
                     mine = null;
@@ -334,8 +354,9 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
                 }
                 if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery()) is null)
                 {
-                    var result = blocked is null ? throw new InvalidOperationException("no departure refusal was supplied") : blocked();
-                    return Task.FromResult(remember is null ? result : remember(key, result));
+                    // Never remembered: nothing was admitted or typed, and a receipt would refuse the
+                    // same request for RememberFor even after a stop that did not happen.
+                    return Task.FromResult(blocked is null ? throw new InvalidOperationException("no departure refusal was supplied") : blocked());
                 }
                 try { entry = known ?? (requests[key] = new Entry(timeline?.Invoke()) { Owner = owner }); }
                 catch { delivery?.Dispose(); throw; }

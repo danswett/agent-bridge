@@ -512,7 +512,8 @@ In order, for every answer:
 3. One answer or reply per session at a time, through the `DeliveryGate` that replies
    ([host-replies.md](host-replies.md)) share (`busy` for a different request; a resend of
    the request being typed waits for its outcome instead). Every request UUID's outcome,
-   whatever it was (`stale`, `refused` and `busy` included), is remembered for 15 minutes
+   whatever it was (`stale`, `refused` and `busy` included, but not a refusal because the host
+   is stopping, below), is remembered for 15 minutes
   and returned for a resend, which types nothing. So is the outcome of a prompt's first
    answer, for any request that says the same thing (the same fields and text) for the
    same session and question, from the same sender (the channel's peer; a second device
@@ -595,7 +596,12 @@ In order, for every answer:
 
 A planned stop blocks new deliveries and waits up to 15 seconds for admitted typing and its
 confirmation to finish. If that wait expires the host stays running; it does not abandon the
-worker. A resend of an already admitted answer waits for its outcome even during the stop.
+worker, and a restart that was waiting goes on. A resend of an already admitted answer waits for its
+outcome even during the stop. A new request refused because the host is stopping typed nothing,
+so it is not remembered (in memory or in the attempt ledger): if the stop is then refused, the
+same request sent again is delivered. A worker that failed unexpectedly is ended, and stops are
+refused until its exit is proven, so its keys can never land in a later question across a
+restart; a failure whose worker cannot be proven gone refuses stops for the rest of that host run.
 
 Progress and timings work as for replies ([host-replies.md](host-replies.md#progress-and-timings)):
 `received` before step 1, `typed` (never `working`: a question holds the session) once step

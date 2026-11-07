@@ -13,6 +13,14 @@ public enum InjectionStatus
 
 public sealed record InjectionResult(InjectionStatus Status, string Detail);
 
+// What an injector throws when it failed after its worker may have started: Exited completes
+// once that worker is proven gone, and faults when nobody can tell. Any other exception from an
+// injector says nothing about its worker, which is then taken to be possibly still typing.
+public sealed class InjectorWorkerException(Exception inner, Task exited) : Exception(inner.Message, inner)
+{
+    public Task Exited { get; } = exited;
+}
+
 // Types a plan into the console of a process. The real one is the injector worker
 // (WorkerInjector); tests drive the whole answer flow with a fake.
 public interface IConsoleInjector
