@@ -140,10 +140,12 @@ public sealed partial class MainWindow : Window
     void AnnounceLive(UIElement region) =>
         DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(region)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
 
-    // The Updating screen (#1167) takes the window's content: what is under it takes no input,
-    // search included, and its title is said once. Should the install not go ahead, focus goes back
-    // where it was (the bar's button, now Try again, ui.md §9.1 A4). The Updated bar is said once as
-    // it opens.
+    // The Updating screen (#1167) takes the window's content: the rail and the pages under it are
+    // collapsed, out of reach of Tab and a screen reader as well as the pointer, and search is
+    // disabled. Its heading takes focus, so its line is read; failing that (the window not in front),
+    // its polite live region says it. Should the install not go ahead (InstallAsync clears
+    // installing on every way out), all of it comes back and focus goes where it was (the bar's
+    // button, now Try again, ui.md §9.1 A4). The Updated bar is said once as it opens.
     bool showingUpdating;
     bool showingUpdated;
     Control? focusBeforeUpdating;
@@ -153,15 +155,27 @@ public sealed partial class MainWindow : Window
         if (update.IsUpdating != showingUpdating)
         {
             showingUpdating = update.IsUpdating;
-            if (showingUpdating) { focusBeforeUpdating = Root.XamlRoot is { } x ? FocusManager.GetFocusedElement(x) as Control : null; }
-            Nav.IsEnabled = !showingUpdating;
-            SearchBox.IsEnabled = !showingUpdating;
-            if (showingUpdating) { AnnounceLive(UpdatingTitle); }
+            if (showingUpdating)
+            {
+                focusBeforeUpdating = Root.XamlRoot is { } x ? FocusManager.GetFocusedElement(x) as Control : null;
+                Nav.Visibility = Visibility.Collapsed;
+                SearchBox.IsEnabled = false;
+                // Shown here too, not only by its binding, which may follow this handler: focus
+                // needs the heading on screen.
+                UpdatingPane.Visibility = Visibility.Visible;
+                UpdatingPane.UpdateLayout();
+                UpdatingHeading.IsTabStop = true;
+                if (!UpdatingHeading.Focus(FocusState.Programmatic)) { UpdatingHeading.IsTabStop = false; AnnounceLive(UpdatingHeading); }
+            }
             else
             {
+                Nav.Visibility = Visibility.Visible;
+                UpdatingPane.Visibility = Visibility.Collapsed;
+                SearchBox.IsEnabled = true;
+                UpdatingHeading.IsTabStop = false;
                 var back = focusBeforeUpdating;
                 focusBeforeUpdating = null;
-                if (back is { IsLoaded: true, IsEnabled: true, Visibility: Visibility.Visible }) { back.Focus(FocusState.Programmatic); }
+                if (back is { IsLoaded: true, IsEnabled: true, Visibility: Visibility.Visible }) { Root.UpdateLayout(); back.Focus(FocusState.Programmatic); }
             }
         }
         if (update.HasUpdated != showingUpdated)
@@ -170,6 +184,8 @@ public sealed partial class MainWindow : Window
             if (showingUpdated) { AnnounceLive(UpdatedBar); }
         }
     }
+
+    void OnUpdatingHeadingLostFocus(object sender, RoutedEventArgs e) => UpdatingHeading.IsTabStop = false;
 
     void OnCloseUpdated(InfoBar sender, object args) => ViewModel.AppUpdate.CloseUpdated();
 

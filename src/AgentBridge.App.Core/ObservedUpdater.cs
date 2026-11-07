@@ -128,7 +128,7 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
         }
     }
 
-    public void ApplyAndRestart(string version) => inner.ApplyAndRestart(version);
+    public void ApplyAndRestart(string version, Action? handedOver = null) => inner.ApplyAndRestart(version, handedOver);
 
     // Something the state reads besides the updater changed: Settings' install failing.
     public void Noted() => Raise();

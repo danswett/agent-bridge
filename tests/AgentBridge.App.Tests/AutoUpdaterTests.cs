@@ -92,12 +92,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         }
         public string? AppliedVersion;
         // As VelopackUpdater: only the release named, while it is the one ready.
-        public void ApplyAndRestart(string version)
+        public void ApplyAndRestart(string version, Action? handedOver = null)
         {
             OnApply?.Invoke();
             if (ApplyFails is { } e) { throw e; }
             if (Ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded"); }
             (Applied, AppliedVersion) = (true, version);
+            handedOver?.Invoke();
         }
     }
 
@@ -1220,7 +1221,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             return answer;
         }
         public Task DownloadAsync(Action<int> progress) => Task.CompletedTask;
-        public void ApplyAndRestart(string version) { }
+        public void ApplyAndRestart(string version, Action? handedOver = null) { }
     }
     // The host back from a failed install is a gap: without a pause, every gap stopped it again.
     [Fact]
@@ -1384,7 +1385,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     [Fact]
     public void An_update_that_did_not_take_is_counted_and_names_what_holds_the_installation_and_one_that_took_clears_the_count()
     {
-        prefs = prefs with { UpdatedFrom = "0.1.0" };
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateHandedOver = true };
         AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, () => "svchost.exe (DiagTrack, pid 4242)");
 
         Assert.Equal(1, prefs.UpdateFailures);
@@ -2400,7 +2401,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     public void A_start_still_on_the_old_version_says_the_update_couldnt_install_with_Try_again()
     {
         var toasts = new Toasts();
-        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateFailedRelease = "0.2.0" };
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateFailedRelease = "0.2.0", UpdateHandedOver = true };
 
         var said = AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add, time);
 
@@ -2413,11 +2414,29 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Null(prefs.UpdatedFrom);
     }
 
+    // Creative on #1181: "Couldn't install" only when an install was attempted. Recorded, then the
+    // app quit or ended before Update.exe started: the next start, still on this version, says
+    // nothing to the person, only the log.
+    [Fact]
+    public void A_start_after_a_hand_over_that_never_reached_the_installer_says_nothing()
+    {
+        var toasts = new Toasts();
+        updater.Ready = "0.2.0";
+        AutoUpdater.Record(() => prefs, p => prefs = p, updater, windowOpen: true);
+
+        var said = AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add, time);
+
+        Assert.Null(said);
+        Assert.Empty(toasts.Shown);
+        Assert.Null(prefs.UpdatedFrom);
+        Assert.Contains(log, l => l.Contains("was not handed to the installer", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void A_start_on_the_new_version_with_the_window_open_for_it_says_Updated_in_the_window_and_no_failure()
     {
         var toasts = new Toasts();
-        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateFailedRelease = "0.2.0", UpdateWindowOpen = true };
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateFailedRelease = "0.2.0", UpdateWindowOpen = true, UpdateHandedOver = true };
         updater.InstalledVersion = "0.2.0";
 
         var said = AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add, time);
@@ -2442,7 +2461,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         windowOpen = open;
         await StartAsync();
         string? updating = "not read";
-        updater.OnApply = () => updating = auto.Updating;
+        bool? handedOverBefore = null;
+        updater.OnApply = () => (updating, handedOverBefore) = (auto.Updating, prefs.UpdateHandedOver);
         await auto.TickAsync();
 
         Assert.Null(auto.Updating);
@@ -2451,6 +2471,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.True(updater.Applied);
         Assert.Equal(open ? "0.2.0" : null, updating);
         Assert.Equal(open, prefs.UpdateWindowOpen);
+        // The attempt is marked only once the installer has started (Creative on #1181).
+        Assert.Equal(((bool?)false, true), (handedOverBefore, prefs.UpdateHandedOver));
     }
 
     // Asked from another device (#51): the press stands in for the switch, for that release, and
@@ -3070,7 +3092,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             }
             finally { running = false; }
         }
-        public void ApplyAndRestart(string version) { }
+        public void ApplyAndRestart(string version, Action? handedOver = null) { }
     }
 
     [Fact]

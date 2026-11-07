@@ -1105,7 +1105,7 @@ public sealed class AutoUpdater
                 // package while the host stopped, and Velopack applies whatever is ready. Only the
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
-                updater.ApplyAndRestart(to);
+                updater.ApplyAndRestart(to, HandedOver(prefs, save));
             }, preflight);
             return null;
         }
@@ -1113,7 +1113,7 @@ public sealed class AutoUpdater
         // is ready now is offered instead, with its own notes when it is installed.
         catch (PackageReplacedException)
         {
-            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false });
+            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
             installing = false;
             Pending = null;
             checkedAt = null;
@@ -1138,7 +1138,7 @@ public sealed class AutoUpdater
         {
             // Still this version: nothing to announce. Still offered while the updater has it
             // downloaded, for the person to try again when they choose; never tried again by itself.
-            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false });
+            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
             if (updater.Ready != to) { Pending = null; }
             checkedAt = time.GetUtcNow();
             save(UpdateBackoff.Failed(prefs(), checkedAt.Value, to, out var retryAt));
@@ -1164,7 +1164,13 @@ public sealed class AutoUpdater
             UpdateNotes = updater.PendingNotes,
             UpdateRequest = request ?? prefs().UpdateInstallAsked,
             UpdateWindowOpen = windowOpen,
+            UpdateHandedOver = false,
         });
+
+    // Once Update.exe has started (IUpdater.ApplyAndRestart's handedOver): an install was attempted,
+    // so a next start still on this version says it couldn't install (#1167).
+    public static Action HandedOver(Func<AppPreferences> prefs, Action<AppPreferences> save) =>
+        () => save(prefs() with { UpdateHandedOver = true });
 
     // Settings' Update and restart failed, the old release still running: kept for the devices as
     // an automatic install that fails is. The press a device made, if Settings took it on, is left
@@ -1175,7 +1181,7 @@ public sealed class AutoUpdater
         TimeProvider? time = null)
     {
         var result = new UpdateResult { Outcome = UpdateOutcome.Failed, From = updater.InstalledVersion, To = to, Reason = reason, At = (time ?? TimeProvider.System).GetUtcNow() };
-        save(recorded ? prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, LastUpdate = result } : prefs() with { LastUpdate = result });
+        save(recorded ? prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false, LastUpdate = result } : prefs() with { LastUpdate = result });
         (updater as ObservedUpdater)?.Noted();
     }
 
@@ -1191,25 +1197,36 @@ public sealed class AutoUpdater
         var notes = prefs().UpdateNotes;
         var open = prefs().UpdateWindowOpen;
         var attempted = prefs().UpdateFailedRelease;
+        var handedOver = prefs().UpdateHandedOver;
         var now = updater.InstalledVersion;
         var took = now is not null && now != from;
         var at = (time ?? TimeProvider.System).GetUtcNow();
+        // Still this version, and Update.exe never started (the app quit or ended between recording
+        // the install and handing it over): no install was attempted, so there is nothing to tell
+        // the person (Creative on #1181), only the log and the devices.
+        var aborted = !took && !handedOver;
         save(prefs() with
         {
             UpdatedFrom = null,
             UpdateNotes = null,
             UpdateRequest = null,
             UpdateWindowOpen = false,
+            UpdateHandedOver = false,
             LastUpdate = new UpdateResult
             {
                 Outcome = took ? UpdateOutcome.Updated : UpdateOutcome.Failed,
                 From = from,
                 To = now,
-                Reason = took ? null : $"the update did not take: still {now ?? "not installed"}",
+                Reason = took ? null : aborted ? "the update was not handed to the installer: the app ended first" : $"the update did not take: still {now ?? "not installed"}",
                 Request = prefs().UpdateRequest,
                 At = at,
             },
         });
+        if (aborted)
+        {
+            log($"the update from {from}{(attempted is null ? "" : $" to {attempted}")} was not handed to the installer: the app ended first; nothing was installed");
+            return null;
+        }
         if (!took)
         {
             // Update.exe failed after this app's earlier run ended (error 5 moving a held file, say)

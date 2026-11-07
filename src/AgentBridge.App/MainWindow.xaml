@@ -352,9 +352,9 @@
 
         <!-- Updating (#1167): while this machine's update is handed to Velopack, with the window open,
              the window's content is one centred state, on the page's layer (the window colour in high
-             contrast), over the rail and the pages, which take no input meanwhile. No buttons: the
-             app closes for a moment and opens again by itself. The title is a polite live region,
-             said once as the screen appears (MainWindow.FollowUpdating). -->
+             contrast). The rail and the pages under it are collapsed meanwhile, out of reach of the
+             pointer, Tab and a screen reader alike, and search is disabled (MainWindow.FollowUpdating).
+             No buttons: the app closes for a moment and opens again by itself. -->
         <Grid
             x:Name="UpdatingPane"
             Grid.Row="1"
@@ -370,16 +370,27 @@
                     IsActive="{x:Bind ViewModel.AppUpdate.IsUpdating, Mode=OneWay}"
                     AutomationProperties.AutomationId="UpdatingProgress"
                     AutomationProperties.Name="{x:Bind ViewModel.AppUpdate.UpdatingTitle, Mode=OneWay}" />
-                <TextBlock
-                    x:Name="UpdatingTitle"
-                    Style="{StaticResource AbTypeTitle}"
+                <!-- The heading takes keyboard focus as the screen appears, so its line is read
+                     (MainWindow.FollowUpdating); a tab stop only while it has focus. Should focus not
+                     be had (the window not in front), its polite live region says it instead. -->
+                <ContentControl
+                    x:Name="UpdatingHeading"
                     HorizontalAlignment="Center"
-                    TextAlignment="Center"
-                    TextWrapping="Wrap"
+                    IsTabStop="False"
+                    UseSystemFocusVisuals="True"
                     AutomationProperties.AutomationId="UpdatingTitle"
                     AutomationProperties.HeadingLevel="Level1"
                     AutomationProperties.LiveSetting="Polite"
-                    Text="{x:Bind ViewModel.AppUpdate.UpdatingTitle, Mode=OneWay}" />
+                    AutomationProperties.Name="{x:Bind ViewModel.AppUpdate.UpdatingTitle, Mode=OneWay}"
+                    LostFocus="OnUpdatingHeadingLostFocus">
+                    <TextBlock
+                        x:Name="UpdatingTitle"
+                        Style="{StaticResource AbTypeTitle}"
+                        TextAlignment="Center"
+                        TextWrapping="Wrap"
+                        AutomationProperties.AccessibilityView="Raw"
+                        Text="{x:Bind ViewModel.AppUpdate.UpdatingTitle, Mode=OneWay}" />
+                </ContentControl>
                 <TextBlock
                     Style="{StaticResource AbTypeRow}"
                     Foreground="{ThemeResource AbText2}"
