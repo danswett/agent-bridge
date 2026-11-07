@@ -717,6 +717,7 @@ function begin(account) {
   feedbackDialog.addEventListener('close', () => { feedbackBundle = null; });
   feedbackDialog.addEventListener('cancel', (event) => { if (feedbackSending) { event.preventDefault(); } });
   feedbackSend.onclick = async () => {
+    if (feedbackSending) { return; }
     const bundle = renderFeedbackPreview();
     if (!bundle || isSensitiveFeedbackText(bundle.note)) { return; }
     const reason = feedbackBlockReason();

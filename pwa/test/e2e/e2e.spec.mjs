@@ -213,6 +213,68 @@ test('feedback preview shows readable diagnostics and exact data before sending'
   );
 });
 
+test('feedback cannot be sent twice while an upload is in progress and can be retried after failure', async ({ page, context }) => {
+  const { publicKey } = generateKeyPairSync('x25519');
+  buildSite({
+    out: siteDir,
+    relay: relayUrl,
+    feedbackKeyId: 'test-key',
+    feedbackPublicKey: publicKey.export({ format: 'jwk' }).x,
+  });
+  feedbackBuildConfigured = true;
+  const requests = [];
+  let client;
+  await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => {
+    client = ws;
+    const server = ws.connectToServer();
+    server.onMessage((data) => {
+      if (typeof data === 'string') {
+        const message = JSON.parse(data);
+        if (message.t === 'ready') {
+          ws.send(JSON.stringify({ ...message, feedback: { max: 65536 } }));
+          return;
+        }
+      }
+      ws.send(data);
+    });
+    ws.onMessage((data) => {
+      if (typeof data === 'string') {
+        const message = JSON.parse(data);
+        if (message.t === 'feedback-put') {
+          requests.push(message);
+          return;
+        }
+      }
+      server.send(data);
+    });
+  });
+  await signIn(page);
+  await page.click('#nav [data-nav="settings"]');
+  await page.click('#feedback-open');
+  const canEncrypt = await page.evaluate(async () => {
+    try { await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']); return true; } catch { return false; }
+  });
+  test.skip(!canEncrypt, 'This Playwright browser does not support WebCrypto X25519; verify real Safari separately.');
+  const send = page.locator('#feedback-send');
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(send).toBeDisabled();
+  await expect(send).toHaveText('Sending…');
+  await expect.poll(() => requests.length).toBe(1);
+  await page.evaluate(async () => {
+    await document.querySelector('#feedback-send').onclick(new MouseEvent('click'));
+  });
+  expect(requests).toHaveLength(1);
+  client.send(JSON.stringify({ t: 'feedback-result', id: requests[0].id, error: 'unavailable' }));
+  await expect(send).toHaveText('Retry');
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(send).toBeDisabled();
+  await expect.poll(() => requests.length).toBe(2);
+  client.send(JSON.stringify({ t: 'feedback-result', id: requests[1].id, error: 'unavailable' }));
+  await expect(send).toBeEnabled();
+});
+
 test('a machine from before the sessions protocol is reported, ?host= opens a machine directly, and a refused sign-in leaves nothing behind', async ({ page, context }) => {
   const sockets = [];
   await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
