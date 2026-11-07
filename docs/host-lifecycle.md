@@ -30,7 +30,14 @@ Unexpected worker failure makes quiet acquisition fail closed with
 `JournalUncertain` for this process. The shared-gate injector wrapper also marks
 uncertainty before a service can normalize an input-injection exception into a
 result; an unconfirmed helper exit must not become permission to restart. Screen
-reads pass through unmarked: the read-only worker never sends keys.
+reads pass through unmarked: the read-only worker never sends keys. A planned stop
+(`DeliveryGate.PrepareStopAsync`) is not a graceful departure, so the latch alone does
+not refuse it, but it is refused until every injector worker that failed is proven
+exited: the worker injector kills a failed worker's process tree and hands the gate
+its exit (`InjectorWorkerException.Exited`); any other injector exception, or an exit
+that cannot be awaited, refuses stops for the rest of the process. A stop that is
+refused leaves a waiting restart uncancelled; the restart is interrupted only once
+the stop holds the fence.
 
 Quiet means **no delivery/mutation in flight and no typing now**. Running turns,
 questions and session `Working`/`Idle` state are not consulted. #819 and #801

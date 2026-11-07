@@ -34,12 +34,15 @@ public sealed class WorkerInjector : IConsoleInjector
     public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(path)) { return Nothing($"the injector is missing beside the host ({FileName})"); }
-        await One.WaitAsync(cancellationToken);
+        try { await One.WaitAsync(cancellationToken); }
+        // No worker was started, so none can be typing.
+        catch (Exception e) { throw new InjectorWorkerException(e, Task.CompletedTask); }
         try
         {
             if (plan.Proceed?.Invoke() is { } stop) { return Nothing($"stopped before typing: {stop}"); }
             return await RunAsync(processId, plan);
         }
+        catch (Exception e) when (e is not InjectorWorkerException) { throw new InjectorWorkerException(e, Task.CompletedTask); }
         finally { One.Release(); }
     }
 
@@ -190,7 +193,8 @@ public sealed class WorkerInjector : IConsoleInjector
         catch (Exception e) { return Nothing(CouldNotStart(processId, e)); }
         if (process is null) { return Nothing(NotStarted); }
 
-        using (process)
+        var ended = false;
+        try
         {
             var wrote = false;
             string? final = null;
@@ -245,6 +249,36 @@ public sealed class WorkerInjector : IConsoleInjector
                 return Interrupted(closed ? "the session's console closed while the answer was being typed" : $"the injector stopped unexpectedly while typing (exit 0x{exit:X8})");
             }
             return Nothing(closed ? "the session's console closed before anything was typed" : $"the injector stopped before typing (exit 0x{exit:X8})");
+        }
+        catch (Exception e)
+        {
+            // Anything unforeseen leaves the worker perhaps still typing: it is ended, and the
+            // exception carries the proof of its end for the host's stop fence (DeliveryGate).
+            ended = true;
+            throw new InjectorWorkerException(e, await EndAsync(process));
+        }
+        finally
+        {
+            if (!ended) { process.Dispose(); }
+        }
+    }
+
+    // The worker may still be sending keys: end it, and wait a moment for proof. The proof is its
+    // exit, not the kill, so a worker that outlives the wait keeps its handle and is watched until
+    // it goes; one whose exit cannot be awaited at all faults, and is never taken as gone.
+    static async Task<Task> EndAsync(Process process)
+    {
+        try { process.Kill(entireProcessTree: true); }
+        catch (Exception) { }
+        var exited = ExitAsync(process);
+        try { await exited.WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (Exception) { }
+        return exited;
+
+        static async Task ExitAsync(Process process)
+        {
+            try { await process.WaitForExitAsync(); }
+            finally { process.Dispose(); }
         }
     }
 

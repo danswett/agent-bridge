@@ -255,7 +255,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 }
 ```
 
-`machine.id` is the host's device id (S4). `os` is `windows`, `macos` or `linux`. `machine` also carries `dev` and `sessions`, for a status line ([v1-usage.md](v1-usage.md#machine-status)), and `readOnly` while the machine takes nothing from other devices: because its config makes it read-only (`delivery.readOnly`, [host-config.md](../host-config.md)), or because agent-ha-bridge runs there for the same user (design G5). It is the reason, in words, which a client shows on the machine's status line and on its read-only questions. Absent otherwise. The `readOnly` agent-ha-bridge gives and the capabilities it takes away (below) come from one look at it, at most 2 s old, shared by hellos in that time (#607). Nothing is acted on from that look: an answer, reply, stop, launch or update looks again immediately before it acts, and is refused with the reason if agent-ha-bridge started meanwhile. `machine.instance`, when present, names this run of the host: it is new each time the host starts and the same on every connection to that run, so a client can tell a reconnect from a restart before sending a request again that only the first run remembers (a reply, an answer or a launch, `session.launch`, whose outcome was lost).
+`machine.id` is the host's device id (S4). `os` is `windows`, `macos` or `linux`. `machine` also carries `dev` and `sessions`, for a status line ([v1-usage.md](v1-usage.md#machine-status)), and `readOnly` while the machine takes nothing from other devices: because its config makes it read-only (`delivery.readOnly`, [host-config.md](../host-config.md)), or because agent-ha-bridge runs there for the same user (design G5). It is the reason, in words, which a client shows on the machine's status line and on its read-only questions. Absent otherwise. The `readOnly` agent-ha-bridge gives and the capabilities it takes away (below) come from one look at it, at most 2 s old, shared by hellos in that time (#607). Nothing is acted on from that look: an answer, reply, stop, launch or update looks again immediately before it acts, and is refused with the reason if agent-ha-bridge started meanwhile. `machine.instance`, when present, names this run of the host: it is new each time the host starts and the same on every connection to that run, so a client can tell a reconnect from a restart before sending a request again that only the first run remembers (a reply or a launch, `session.launch`, whose outcome was lost). Answer outcomes are also remembered across restarts as described below.
 
 **What went (`machine.restore`).** A host that offers `sessions.restore` keeps a record of the sessions it sees live (#780, [host-launch.md](../host-launch.md#restoring-after-a-reboot-or-a-crash)), and when it starts again says in `machine.restore` what a machine reboot, a crash of the host, or its clean restart took with it, for this run of the host and at most 24 hours:
 
@@ -600,7 +600,7 @@ Answers a session's pending question. Request `data`:
 |---|---|
 | `id` | The session |
 | `question` | The `question.id` the client was shown. The host answers only that question: if the session is no longer asking it, nothing is typed |
-| `request` | A fresh UUID per answer the person gives. A host remembers the outcome of each request, **whatever it was** (`stale`, `busy` and `refused` included), for at least 10 minutes and returns it again for a repeat, typing nothing more. A repeat that arrives while the first copy is still being delivered waits for it and gets the same outcome, never `busy`. A client resending after a lost response or a reconnect therefore never answers twice. After `busy` or `refused`, a client that tries again uses a new `request` |
+| `request` | A fresh UUID per answer the person gives. A host remembers the outcome of each request, **whatever it was** (`stale`, `busy` and `refused` included), for 15 minutes, across host restarts, and returns it again for a repeat, typing nothing more. A repeat that arrives while the first copy is still being delivered waits for it and gets the same outcome, never `busy`. A client resending after a lost response or a reconnect therefore never answers twice. After `busy` or `refused`, a client that tries again uses a new `request` |
 | `fields` | One value per field, by `name` (below). Omit a field to leave it unanswered; `required` fields must be present |
 | `text` | Instead of `fields`, for a question with no fields: the free-text answer |
 | `progress` | Optional, `true` from a client that saw `sessions.progress`: it hears the answer's progress before its result ([Progress](#progress)). Absent, nothing changes |
@@ -636,20 +636,20 @@ with `reason` present for anything but `delivered`, `stage` only on `unconfirmed
 | `outcome` | Meaning | Typed? |
 |---|---|---|
 | `delivered` | The host typed the answer and the agent's transcript recorded it | Yes |
-| `unconfirmed` | The host typed it, but could not confirm the agent recorded it (for example the session stopped answering). It never retries on its own; the client says to check the conversation | Yes |
+| `unconfirmed` | The host typed it, or may have done so before stopping, but could not confirm the agent recorded it. It never retries on its own; the client says to check the conversation | Yes or unknown |
 | `stale` | The session is no longer asking that question: answered at the machine or by another device, or gone | No |
 | `busy` | Another answer or a reply to this session is being delivered | No |
 | `refused` | The host will not type it: an invalid answer, a question the client should not answer remotely (`truncated` or `answerAtMachine`), a prompt the host has already typed an answer into once, an elevated or otherwise unreachable session, an agent or platform without delivery, or agent-ha-bridge active for this user | No |
 
-A client treats an outcome it doesn't know as `unconfirmed`, never as `delivered`. The
-session's next `session.upsert` shows the question gone whatever the outcome.
+A client treats an outcome it doesn't know as `unconfirmed`, never as `delivered`. A question
+still visible after its prompt was claimed is listed `answerAtMachine`, not answerable remotely.
 
 An `unconfirmed` answer also carries `stage`, how far it is known to have got
 ([#467](https://github.com/danswett/agent-bridge/issues/467)):
 
 | `stage` | Meaning |
 |---|---|
-| `typed` | The keys were typed into the prompt and the session has recorded nothing for that question since. It may not have been submitted: Copilot's form once took an answer's last Enter as a new line in its text field |
+| `typed` | The keys were typed into the prompt, or may have been before the host stopped, and the session has recorded nothing for that question since. It may not have been submitted: Copilot's form once took an answer's last Enter as a new line in its text field |
 | `recorded` | The session recorded an answer to that very question, but not the one typed (or the call ended in an error) |
 
 ### Answer reasons
@@ -670,7 +670,7 @@ in [#908](https://github.com/danswett/agent-bridge/issues/908) does not remove t
 or enable typing ([host answers](../host-answers.md)).
 
 Accepted by the session is `delivered`, never a stage. A stage a client does not know reads as
-`typed`; an older host sends none. A repeat of a request whose outcome was `unconfirmed`
+`typed`; an older host sends none. In the same host run, a repeat of a request whose outcome was `unconfirmed`
 reads the session's record of that same question again, typing nothing: an answer recorded
 since (submitted at the machine, or recorded late) comes back `delivered`, and from then on
 stays so, and one recorded differently comes back `recorded`. It never answers a newer
@@ -685,7 +685,11 @@ immediately before typing and confirmed by identity, never by clock, after.
 into that prompt again, whatever the request and across restarts: nobody can say what a
 half-typed prompt holds, and a second answer would land on top of the first. Only an
 attempt that typed nothing (the session's console could not be reached) leaves the prompt
-answerable. A host records the attempt before the first key, and refuses when it cannot.
+answerable. A host records the attempt and request before the first key, and refuses when it cannot.
+If it restarts with a claim but no recorded outcome, a resend within 15 minutes is `unconfirmed`,
+not `refused`; the question is listed `answerAtMachine`. A planned host stop excludes new
+deliveries and waits up to 15 seconds for typing and confirmation; on timeout the host stays
+running rather than leaving a worker to type after it exits.
 
 The same answer sent again for such a prompt under a different request UUID by the **same
 sender** (a phone that was reloaded keeps its UUIDs in memory only) is that request sent

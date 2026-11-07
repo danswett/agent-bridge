@@ -7,7 +7,12 @@ internal sealed class GateTrackedInjector(IConsoleInjector inner, DeliveryGate g
     public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
     {
         try { return await inner.InjectAsync(processId, plan, cancellationToken).ConfigureAwait(false); }
-        catch { gate.MarkJournalUncertain(); throw; }
+        catch (Exception e)
+        {
+            // Only an injector that proves its worker's end lets a planned stop through later.
+            gate.MarkWorkerUncertain(e is InjectorWorkerException failed ? failed.Exited : null);
+            throw;
+        }
     }
 
     // The --screen worker never sends keys, so a failed read proves nothing was typed. Marking

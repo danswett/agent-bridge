@@ -20,7 +20,7 @@ namespace AgentBridge.Host;
 // starts the app again in the background for this host's profile, which starts this host. So
 // handing the release over is followed by this host stopping, as serve does on Ctrl+C.
 sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, Action<string> log, IVelopackLocator? locator = null, ReleaseDiscovery? discovery = null,
-    Func<CancellationToken, Task<string?>>? ready = null) : IHostUpdates
+    Func<CancellationToken, Task<string?>>? ready = null, Func<Task<IDisposable?>>? prepareStop = null) : IHostUpdates
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
     readonly object gate = new();
@@ -160,9 +160,29 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
 
     public void ApplyAndRestart(UpdateRelease release)
     {
+        if (prepareStop is not null) { throw new InvalidOperationException("this update must acquire the delivery stop fence asynchronously"); }
         var found = Of(release);
         if (!found.Downloaded) { throw new InvalidOperationException($"{release.Version} has not been downloaded here"); }
         found.Manager.WaitExitThenApplyUpdates(found.Info.TargetFullRelease, silent: true, restart: true, RestartArguments(profile));
+        log($"updating to {release.Version}: Velopack applies it once this host has exited, and starts the app again, which starts the host");
+        stop();
+    }
+
+    public async Task ApplyAndRestartAsync(UpdateRelease release)
+    {
+        var found = Of(release);
+        if (!found.Downloaded) { throw new InvalidOperationException($"{release.Version} has not been downloaded here"); }
+        var prepared = prepareStop is not null ? await prepareStop() : null;
+        if (prepareStop is not null && prepared is null)
+        {
+            throw new InvalidOperationException("a delivery or typing is still in progress; the update was not started");
+        }
+        try { found.Manager.WaitExitThenApplyUpdates(found.Info.TargetFullRelease, silent: true, restart: true, RestartArguments(profile)); }
+        catch
+        {
+            prepared?.Dispose();
+            throw;
+        }
         log($"updating to {release.Version}: Velopack applies it once this host has exited, and starts the app again, which starts the host");
         stop();
     }

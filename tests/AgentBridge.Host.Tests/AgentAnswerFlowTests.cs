@@ -86,6 +86,94 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Claude.Answered("toolu_1", second++, new Dictionary<string, string> { ["Which database?"] = database, ["Which features?"] = features });
 
     [Fact]
+    public async Task A_resend_after_the_answer_service_restarts_returns_the_recorded_outcome_without_typing()
+    {
+        var request = Request(CodexId, CodexQuestion, new { decision = "approve" });
+        var first = await Answerer().AnswerAsync(request);
+        Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
+        Assert.Single(injector.Plans);
+
+        var afterRestart = await Answerer().AnswerAsync(request);
+        Assert.Equal(first, afterRestart);
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_failure_recording_an_outcome_after_typing_stays_unconfirmed_after_restart()
+    {
+        var request = Request(CodexId, CodexQuestion, new { decision = "approve" });
+        injector.OnInject = _ => Directory.CreateDirectory(ledger + ".tmp");
+
+        var first = await Answerer().AnswerAsync(request);
+        var repeated = await Answerer().AnswerAsync(request);
+
+        Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
+        Assert.Equal(AnswerOutcome.Unconfirmed, repeated.Outcome);
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_resend_during_and_after_a_planned_stop_never_types_the_claimed_answer_twice()
+    {
+        var gate = new DeliveryGate();
+        var blocked = new BlockingInjector();
+        var options = new AnswerOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            ConfirmTimeout = TimeSpan.FromSeconds(2),
+            PollInterval = TimeSpan.FromMilliseconds(25),
+            AttemptLedgerPath = ledger,
+            Time = clock,
+        };
+        var answerer = new AnswerService(gate, source, f.Processes, probe, guard, blocked, options);
+        var request = Request(CodexId, CodexQuestion, new { decision = "approve" });
+        var first = answerer.AnswerAsync(request);
+        await blocked.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var stopping = gate.PrepareStopAsync(TimeSpan.FromSeconds(10));
+        var during = answerer.AnswerAsync(request);
+        Assert.False(stopping.IsCompleted);
+        Assert.False(during.IsCompleted);
+
+        blocked.Release.SetResult();
+        var outcome = await first.WaitAsync(TimeSpan.FromSeconds(10));
+        using var prepared = await stopping.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.NotNull(prepared);
+        Assert.Equal(AnswerOutcome.Unconfirmed, outcome.Outcome);
+        // A repeat within the service says nothing was typed again (#1100); after a restart the recorded outcome is returned.
+        var resent = await during.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal((outcome.Outcome, outcome.Stage), (resent.Outcome, resent.Stage));
+        var again = await answerer.AnswerAsync(request);
+        Assert.Equal((outcome.Outcome, outcome.Stage), (again.Outcome, again.Stage));
+        Assert.Equal(outcome, await new AnswerService(new DeliveryGate(), source, f.Processes, probe, guard, blocked, options).AnswerAsync(request));
+        Assert.Equal(1, blocked.Calls);
+    }
+
+    [Fact]
+    public async Task A_claimed_question_is_published_at_the_machine_without_changing_the_delivery_guard()
+    {
+        var attempts = new AttemptLedger(ledger);
+        await using var published = new SessionSource(f.Options(), f.Processes, answerAttempted: attempts.IsClaimed);
+        await published.RefreshAsync();
+        using var subscription = published.Subscribe();
+        Assert.NotEqual(true, published.Get(CodexId)!.Question!.AnswerAtMachine);
+
+        Assert.Null(attempts.Claim(AttemptLedger.Key("codex", CodexId, "node-1"), Guid.NewGuid()));
+        await published.RefreshAsync();
+
+        Assert.True(published.Get(CodexId)!.Question!.AnswerAtMachine);
+        Assert.NotEqual(true, published.GetForDelivery(CodexId)!.Question!.AnswerAtMachine);
+        Assert.True(published.List().Sessions.Single(s => s.Id == CodexId).Question!.AnswerAtMachine);
+        var upsert = await subscription.Events.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        while (upsert.Name != Events.SessionUpsert || ((Session)upsert.Data).Id != CodexId
+            || ((Session)upsert.Data).Question?.AnswerAtMachine != true)
+        {
+            upsert = await subscription.Events.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        Assert.True(((Session)upsert.Data).Question!.AnswerAtMachine);
+    }
+
+    [Fact]
     public async Task A_Claude_answer_the_transcript_then_records_by_its_tool_use_id_is_delivered()
     {
         injector.OnInject = _ => Fixture.Append(claude, Recorded());
@@ -891,6 +979,21 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         public string? Reason;
 
         public string? Refuse(int processId) => Reason;
+    }
+
+    sealed class BlockingInjector : IConsoleInjector
+    {
+        public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Calls;
+
+        public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref Calls);
+            Entered.SetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return new InjectionResult(InjectionStatus.Typed, "ok");
+        }
     }
 
     sealed class Injector : IConsoleInjector

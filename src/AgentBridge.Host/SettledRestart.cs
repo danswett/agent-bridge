@@ -9,25 +9,41 @@ namespace AgentBridge.Host;
 // A stop wins over a restart (docs/host-lifecycle.md): the settle can take 90 s, and a stop asked
 // for meanwhile (the app's Stop, a shutdown, a sign-out) used to be turned into a restart by the
 // handover that followed. Now the wait ends when the stop arrives, and nothing is handed over.
-public sealed class SettledRestart(Func<TimeSpan, CancellationToken, Task>? settleProbes, Action handover, Action stop, CancellationToken stopping)
+public sealed class SettledRestart(Func<TimeSpan, CancellationToken, Task>? settleProbes, Action handover, Action stop, CancellationToken stopping,
+    Func<CancellationToken, Task<IDisposable?>>? prepareStop = null,
+    Func<CancellationToken, Action, bool>? commitHandover = null)
 {
     public static readonly TimeSpan SettleFor = TimeSpan.FromSeconds(90);
 
-    public async Task RunAsync()
+    public async Task RunAsync(CancellationToken interrupted = default)
     {
-        if (stopping.IsCancellationRequested) { return; }
+        using var linked = interrupted.CanBeCanceled ? CancellationTokenSource.CreateLinkedTokenSource(stopping, interrupted) : null;
+        var ending = linked?.Token ?? stopping;
+        if (ending.IsCancellationRequested) { return; }
         if (settleProbes is not null)
         {
             // WaitAsync too, so a settle that ignores the token still lets the stop through at once.
-            try { await settleProbes(SettleFor, stopping).WaitAsync(stopping); }
-            catch (OperationCanceledException) when (stopping.IsCancellationRequested) { return; }
+            try { await settleProbes(SettleFor, ending).WaitAsync(ending); }
+            catch (OperationCanceledException) when (ending.IsCancellationRequested) { return; }
         }
-        // Read last thing before the handover. A stop landing between this read and
-        // handover() (a few instructions; HostHandover.Request is one volatile write) still
-        // becomes a restart: nothing can withdraw a handover, and every stop path cancels the
-        // token without a lock this could share.
-        if (stopping.IsCancellationRequested) { return; }
-        handover();
+        if (ending.IsCancellationRequested) { return; }
+        IDisposable? prepared;
+        try { prepared = prepareStop is not null ? await prepareStop(ending) : null; }
+        catch (OperationCanceledException) when (ending.IsCancellationRequested) { return; }
+        if (prepareStop is not null && prepared is null) { return; }
+        try
+        {
+            if (commitHandover is not null)
+            {
+                if (!commitHandover(ending, handover)) { prepared?.Dispose(); return; }
+            }
+            else
+            {
+                if (ending.IsCancellationRequested) { prepared?.Dispose(); return; }
+                handover();
+            }
+        }
+        catch { prepared?.Dispose(); throw; }
         stop();
     }
 }

@@ -97,6 +97,7 @@ public sealed class AnswerOptions
     // The host's own record of prompts already typed into (AttemptLedger), in its profile
     // folder; null keeps it in memory only.
     public string? AttemptLedgerPath { get; init; }
+    public AttemptLedger? AttemptLedger { get; init; }
 
     // The host's permissions.remoteApproval: whether Copilot's permission prompts may be
     // approved or denied from another device. On unless the person turns it off.
@@ -160,8 +161,11 @@ public sealed class AnswerService : ISessionAnswerer
         this.options = options;
         this.log = log ?? (_ => { });
         this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
-        requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor, this.gate, Busy);
-        ledger = new AttemptLedger(options.AttemptLedgerPath, options.Time, this.log);
+        ledger = options.AttemptLedger ?? new AttemptLedger(options.AttemptLedgerPath, options.Time, this.log);
+        requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor, this.gate, Busy,
+            key => ledger.Outcome(key) is { } result ? (true, result) : (false, default!),
+            (key, result) => ledger.RecordOutcome(key, result) is null ? result
+                : ledger.HasClaim(key) ? Unconfirmed(DeliveryReasons.CouldNotDeliver) : Refused(DeliveryReasons.CouldNotDeliver));
     }
 
     public bool Available => options.PlatformSupported && probe.Recent() is null;
@@ -353,7 +357,7 @@ public sealed class AnswerService : ISessionAnswerer
         {
             if (!options.PlatformSupported) { return Refused("answering is not supported on this platform yet; answer at the machine"); }
             if (probe.Active() is { } active) { return Refused(active); }
-            var session = source.Get(request.Id);
+            var session = source.GetForDelivery(request.Id);
             if (session is null) { return Stale("the session has ended"); }
             if (session.Question is not { } question || question.Id != request.Question) { return Stale("the session is no longer asking that question"); }
             var permission = session.Agent == AgentKind.Copilot && question.Kind == QuestionKind.Approval;
@@ -503,7 +507,7 @@ public sealed class AnswerService : ISessionAnswerer
         string? Asked()
         {
             if (probe.Active() is { } active) { return active; }
-            if (source.Get(session.Id)?.Question is not { } listed || listed.Id != question.Id) { return "the session is no longer asking that question"; }
+            if (source.GetForDelivery(session.Id)?.Question is not { } listed || listed.Id != question.Id) { return "the session is no longer asking that question"; }
             if (listed.AnswerAtMachine == true) { return AtMachine(session.Agent, listed); }
             if (asked is null) { return "the question was not found in the session's transcript"; }
             var now = asked.Read();
@@ -588,7 +592,7 @@ public sealed class AnswerService : ISessionAnswerer
             }
             (plan, from) = (planned, call.ScannedTo);
 
-            if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
+            if (ledger.Claim(attempt, Guid.Parse(request.Request)) is { } claimed) { return Refused(claimed); }
             (typed, held, partial) = await TypeWordsApartAsync(session.Id, pid, form, plan.Keys, StillAsked, timeline, progress);
             trace.Stage("typed");
         }
@@ -1471,7 +1475,7 @@ public sealed class AnswerService : ISessionAnswerer
             keys = new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Hold)]);
             from = after.ScannedTo;
 
-            if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
+            if (ledger.Claim(attempt, Guid.Parse(request.Request)) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, keys, timeline);
         }
         finally { gate.DoneTyping(); }
@@ -1568,7 +1572,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (planned is null) { return Refused(problem!); }
             (plan, from) = (planned, call.ScannedTo);
 
-            if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
+            if (ledger.Claim(attempt, Guid.Parse(request.Request)) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, plan.Keys, timeline);
         }
         finally { gate.DoneTyping(); }
@@ -1691,7 +1695,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (EscapedRefusal(question, request, confirmed) is { } unconfirmed) { return Refused(unconfirmed); }
             if (marker.Attempted) { return Refused("agent-ha-bridge has already typed an answer into this approval, and it is never typed again"); }
 
-            if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
+            if (ledger.Claim(attempt, Guid.Parse(request.Request)) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, keys, timeline);
         }
         finally { gate.DoneTyping(); }
