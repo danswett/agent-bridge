@@ -2503,7 +2503,7 @@ that survives a failed turn never hides the error behind "Delegating".
 | Code expired | "Code expired" | Try again (a new request) |
 | Signed in, confirming (`recovery: pending`) | "Signed in · waiting for *n* sessions to confirm" | None |
 | Recovered (the host cleared `signInNeeded`) | "Signed in · *n* sessions recovered" for 60 s, then gone; or "Recovered by itself" when no person signed in | None |
-| Refused (the host refused the request) | "Sign-in refused · *reason*" | Try again (a new request) |
+| Refused (the machine refused the request) | "Sign-in refused · *reason*" | Try again (a new request) |
 | Failed | "Sign-in failed" (`signin.done` carries no reason) | Try again (a new request) |
 
 A session that fails sign-in again while confirming returns the banner to Needed, with its
