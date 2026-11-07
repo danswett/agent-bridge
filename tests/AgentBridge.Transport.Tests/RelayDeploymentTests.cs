@@ -212,18 +212,21 @@ public class RelayDeploymentTests
         using var listener = new MeterListener();
         // Relays in other tests share the meter name and run in parallel: listen to this factory only.
         listener.InstrumentPublished = (i, l) => { if (i.Meter.Name == RelayMetrics.MeterName && ReferenceEquals(i.Meter.Scope, factory)) { l.EnableMeasurementEvents(i); } };
-        listener.SetMeasurementEventCallback<double>((i, v, tags, _) => seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], tags.ToArray().FirstOrDefault().Value)));
-        listener.SetMeasurementEventCallback<int>((i, v, tags, _) => seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], tags.ToArray().FirstOrDefault().Value)));
+        listener.SetMeasurementEventCallback<double>((i, v, tags, _) => { lock (seen) { seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], tags.ToArray().FirstOrDefault().Value)); } });
+        listener.SetMeasurementEventCallback<int>((i, v, tags, _) => { lock (seen) { seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], tags.ToArray().FirstOrDefault().Value)); } });
         listener.Start();
 
         metrics.ForwardLatency("app", TimeSpan.FromMilliseconds(12));
         metrics.ConnectTime("host", TimeSpan.FromMilliseconds(40));
         listener.RecordObservableInstruments();
 
-        Assert.Contains(seen, s => s.Instrument == "relay.forward.latency" && s.Value == 12 && (string?)s.Kind == "app");
-        Assert.Contains(seen, s => s.Instrument == "relay.connect.duration" && s.Value == 40 && (string?)s.Kind == "host");
-        Assert.Contains(seen, s => s.Instrument == "relay.sockets.live" && s.Value == 2 && (string?)s.Kind == "host");
-        Assert.All(seen.Where(s => s.Instrument is "relay.forward.latency" or "relay.connect.duration" or "relay.sockets.live"), s => Assert.Equal(["kind"], s.Keys));
+        lock (seen)
+        {
+            Assert.Contains(seen, s => s.Instrument == "relay.forward.latency" && s.Value == 12 && (string?)s.Kind == "app");
+            Assert.Contains(seen, s => s.Instrument == "relay.connect.duration" && s.Value == 40 && (string?)s.Kind == "host");
+            Assert.Contains(seen, s => s.Instrument == "relay.sockets.live" && s.Value == 2 && (string?)s.Kind == "host");
+            Assert.All(seen.Where(s => s.Instrument is "relay.forward.latency" or "relay.connect.duration" or "relay.sockets.live"), s => Assert.Equal(["kind"], s.Keys));
+        }
     }
 
     [Fact]
