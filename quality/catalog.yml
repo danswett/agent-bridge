@@ -365,6 +365,32 @@ suites:
     where: ci.yml product
     status: exists
 
+  - id: review-receipt
+    kind: unit
+    ring: 0
+    select: affected
+    # build/review-receipt.ps1's receipts and refusals (#929), against a stand-in gh and the
+    # synthetic fixtures beside the test: nothing reaches GitHub. Ring 0 on Linux, so a draft runs it.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [build/review-receipt.ps1, build/test-review-receipt.ps1, build/test-review-receipt/**]
+    command: pwsh build/test-review-receipt.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: realtime-lint
+    kind: unit
+    ring: 0
+    select: affected
+    # quality/realtime-lint.ps1, the warning run.ps1 prints for real time in tests (#929), on a
+    # made-up tree.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/realtime-lint.ps1, quality/test-realtime-lint.ps1]
+    command: pwsh quality/test-realtime-lint.ps1
+    where: ci.yml light
+    status: exists
+
   - id: relay-container
     kind: packaging
     ring: 1
