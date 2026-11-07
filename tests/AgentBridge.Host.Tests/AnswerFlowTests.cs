@@ -584,6 +584,39 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Words_in_a_text_field_whose_hints_say_esc_clear_as_on_CLI_1_0_106_still_get_their_Enter()
+    {
+        // Copilot CLI 1.0.106 says "esc clear" in place of "esc cancel" while a text field holds
+        // words (Esc then empties it). Read as no hints of the form, every typed answer was left
+        // unsubmitted, its words on screen (#1123).
+        await AskFormAsync();
+        injector.Screen = () => [.. FormScreen(Picked(), WordsTyped(), moved: Moved())
+            .Select(r => Picked() && WordsTyped() ? r.Replace("esc cancel", "esc clear", StringComparison.Ordinal) : r)];
+        injector.OnInject = () => { if (Submits(injector.Plans[^1].Plan)) { Fixture.Append(events, Recorded("q2", FormAnswer)); } };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
+    }
+
+    [Fact]
+    public async Task An_option_list_whose_hints_say_esc_clear_is_not_read_as_the_questions_form()
+    {
+        // Only a text or number field says "esc clear"; a list that does is not as the CLI draws it.
+        await AskFormAsync();
+        injector.Screen = () => [.. FormScreen(false, false).Select(r => r.Replace("esc cancel", "esc clear", StringComparison.Ordinal))];
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, FormAnswer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=hints@", (await AttemptLineAsync()));
+    }
+
+    [Fact]
     public async Task Words_are_counted_on_the_field_they_go_to_not_on_the_screen_before_the_keys_that_open_it()
     {
         // The option list shows the same words (an earlier answer quoted in the question, say),
@@ -1645,12 +1678,90 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, SixAnswer, question: "q2");
 
         Assert.Equal("refused", outcome);
-        Assert.Contains("no longer showed the question's form", reason);
+        Assert.Contains("too narrow, or the question's titles too long, to check which field is open", reason);
+        Assert.DoesNotContain("no longer showed", reason);
         Assert.Empty(injector.Attempts);
         Assert.Contains("check=bar@", (await AttemptLineAsync()));
     }
 
+    // A three-field form refused live on Copilot CLI 1.0.106 at 120 columns (#1123): titles
+    // of full sentences, each longer than the bar's row on its own.
+    static readonly string[] LongTitles =
+    [
+        "Licence/notice/source packaging (AGPL text, third-party notices, SBOM licence fields, source link; all verified)",
+        "Release signing and provenance (Authenticode on every binary, SLSA attestations, checksums with every new release)",
+        "Support and data handling (who answers the EEA/UK personal-data question, log retention, crash reports: opt-in)",
+    ];
+
+    // Such a form as 1.0.106 draws it in a console 120 wide: its own strip above the form, and a
+    // bar (`_l`) with room for not even one title, so it shows the field's alone (`kHi`), wrapped
+    // over rows, "→" beside its first row as fields follow ("←" as fields come before). `shown`
+    // is the title drawn there, the question's own unless given.
+    List<string> LongScreen(string[] names, bool marked, string? shown = null)
+    {
+        var rows = FieldsScreen(names, message: "Three release decisions.", labels: LongTitles);
+        var at = Array.FindIndex(LongTitles, t => rows.Contains($" {t}:"));
+        if (at < 0) { return rows; }
+        var title = shown ?? LongTitles[at];
+        var lines = Wrapped(marked ? $"[{title}]" : title, 100).ToList();
+        var bar = lines.Select((l, i) => i == 0 ? $" {(at > 0 ? "\u2190 " : "")}{l}{(at < LongTitles.Length - 1 ? " \u2192" : "")}" : $"   {l}");
+        var whole = TabBar(LongTitles, 0, marked: false);
+        return
+        [
+            " Current Sessions Issues Pull requests Gists", "",
+            .. rows.SelectMany(r => r == whole ? bar : [r.StartsWith(" enter accept", StringComparison.Ordinal) ? $" \u2191/\u2193 select \u00B7{r}" : r]),
+        ];
+    }
+
+    async Task<string[]> AskLongAsync(object answer)
+    {
+        await AskFieldsAsync(new
+        {
+            licence = new { type = "string", title = LongTitles[0], @enum = new[] { "Ship", "Hold", "Ask" } },
+            signing = new { type = "string", title = LongTitles[1], @enum = new[] { "Ship", "Hold", "Ask" } },
+            support = new { type = "string", title = LongTitles[2], @enum = new[] { "Ship", "Hold" } },
+        }, 3, answer, "Three release decisions.");
+        return ["licence", "signing", "support"];
+    }
+
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_form_whose_tab_bar_wraps_one_long_title_over_rows_gets_no_keys_and_says_the_window_is_too_narrow(bool marked)
+    {
+        // The bar shows the first title alone, over two rows: the other two titles are hidden,
+        // so the form cannot be told from one differing only in them. Read as one row, this was
+        // refused as a form gone (check=bar@29 live); it is the bar's window, named so.
+        var answer = new { licence = "Ship", signing = "Hold", support = "Ship" };
+        var names = await AskLongAsync(answer);
+        injector.Screen = () => LongScreen(names, marked);
+        Assert.Equal(2, Wrapped(LongTitles[0], 100).Count());
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("too narrow for phone answers to this question", reason);
+        Assert.DoesNotContain("no longer showed", reason);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
+    }
+
+    [Fact]
+    public async Task A_wrapped_tab_bar_showing_another_title_gets_no_keys_and_says_the_field_cannot_be_checked()
+    {
+        var answer = new { licence = "Ship", signing = "Hold", support = "Ship" };
+        var names = await AskLongAsync(answer);
+        injector.Screen = () => LongScreen(names, marked: false, shown: LongTitles[1]);
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("too narrow, or the question's titles too long, to check which field is open", reason);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=bar@", (await AttemptLineAsync()));
+    }
     // The question says "Now here"; the screen shows a form that says "Nowhere" (or
     // "enteraccept") in one place, in a row of its own, every other row the same. Read with
     // their spaces left out, the two read alike, and the keys went to a form that is not this
@@ -2938,6 +3049,31 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.True(Escaped());
         Assert.Empty(AfterEscape());
         Assert.Contains("resume=uncancelled resumes=0", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task A_part_answered_form_is_not_reset_by_an_Esc_where_its_hints_say_esc_clear()
+    {
+        // As above, on Copilot CLI 1.0.106: the text field holding the "9" says "esc clear", and
+        // Esc there would only empty the field, not cancel the form. No Esc goes (#1123).
+        Serve(Answerer(resume: true));
+        await AskFormAsync();
+        DateTime? back = null;
+        injector.OnInject = () => { if (Enters() == 1) { back ??= DateTime.UtcNow.AddMilliseconds(800); } };
+        injector.Screen = () => !Picked() ? FormScreen(false, false, moved: Moved())
+            : back is { } b && DateTime.UtcNow < b ? PermissionPrompt
+            : [.. Framed("Approve the mark?", ["pick", "Feedback (optional)"], 1, [.. Input("9")], colon: false)
+                .Select(r => r.Replace("esc cancel", "esc clear", StringComparison.Ordinal))];
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        Assert.Equal(1, Enters());
+        Assert.DoesNotContain(injector.Attempts, p => p.Sends.Any(s => s.Text == Feedback));
+        Assert.False(Escaped());
+        Assert.Contains("resume=held resumes=0", await AttemptLineAsync());
+        lock (logged) { Assert.Contains(logged, m => m.Contains("esc would only clear a field", StringComparison.Ordinal)); }
     }
 
     [Fact]
