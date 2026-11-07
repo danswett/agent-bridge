@@ -209,6 +209,25 @@ Historical native publication work under #317, superseded by #387's redirect:
 
 ## 3. Shadow gate (#40)
 
+**Scope (owner, 2026-11-03).** The shadow gate is a checkpoint for comparing against HA and
+retiring the legacy bridge. It is **not** a prerequisite for native Agent Bridge delivery. Host,
+app, PWA, relay and native MCP work ships on its own gates:
+- tests, review and security review on the exact head;
+- truthful native product behaviour;
+- a qualified main under the serial merge rule;
+- explicit production approval where that is required.
+
+Nothing native waits for Home Assistant, for a shadow PASS, for the dashboard writer cutover
+(#317/#319/#389) or for retiring the legacy bridge. Those are an optional compatibility and
+retirement lane with their own acceptance criteria. #238 needs its own security review and
+product live checks, not a shadow PASS. #45 uses the product's native agent identity, not HA
+credentials. The VM safety and finish rules below apply to this lane only.
+
+This scoping does **not** authorize stopping another session's VM, interfering with the soak,
+starting paid resources without authority, skipping a required product test, removing installed
+compatibility or making a live cutover. #238's live checks run on its final head, with the owner's
+consent where needed, on a slot agreed with VM-M's owner or another already-authorized test slot.
+
 The gate is coverage-based (design §10, Stage 4). Since DEV-VM1 migrated (11-02 14:16 PT) and
 its shadow host was uninstalled (14:50), **VM-M's scripted soak is the only comparator.** Check it
 from the operator's machine:
@@ -248,11 +267,13 @@ closed. The steps below are the machine and migration steps within it.
 1. **Watch ULTRA.** Its HA entities (`*_dswett_ultra_*`) and the PWA should agree, and answers, replies and launches from the phone and the HA card should all work. Install from the PWA worked on 2026-11-01 (0.1.690 to 0.1.700); Install from the HA card's button is still untried live (#161).
 2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
 3. **Migrate machines while the soak runs** (owner, 2026-11-01): ~~ARM8~~ done. ~~DEV-VM1~~ done 11-02 14:16 PT. Its keep-awake has landed (#224), and the commands are with the owner. Then DASDESK when it's online, and the Mac after P5. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
-4. **The VM soak's gate** (§3): report it when it passes, then run `-Finish` to deallocate.
-5. **Writer migration** (P7, #317): verify the separate HA integration/card
-   replacement (#387), then reversible handover/rollback (#319). Do not resume
-   superseded #318 publication work, bypass G7, or retire HA functionality as a
-   migration prerequisite. Cleanup remains gated under #389.
+4. **The VM soak's gate** (§3; the legacy and HA-comparison lane): report it when it passes,
+   then run `-Finish` to deallocate. No native delivery waits for it.
+5. **Writer migration** (P7, #317; the optional HA compatibility lane): verify the separate
+   HA integration/card replacement (#387), then reversible handover/rollback (#319). Do not
+   resume superseded #318 publication work, bypass G7, or retire HA functionality as a
+   migration prerequisite. Cleanup remains gated under #389. None of it gates host, app, PWA,
+   relay or native MCP work.
 6. **UI design track** (§5).
 7. **Later:** code signing, macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
 
