@@ -91,7 +91,19 @@ resource feedback 'Microsoft.Storage/storageAccounts/blobServices/containers@202
   properties: { publicAccess: 'None' }
 }
 
-// Write-once for the retention: a blob in this container cannot be overwritten or deleted by\n// anyone, the relay included, until its 30 days are up. (The condition on the relay's role below\n// covers read, list and delete; this covers overwrite, which no role condition can express.)\nresource feedbackRetention 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01' = {\n  parent: feedback\n  name: 'default'\n  properties: {\n    immutabilityPeriodSinceCreationInDays: 30\n    allowProtectedAppendWrites: false\n  }\n}\n\n// The backstop behind the relay's own deletes and its 24-hour tickets: every blob goes a day
+// Write-once for the retention: a blob in this container cannot be overwritten or deleted by
+// anyone, the relay included, until its 30 days are up. (The condition on the relay's role below
+// covers read, list and delete; this covers overwrite, which no role condition can express.)
+resource feedbackRetention 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01' = {
+  parent: feedback
+  name: 'default'
+  properties: {
+    immutabilityPeriodSinceCreationInDays: 30
+    allowProtectedAppendWrites: false
+  }
+}
+
+// The backstop behind the relay's own deletes and its 24-hour tickets: every blob goes a day
 // after it was written. Lifecycle runs once a day, so a blob lasts 1 to 2 days at most.
 resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
   parent: account
