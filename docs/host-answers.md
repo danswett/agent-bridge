@@ -122,21 +122,25 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     frame closed by the same rule with nothing drawn under it (the CLI draws a prompt in place
     of its input box and footer, so another form or an input under it is refused, Copilot
     4479698033, and everything below is read inside the frame), the whole question under it
-    (its lines, each wrapped onto as many rows as it takes, compared with every white space
-    left out: 1.0.105's renderer, `gVr`, breaks a line wherever Unicode line breaking allows,
-    after a hyphen or inside a word too long for its row as well as at a space, so a question
-    broken after "ag-" was refused on a steady screen every time it was answered, #1123,
-    #848), with more than one field the tab
-    bar naming exactly this form's fields in order (titles as written, brackets included; the
-    field being answered may be in the bar's own brackets; read with white space left out
-    across the rows it wraps onto inside the frame, and taken wrapped only while every field's
-    heading fits on a row of the frame), the field's own heading on a row
+    (its lines, each wrapped onto as many rows as it takes: each row, its runs of white space
+    read as one space, must be the question's next characters exactly, a space being missing
+    only where a row breaks. 1.0.105's renderer, `gVr`, breaks a line wherever Unicode line
+    breaking allows, so with no space at a break the break must be one it allows: after a
+    hyphen, a dash or a slash, beside a wide character, or inside a word longer than the
+    frame is wide. A question broken after "ag-" was refused on a steady screen every time it
+    was answered, #1123, #848; read with every space left out, "Now here" read as "Nowhere",
+    #1137 review), with more than one field the tab
+    bar naming exactly this form's fields in order, on one row read exactly as `Da` draws it
+    (titles as written, brackets included, each ` <title> ` with a column between; the field
+    being answered may be in the bar's own brackets; the bar fits the console's width less
+    four columns, within the frame, so it is not taken across rows), the field's own heading on a row
     of its own (`<title ?? name>:` for a list, a Yes/No or a multi-select; the title alone,
     with no colon, for a text or number box, `Fxn` and `Lxn`; only the field being answered
     is drawn), and under it the hints
     row (the last row ending "esc cancel", with the rows it wrapped from, every part one of
-    the form's hints, read with white space left out so a narrow window that breaks a hint,
-    or a word of one, across rows still reads, #910): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
+    the form's hints, its spaces read as drawn but a space allowed missing where a row breaks,
+    so a narrow window that breaks a hint, or a word of one, across rows still reads, #910,
+    while "enteraccept" in a row is not "enter accept"): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
     place by "tab next" and "shift+tab prev" when there is more than one, read from that row
     alone, since the question or the words typed may say them too; and no permission prompt
     drawn against the form: one ending just above its frame or drawn under it, read by its
@@ -151,12 +155,15 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     So is a form with two fields of the same heading the tab hints cannot tell apart (both
     between the first and the last): the tab bar marks the field being answered by colour
     alone, which the screen read does not carry, so a repaint while the CLI still showed the
-    first could pass for the second. Headings are compared with every run of whitespace, a
-    no-break space included, as one space and the ends trimmed, a list's colon taken with its
-    title as the CLI draws them together, untrimmed ("Pick one " is "Pick one :"); a title of
+    first could pass for the second. Headings are compared with every run of whitespace as
+    one space and the ends trimmed, a list's colon taken with its title as the CLI draws them
+    together. So a title the screen reads as another's (white space at its ends, a run of
+    spaces, or a space of another kind, such as a no-break space: "Pick one ", "Pick  one"
+    and "Pick one" with a no-break space all read "Pick one", and a form titled either way
+    would pass for the other's, #1137 review) is refused before the first key, as is a title of
     white space alone, drawn as a blank row or a lone colon, or with a line break or another
     control character, which splits its heading across rows while the tab bar's first row
-    still reads as the labels, is refused before the first key. Both, like a `requestedSchema`
+    still reads as the labels. All, like a `requestedSchema`
     encoded as JSON twice (read once, it is text, not a form), are listed `answerAtMachine`,
     so no client offers what would be refused; a field heading the
     console wraps mid-word is refused rather than typed into (#848). With more than one

@@ -93,20 +93,24 @@ public static partial class CopilotFieldSchema
     // the labels, so the field was found missing only once the fields before it had been
     // answered (#510 review, Trust on 412f1b2d). Without a label every field of the form is
     // refused before the first key, rather than this one only once the fields before it have
-    // been answered (#510 review, Copilot 5780656913).
+    // been answered (#510 review, Copilot 5780656913). Nor, last, is one the screen could read as
+    // another's: the field's heading is read with its runs of white space as one space and its
+    // ends trimmed, so "Pick  one", " Pick one" and "Pick\u00A0one" all read as "Pick one", and
+    // a form of either title would pass for the other's at that field (#1137 review). A title of
+    // words between single spaces is read exactly, in the tab bar and the heading alike.
     public static string? Label(string name, JsonElement p) =>
         (!p.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null ? name
         : title.ValueKind == JsonValueKind.String && title.GetString() is { Length: > 0 } text ? text
-        : null) is { } label && !string.IsNullOrWhiteSpace(label) && !label.Any(char.IsControl) ? label : null;
+        : null) is { } label && !string.IsNullOrWhiteSpace(label) && !label.Any(char.IsControl) && Plain(label) ? label : null;
+
+    static bool Plain(string label) =>
+        label == label.Trim() && !label.Any(c => char.IsWhiteSpace(c) && c != ' ') && !label.Contains("  ", StringComparison.Ordinal);
 
     // The heading as drawn, for a label: a text or number box's (`box`) title alone, any other's
     // with a colon (`Fxn`, `Lxn`; `Dxn`, `Oxn`, `Nxn`). Read as "<title>:" for every field, the
     // text field after a list was never found: the list was picked and committed, and the form
     // left half answered (#510 review, Copilot 5780329899). The colon is added to the title as
-    // written before the whitespace is collapsed, as the CLI draws the two together (`t,":"`,
-    // never trimmed): "Pick one " is drawn "Pick one :", which the title collapsed first and the
-    // colon added after read as "Pick one:", and the list was refused after the fields before it
-    // had been committed (Copilot 5780656913).
+    // written, as the CLI draws the two together (`t,":"`, never trimmed).
     public static string Heading(string label, bool box) => Spaces().Replace(label + (box ? "" : ":"), " ").Trim();
 
     // The first field whose heading cannot be told on screen from an earlier one's, or null;

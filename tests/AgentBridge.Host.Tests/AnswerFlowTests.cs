@@ -503,11 +503,16 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         if (labels.Length > 1 && at > 0) { hints.Add("shift+tab prev"); }
         hints.AddRange(["ctrl+d decline", "esc cancel"]);
         List<string> rows = ["────────────────────────", " Copilot needs information.", .. message.Split('\n').SelectMany(line => Wrapped(line, wrap)).Select(l => $" {l}"), ""];
-        if (labels.Length > 1) { rows.AddRange([$" {string.Join("   ", labels.Select((l, i) => marked && i == at ? $"[{l}]" : l))}", ""]); }
+        if (labels.Length > 1) { rows.AddRange([TabBar(labels, at, marked), ""]); }
         // A line break in a title or the question is drawn as rows of their own, as Ink does.
         List<string> drawn = [.. rows, $" {labels[at]}{(colon ? ":" : "")}", .. body, "", $" {string.Join(" · ", hints)}", "────────────────────────"];
         return [.. drawn.SelectMany(r => r.Split('\n', '\r'))];
     }
+
+    // The whole tab bar's row as `Da` draws it at field `at` (inside the frame's paddingX 1):
+    // each label ` <label> `, gaps of one, the selected one `[<label>]` with `marked`.
+    static string TabBar(string[] labels, int at, bool marked) =>
+        $" {string.Join(" ", labels.Select((l, i) => marked && i == at ? $"[{l}]" : $" {l} "))}";
 
     // A line as a console `wrap` columns wide breaks it between words; whole when wrap is 0.
     static IEnumerable<string> Wrapped(string line, int wrap)
@@ -1304,23 +1309,19 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     [Theory]
     // Fields of the same heading the tab hints do tell apart (the first and the last, or the
-    // first and one between), and a title with a no-break space, a run of spaces and spaces at
-    // its ends, drawn as written with its colon after it (`Dxn`: `t,":"`): all answered as usual.
+    // first and one between): answered as usual.
     [InlineData("first-and-last")]
     [InlineData("first-and-between")]
-    [InlineData("spaces")]
-    public async Task Headings_the_screen_tells_apart_or_reads_with_other_spaces_are_answered(string form)
+    public async Task Headings_the_screen_tells_apart_are_answered(string form)
     {
         var three = form == "first-and-between";
         object answer = three ? new { one = "b", two = "c", last = "a" } : new { one = "b", two = "c" };
         string[] names = three ? ["one", "two", "last"] : ["one", "two"];
-        var title = form == "spaces" ? "\u00A0Pick  one " : "Pick";
-        string[] labels = form switch { "spaces" => [title, "two"], "first-and-between" => ["Pick", "Pick", "last"], _ => ["Pick", "Pick"] };
-        var list = new { type = "string", title, @enum = new[] { "a", "b", "c" } };
-        var other = new { type = "string", title = form == "spaces" ? "two" : "Pick", @enum = new[] { "a", "b", "c" } };
+        string[] labels = three ? ["Pick", "Pick", "last"] : ["Pick", "Pick"];
+        var list = new { type = "string", title = "Pick", @enum = new[] { "a", "b", "c" } };
         await AskFieldsAsync(three
-            ? new { one = list, two = other, last = new { type = "string", title = "last", @enum = new[] { "a", "b", "c" } } }
-            : new { one = list, two = other }, names.Length, answer);
+            ? new { one = list, two = list, last = new { type = "string", title = "last", @enum = new[] { "a", "b", "c" } } }
+            : new { one = list, two = list }, names.Length, answer);
         injector.Screen = () => FieldsScreen(names, labels: labels);
         var ch = await OpenAsync();
 
@@ -1439,13 +1440,15 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     [Theory]
     // Copilot CLI 1.0.105 breaks a question's line wherever Unicode line breaking allows: after a
-    // hyphen, as the question refused all morning was (#1123), or inside a word too long for its
-    // row (#848). The form, steady on screen, is still this question's.
-    [InlineData("from ag-\ntest-ops)")]
-    [InlineData("from ag-te\nst-ops)")]
-    public async Task A_three_field_form_whose_question_wraps_inside_a_word_is_still_answered_field_by_field(string drawn)
+    // hyphen, as the question refused all morning was (#1123), inside a word too long for its
+    // row (#848), or between two wide characters. The form, steady on screen, is still this
+    // question's.
+    [InlineData("ag-test-ops", "ag-\ntest-ops")]
+    [InlineData("agentbridgetestoperations", "agentbridgetes\ntoperations")]
+    [InlineData("\u30C6\u30B9\u30C8\u7528\u30E1\u30FC\u30EB", "\u30C6\u30B9\u30C8\u7528\n\u30E1\u30FC\u30EB")]
+    public async Task A_three_field_form_whose_question_wraps_inside_a_word_is_still_answered_field_by_field(string word, string drawn)
     {
-        const string Message = "Which mailbox should the test mail go out from (from ag-test-ops)?";
+        var message = $"Which mailbox should the test mail go out from (from {word})?";
         var answer = new { first = "b", second = "c", feedback = Feedback };
         string[] names = ["first", "second", "feedback"];
         await AskFieldsAsync(new
@@ -1453,8 +1456,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
             first = new { type = "string", @enum = new[] { "a", "b", "c" } },
             second = new { type = "string", @enum = new[] { "a", "b", "c" } },
             feedback = new { type = "string" },
-        }, 3, answer, Message);
-        injector.Screen = () => FieldsScreen(names, message: Message.Replace("from ag-test-ops)", drawn, StringComparison.Ordinal));
+        }, 3, answer, message);
+        injector.Screen = () => FieldsScreen(names, message: message.Replace(word, drawn, StringComparison.Ordinal));
         var ch = await OpenAsync();
 
         var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
@@ -1500,7 +1503,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var rows = FieldsScreen(names, message: SixMessage, labels: SixTitles, wrap: columns - 4);
         var at = Array.FindIndex(SixTitles, t => rows.Contains($" {t}:"));
         if (at < 0) { return rows; }
-        var whole = $" {string.Join("   ", SixTitles)}";
+        var whole = TabBar(SixTitles, 0, marked: false);
         return [.. rows.Select(r => r.Trim('\u2500').Length == 0 && r.Length > 0 ? new string('\u2500', columns - 2) : r == whole ? $" {bar(at)}" : r)];
     }
 
@@ -1615,6 +1618,61 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains("no longer showed the question's form", reason);
         Assert.Empty(injector.Attempts);
         Assert.Contains("check=bar@", (await AttemptLineAsync()));
+    }
+
+    [Theory]
+    // The question says "Now here"; the screen shows a form that says "Nowhere" (or
+    // "enteraccept") in one place, in a row of its own, every other row the same. Read with
+    // their spaces left out, the two read alike, and the keys went to a form that is not this
+    // question (#1137 review). A space is missing only where a row breaks.
+    [InlineData("bar")]
+    [InlineData("message")]
+    [InlineData("hints")]
+    public async Task A_form_that_says_Nowhere_where_the_question_says_Now_here_gets_no_keys(string where)
+    {
+        const string Message = "Put it Now here or archive it?";
+        var answer = new { pick = "b", here = "c", archive = "a" };
+        string[] names = ["pick", "here", "archive"];
+        await AskFieldsAsync(new
+        {
+            pick = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            here = new { type = "string", title = "Now here", @enum = new[] { "a", "b", "c" } },
+            archive = new { type = "string", title = "Archive", @enum = new[] { "a", "b", "c" } },
+        }, 3, answer, Message);
+        injector.Screen = () =>
+        {
+            var rows = FieldsScreen(names, message: where == "message" ? Message.Replace("Now here", "Nowhere", StringComparison.Ordinal) : Message,
+                labels: where == "bar" ? ["pick", "Nowhere", "Archive"] : ["pick", "Now here", "Archive"]);
+            return where == "hints" ? [.. rows.Select(r => r.Replace("enter accept", "enteraccept", StringComparison.Ordinal))] : rows;
+        };
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains($"check={where}@", (await AttemptLineAsync()));
+    }
+
+    [Fact]
+    public async Task A_question_and_titles_with_spaces_are_still_this_questions_where_a_row_breaks_at_one()
+    {
+        const string Message = "Put it Now here or archive it?";
+        var answer = new { pick = "b", here = "c", archive = "a" };
+        string[] names = ["pick", "here", "archive"];
+        await AskFieldsAsync(new
+        {
+            pick = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            here = new { type = "string", title = "Now here", @enum = new[] { "a", "b", "c" } },
+            archive = new { type = "string", title = "Archive", @enum = new[] { "a", "b", "c" } },
+        }, 3, answer, Message);
+        injector.Screen = () => FieldsScreen(names, message: Message.Replace("Now here", "Now\nhere", StringComparison.Ordinal), labels: ["pick", "Now here", "Archive"]);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(3, Enters());
     }
 
     [Theory]
@@ -2195,39 +2253,25 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Theory]
-    // A list's title with white space at either end, or a no-break space, drawn as written with
-    // its colon after it (`Dxn`: `t,":"`, never trimmed): "Pick one " is "Pick one :". The
-    // heading looked for is the title and colon as drawn, so the list after the first field is
-    // found, not refused once the first has been committed (#510 review, Copilot 5780656913).
-    [InlineData("Pick one ")]
-    [InlineData(" Pick one")]
-    [InlineData("Pick\u00A0one\u00A0")]
-    public async Task A_list_whose_title_has_white_space_at_its_ends_is_found_by_its_heading_as_drawn(string title)
-    {
-        var answer = new { first = "b", pick = "c" };
-        string[] names = ["first", "pick"];
-        await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, pick = new { type = "string", @enum = new[] { "a", "b", "c" }, title } }, 2, answer);
-        injector.Screen = () => FieldsScreen(names, labels: ["first", title]);
-        var ch = await OpenAsync();
-
-        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
-
-        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
-        Assert.Equal(2, Enters());
-    }
-
-    [Theory]
     // A later field whose title is white space alone (a text box draws it as a blank row, a list
     // as a lone colon) or holds a line break (the heading split across rows, its colon on the
     // next, while the tab bar's first row still reads as the labels). It is refused before the
     // first key, not found missing once the field before it has been answered (#510 review,
     // Copilot 5780656913; Trust on 412f1b2d), and listed for the machine (Trust on 8335427d).
+    // So is one with white space at its ends, a run of spaces, or a space of another kind: the
+    // screen reads "Pick one ", "Pick  one" and "Pick\u00A0one" as "Pick one", so a form titled
+    // either way would pass for the other's at that field (#1137 review).
     [InlineData("string", "   ")]
     [InlineData("enum", "   ")]
     [InlineData("enum", "Pick\n")]
     [InlineData("enum", "Pick\r")]
     [InlineData("string", "Pick\n")]
-    public async Task A_later_field_titled_with_white_space_alone_or_a_line_break_is_refused_before_any_key(string kind, string title)
+    [InlineData("enum", "Pick one ")]
+    [InlineData("enum", " Pick one")]
+    [InlineData("enum", "Pick  one")]
+    [InlineData("enum", "Pick\u00A0one")]
+    [InlineData("string", "\u00A0Pick  one ")]
+    public async Task A_later_field_whose_title_the_screen_cannot_tell_from_another_is_refused_before_any_key(string kind, string title)
     {
         var answer = new { first = "b", note = kind == "enum" ? "c" : Feedback };
         string[] names = ["first", "note"];

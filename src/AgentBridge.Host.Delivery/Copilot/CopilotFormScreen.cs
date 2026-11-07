@@ -15,9 +15,10 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //     first row inside "Copilot needs information." for ask_user (its source is
 //     Copilot's own, `JD`); an MCP server's reads "<server> needs information.". Under the
 //     heading, the question's message, wrapped by the renderer (`gVr`) wherever Unicode line
-//     breaking allows, so it is compared with its spaces left out.
-//   * Then the fields (`Uxn`): with more than one, a tab bar (`Da`) naming each in order
-//     (` <label> `, the selected one `[<label>]` where colour is unavailable); then only the
+//     breaking allows, so a space may be missing where a row breaks, and nowhere else (Drawn).
+//   * Then the fields (`Uxn`): with more than one, a tab bar (`Da`) naming each in order, on
+//     one row (` <label> ` a column apart, the selected one `[<label>]` where colour is
+//     unavailable); then only the
 //     field being answered, headed on a row of its own: a list, a Yes/No or a multi-select
 //     (`Dxn`, `Oxn`, `Nxn`) as `<title ?? name>:`, a text or number box (`Fxn`, `Lxn`) as
 //     `<title ?? name>` with no colon (and " * <error>" beside it while its input is invalid).
@@ -225,24 +226,17 @@ public static partial class CopilotFormScreen
         var frame = rows;
         rows = [.. rows.Take(bottom)];
         var at = headed[0] + 1;
-        // The whole question, as drawn: its lines, each wrapped onto as many rows as it takes,
-        // compared with every space left out. Copilot CLI 1.0.105's renderer (`gVr`) breaks a line
-        // wherever Unicode line breaking allows (`lineBreakPositions`), not only at a space: after
-        // a hyphen, between CJK characters, inside a word too long for a row. Joined with a space,
-        // "from ag-" over "agent-bridge-ops" read "ag- agent", and every answer to that question
-        // was refused, the form steady on screen (#1123, #848). Left out on both sides, a break
-        // reads the same wherever it falls; what is compared is still every other character the
-        // question has, in order.
-        if (Squeeze(form.Message ?? "") is { Length: > 0 } message)
+        // The whole question, as drawn: its lines, each wrapped onto as many rows as it takes
+        // (Drawn). Copilot CLI 1.0.105's renderer (`gVr`) breaks a line wherever Unicode line
+        // breaking allows (`lineBreakPositions`), not only at a space: after a hyphen, between
+        // CJK characters, inside a word too long for a row. Joined with a space, "from ag-" over
+        // "agent-bridge-ops" read "ag- agent", and every answer to that question was refused, the
+        // form steady on screen (#1123, #848). Only where a row breaks may a space be missing;
+        // every space inside a row is the question's own, so "Now here" is never "Nowhere".
+        if (Lines(form.Message) is { Length: > 0 } message)
         {
-            var shown = "";
-            while (shown != message)
-            {
-                if (at >= rows.Count) { return found.Fail(FormCheck.Message, at, NotForm); }
-                var more = shown + Squeeze(rows[at++]);
-                if (!message.StartsWith(more, StringComparison.Ordinal)) { return found.Fail(FormCheck.Message, at - 1, NotForm); }
-                shown = more;
-            }
+            at = Next(rows, at);
+            if (!Drawn(rows, ref at, message, top.Trim(' ').Length - 2)) { return found.Fail(FormCheck.Message, at, NotForm); }
         }
         if (index < 0 || index >= form.Fields.Count) { return found.Fail(FormCheck.Field, -1, "the question's form has no such field"); }
         if (form.Fields.Any(f => f.Label is null))
@@ -255,27 +249,17 @@ public static partial class CopilotFormScreen
         var heading = Headed(form.Fields[index]);
         if (form.Fields.Count > 1)
         {
-            // Each label as it is, brackets in a title included; the field being answered alone
-            // may be in brackets of the bar's own, where colour is unavailable. Spaces are left
-            // out as in the question: the bar (`Da`) measures itself against the console's width,
-            // not the frame's, so it can wrap inside the frame, and where it breaks is the
-            // renderer's. Too wide for the console, it shows only the labels around the field
-            // being answered, between arrows (Bars), and is refused below. Wrapped, it still
-            // vouches for every later field's heading only while each fits on a row of the
-            // frame, so it is taken so only then.
-            var bars = Bars([.. form.Fields.Select(f => f.Label!)], index);
+            // One row, read exactly as `Da` draws it at this field (Bars): each label as it is,
+            // brackets in a title included, its spaces and the gaps between labels too, so two
+            // titles are never read as one ("Now here" is not "Nowhere"), nor one as two. The
+            // bar fits itself to the console's width less four columns (`$fn`), within the
+            // frame, so it is drawn on one row; one read across rows is not taken. Too wide for
+            // the console, it shows only the labels around the field being answered, between
+            // arrows, and is refused below.
             at = Next(rows, at);
-            var bar = "";
-            var barRows = 0;
-            while (!bars.TryGetValue(bar, out _))
+            if (at >= rows.Count || !Bars([.. form.Fields.Select(f => f.Label!)], index).TryGetValue(rows[at].Trim(' '), out var windowed))
             {
-                var more = at < rows.Count ? bar + Squeeze(rows[at]) : bar;
-                if (more.Length == bar.Length || !bars.Keys.Any(b => b.StartsWith(more, StringComparison.Ordinal)))
-                {
-                    return found.Fail(FormCheck.Bar, at, NotForm);
-                }
-                (bar, barRows) = (more, barRows + 1);
-                at++;
+                return found.Fail(FormCheck.Bar, at, NotForm);
             }
             // Windowed, the bar hides some titles, and a form that differs from this question only
             // in a hidden title reads the same: its message, the labels shown, the field's heading
@@ -283,9 +267,8 @@ public static partial class CopilotFormScreen
             // stays so, so the keys could fill a form that is not this question before the one
             // title that tells them apart showed (#1137 review). Named, it is refused with nothing
             // typed, for the machine, rather than read as no form at all (#1123).
-            if (bars[bar]) { return found.Fail(FormCheck.BarWindow, at - 1, Narrow); }
-            var inside = top.Trim(' ').Length - 2;
-            if (barRows > 1 && form.Fields.Any(f => Headed(f).Length > inside)) { return found.Fail(FormCheck.Bar, at - 1, NotForm); }
+            if (windowed) { return found.Fail(FormCheck.BarWindow, at, Narrow); }
+            at++;
         }
         at = Next(rows, at);
         if (at >= rows.Count || Collapse(rows[at]) != heading) { return found.Fail(FormCheck.FieldHeading, at, off); }
@@ -321,25 +304,25 @@ public static partial class CopilotFormScreen
 
     static int Indent(string row) => row.Length - row.TrimStart(' ').Length;
 
-    // Every way the tab bar (`Da`) can draw the form's labels at field `index`, with its spaces
-    // left out, each with whether it is windowed. Each label ` <label> ` (`wlo`), the field being
-    // answered `[<label>]` where colour is unavailable. Every label while they all fit across the
-    // console (`$fn` counts how many do around the selected one); otherwise `n` of them, the
-    // window `Hfn` centres on the selected one (from `index - n / 2`, kept inside the list), "←"
-    // before it when labels are hidden on the left and "→" after it when on the right. A window
-    // is one of these alone: the selected field in it, the arrows saying exactly which ends are
-    // hidden, and the labels in it in the form's order; read so, it is named (bar-window) rather
-    // than refused as no form at all. Six long titles at 102 columns showed two and "→" (#1123).
-    // A label with an arrow of its own could read as a window it is not, so such a form's bar is
-    // taken only whole.
+    // Every way the tab bar (`Da`) can draw the form's labels at field `index`, as its row reads
+    // with its ends trimmed, each with whether it is windowed. Each label ` <label> ` (`wlo`), the
+    // field being answered `[<label>]` where colour is unavailable, one column between them.
+    // Every label while they all fit across the console (`$fn` counts how many do around the
+    // selected one); otherwise `n` of them, the window `Hfn` centres on the selected one (from
+    // `index - n / 2`, kept inside the list), "← " before it when labels are hidden on the left
+    // and " →" after it when on the right. A window is one of these alone: the selected field in
+    // it, the arrows saying exactly which ends are hidden, and the labels in it in the form's
+    // order; read so, it is named (bar-window) rather than refused as no form at all. Six long
+    // titles at 102 columns showed two and "→" (#1123). A label with an arrow of its own could
+    // read as a window it is not, so such a form's bar is taken only whole.
     static Dictionary<string, bool> Bars(IReadOnlyList<string> labels, int index)
     {
         string Run(int start, int end, bool mark) =>
-            Squeeze(string.Concat(labels.Skip(start).Take(end - start).Select((l, i) => mark && start + i == index ? $"[{l}]" : l)));
+            string.Join(" ", labels.Skip(start).Take(end - start).Select((l, i) => mark && start + i == index ? $"[{l}]" : $" {l} "));
         var bars = new Dictionary<string, bool>(StringComparer.Ordinal)
         {
-            [Run(0, labels.Count, false)] = false,
-            [Run(0, labels.Count, true)] = false,
+            [Run(0, labels.Count, false).Trim(' ')] = false,
+            [Run(0, labels.Count, true).Trim(' ')] = false,
         };
         if (labels.Any(l => l.Contains('\u2190', StringComparison.Ordinal) || l.Contains('\u2192', StringComparison.Ordinal))) { return bars; }
         for (var n = 1; n < labels.Count; n++)
@@ -348,7 +331,7 @@ public static partial class CopilotFormScreen
             var end = start + n;
             foreach (var mark in new[] { false, true })
             {
-                bars.TryAdd((start > 0 ? "\u2190" : "") + Run(start, end, mark) + (end < labels.Count ? "\u2192" : ""), true);
+                bars.TryAdd(((start > 0 ? "\u2190 " : "") + Run(start, end, mark) + (end < labels.Count ? " \u2192" : "")).Trim(' '), true);
             }
         }
         return bars;
@@ -372,40 +355,102 @@ public static partial class CopilotFormScreen
     static (int Start, int End)? Hints(IReadOnlyList<string> rows, int from, int index, int count)
     {
         if (HintParts(rows, from) is not ({ } parts, var start, var end)) { return null; }
-        if (!parts.Contains("enteraccept") || !parts.Contains("ctrl+ddecline") || !parts.Contains("esccancel")) { return null; }
-        return count <= 1 || (parts.Contains("tabnext") == index < count - 1 && parts.Contains("shift+tabprev") == index > 0) ? (start, end) : null;
+        if (!parts.Contains("enter accept") || !parts.Contains("ctrl+d decline") || !parts.Contains("esc cancel")) { return null; }
+        return count <= 1 || (parts.Contains("tab next") == index < count - 1 && parts.Contains("shift+tab prev") == index > 0) ? (start, end) : null;
     }
 
-    // What `Ft` can say under the form (`Uxn`'s hints), each "<key> <action>", read with its
-    // spaces left out, as the rows it wraps onto are joined (HintParts).
-    static readonly HashSet<string> HintItems = new(new[]
-    {
+    // What `Ft` can say under the form (`Uxn`'s hints), each "<key> <action>".
+    static readonly HashSet<string> HintItems = new(
+    [
         "\u2191/\u2193 select", "\u2191/\u2193 adjust", "space toggle", "enter accept", "tab next", "shift+tab prev", "ctrl+d decline", "esc cancel",
-    }.Select(Squeeze), StringComparer.Ordinal);
+    ], StringComparer.Ordinal);
 
     // The hints row's parts: the last row below `from` whose rows up to three above it end the
     // hints ("esc cancel"), and the rows it wrapped from just above it, as far up as every part
     // read is one of the hints. Null when there is no such row. The renderer breaks a row
     // wherever line breaking allows, a hint's own words or a hint itself included: joined with
     // a space, "esc" over "cancel" or "esc can" over "cel" were not the hints, and every answer
-    // in a narrow window was refused (#910). Joined with the spaces left out, a break reads the
-    // same wherever it falls; each part must still be a whole hint.
+    // in a narrow window was refused (#910). Where a row breaks, a space may be missing (Hint);
+    // inside a row, every space is read as drawn, so "enteraccept" is not "enter accept".
     static (List<string> Parts, int Start, int End)? HintParts(IReadOnlyList<string> rows, int from)
     {
         for (var end = rows.Count - 1; end >= from; end--)
         {
-            if (Squeeze(rows[end]).Length == 0) { continue; }
-            if (!Squeeze(string.Concat(rows.Skip(Math.Max(from, end - 3)).Take(end - Math.Max(from, end - 3) + 1))).EndsWith("esccancel", StringComparison.Ordinal)) { continue; }
-            for (var start = Math.Max(from, end - 3); start <= end; start++)
+            if (rows[end].Trim().Length == 0) { continue; }
+            var first = Math.Max(from, end - 3);
+            if (Hint(Joined(rows, first, end).Split('\u00B7')[^1]) != "esc cancel") { continue; }
+            for (var start = first; start <= end; start++)
             {
-                if (Squeeze(rows[start]).Length == 0) { continue; }
-                var parts = Squeeze(string.Concat(rows.Skip(start).Take(end - start + 1))).Split('\u00B7').ToList();
-                if (parts.All(HintItems.Contains)) { return (parts, start, end); }
+                if (rows[start].Trim().Length == 0) { continue; }
+                var parts = Joined(rows, start, end).Split('\u00B7').Select(Hint).ToList();
+                if (parts.All(p => p is not null)) { return ([.. parts.OfType<string>()], start, end); }
             }
             return null;
         }
         return null;
     }
+
+    // Rows `start` to `end`, each read with its runs of white space as one space, a line break
+    // where each row ends.
+    static string Joined(IReadOnlyList<string> rows, int start, int end) =>
+        string.Join('\n', rows.Skip(start).Take(end - start + 1).Select(Collapse));
+
+    // The hint a part of the hints reads as, each row break in it a space or nothing; null when
+    // it is none.
+    static string? Hint(string part)
+    {
+        var bits = part.Trim(' ', '\n').Split('\n');
+        if (bits.Length > 4 || bits.Any(b => b.Length == 0)) { return null; }
+        for (var breaks = 0; breaks < 1 << (bits.Length - 1); breaks++)
+        {
+            var text = bits[0];
+            for (var i = 1; i < bits.Length; i++) { text += (((breaks >> (i - 1)) & 1) == 1 ? " " : "") + bits[i]; }
+            if (HintItems.Contains(text)) { return text; }
+        }
+        return null;
+    }
+
+    // The question as the form draws it, line by line: each line's runs of white space as one
+    // space, its ends trimmed, blank lines left out (Drawn skips the blank rows between lines).
+    static string Lines(string? text) =>
+        string.Join('\n', (text ?? "").Split('\n', '\r').Select(Collapse).Where(l => l.Length > 0));
+
+    // Whether the rows from `at` read as `text` (Lines), each line wrapped onto as many rows as
+    // it takes, rows of `width` columns; `at` is left after its last row, or at the row that
+    // does not read so. Each row, its runs of white space as one space, must be the text's next
+    // characters exactly. Between two rows of a line, the space the row broke at is not drawn;
+    // where there is none, the break must be one line breaking allows (Breaks). Blank rows are
+    // taken only between lines.
+    static bool Drawn(IReadOnlyList<string> rows, ref int at, string text, int width)
+    {
+        var p = 0;
+        while (true)
+        {
+            if (at >= rows.Count) { return false; }
+            var row = Collapse(rows[at]);
+            if (row.Length == 0 || row.Length > text.Length - p || string.CompareOrdinal(text, p, row, 0, row.Length) != 0) { return false; }
+            (p, at) = (p + row.Length, at + 1);
+            if (p == text.Length) { return true; }
+            if (text[p] == '\n') { (p, at) = (p + 1, Next(rows, at)); }
+            else if (text[p] == ' ') { p++; }
+            else if (!Breaks(text, p, width)) { return false; }
+        }
+    }
+
+    // Whether a row may break before `text[p]` with no space there: after a hyphen, a dash or a
+    // slash, beside a wide character (CJK, an emoji), or inside a word longer than a row.
+    static bool Breaks(string text, int p, int width)
+    {
+        if (text[p - 1] is '-' or '/' or '\u2010' or '\u2013' or '\u2014' || Wide(text[p - 1]) || Wide(text[p])) { return true; }
+        var (start, end) = (p, p);
+        while (start > 0 && text[start - 1] is not (' ' or '\n')) { start--; }
+        while (end < text.Length && text[end] is not (' ' or '\n')) { end++; }
+        return end - start > width;
+    }
+
+    static bool Wide(char c) =>
+        char.IsSurrogate(c) || c is >= '\u1100' and <= '\u115F' or >= '\u2E80' and <= '\uA4CF' or >= '\uAC00' and <= '\uD7A3'
+            or >= '\uF900' and <= '\uFAFF' or >= '\uFE30' and <= '\uFE4F' or >= '\uFF00' and <= '\uFF60' or >= '\uFFE0' and <= '\uFFE6';
 
     static int Next(IReadOnlyList<string> rows, int from)
     {
@@ -414,9 +459,6 @@ public static partial class CopilotFormScreen
     }
 
     static string Collapse(string text) => Spaces().Replace(text, " ").Trim();
-
-    // Text with every space left out, so that where a row was broken does not change it.
-    static string Squeeze(string text) => Spaces().Replace(text, "");
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex Spaces();
