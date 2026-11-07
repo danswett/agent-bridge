@@ -40,6 +40,30 @@ test('dragging the list divider sets the list pane to where the pointer is, and 
   expect(await stored(page)).toEqual({ list: 380 });
 });
 
+test('a drag the system cancels puts the pane back and saves nothing, even with a frame queued', async ({ page }) => {
+  await openDemo(page);
+  const box = await page.locator(list).boundingBox();
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  // Move and cancel in one task, so the frame the move queued is still waiting at the cancel.
+  await page.evaluate(({ sel, x, y }) => {
+    const el = document.querySelector(sel);
+    el.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: x + 60, clientY: y, bubbles: true }));
+    el.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 1, bubbles: true }));
+  }, { sel: list, x, y });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  expect(await width(page, '#list-pane')).toBe(320);
+  await expect(page.locator(list)).toHaveAttribute('aria-valuenow', '320');
+  await page.mouse.up();
+  expect(await stored(page)).toBeNull();
+  await page.locator(list).focus();
+  await page.keyboard.press('ArrowRight');
+  expect(await width(page, '#list-pane')).toBe(336);
+  expect(await stored(page)).toEqual({ list: 336 });
+});
+
 test('dragging the inspector divider left makes the inspector wider', async ({ page }) => {
   await openDemo(page);
   expect(await width(page, insp)).toBe(336);

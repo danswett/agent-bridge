@@ -74,6 +74,9 @@ export class PaneWidths {
   // save: false while a drag moves, which writes the device's storage once, where it ends.
   set(which, width, save = true) { this.#kept[which] = width; if (save) { this.#save(); } }
   reset(which) { delete this.#kept[which]; this.#save(); }
+  // What a drag started from, put back unsaved when the drag is cancelled (undefined: the default).
+  kept(which) { return this.#kept[which]; }
+  restore(which, width) { if (width === undefined) { delete this.#kept[which]; } else { this.#kept[which] = width; } }
 
   #save() {
     try {

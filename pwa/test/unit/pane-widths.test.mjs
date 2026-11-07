@@ -70,6 +70,18 @@ test('widths kept are read back, held to their limits, and a reset forgets one',
   assert.equal(s.m.has(PANES_KEY), false);
 });
 
+test('a width held in memory during a drag can be put back without saving', () => {
+  const s = memory(JSON.stringify({ list: 400 }));
+  const w = new PaneWidths({ storage: s });
+  w.set('list', 300, false);
+  w.set('inspector', 500, false);
+  w.restore('list', 400);
+  w.restore('inspector', undefined);
+  assert.equal(w.list, 400);
+  assert.equal(w.inspector, 336);
+  assert.deepEqual(JSON.parse(s.m.get(PANES_KEY)), { list: 400 });
+});
+
 test('storage that is blocked or holds rubbish leaves the defaults and does not throw', () => {
   const blocked = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); }, removeItem() { throw new Error('blocked'); } };
   const w = new PaneWidths({ storage: blocked });

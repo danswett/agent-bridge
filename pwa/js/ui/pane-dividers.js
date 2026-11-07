@@ -66,7 +66,7 @@ export class PaneDividers {
     el.addEventListener('pointerdown', (e) => {
       if (e.button > 0) { return; }
       this.total = this.root.clientWidth;
-      drag = { id: e.pointerId, x: e.clientX, from: this.shownNow[which], width: this.shownNow[which], moved: false };
+      drag = { id: e.pointerId, x: e.clientX, from: this.shownNow[which], width: this.shownNow[which], moved: false, kept: this.widths.kept(which) };
       el.setPointerCapture?.(e.pointerId);
       el.dataset.dragging = 'true';
       e.preventDefault();
@@ -98,7 +98,19 @@ export class PaneDividers {
       else { tap = { at: now, x: e.clientX }; }
     };
     el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', (e) => { if (drag?.id === e.pointerId) { drag = null; delete el.dataset.dragging; this.#apply(); } });
+    el.addEventListener('pointercancel', (e) => {
+      if (!drag || e.pointerId !== drag.id) { return; }
+      const { moved, kept } = drag;
+      drag = null;
+      delete el.dataset.dragging;
+      el.releasePointerCapture?.(e.pointerId);
+      // The drag never happened: no queued frame may commit its width, and the one before shows again.
+      // The drag never happened: no queued frame may commit its width, and the one before shows again.
+      if (this.frame) { this.win.cancelAnimationFrame?.(this.frame); this.frame = 0; }
+      this.#pending = null;
+      if (moved) { this.widths.restore(which, kept); }
+      this.#apply();
+    });
     el.addEventListener('dblclick', () => this.#reset(which));
     el.addEventListener('keydown', (e) => {
       const now = this.shownNow[which] || PANES[which];
