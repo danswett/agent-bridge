@@ -332,7 +332,7 @@ public sealed class AutoUpdater
         }
         // Install between turns: the gap settling, or the backstop's time.
         var now = time.GetUtcNow();
-        if (InstallFailedLately(now)) { return $"update failed, retrying at {UpdateBackoff.RetryAt(prefs(), now, Pending)!.Value.ToLocalTime():t}, or at Restart to update"; }
+        if (FailedRetryAt(now) is { } retryAt) { return $"update failed, retrying at {retryAt.ToLocalTime():t}, or at Restart to update"; }
         var at = ForcedAt(now);
         var until = at > now ? $"; it installs anyway at {at.ToLocalTime():g} unless a question is waiting then" : "";
         return Idle ? "it installs between turns, as soon as this machine's sessions are read and still idle"
@@ -515,7 +515,17 @@ public sealed class AutoUpdater
         return null;
     }
 
-    bool InstallFailedLately(DateTimeOffset now) => UpdateBackoff.RetryAt(prefs(), now, Pending) is not null;
+    bool InstallFailedLately(DateTimeOffset now) => FailedRetryAt(now) is not null;
+
+    // A kept retry time beyond Cap (the clock moved back) is written back as Cap from now the first
+    // time it is seen, so the deadline stays fixed and elapses instead of moving on every check.
+    DateTimeOffset? FailedRetryAt(DateTimeOffset now)
+    {
+        var p = prefs();
+        var capped = UpdateBackoff.Capped(p, now);
+        if (!ReferenceEquals(capped, p)) { save(capped); }
+        return UpdateBackoff.RetryAt(capped, now, Pending);
+    }
 
     // A session went idle, or the snapshot was read again: set to Install between turns with a
     // release ready, a gap starts, and the tick is due once it has settled.

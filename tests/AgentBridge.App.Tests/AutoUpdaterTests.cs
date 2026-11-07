@@ -1310,6 +1310,33 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_retry_time_far_in_the_future_is_capped_once_so_it_stays_put_and_then_elapses()
+    {
+        InstallBetweenTurns();
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        var start = time.GetUtcNow();
+        prefs = prefs with { UpdateFailures = 3, UpdateRetryAt = start + TimeSpan.FromDays(3) };
+
+        await auto.TickAsync();
+        var capped = prefs.UpdateRetryAt;
+        var waiting = auto.State.Waiting;
+        Assert.Equal(start + UpdateBackoff.Cap, capped);
+        Assert.StartsWith("update failed, retrying at", waiting);
+
+        time.Advance(TimeSpan.FromMinutes(5));
+        await auto.TickAsync();
+        Assert.Equal(capped, prefs.UpdateRetryAt);
+        Assert.Equal(waiting, auto.State.Waiting);
+        Assert.False(updater.Applied);
+
+        time.Advance(UpdateBackoff.Cap);
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await Wait.UntilAsync(() => updater.Applied, "the install once the capped time has passed", TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_newer_release_is_not_held_by_the_backoff_of_the_release_that_failed()
     {
         InstallBetweenTurns();
@@ -1332,13 +1359,16 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
-    public void A_retry_time_further_off_than_the_cap_is_the_cap_from_now_and_another_release_starts_its_count_again()
+    public void A_retry_time_further_off_than_the_cap_is_saved_as_the_cap_from_now_and_another_release_starts_its_count_again()
     {
         var now = DateTimeOffset.UtcNow;
         var p = new AppPreferences { UpdateFailures = 4, UpdateRetryAt = now + TimeSpan.FromDays(3), UpdateFailedRelease = "0.2.0" };
 
-        Assert.Equal(now + UpdateBackoff.Cap, UpdateBackoff.RetryAt(p, now, "0.2.0"));
-        Assert.Null(UpdateBackoff.RetryAt(p, now, "0.3.0"));
+        var capped = UpdateBackoff.Capped(p, now);
+        Assert.Equal(now + UpdateBackoff.Cap, capped.UpdateRetryAt);
+        Assert.Same(capped, UpdateBackoff.Capped(capped, now + TimeSpan.FromMinutes(5)));
+        Assert.Equal(now + UpdateBackoff.Cap, UpdateBackoff.RetryAt(capped, now, "0.2.0"));
+        Assert.Null(UpdateBackoff.RetryAt(capped, now, "0.3.0"));
 
         UpdateBackoff.Failed(p, now, "0.3.0", out var retryAt);
         Assert.Equal(now + UpdateBackoff.First, retryAt);

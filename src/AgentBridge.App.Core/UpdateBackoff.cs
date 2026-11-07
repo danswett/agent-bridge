@@ -31,13 +31,19 @@ public static class UpdateBackoff
             ? p with { UpdateFailedRelease = release }
             : p with { UpdateFailures = null, UpdateRetryAt = null, UpdateFailedRelease = release };
 
+    // A time further off than Cap means the clock moved back: it becomes Cap from now, to be saved
+    // once. Returning a fresh now + Cap on every call would keep moving it and never let it elapse.
+    // Returns p itself when nothing changes.
+    public static AppPreferences Capped(AppPreferences p, DateTimeOffset now) =>
+        p.UpdateRetryAt is { } retry && retry > now + Cap ? p with { UpdateRetryAt = now + Cap } : p;
+
     // When the pending release may be tried again by itself, or null if nothing holds it: only the
-    // release that failed waits, and a time further off than Cap (the clock moved back) is Cap on.
+    // release that failed waits. Run p through Capped (and save it) first.
     public static DateTimeOffset? RetryAt(AppPreferences p, DateTimeOffset now, string? pending)
     {
         if (p.UpdateRetryAt is not { } retry || now >= retry) { return null; }
         if (p.UpdateFailedRelease is not null && p.UpdateFailedRelease != pending) { return null; }
-        return retry > now + Cap ? now + Cap : retry;
+        return retry;
     }
 }
 
