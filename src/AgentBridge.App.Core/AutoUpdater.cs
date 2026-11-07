@@ -73,9 +73,11 @@ public sealed class AutoUpdater
     // between turns still waits this long for a gap before the backstop installs: devices see
     // "Needs you" for more than a minute, and a turn under way gets the chance to end (#800 review).
     public static readonly TimeSpan ReturnGrace = TimeSpan.FromMinutes(20);
-    // Set to Install between turns, a release whose install failed is not installed by itself again
-    // for this long: every gap would otherwise stop the host for it again (the host back from the
-    // failure is a gap). A person's Restart to update, or a device's Install, still may at once.
+    // Set to Install between turns, an install that failed is not tried by itself again for a
+    // while that doubles with each failure up to this (UpdateBackoff, kept in the preferences, as a
+    // failed update restarts the app): every gap would otherwise stop the host for it again (the
+    // host back from the failure is a gap). A person's Restart to update, or a device's Install,
+    // still may at once.
     public static readonly TimeSpan InstallAgainAfter = TimeSpan.FromHours(1);
     // A press within this of the last check is answered from it, not by asking the feed again,
     // so a device pressing Check over and over costs the feed nothing.
@@ -128,6 +130,9 @@ public sealed class AutoUpdater
     // The app's UI thread, where the sessions this reads change: the settle timer's tick is posted
     // there, never run on the timer's own thread (Copilot, r4488279939).
     readonly IUiDispatcher ui;
+    // Names what holds files in the installation, or null: asked before the host is stopped
+    // (HostManager.StopAndApplyAsync), so an update that cannot replace them stops nothing.
+    readonly Func<string?>? preflight;
     DateTimeOffset? checkedAt;
     // The last check's end, and its failure if it failed, which a press soon after is answered with.
     DateTimeOffset? lastCheckAt;
@@ -148,9 +153,6 @@ public sealed class AutoUpdater
     // at the next minute's, which a short gap between turns would not last to.
     readonly object settleGate = new();
     ITimer? settle;
-    // The release whose install last failed, and when (InstallAgainAfter).
-    string? failedInstall;
-    DateTimeOffset failedInstallAt;
     // When the release found or downloaded first was (a newer one taking its place keeps it, so
     // releases every half hour cannot put "Needs you" off for good), and since when the person has
     // allowed updates without a break: the machine's own refusals never restart that (#800).
@@ -191,8 +193,10 @@ public sealed class AutoUpdater
     // A release downloaded is said by the app's banner and Settings, never a toast: toasts are
     // for what waits on the person, and an update can wait (Creative, #231 for a found agent).
     public AutoUpdater(IUpdater updater, HostConnection host, HostManager manager, Func<AppPreferences> prefs, Action<AppPreferences> save, Action<string> log,
-        Func<int?, string?> othersInPackage, TimeProvider? time = null, IUiDispatcher? ui = null)
+        Func<int?, string?> othersInPackage,         TimeProvider? time = null, IUiDispatcher? ui = null,
+                Func<string?>? preflight = null)
     {
+                this.preflight = preflight;
         this.updater = updater as ObservedUpdater ?? new ObservedUpdater(updater, time);
         this.updater.Changed += Changed;
         seenSource = this.updater.Source;
@@ -328,7 +332,7 @@ public sealed class AutoUpdater
         }
         // Install between turns: the gap settling, or the backstop's time.
         var now = time.GetUtcNow();
-        if (InstallFailedLately(now)) { return $"installing it failed, so it is installed by itself again after {(failedInstallAt + InstallAgainAfter).ToLocalTime():t}, or at Restart to update"; }
+        if (InstallFailedLately(now)) { return $"update failed, retrying at {prefs().UpdateRetryAt!.Value.ToLocalTime():t}, or at Restart to update"; }
         var at = ForcedAt(now);
         var until = at > now ? $"; it installs anyway at {at.ToLocalTime():g} unless a question is waiting then" : "";
         return Idle ? "it installs between turns, as soon as this machine's sessions are read and still idle"
@@ -511,7 +515,7 @@ public sealed class AutoUpdater
         return null;
     }
 
-    bool InstallFailedLately(DateTimeOffset now) => failedInstall is { } failed && failed == Pending && now - failedInstallAt < InstallAgainAfter;
+    bool InstallFailedLately(DateTimeOffset now) => prefs().UpdateRetryAt is { } retry && now < retry;
 
     // A session went idle, or the snapshot was read again: set to Install between turns with a
     // release ready, a gap starts, and the tick is due once it has settled.
@@ -1074,7 +1078,7 @@ public sealed class AutoUpdater
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
                 updater.ApplyAndRestart(to);
-            });
+            }, preflight);
             return null;
         }
         // Replaced while the host stopped: nothing failed, and the host is back (HostManager). What
@@ -1109,8 +1113,8 @@ public sealed class AutoUpdater
             save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null });
             if (updater.Ready != to) { Pending = null; }
             checkedAt = time.GetUtcNow();
-            (failedInstall, failedInstallAt) = (to, checkedAt.Value);
-            log($"auto-update: installing {to} failed: {e.Message}");
+            save(UpdateBackoff.Failed(prefs(), checkedAt.Value, out var retryAt));
+            log($"auto-update: installing {to} failed: {e.Message}; update failed, retrying at {retryAt.ToLocalTime():t}");
             installing = false;
             // Kept for the devices whether a device asked for it or the person here did: the old
             // release still runs, and no later start would say so.
@@ -1143,12 +1147,13 @@ public sealed class AutoUpdater
     // The first start after an update: a toast saying what changed, once, and how it went kept for
     // the account's other devices (State.Last), the press it answers with it.
     public static void Announce(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, IToastSink sink, Action<string> log,
-        TimeProvider? time = null)
+        TimeProvider? time = null, Func<string?>? blockers = null)
     {
         if (prefs().UpdatedFrom is not { } from) { return; }
         var notes = prefs().UpdateNotes;
         var now = updater.InstalledVersion;
         var took = now is not null && now != from;
+        var at = (time ?? TimeProvider.System).GetUtcNow();
         save(prefs() with
         {
             UpdatedFrom = null,
@@ -1161,14 +1166,22 @@ public sealed class AutoUpdater
                 To = now,
                 Reason = took ? null : $"the update did not take: still {now ?? "not installed"}",
                 Request = prefs().UpdateRequest,
-                At = (time ?? TimeProvider.System).GetUtcNow(),
+                At = at,
             },
         });
         if (!took)
         {
-            log($"the update from {from} did not take: still {now ?? "not installed"}");
+            // Update.exe failed after this app's earlier run ended (error 5 moving a held file, say)
+            // and started this one: the failure and its next try are kept (UpdateBackoff), and what
+            // holds the files is named, best effort.
+            save(UpdateBackoff.Failed(prefs(), at, out var retryAt));
+            string? held = null;
+            try { held = blockers?.Invoke(); }
+            catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { }
+            log($"the update from {from} did not take: still {now ?? "not installed"}{(held is null ? "" : $"; {UpdateBlockedException.Prefix}{held}")}; update failed, retrying at {retryAt.ToLocalTime():t}");
             return;
         }
+        save(UpdateBackoff.Cleared(prefs()));
         log($"updated from {from} to {now}");
         if (prefs().Toasts) { sink.Show(new ToastNotice("agent-bridge-updated", ToastXml.Updated(now!, from, notes), Quiet: true)); }
     }
