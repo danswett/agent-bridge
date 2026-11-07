@@ -305,7 +305,7 @@ runtime's ping/pong timeout ended it. The runtime words that only in its excepti
 
 To produce each kind of end against staging, with the token key in `RELAY_SMOKE_TOKEN_KEY` (never echoed):
 `relay-smoke host-probe --relay <url> --mode kill|blackhole|hold --hold <s> [--count N]` prints its
-throwaway account id and device ids with UTC times; `--mode observe --account <id> --hold <s>`
+throwaway account id and device ids with UTC times; it needs https and refuses the production relay hosts unless `--allow-production` is passed; `--mode observe --account <id> --hold <s>`
 prints the roster and presence changes an app of that account sees.
 
 ## History

@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using AgentBridge.Relay;
+using AgentBridge.RelaySmoke;
 using Xunit;
 
 namespace AgentBridge.Transport.Tests;
@@ -42,5 +43,23 @@ public class DisconnectCauseTests
     {
         Assert.StartsWith("exception=OperationCanceledException wserror=none close=none",
             DisconnectCause.Describe(new OperationCanceledException(), null));
+    }
+
+    [Theory]
+    [InlineData("http://agent-bridge-relay-staging.icyflower-4f71155d.westus2.azurecontainerapps.io", false)]
+    [InlineData("http://localhost:5000", true)]
+    [InlineData("https://relay.bad-duck.com", false)]
+    [InlineData("https://RELAY.bad-duck.com", false)]
+    [InlineData("https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io", false)]
+    public void The_host_probe_refuses_cleartext_and_production_relays(string url, bool allowProduction)
+    {
+        Assert.NotNull(HostProbe.CheckRelay(new Uri(url), allowProduction));
+    }
+
+    [Fact]
+    public void The_host_probe_takes_staging_and_a_production_relay_only_when_allowed()
+    {
+        Assert.Null(HostProbe.CheckRelay(new Uri("https://agent-bridge-relay-staging.icyflower-4f71155d.westus2.azurecontainerapps.io"), false));
+        Assert.Null(HostProbe.CheckRelay(new Uri("https://relay.bad-duck.com"), true));
     }
 }

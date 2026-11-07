@@ -18,8 +18,29 @@ namespace AgentBridge.RelaySmoke;
 // so the lines can be matched against the relay's logs.
 public static class HostProbe
 {
-    public const string Usage = "usage: relay-smoke host-probe --relay <https://...> --mode kill|blackhole|hold|observe [--hold <seconds>] [--count N] [--account <id>]\n" +
+    public const string Usage = "usage: relay-smoke host-probe --relay <https://...> --mode kill|blackhole|hold|observe [--hold <seconds>] [--count N] [--account <id>] [--allow-production]\n" +
         "  RELAY_SMOKE_TOKEN_KEY (base64) is required. A probe prints its account id; pass it as --account to observe to watch the same account.";
+
+    const string Staging = "https://agent-bridge-relay-staging.icyflower-4f71155d.westus2.azurecontainerapps.io";
+
+    // Killing or blackholing sockets is for staging; a production relay is refused unless the
+    // person says so, and a cleartext relay is never used, since the token would cross it.
+    static readonly string[] ProductionHosts =
+    [
+        "relay.bad-duck.com",
+        "agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io",
+        "relay.slipgates.com",
+    ];
+
+    public static string? CheckRelay(Uri relay, bool allowProduction)
+    {
+        if (relay.Scheme != Uri.UriSchemeHttps) { return $"the relay must be https (staging: {Staging})"; }
+        if (!allowProduction && ProductionHosts.Contains(relay.IdnHost, StringComparer.OrdinalIgnoreCase))
+        {
+            return $"{relay.IdnHost} is a production relay; use staging ({Staging}), or pass --allow-production";
+        }
+        return null;
+    }
 
     public static async Task<int> RunAsync(string[] args, TextWriter output)
     {
@@ -36,6 +57,11 @@ public static class HostProbe
             || !int.TryParse(Arg("--count") ?? "1", out var count) || count is < 1 or > 20)
         {
             Console.Error.WriteLine(Usage);
+            return 2;
+        }
+        if (CheckRelay(relay, args.Contains("--allow-production")) is { } refused)
+        {
+            Console.Error.WriteLine(refused);
             return 2;
         }
         var account = Arg("--account") ?? "smoke-" + RandomNumberGenerator.GetHexString(12, lowercase: true);
