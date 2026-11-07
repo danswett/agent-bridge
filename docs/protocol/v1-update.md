@@ -226,7 +226,7 @@ not the authority. Its `args`, signed with the rest:
 |---|---|---|
 | `now` | `true` | Required. Anything else is refused `bad-args` |
 | `release` | string | The release the person was shown (`available`). Anything else at the press, or at the departure, is refused `release-changed` |
-| `accept` | `UpdateBusy`? | What the person confirmed it may go over: the counts, `unknown` if it was shown, `sessions`, the ids and states the confirmation listed, and `more`, how many it left out past 32. Absent: the one-press case, valid only while the machine is quiet |
+| `accept` | `UpdateBusy`? | What the person confirmed it may go over: the counts, `unknown` if it was shown, `sessions`, the ids and states the confirmation listed, and past 32 `moreApprovals` and `moreOther`, how many approvals and other busy sessions it left out. Absent: the one-press case, valid only while the machine is quiet |
 
 Anything else in `args`, or a `contentSha256`, is refused `bad-args`.
 
@@ -262,7 +262,7 @@ Update now interrupts what Install would wait for.
 The host adds `busy` to the `UpdateState` it serves, from **its own session snapshot**, never
 from the app's report:
 
-`UpdateBusy`: `{ "working": int, "waiting": int, "unknown"?: true, "sessions"?: [{ "id", "state": "working" | "question" | "approval" }], "more"?: int }`
+`UpdateBusy`: `{ "working": int, "waiting": int, "unknown"?: true, "sessions"?: [{ "id", "state": "working" | "question" | "approval" }], "moreApprovals"?: int, "moreOther"?: int }`
 
 * `working`: sessions whose `status` is `working`, or `idle` with `activity.background`
   (delegating): a turn or work in flight, as `session.stop` counts it.
@@ -272,29 +272,33 @@ from the app's report:
 * `unknown`: the snapshot isn't whole yet, or the host is unsure of a session, so it can't be
   told whether one is busy (`AutoUpdater`'s `Sessions.Complete` and `Unsure`).
 * `sessions`: the busy sessions themselves, at most 32, by id and state only, so a client can
-  list each by the name it already shows for it (Creative's rule, below). With more than 32
-  busy, it lists approvals first, then questions, then turns, and **`more`** says how many busy
-  sessions it left out (`working` plus `waiting` minus those listed). In `accept`, a client
-  sends back the counts, `unknown` if it was shown, the `sessions` it listed and `more`, so the
+  list each by the name it already shows for it (Creative's rule, below). **Approvals are always
+  listed first**, then questions, then turns. With more than 32 busy, two numbers say what it
+  left out, kept apart so an approval is never counted as anything else: **`moreApprovals`**,
+  left-out sessions with an approval waiting, and **`moreOther`**, the other left-out busy
+  sessions (questions and turns). In `accept`, a client sends back the counts, `unknown` if it
+  was shown, the `sessions` it listed, `moreApprovals` and `moreOther`, so the
   person's confirmation names the sessions it covers, not only how many (security review, Low).
 
 **Covered by the confirmation**, the one comparison the host makes at the press and again when
 it acts: every busy session now that is in `accept.sessions` has the same state there (a
 session accepted as `working` that now has a question or approval waiting is not covered: the
 person wasn't warned of it); the busy sessions now that aren't in `accept.sessions` are, by
-kind, no more than the confirmation left out: those working no more than `accept.working`
-minus the listed `working`, those with a question or approval no more than `accept.waiting`
-minus the listed `question` and `approval`, and one with an approval only if the list held
-nothing but approvals (approvals are listed first, so the person saw every approval by name
-unless more than 32 approvals were waiting); `working` and `waiting` are each no more than accepted; and
-the host is unsure only if `accept.unknown` was set. An `accept` whose `more` doesn't match its
-list (`more` above 0 with fewer than 32 `sessions`, or the listed sessions plus `more` not
-equal to `working` plus `waiting`) is refused `bad-args`, so a client can't skip the list on a
-machine with 32 or fewer busy, where `more` is absent and every one must be listed. So past 32
-the confirmation covers the left-out sessions by number and kind only, and an unchanged
-machine is covered on the first confirmation; one whose busy set grew, where a listed
-session's state changed, or where a left-out session gained a question or approval, is not,
-and gets the usual answer:
+kind, no more than the confirmation left out: those with an approval waiting no more than
+`accept.moreApprovals` (so a left-out question that becomes an approval is not covered), all
+of them no more than `accept.moreApprovals` plus `accept.moreOther`, those working no more than
+`accept.working` minus the listed `working`, and those with a question or approval no more
+than `accept.waiting` minus the listed `question` and `approval`; `working` and `waiting` are
+each no more than accepted; and the host is unsure only if `accept.unknown` was set. An
+`accept` whose numbers don't match its list is refused `bad-args`: either left-out number above
+0 with fewer than 32 `sessions`; `moreApprovals` above 0 unless all 32 listed are approvals
+(approvals come first); or the listed sessions plus `moreApprovals` plus `moreOther` not equal
+to `working` plus `waiting`. So a client can't skip the list on a machine with 32 or fewer
+busy, where both are absent and every one must be listed. Past 32 the confirmation covers the
+left-out sessions by number and kind only, and an unchanged machine is covered on the first
+confirmation; one whose busy set grew, where a listed session's state changed, or where a
+left-out session gained a question or approval beyond what was left out, is not (the busy set
+changed), and gets the usual answer:
 `confirm` at the press, back to `waiting` when the host acts. A press with no `accept` is
 covered only while the machine is quiet and its sessions are known.
 
@@ -374,8 +378,9 @@ host's own text (#826). "Bridge", never "host".
   (#1142), and also whenever the bridge can't tell (Product: err toward warning). Title
   "Update *machine* now?" Body: each busy session from `busy.sessions`, by the name the client
   shows for it, with its state in words, "Mid-turn", "Question waiting" or "Approval waiting"; a
-  session the client has no name for yet reads "A session"; with `more`, one line after the
-  list: "and *N* more". If `unknown`: "Some sessions there
+  session the client has no name for yet reads "A session"; with sessions left out, one line
+  after the list: "and *N* more" (`moreApprovals` plus `moreOther`), or "and *N* more, *M* of
+  them with an approval waiting" when `moreApprovals` is above 0. If `unknown`: "Some sessions there
   haven't reported yet." (Creative.) Then one line: "They pause while the bridge restarts,
   usually under a minute." (The time is one the bridge backs up: planned update restarts came
   back in 20 to 25 s in #498's logs, and #815 announces 90 s as the most it expects.) Until #954
@@ -685,7 +690,9 @@ owns what the host keeps on disk; slice 0 lands only with all of Trust's conditi
    busy sessions, a confirmation of the 32 listed and 8 more is covered while nothing changes,
    and not once a ninth unlisted session or a listed session's new question appears"; "with more
    than 32 busy, an unlisted turn that gains an approval while a listed approval clears is not
-   covered"; "an accept with `more` and a short list is refused bad-args"; "Update
+   covered"; "with 32 listed approvals and 1 left-out question, that question becoming an
+   approval is not covered"; "an accept with left-out numbers and a short list, or
+   `moreApprovals` beside a listed question or turn, is refused bad-args"; "Update
    now is refused on a read-only machine, reads included"; "Update now is refused with remote
    management off"; "Update now from this machine's own app is refused"; "an Update now signed
    more than two minutes ago is refused"; "Update now spends its own slot before a shared one";
@@ -724,7 +731,8 @@ owns what the host keeps on disk; slice 0 lands only with all of Trust's conditi
    channel's close, and the result in words from `code`. Unit tests for the lists and words
    from `busy` and `code`, and Playwright: "a quiet machine updates on one press", "a busy
    machine lists each busy session by name and state, and sends what was shown", "past 32 busy
-   sessions the confirmation lists 32 and says how many more, and sends both", "the
+   sessions the confirmation lists 32, approvals first, says how many more and how many of
+   those have an approval waiting, and sends both numbers", "the
    confirmation's focus starts on Cancel", "Cancel sends nothing", "a confirm outcome shows the
    sessions busy now", "a machine that can't update now says why instead of the button", "a
    refusal shows its fixed reason, never the machine's text", "a waiting approval is named and
