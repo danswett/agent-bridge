@@ -1072,6 +1072,11 @@ public sealed class SettingsTests : IAsyncLifetime
         var row = settings.Agents.Single();
         Assert.Equal("Set up", row.SetUpVerb);
         Assert.False(row.ShowSetUp);
+        // First run: the offer holds the Set up, so Get started points at it, not at "can't be changed".
+        var hooks = settings.SetupSteps.Single(s => s.Id == "hooks");
+        Assert.Equal("Next", hooks.Mark);
+        Assert.DoesNotContain("can't be changed", hooks.Detail);
+        Assert.Contains("Set up on Claude Code", hooks.Detail);
     }
 
     [Theory]

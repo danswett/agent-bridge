@@ -27,7 +27,7 @@ public static class SetupGuide
     public static IReadOnlyList<SetupStep> Steps(bool hostRunning, IReadOnlyList<AgentReadinessRow> agents, bool signedIn)
     {
         var installed = agents.Where(a => a.IsInstalled).ToList();
-        var toSetUp = installed.Where(a => a.ShowSetUp).ToList();
+        var toSetUp = installed.Where(a => a.ShowSetUp || a.Offered).ToList();
         var connected = installed.Any(a => a.Setup == HookSetup.Completed || a.HooksWorking);
         var tested = installed.Any(a => a.HooksWorking);
 
