@@ -13,6 +13,9 @@ param name string
 @description('Principal id of the relay app\'s managed identity.')
 param relayPrincipalId string
 
+@description('Name of a user-assigned identity to create that can only read the feedback container (empty: none).')
+param feedbackReaderIdentityName string = ''
+
 @description('Web origins that upload and download in the browser: the PWA.')
 param allowedOrigins array
 
@@ -27,6 +30,8 @@ var feedbackContainer = 'feedback'
 var roles = {
   // Read, write and delete blobs: given on the one container only.
   blobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+  // Read blobs: given to the feedback reader on the feedback container only, no condition.
+  blobDataReader: '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
   // Get a user delegation key, to sign SAS with: needs the account (blob service) scope.
   blobDelegator: 'db58b8e5-c6ad-4a2a-8342-4190687cbf4a'
 }
@@ -160,6 +165,24 @@ resource feedbackAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+// Who reads feedback, apart from the relay and the writer: a separate identity with no way
+// to write, delete or reach the other container. It holds no secret; see docs/relay-deploy.md.
+resource feedbackReader 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (!empty(feedbackReaderIdentityName)) {
+  name: feedbackReaderIdentityName
+  location: location
+  tags: tags
+}
+
+resource feedbackReaderAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(feedbackReaderIdentityName)) {
+  name: guid(feedback.id, feedbackReaderIdentityName, roles.blobDataReader)
+  scope: feedback
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataReader)
+    principalId: feedbackReader!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 resource delegator 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(account.id, relayPrincipalId, roles.blobDelegator)
   scope: account
@@ -173,3 +196,4 @@ resource delegator 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 output accountUrl string = account.properties.primaryEndpoints.blob
 output container string = container
 output feedbackContainer string = feedbackContainer
+output feedbackReaderClientId string = !empty(feedbackReaderIdentityName) ? feedbackReader!.properties.clientId : ''

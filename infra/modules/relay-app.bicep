@@ -206,6 +206,7 @@ module blobStore 'blob-store.bicep' = if (blobsOn) {
     location: location
     name: blobStorageName
     relayPrincipalId: identity.properties.principalId
+    feedbackReaderIdentityName: app.?feedbackReaderIdentityName ?? ''
     allowedOrigins: allowedOrigins
     tags: tags
   }

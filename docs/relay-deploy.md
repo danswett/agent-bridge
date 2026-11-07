@@ -472,6 +472,25 @@ Azure Storage on URLs the relay signs; no blob byte passes through a relay node.
   scoped to its own container. Reading feedback is a role given to the feedback lead's
   identity (SRE), never to the relay. Environment: `Relay__Feedback__Backend`,
   `AccountUrl`, `Container`, `ManagedIdentityClientId`; empty `Backend` turns it off.
+* Feedback reader (staging, `feedbackReaderIdentityName`): a separate user-assigned identity,
+  `id-agent-bridge-feedback-reader-staging`, with the built-in Storage Blob Data Reader role
+  scoped to the `feedback` container only: no condition, no write or delete, no access to
+  `blobs`, no account key or SAS (shared key access is off). It is neither the relay nor the
+  writer.
+  * **Token without a stored secret.** A user-assigned identity can only get a token from
+    inside Azure: attach it to the Azure VM that runs the Feedback Inbox
+    (`az vm identity assign -g <rg> -n <vm> --identities <identity resource id>`), then the
+    inbox asks the VM's metadata endpoint for a storage token
+    (`DefaultAzureCredential` or `ManagedIdentityCredential` with the identity's client id).
+    Nothing is stored. Any process on that VM can ask for the token, so the VM is dedicated
+    to the inbox and the decryption key stays with the `fbinbox` account (#740). A host that
+    is not an Azure VM has no secret-free path for this identity: do not hand it a client
+    secret or SAS; ask for a different design.
+  * **Cleanup, by name.** Detach it from any VM first (`az vm identity remove ...`), then
+    `az role assignment delete --assignee <principalId> --scope <feedback container id>`
+    and `az identity delete -g rg-agent-bridge-relay -n id-agent-bridge-feedback-reader-staging`.
+    Removing `feedbackReaderIdentityName` from the staging config stops a later apply from
+    recreating it.
 * The retention policy deploys **unlocked**. Until it is locked, someone with write access
   to the storage account (not the relay) could shorten or remove it, so "no one can
   overwrite or delete" holds against the relay and any data-plane identity, not against an
