@@ -943,7 +943,6 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   it, as everywhere else for now.
 * **Cancelling a large attachment** part way. The PWA has a Cancel while a file uploads; the
   app has none yet, over the pipe or through the blob store.
-* Agent hook registration for a fresh install (#54).
 * **Migrate and Roll back on the Settings page** (WinUI slice 2). Both exist in the host
   (`agent-bridge-host migrate` / `rollback`, [migration.md](migration.md)); the page needs
   to show the dry run's report, confirm, and show the result, and it cannot be reached through
