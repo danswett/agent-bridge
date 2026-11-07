@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\TestTimeoutDiagnostics.cs" Link="TestTimeoutDiagnostics.cs" />
     <!-- The generated motion resources the app loads, read by MotionTests as the app reads them. -->
     <None Include="..\..\src\AgentBridge.App\Design\DesignResources.xaml" Link="DesignResources.xaml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

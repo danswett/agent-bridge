@@ -287,7 +287,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Result(await channel.RequestAsync(Ops.SessionsList, new { }, Patience));
         Assert.Equal(SessionId, Result(await channel.RequestAsync(Ops.SessionGet, new { id = SessionId }, Patience)).GetProperty("id").GetString());
         Result(await channel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
-        await Wait.UntilAsync(() => service.Subscribers == 1, "the read-only feed", Patience);
+        await HostWait.UntilAsync(() => service.Subscribers == 1, "the read-only feed", Patience);
         foreach (var op in new[]
         {
             Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop, Ops.AttachmentStart, Ops.PushSubscribe,
@@ -407,7 +407,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var channel = await peer.Hub.OpenAsync(host.Id, Patience);
         var otherChannel = await other.Hub.OpenAsync(host.Id, Patience);
         Result(await channel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
-        await Wait.UntilAsync(() => service.Subscribers == 1, "the active feed", Patience);
+        await HostWait.UntilAsync(() => service.Subscribers == 1, "the active feed", Patience);
         var held = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         peer.Hub.Handler = (_, _, _) => { started.TrySetResult(); return held.Task; };
@@ -419,7 +419,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
             else { store.Revoke(peer.Key.Public); authorization.Revalidate(); }
             await Assert.ThrowsAsync<IOException>(async () => await pending);
             await channel.Closed.WaitAsync(Patience);
-            await Wait.UntilAsync(() => service.Subscribers == 0, "the revoked feed to end", Patience);
+            await HostWait.UntilAsync(() => service.Subscribers == 0, "the revoked feed to end", Patience);
             Result(await otherChannel.RequestAsync(Ops.Hello, new { }, Patience));
         }
         finally { held.TrySetResult(new { finished = true }); }
