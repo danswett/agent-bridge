@@ -10,12 +10,16 @@ public sealed class RelayMetrics
     public const string MeterName = "AgentBridge.Relay";
     public static readonly IReadOnlySet<string> AllowedTags = new HashSet<string> { "kind", "outcome", "code" };
 
+    readonly Histogram<double> forwardLatency, connectTime;
     readonly Counter<long> connects, disconnects, refusals, frames, bytes, undeliverable, pushes, signIns, blobs, blobBytes, roster;
 
-    public RelayMetrics(IMeterFactory factory, Func<int> online)
+    public RelayMetrics(IMeterFactory factory, Func<int> online, Func<IEnumerable<KeyValuePair<string, int>>>? onlineByKind = null)
     {
         var meter = factory.Create(MeterName);
         meter.CreateObservableGauge("relay.connections", online, description: "Admitted sockets on this replica");
+        meter.CreateObservableGauge("relay.sockets.live", () => (onlineByKind?.Invoke() ?? []).Select(k => new Measurement<int>(k.Value, new KeyValuePair<string, object?>("kind", k.Key))), description: "Admitted sockets on this replica, by device kind");
+        forwardLatency = meter.CreateHistogram<double>("relay.forward.latency", unit: "ms", description: "Data frame received to written to its target, by the sender's device kind");
+        connectTime = meter.CreateHistogram<double>("relay.connect.duration", unit: "ms", description: "Socket opened to admitted (ready sent), by device kind");
         connects = meter.CreateCounter<long>("relay.connects", description: "Admitted sockets, by device kind");
         disconnects = meter.CreateCounter<long>("relay.disconnects", description: "Ended sockets, by how they ended");
         refusals = meter.CreateCounter<long>("relay.refusals", description: "Sockets refused before or at admission, by close code");
@@ -33,6 +37,8 @@ public sealed class RelayMetrics
     public void Disconnected(string outcome) => disconnects.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
     public void Refused(int code) => refusals.Add(1, new KeyValuePair<string, object?>("code", code));
     public void Forwarded(int length) { frames.Add(1); bytes.Add(length); }
+    public void ForwardLatency(string kind, TimeSpan elapsed) => forwardLatency.Record(elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("kind", kind));
+    public void ConnectTime(string kind, TimeSpan elapsed) => connectTime.Record(elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("kind", kind));
     public void Undeliverable() => undeliverable.Add(1);
     // Push outcomes: the HTTP status class from the push service, or the relay's refusal.
     public void Pushed(PushGateway.Result r) => pushes.Add(1, new KeyValuePair<string, object?>("outcome", r.Error ?? (r.Status / 100) + "xx"));

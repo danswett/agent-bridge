@@ -133,6 +133,7 @@ public class RelayDeploymentTests
         listener.InstrumentPublished = (i, l) => { if (i.Meter.Name == RelayMetrics.MeterName) { l.EnableMeasurementEvents(i); } };
         listener.SetMeasurementEventCallback<long>((i, _, tags, _) => { if (i.Meter.Scope == Volatile.Read(ref scope)) { lock (seen) { foreach (var t in tags) { seen.Add((i.Name, t.Key)); } } } });
         listener.SetMeasurementEventCallback<int>((i, _, tags, _) => { if (i.Meter.Scope == Volatile.Read(ref scope)) { lock (seen) { foreach (var t in tags) { seen.Add((i.Name, t.Key)); } } } });
+        listener.SetMeasurementEventCallback<double>((i, _, tags, _) => { if (i.Meter.Scope == Volatile.Read(ref scope)) { lock (seen) { foreach (var t in tags) { seen.Add((i.Name, t.Key)); } } } });
         listener.Start();
         await using var relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
         Volatile.Write(ref scope, relay.App.Services.GetRequiredService<IMeterFactory>());
@@ -155,6 +156,9 @@ public class RelayDeploymentTests
             Assert.Contains(seen, s => s.Instrument == "relay.connects");
             Assert.Contains(seen, s => s.Instrument == "relay.refusals");
             Assert.Contains(seen, s => s.Instrument == "relay.blobs");
+            Assert.Contains(seen, s => s.Instrument == "relay.forward.latency" && s.Tag == "kind");
+            Assert.Contains(seen, s => s.Instrument == "relay.connect.duration" && s.Tag == "kind");
+            Assert.Contains(seen, s => s.Instrument == "relay.sockets.live" && s.Tag == "kind");
             Assert.All(seen, s => Assert.Contains(s.Tag, RelayMetrics.AllowedTags));
         }
     }
@@ -188,4 +192,34 @@ public class RelayDeploymentTests
             await collecting;
         }
     }
-}
+
+    [Fact]
+    public void The_metric_tag_allow_list_has_no_id_like_key()
+    {
+        // A new tag key must be a deliberate, reviewed change: this fails if one that names an
+        // account, device, session, address or user is added to the allow-list.
+        string[] idLike = ["id", "account", "device", "session", "user", "login", "name", "address", "ip", "token", "payload"];
+        Assert.All(RelayMetrics.AllowedTags, k => Assert.DoesNotContain(idLike, w => k.Contains(w, StringComparison.OrdinalIgnoreCase)));
+        Assert.Equal(["code", "kind", "outcome"], RelayMetrics.AllowedTags.Order());
+    }
+
+    [Fact]
+    public void Latency_and_connect_histograms_and_the_live_gauge_are_dimensioned_by_kind_only()
+    {
+        var metrics = new RelayMetrics(new ServiceCollection().AddMetrics().BuildServiceProvider().GetRequiredService<IMeterFactory>(), () => 3, () => [new("host", 2), new("app", 1)]);
+        var seen = new List<(string Instrument, double Value, string[] Keys, object? Kind)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (i, l) => { if (i.Meter.Name == RelayMetrics.MeterName) { l.EnableMeasurementEvents(i); } };
+        listener.SetMeasurementEventCallback<double>((i, v, tags, _) => seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], tags.ToArray().FirstOrDefault().Value)));
+        listener.SetMeasurementEventCallback<int>((i, v, tags, _) => seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], tags.ToArray().FirstOrDefault().Value)));
+        listener.Start();
+
+        metrics.ForwardLatency("app", TimeSpan.FromMilliseconds(12));
+        metrics.ConnectTime("host", TimeSpan.FromMilliseconds(40));
+        listener.RecordObservableInstruments();
+
+        Assert.Contains(seen, s => s.Instrument == "relay.forward.latency" && s.Value == 12 && (string?)s.Kind == "app");
+        Assert.Contains(seen, s => s.Instrument == "relay.connect.duration" && s.Value == 40 && (string?)s.Kind == "host");
+        Assert.Contains(seen, s => s.Instrument == "relay.sockets.live" && s.Value == 2 && (string?)s.Kind == "host");
+        Assert.All(seen.Where(s => s.Instrument is "relay.forward.latency" or "relay.connect.duration" or "relay.sockets.live"), s => Assert.Equal(["kind"], s.Keys));
+    }}

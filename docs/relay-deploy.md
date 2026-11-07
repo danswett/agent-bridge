@@ -627,3 +627,7 @@ West US 2 consumption prices; the subscription's monthly free grant is 180,000 v
 
 Levers when it matters: GHCR instead of ACR saves the $5 registry; a second region is
 another ≈ $14; the next step up is 0.5 vCPU / 1 GiB (≈ $34) for tens of thousands of sockets.
+
+## Metrics export (#1134)
+
+The relay's meter (`AgentBridge.Relay`) is exported to Application Insights by the Azure Monitor OpenTelemetry exporter (`RelayTelemetry.cs`), only when `Relay__ApplicationInsightsConnectionString` or `APPLICATIONINSIGHTS_CONNECTION_STRING` is set as an app setting (a connection string, supplied by the deployment, never kept in the repo). Unset, nothing is exported. Instruments added: `relay.forward.latency` (ms, frame received to written to its target), `relay.connect.duration` (ms, socket opened to ready) and `relay.sockets.live` (gauge). Each carries the `kind` tag only; `RelayMetrics.AllowedTags` is the whole tag allow-list and a test fails if an id-like key joins it. Wiring the app setting in `infra/` is a follow-up that needs the owner's deploy approval.
