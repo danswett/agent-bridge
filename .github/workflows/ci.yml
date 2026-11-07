@@ -927,6 +927,7 @@ jobs:
     #  - design-gen, a11y-contrast: every client's generated copy matches design/, so a token or
     #    SVG changed without regenerating fails here, and every theme meets the contrast rules in
     #    design/tokens.json (design/README.md);
+    #  - lab-nightly: the held nightly lab run's gate and cut verdict, offline (lab-nightly.yml);
     #  - pwa-unit: the PWA's unit tests in Node, then again for coverage, beside the Playwright
     #    jobs rather than before them (#457);
     #  - pwa-site-csp: the Pages build's CSP;
@@ -1039,6 +1040,11 @@ jobs:
             echo "::error::build-site.mjs accepted a blob origin that is not an Azure blob store"; exit 1
           fi
           grep -q -- '--blob-origin must be an origin' "$RUNNER_TEMP/bad-blobs.err" || { cat "$RUNNER_TEMP/bad-blobs.err"; echo "::error::build-site.mjs failed, but not by refusing the blob origin"; exit 1; }
+      - name: The lab nightly's gate refuses every run today, and its verdict passes only a cut both roles pass
+        # Offline: nothing reaches Azure or GitHub.
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-nightly')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File quality/lab/test-nightly.ps1
       # Relative links and their anchors (quality/catalog.yml, docs-links), so renaming a doc or a
       # heading can't strand the links to it. Offline: web links are not fetched, so a site being
       # down never fails a run. Advisory for now: a broken link is a warning on the run. lychee is

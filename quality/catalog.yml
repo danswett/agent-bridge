@@ -704,6 +704,20 @@ suites:
     status: exists
 
   # ---------------------------------------------------------------- live, on disposable machines
+  - id: lab-nightly
+    kind: unit
+    ring: 0
+    select: affected
+    # The held nightly lab run's gate and cut verdict (lab-nightly.yml), offline: the gate refuses
+    # every run until the lab's prerequisites are met in reviewed source, and the verdict passes a
+    # cut only when both roles pass it. Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/lab/**, .github/workflows/lab-nightly.yml]
+    command: pwsh quality/lab/test-nightly.ps1
+    where: ci.yml light
+    status: exists
+
   - id: lab-e2e-simulated
     kind: e2e
     ring: 3
@@ -715,6 +729,8 @@ suites:
     # only nonexecuting provisioning and runner-interface drafts exist (lab-scripts).
     platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
     runner: lab
+    # Windows x64 and Arm64 nightly, once its gate lets it run (lab-nightly); it refuses today.
+    where: lab-nightly.yml
     status: planned
 
   - id: lab-e2e-agents
