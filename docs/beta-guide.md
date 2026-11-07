@@ -15,7 +15,8 @@ are.
 
 ## Install on Windows
 
-1. Open the newest pre-release at <https://github.com/danswett/agent-bridge/releases>
+1. Open the newest pre-release (v0.1.3215 at the time of writing) at
+   <https://github.com/danswett/agent-bridge/releases/tag/v0.1.3215>
    **[confirm: a stable download link replaces this when #735 lands]**.
 2. Download the installer for your PC:
 
@@ -30,12 +31,20 @@ are.
 3. Run it. Windows shows a blue box, **Windows protected your PC**. This is expected: the beta
    installer is not signed yet, and Windows warns about any installer it does not recognise.
    Click **More info**, then **Run anyway**.
-4. Slipgates opens and walks you through setup. The app then keeps itself up to date and offers
-   **Restart to update** when there is a newer version.
+4. Slipgates opens. Under **Agents on this machine** it shows whether your coding tools are
+   ready and offers **Set up** or **Repair** for the hooks. Installing a CLI, signing in to it
+   and trusting a folder are separate steps you do yourself; if one is missing, tell us rather
+   than assuming it is done. The app keeps itself up to date and offers **Restart to update**
+   when there is a newer version.
 
 ## Connect your phone
 
-**[confirm: Platform supplies the phone address and the sign-in steps.]**
+1. On your PC, open Slipgates > Settings > relay and choose **Sign in with GitHub**. It shows a
+   code and a GitHub link.
+2. On your phone, open <https://danswett.github.io/agent-bridge/app/> and choose
+   **Sign in with GitHub**. Open the GitHub link it shows, enter the code, and use the same
+   GitHub account as your PC.
+3. Return to the phone app. Your PC's sessions appear there.
 
 ## Known issues
 
@@ -53,8 +62,10 @@ how much each sends.
 
 ## Getting help and sending feedback
 
-Until the in-app Send feedback button lands (#738, #739), email or message us on Teams
-**[confirm: the address the owner names]**. Please do not file it as a public issue.
+Until the in-app Send feedback button lands (#738, #739), reply in the email or Teams
+conversation your invitation came in. Please do not file it as a public issue. If something
+fails, tell us the first step that failed and its exact error message (or that a PC session
+appeared on your phone). Never send tokens or sign-in codes.
 
 ## Uninstall
 
