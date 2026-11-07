@@ -513,7 +513,7 @@ In order, for every answer:
    ([host-replies.md](host-replies.md)) share (`busy` for a different request; a resend of
    the request being typed waits for its outcome instead). Every request UUID's outcome,
    whatever it was (`stale`, `refused` and `busy` included), is remembered for 15 minutes
-   and returned for a resend, which types nothing. So is the outcome of a prompt's first
+  and returned for a resend, which types nothing. So is the outcome of a prompt's first
    answer, for any request that says the same thing (the same fields and text) for the
    same session and question, from the same sender (the channel's peer; a second device
    gets the plain refusal, and so does the same text from any other sender, so a guess
@@ -530,7 +530,10 @@ In order, for every answer:
    replaying it gets the answer a request of its own would, never the first's outcome or
    progress. That
    record is the host's memory only, and is kept while the prompt's claim is; it never
-   covers an answer that typed nothing, nor a different answer.
+   covers an answer that typed nothing, nor a different answer. A request UUID's own outcome,
+   by contrast, is also kept in the attempt ledger, so that window survives a host restart; those
+   receipts carry the UUID only, with no sender, session or question, so the ownership rule above
+   holds only in memory until receipts are reconciled with #1100's.
 4. The session's process is still the live agent process; it does not run elevated
    (integrity level High or above, or unreadable, is refused).
 5. One answer is typed at a time across sessions, and its turn is taken before these last
@@ -548,7 +551,15 @@ In order, for every answer:
    before or after a restart; the same answer sent again gets the first outcome before it
    gets here, step 3) or a ledger that cannot be read or written is `refused`:
    agent-ha-bridge's rule that a prompt gets one attempt (`Start-CopilotDecisionAttempt`,
-   `DeliveryAttempted`), since nobody can say what a half-typed prompt holds.
+   `DeliveryAttempted`), since nobody can say what a half-typed prompt holds. A claimed
+   question is listed as `answerAtMachine`. If the host stopped after claiming but before
+   recording the outcome, a resend of that request within 15 minutes is `unconfirmed`:
+   keys may have gone, and the host must not say it refused or type them again.
+   A failed write is retryable: it refuses that request, the next one re-reads the file and keeps every
+   claim held in memory, and only a corrupt file latches refusal until restart. The ledger's
+   refusal reasons can name a question's label or field names (never answer text), and its folder's
+   ACL lets the Codex sandbox group read it; the ledger holds no secrets. Receipts are request UUIDs
+   only; reconciling them with #1100's receipts is open.
 7. The worker types the plan. Nothing written (it could not start, attach or open the
    console input) is `refused`, and releases the claim. Anything after its first write that
    is not a clean finish (the worker died, hung, or the console closed) is `unconfirmed`,
@@ -569,7 +580,7 @@ In order, for every answer:
    Every `unconfirmed` answer says its `stage`: `typed` when nothing was recorded for the
    call (the keys reached the prompt, but it may not have been submitted), `recorded` when
    something else was (#467).
-9. A repeat of a request settled `unconfirmed` (a client's resend after a reconnect) reads
+9. In the same host run, a repeat of a request settled `unconfirmed` (a client's resend after a reconnect) reads
    the same call's record again from the same point, and types nothing. An answer recorded
    since, the one typed (submitted at the machine, or recorded late), makes the request
    `delivered` from then on; another makes it `recorded`. Only that call is read, so a newer
@@ -581,6 +592,10 @@ In order, for every answer:
    to the 15 s a first watch allows, from when a read first found the record. Those waits are
    made within the read, so the one resend a client makes per reconnect settles it.
    Copilot and Claude; Codex records nothing to read.
+
+A planned stop blocks new deliveries and waits up to 15 seconds for admitted typing and its
+confirmation to finish. If that wait expires the host stays running; it does not abandon the
+worker. A resend of an already admitted answer waits for its outcome even during the stop.
 
 Progress and timings work as for replies ([host-replies.md](host-replies.md#progress-and-timings)):
 `received` before step 1, `typed` (never `working`: a question holds the session) once step

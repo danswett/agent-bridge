@@ -42,6 +42,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     // Who drives each session (Session.Driver), shared with the Home Assistant connector; null for
     // a source that does not say.
     readonly SessionDrivers? _drivers;
+    readonly Func<Session, bool>? _answerAttempted;
     readonly List<FileSystemWatcher> _watchers = [];
     readonly CancellationTokenSource _stop = new();
     readonly Task _dispatch;
@@ -80,6 +81,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         public SessionTracker Tracker { get; } = tracker;
         public Session ListForm = null!;
         public Session GetForm = null!;
+        public Session GuardForm = null!;
         // GetForm before SessionBudget.Fit (GetUnbudgeted), and its JSON when Fit changed it.
         public Session Unbudgeted = null!;
         public string? UnbudgetedJson;
@@ -99,7 +101,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         public long? Pending;
         // What the last commit was made from: Commit made again from the same is the same.
         public Session? CommittedFull;
-        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored, DateTimeOffset? Boundary, bool Prompted, SessionStatus Turn, bool PhoneSignIn) CommittedWith;
+        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored, DateTimeOffset? Boundary, bool Prompted, SessionStatus Turn, bool PhoneSignIn, bool Attempted) CommittedWith;
         // The turns whose prompt the host showed as an agent's (#489), newest last, as many as
         // history serves: the transcript does not mark them, and history shows them as live did.
         // Under the gate.
@@ -114,13 +116,15 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         }
     }
 
-    public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null)
+    public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null,
+        Func<Session, bool>? answerAttempted = null)
     {
         _options = options;
         _processes = processes ?? new SystemProcessInspector();
         _time = time ?? TimeProvider.System;
         _unaccounted = new Unaccounted(_time, Log);
         _drivers = drivers;
+        _answerAttempted = answerAttempted;
         if (_drivers is not null)
         {
             _drivers.SourceObserves = true;
@@ -171,6 +175,13 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
     {
         lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GetForm : null; }
     }
+
+    public Session? GetForDelivery(string id)
+    {
+        lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GuardForm : null; }
+    }
+
+    public void AnswerAttemptsChanged() => _wake.Writer.TryWrite(true);
 
     public Session? GetUnbudgeted(string id)
     {
@@ -1072,7 +1083,8 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         // Whether its sign-in is the phone's: held apart from the transcript, in the roster (#972).
         var phoneSignIn = full.Attention is { Kind: AttentionKind.SignInNeeded, SignIn: null } failing
             && _options.PhoneSignIn.Contains(failing.Agent ?? full.Agent) && PhoneSignInPinned();
-        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt, restored, boundary, prompted, turn, phoneSignIn);
+        var attempted = _answerAttempted?.Invoke(full) == true;
+        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt, restored, boundary, prompted, turn, phoneSignIn, attempted);
         // The tracker hands back the very session it built last when nothing it reads changed.
         // Fitting and serialising it again (about 37 MB/min, #608) found the same JSON every time.
         // Never while a sign-in recovery overlay is held (#800): each step of it (Checking, then
@@ -1144,6 +1156,11 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         // classSince carries over from what was last sent while the tier is unchanged (an episode).
         var tier = NotificationClasses.Of(shown, crashed);
         shown = shown with { Class = tier, ClassSince = NotificationClasses.Since(shown, tier, entry.Unbudgeted, crashed) };
+        var guardForm = SessionBudget.Fit(shown);
+        if (attempted && shown.Question is { } question)
+        {
+            shown = shown with { Question = question with { AnswerAtMachine = true } };
+        }
         var getForm = SessionBudget.Fit(shown);
         var listForm = SessionBudget.Fit(shown.WithoutHistory());
         var json = JsonSerializer.Serialize(getForm, ProtocolJson.Options);
@@ -1151,6 +1168,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         var unbudgetedJson = ReferenceEquals(getForm, shown) ? null : JsonSerializer.Serialize(shown, ProtocolJson.Options);
         lock (_gate)
         {
+            entry.GuardForm = guardForm;
             if (json == entry.Json && _entries.ContainsKey(full.Id))
             {
                 if (unbudgetedJson == entry.UnbudgetedJson) { return; }

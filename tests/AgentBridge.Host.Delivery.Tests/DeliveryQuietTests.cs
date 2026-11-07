@@ -8,6 +8,72 @@ public sealed class DeliveryQuietTests
     static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     [Fact]
+    public async Task Planned_stop_waits_through_confirmation_and_resends_get_the_original_outcome()
+    {
+        var gate = new DeliveryGate();
+        var memory = new OutcomeMemory<int>(TimeProvider.System, TimeSpan.FromMinutes(15), gate, () => -1);
+        var key = Guid.NewGuid();
+        var typed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var confirm = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = memory.Once(key, async () =>
+        {
+            await gate.WaitToTypeAsync();
+            gate.DoneTyping();
+            typed.SetResult();
+            return await confirm.Task;
+        }, _ => { });
+        await typed.Task.WaitAsync(Bound);
+        var stop = gate.PrepareStopAsync(Bound);
+        Assert.False(stop.IsCompleted);
+        var repeat = memory.Once(key, () => throw new Exception("must not type twice"), _ => { });
+        Assert.False(repeat.IsCompleted);
+        Assert.Equal(-1, await memory.Once(Guid.NewGuid(), () => Task.FromResult(9), _ => { }));
+        confirm.SetResult(7);
+        Assert.Equal(7, await first.WaitAsync(Bound));
+        using var prepared = await stop.WaitAsync(Bound);
+        Assert.NotNull(prepared);
+        Assert.Equal(7, await repeat.WaitAsync(Bound));
+        Assert.Equal(7, await memory.Once(key, () => throw new Exception("must not type twice"), _ => { }));
+        Assert.Null(gate.TryEnterDelivery());
+    }
+
+    [Fact]
+    public async Task A_recovery_stop_is_granted_after_a_journal_uncertainty_once_nothing_is_in_flight()
+    {
+        var gate = new DeliveryGate();
+        var delivery = gate.TryEnterDelivery();
+        Assert.NotNull(delivery);
+        gate.MarkJournalUncertain();
+        var stop = gate.PrepareStopAsync(Bound);
+        Assert.False(stop.IsCompleted);
+        delivery.Dispose();
+        using var lease = await stop.WaitAsync(Bound);
+        Assert.NotNull(lease);
+        Assert.Null(gate.TryEnterDelivery());
+    }
+
+    [Fact]
+    public async Task A_stop_after_a_journal_uncertainty_is_still_refused_while_typing()
+    {
+        var gate = new DeliveryGate();
+        await gate.WaitToTypeAsync();
+        gate.MarkJournalUncertain();
+        Assert.Null(await gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50)));
+        gate.DoneTyping();
+    }
+
+    [Fact]
+    public async Task A_stop_that_times_out_leaves_the_host_and_delivery_running()
+    {
+        var gate = new DeliveryGate();
+        using var delivery = gate.TryEnterDelivery();
+        Assert.NotNull(delivery);
+        Assert.Null(await gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50)));
+        using var next = gate.TryEnterDelivery();
+        Assert.NotNull(next);
+    }
+
+    [Fact]
     public void A_committed_exclusion_cannot_be_released_even_through_IDisposable()
     {
         var gate = new DeliveryGate(new FakeTimeProvider());

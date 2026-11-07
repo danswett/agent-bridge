@@ -1,4 +1,5 @@
 using AgentBridge.Host;
+using AgentBridge.Host.Delivery;
 using Xunit;
 
 // host.restart and the departure watchdog leave the same way: a usage probe tied to this host
@@ -63,6 +64,76 @@ public sealed class SettledRestartTests
 
         await restart.RunAsync().WaitAsync(Bound);
         Assert.Equal(["settle"], steps.Seen());
+    }
+
+    [Fact]
+    public async Task A_stop_interrupts_a_restart_waiting_for_a_delivery_without_handing_over()
+    {
+        var gate = new DeliveryGate();
+        using var delivery = gate.TryEnterDelivery()!;
+        var stops = new PlannedStops(gate, Bound, _ => { });
+        var handovers = 0;
+        using var ending = new CancellationTokenSource();
+        var restart = new SettledRestart(null, () => handovers++, ending.Cancel, ending.Token,
+            ct => gate.PrepareStopAsync(Bound, ct));
+        var running = restart.RunAsync(stops.RestartToken());
+        Assert.Null(gate.TryEnterDelivery());
+
+        var stopping = stops.PrepareStopAsync();
+        await running.WaitAsync(Bound);
+        Assert.Equal(0, handovers);
+        Assert.False(stopping.IsCompleted);
+        delivery.Dispose();
+        using var lease = await stopping.WaitAsync(Bound);
+        Assert.NotNull(lease);
+        Assert.Null(gate.TryEnterDelivery());
+    }
+
+    [Fact]
+    public async Task A_stop_before_the_restart_commits_wins_even_after_the_restart_has_the_fence()
+    {
+        var gate = new DeliveryGate();
+        var stops = new PlannedStops(gate, Bound, _ => { });
+        var atCommit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var proceed = new ManualResetEventSlim();
+        using var ending = new CancellationTokenSource();
+        var handovers = 0;
+        var restart = new SettledRestart(null, () => handovers++, ending.Cancel, ending.Token,
+            ct => gate.PrepareStopAsync(Bound, ct),
+            (ct, handover) =>
+            {
+                atCommit.SetResult();
+                if (!proceed.Wait(Bound)) { throw new TimeoutException("restart commit was not released"); }
+                return stops.TryCommitRestart(ct, handover);
+            });
+        var running = Task.Run(() => restart.RunAsync(stops.RestartToken()));
+        try
+        {
+            await atCommit.Task.WaitAsync(Bound);
+            var stopping = stops.PrepareStopAsync();
+            proceed.Set();
+            await running.WaitAsync(Bound);
+            using var lease = await stopping.WaitAsync(Bound);
+            Assert.NotNull(lease);
+            Assert.Equal(0, handovers);
+            Assert.False(ending.IsCancellationRequested);
+        }
+        finally { proceed.Set(); }
+    }
+
+    [Fact]
+    public async Task Releasing_an_old_stop_lease_cannot_release_a_new_one()
+    {
+        var gate = new DeliveryGate();
+        var stops = new PlannedStops(gate, Bound, _ => { });
+        var first = await stops.PrepareStopAsync();
+        Assert.NotNull(first);
+        first.Dispose();
+        using var second = await stops.PrepareStopAsync();
+        Assert.NotNull(second);
+
+        first.Dispose();
+        Assert.Null(gate.TryEnterDelivery());
     }
 
     [Fact]
