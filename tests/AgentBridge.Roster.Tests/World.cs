@@ -15,6 +15,13 @@ public sealed class World
 
     public TimeSpan Now { get; set; }
 
+    // What the entries made next carry instead of the generation's own account, generation and
+    // sequence number, and the presence a named device is described with.
+    public string AccountId { get; set; } = Account;
+    public string GenerationId { get; set; } = Generation;
+    public int SeqOffset { get; set; }
+    public Dictionary<string, string> Presences { get; } = new(StringComparer.Ordinal);
+
     public static (TestKey Dh, TestKey Sign) Keys(string device) => (TestKey.Named($"{device} dh"), TestKey.Named($"{device} sign"));
 
     public string Id(string device)
@@ -35,7 +42,7 @@ public sealed class World
     JsonObject Body(string op, string by, string[] parents)
     {
         var seq = parents.Length == 0 ? 0 : parents.Max(p => JsonNode.Parse(_entries[p].Body)!["seq"]!.GetValue<int>()) + 1;
-        var b = new JsonObject { ["v"] = 1, ["op"] = op, ["account"] = Account, ["generation"] = Generation, ["seq"] = seq };
+        var b = new JsonObject { ["v"] = 1, ["op"] = op, ["account"] = AccountId, ["generation"] = GenerationId, ["seq"] = seq + SeqOffset };
         if (parents.Length > 0) { b["prev"] = Hashes(parents.Select(p => _entries[p].Hash)); }
         b["by"] = Id(by);
         b["at"] = $"2026-11-04T10:{_at / 60 % 60:D2}:{_at++ % 60:D2}Z";
@@ -48,7 +55,7 @@ public sealed class World
         var (dh, sign) = Keys(device);
         Id(device);
         if (kind == "host") { return HostDevice(dh, "windows", device); }
-        return Person(dh, signWith is null ? sign : Keys(signWith).Sign, kind, kind == "pwa" ? "windows" : "ios", device, Presence.Key);
+        return Person(dh, signWith is null ? sign : Keys(signWith).Sign, kind, kind == "pwa" ? "windows" : "ios", device, Presences.GetValueOrDefault(device, Presence.Key));
     }
 
     Signed Put(string label, JsonObject body, string by, string? cosigner = null, string? signAs = null)

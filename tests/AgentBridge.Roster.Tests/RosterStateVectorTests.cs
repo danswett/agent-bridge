@@ -11,7 +11,7 @@ public sealed class RosterStateVectorTests
     // Offer an entry at a running time, move the clock and record who is served, or adopt a head.
     sealed record Step(string? Offer = null, double? Hours = null, string? Adopt = null);
 
-    sealed record Scenario(string Name, string About, Func<World> Build, Func<World, Step[]>? Steps = null);
+    sealed record Scenario(string Name, string About, Func<World> Build, Func<World, Step[]>? Steps = null, int? AddCap = null);
 
     static Step[] All(World w) => [.. w.Labels.Select(l => new Step(l))];
 
@@ -60,7 +60,7 @@ public sealed class RosterStateVectorTests
                 w.Add("+C", "A", "C", "+A");
                 return w;
             },
-            w => [.. All(w), new Step(Hours: 71), new Step(Hours: 73)]);
+            w => [.. All(w), new Step(Hours: 71), new Step(Hours: 72), new Step(Hours: 73)]);
         yield return new("held-rename", "a rename by a device on probation, or a held one, is pending until the hold ends",
             () =>
             {
@@ -81,8 +81,94 @@ public sealed class RosterStateVectorTests
                 for (var i = 0; i < 9; i++) { w.Rename($"n{i}", "G", "+B", last, $"Name {i}"); last = $"n{i}"; }
                 return w;
             });
+        yield return new("refused-account", "an entry of another account is refused", () => Refused(w => w.AccountId = "another-account"));
+        yield return new("refused-generation", "an entry of another generation is refused", () => Refused(w => w.GenerationId = new string('f', 32)));
+        yield return new("refused-seq", "an entry whose seq is not one past its parents' greatest is refused", () => Refused(w => w.SeqOffset = 1));
+        yield return new("refused-genesis", "a second genesis in a generation that has one is refused",
+            () =>
+            {
+                var w = Base();
+                w.Genesis("H", "G2");
+                return w;
+            });
+        yield return new("refused-signature", "an add signed by another device's key than its signer's is refused",
+            () =>
+            {
+                var w = Base();
+                w.Add("forged", "G", "B", "+A", signAs: "A");
+                return w;
+            });
+        yield return new("refused-presence", "an entry signed by a device whose presence is none is refused",
+            () =>
+            {
+                var w = new World();
+                w.Presences["A"] = Presence.None;
+                w.Genesis();
+                w.Add("+A", "G", "A", "G");
+                w.Add("fromA", "A", "B", "+A");
+                return w;
+            });
+        yield return new("refused-readded", "an add of an id the history already added is refused",
+            () =>
+            {
+                var w = Base();
+                w.Add("again", "G", "A", "+A");
+                return w;
+            });
+        yield return new("refused-target", "a rename of a device already removed names no active add and is refused",
+            () =>
+            {
+                var w = Base();
+                w.Remove("G-A", "G", "+A", "+A");
+                w.Rename("late", "G", "+A", "G-A", "Too late");
+                return w;
+            });
+        yield return new("refused-confirm", "a device is confirmed only by its own approver, so another's confirmation is refused",
+            () =>
+            {
+                var w = new World();
+                w.Genesis();
+                w.Add("+H", "G", "H", "G");
+                w.Confirm("cH", "G", "+H", "+H");
+                w.Add("+B", "G", "B", "cH");
+                w.Confirm("H-cB", "H", "+B", "+B");
+                return w;
+            });
+        yield return new("refused-merge", "a merge of heads one of which is the other's ancestor is refused",
+            () =>
+            {
+                var w = Base();
+                w.Merge("m", "G", ["G", "+A"]);
+                return w;
+            });
+        yield return new("refused-cap", "the add past the generation's add cap is refused (the vector's verifier has its add cap at 5)",
+            () =>
+            {
+                var w = new World();
+                w.Genesis();
+                var last = "G";
+                for (var i = 0; i < 6; i++) { w.Add($"+N{i}", "G", $"N{i}", last); last = $"+N{i}"; }
+                return w;
+            },
+            AddCap: 5);
     }
 
+    // A genesis and one add, then an add of B that the rule refuses once `tamper` has bent what it carries.
+    static World Refused(Action<World> tamper)
+    {
+        var w = Base();
+        tamper(w);
+        w.Add("bent", "G", "B", "+A");
+        return w;
+    }
+
+    static World Base()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+A", "G", "A", "G");
+        return w;
+    }
     static string Hash(World w, string label) => Codec.Base64Url(w[label].Hash);
 
     static JsonObject Snapshot(World w, RosterVerifier v)
@@ -117,7 +203,7 @@ public sealed class RosterStateVectorTests
     {
         var w = scenario.Build();
         var steps = (scenario.Steps ?? All)(w);
-        var v = new RosterVerifier(Account, Generation, () => w.Now);
+        var v = new RosterVerifier(Account, Generation, () => w.Now) { AddCap = scenario.AddCap ?? RosterVerifier.MaxAdds };
         var devices = new JsonObject();
         var entries = new JsonArray();
         foreach (var l in w.Labels)
@@ -156,7 +242,7 @@ public sealed class RosterStateVectorTests
         {
             if (w.Entry(l).Body.Device is { } d) { devices[w.NameOf(d.Id)] = d.Id; }
         }
-        return new JsonObject
+        var result = new JsonObject
         {
             ["name"] = scenario.Name,
             ["about"] = scenario.About,
@@ -165,6 +251,8 @@ public sealed class RosterStateVectorTests
             ["steps"] = outSteps,
             ["state"] = Snapshot(w, v),
         };
+        if (scenario.AddCap is { } cap) { result.Insert(3, "limits", new JsonObject { ["addCap"] = cap }); }
+        return result;
     }
 
     static JsonObject Generate() => new()
@@ -193,8 +281,19 @@ public sealed class RosterStateVectorTests
         Assert.Empty(Active("tie"));
         Assert.Equal(["Y"], byName["local-adoption"]["state"]!["active"]!.AsObject().Where(p => p.Key == "Y").Select(p => p.Key));
         var probation = byName["probation"]["steps"]!.AsArray();
-        Assert.Equal(["A", "G"], probation[^2]!["serving"]!.AsArray().Select(n => n!.GetValue<string>()));
-        Assert.Equal(["A", "C", "G"], probation[^1]!["serving"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.Equal(["A", "G"], probation[^3]!["serving"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.Equal(["A", "C", "G"], probation[^2]!["serving"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.Equal("evidence", byName["self-removal-no-evidence"]["steps"]!.AsArray()[^1]!["reason"]!.GetValue<string>());
+        Assert.Equal(["A", "C", "G"], probation[^1]!["serving"]!.AsArray().Select(n => n!.GetValue<string>()));
+
+        // Every refusal reason of the acceptance rule, each shown by a step: one added to the verifier needs a scenario and a place here.
+        string[] reasons = ["parent", "account", "generation", "genesis", "seq", "signer", "signature", "presence", "readded", "target", "seniority", "cosign", "keep", "confirm", "merge", "active-cap", "cap", "budget", "evidence"];
+        Assert.Equal(reasons.Order(StringComparer.Ordinal), typeof(Invalid).GetFields().Select(f => (string)f.GetRawConstantValue()!).Order(StringComparer.Ordinal));
+        var shown = byName.Values.SelectMany(s => s["steps"]!.AsArray()).Select(s => s!["reason"]?.GetValue<string>()).Where(r => r is not null).Distinct().Order(StringComparer.Ordinal);
+        Assert.Equal(reasons.Order(StringComparer.Ordinal), shown);
+        foreach (var name in byName.Keys.Where(n => n.StartsWith("refused-")))
+        {
+            Assert.Equal("refused", byName[name]["steps"]!.AsArray()[^1]!["verdict"]!.GetValue<string>());
+        }
     }
 }
