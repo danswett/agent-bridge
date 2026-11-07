@@ -260,7 +260,9 @@ In order, for every reply:
    launched, resumed or restored whose window has not been seen ready is `refused`: it may
    still show a startup question, folder trust above all, that Enter would answer, and a resume's
    transcript already exists, so the check below never catches it (`LaunchService.HeldForReply`,
-   #780). Once following has ended unready, it stays so while that agent runs (the launcher, or the
+   #780). While following it says what the window shows: the folder-trust question (answered from
+   a device where allowed, #947, else on that machine), another startup question (on that machine),
+   or only "still starting, send it again in a moment" (#1018). Once following has ended unready, it stays so while that agent runs (the launcher, or the
    process it handed the session to), until a prompt of the person's is in its transcript after the
    launch (Copilot; a turn count would not do: it leaves out the turn that prompt starts, and a new
    CLI's `session.resume` ending a killed turn counts one with nobody having typed) or, for an agent
@@ -279,12 +281,22 @@ In order, for every reply:
    reply after a start used to spend before typing, #599), and from where it was
    left on every later read, so the read before typing covers only what was written since. A transcript that cannot be read is `refused`, never taken to
    mean nothing is asking. A Copilot session with no `events.jsonl` yet (its folder there,
-   and no transcript ever read for it) is refused with its own reason. Copilot 1.0.105
+   and no transcript ever read for it) is told apart by its window (#1018). Copilot 1.0.105
    creates the file only with the first prompt, and it registers the session while its
    folder-trust question may still be on screen. There, typed words are dropped and Enter
-   answers "Yes" (seen live: a reply trusted the folder). Without a transcript, the host
-   cannot tell that question from an idle prompt, and only a person answers it. So the
-   first prompt is sent at the machine, or given at launch. The point read up to is where
+   answers "Yes" (seen live: a reply trusted the folder). Copilot draws that question in place
+   of the prompt's box and footer, never beside them (1.0.105 to 1.0.107, seen live), so the
+   reply goes only when the window shows the box and its footer and no startup question is
+   drawn, and the keys are still held to those rows (the worker types nothing if they change).
+   With the trust question showing it is `refused` with words for the phone (`FirstReplyWords`):
+   answer it first, from the phone where the host allows that for a session it launched
+   (#947), else at the machine. With the window unreadable or not drawn yet it is `refused`
+   as "the session is still starting, so it can't take a reply yet. Send it again in a moment"
+   (Creative's words; the clients read it as "The machine refused this reply: {reason}."), and nothing is typed. For a
+   launch the bridge follows it names Needs you ("If it asks whether to trust its folder, that shows in Needs you")
+   only where remote folder trust is on with a device approved, so a reason never promises a place that is not coming.
+   A refused reply stays in the sender's box (only a delivered one comes out), so sending again costs a tap. So a session launched
+   with no first prompt takes its first reply from the phone. The point read up to is where
    confirmation starts.
 6. The worker types it. Nothing written is `refused`, and the staged files are deleted with
    the attachments kept for another try; a worker that stopped after its first write is

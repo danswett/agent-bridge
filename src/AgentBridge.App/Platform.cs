@@ -12,7 +12,9 @@ namespace AgentBridge.App;
 // The app's updates through Velopack. The host is in the same package, so this updates both.
 // Releases come from the repository's GitHub releases; a feed.txt beside the app's data (a
 // folder or URL holding releases.<channel>.json) overrides that, for a test VM or a private channel.
-sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile) : IUpdater
+// profileFolder: this profile's own folder, where the installer's copy of the package is made
+// (PackageHandoff); null for a copy that only reads its version.
+sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile, string? profileFolder = null) : IUpdater
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
     // Shared with every profile's app and host through the app's folder (#530).
@@ -21,6 +23,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     UpdateInfo? pending;
     string? source;
     readonly DownloadMark mark = new(Path.Combine(Paths.AppData, "update-downloaded.txt"));
+    PackageHandoff? Handoff => profileFolder is null ? null : new(mark, Path.Combine(profileFolder, "app-update"));
 
     public static string FeedFile => Path.Combine(Paths.AppData, "feed.txt");
 
@@ -58,6 +61,8 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         // No channel named: the installed package's own decides, `win` for x64 and `win-arm64` for
         // Arm64 (build/app-channels.ps1), so a copy is only ever offered its own architecture.
         var first = manager is null;
+        // A copy an earlier run handed the installer (installed since, or refused) is not kept.
+        if (first) { Handoff?.Clear(); }
         manager = new UpdateManager(from, AppPackages.Options);
         // Only for the source this start began with: a change of feed or of "Include pre-releases"
         // drops what was downloaded, which must not come back as ready from the packages folder,
@@ -74,9 +79,9 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
             ? Path.Combine(folder, name)
             : null;
 
-    // The package held for the installer (DownloadMark.Hold): open, read-only to everyone else,
-    // until this process ends. Update.exe opens it by its path only after that (Velopack's
-    // UpdateExe.Apply), so the hold does not reach into the installer (6677353697).
+    // The installer's copy of the package (PackageHandoff), held open, read-only to everyone else,
+    // until this process ends. It is in this profile's own folder, which no other profile's updater
+    // writes, so the bytes checked are the ones Update.exe opens once the app has exited (#984).
     static FileStream? handedOver;
 
     // A release an earlier run downloaded and nobody has restarted into yet (#516): ready from this
@@ -171,20 +176,27 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         if (ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded ({ready} is); nothing was installed"); }
         var release = pending?.TargetFullRelease ?? local ?? throw new InvalidOperationException("no downloaded update to install; check for updates again");
         if (release.Version.ToString() != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded; nothing was installed"); }
-        // The bytes verified and marked, still, held open and unchangeable until this process
-        // ends: Velopack finds the package by its name, so the file is checked from the handle that
-        // keeps it.
-        var from = Manager();
-        handedOver?.Dispose();
-        handedOver = (PackageFile(release) is { } file ? mark.Hold(file, version, source!) : null)
-            ?? throw new PackageMismatchException($"the package downloaded for {version} is no longer the bytes verified for it; nothing was installed, so check for updates again");
-        try { from.ApplyUpdatesAndRestart(release, ["--background", "--profile", profile]); }
-        catch
+        // Not Velopack's ApplyUpdatesAndRestart, which names the shared packages folder's file to
+        // Update.exe (#984): the bytes verified and marked, copied into this profile's own folder
+        // and checked again from the handle that keeps them until this process ends, then
+        // Update.exe started as ApplyUpdatesAndRestart starts it, with --package naming the copy
+        // and the shared --packageDir, where its install lock is.
+        Manager();
+        var handoff = Handoff ?? throw new InvalidOperationException("this copy of the app has no profile folder to hand an update over from; nothing was installed");
+        if (!VelopackLocator.IsCurrentSet) { throw new InvalidOperationException("Velopack's locator is not set, so the installer can't be found; nothing was installed"); }
+        var locator = VelopackLocator.Current;
+        if (locator.UpdateExePath is not { Length: > 0 } updateExe || !File.Exists(updateExe)) { throw new FileNotFoundException("Cannot find Update.exe to apply updates.", locator.UpdateExePath); }
+        if (locator.RootAppDir is not { Length: > 0 } root || locator.PackagesDir is not { Length: > 0 } packages || PackageFile(release) is not { } file)
         {
-            handedOver.Dispose();
-            handedOver = null;
-            throw;
+            throw new InvalidOperationException("the installation's folders can't be told, so nothing was installed");
         }
+        handedOver?.Dispose();
+        handedOver = null;
+        var copy = handoff.Prepare(file, version, source!);
+        handedOver = handoff.Launch(copy, (uint)Environment.ProcessId, root, packages, ["--background", "--profile", profile],
+            args => locator.Process.StartProcess(updateExe, args, Path.GetDirectoryName(updateExe)!, false));
+        // As ApplyUpdatesAndRestart ends: Update.exe waits for this process to exit (--waitPid).
+        locator.Process.Exit(0);
     }
 }
 
