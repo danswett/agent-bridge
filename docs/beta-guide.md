@@ -47,7 +47,9 @@ are.
 
 **[confirm: copy the exact wording of what Send feedback and the opt-in telemetry collect from
 the D2 design (#732).]** Separately, the sessions you watch send their prompts, replies and
-approvals to your own phone through Slipgates' relay; that is how the phone sees them.
+approvals to your own phone through Slipgates' relay, encrypted end to end so the relay cannot
+read them. The relay does see connection details: which of your devices are online, when, and
+how much each sends.
 
 ## Getting help and sending feedback
 
