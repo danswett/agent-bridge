@@ -89,9 +89,15 @@ public sealed class FeedbackInboxTransientException(string message, Exception? i
 {
 }
 
+public sealed class FeedbackInboxRepositoryNotPrivateException()
+    : Exception("The configured feedback repository is confirmed public.")
+{
+}
+
 public interface IFeedbackPrivateStore
 {
-    // True only when the configured destination is explicitly confirmed private; false or null fails closed.
+    // True only when confirmed private, false only when confirmed public, and null when status is unavailable.
+    // Adapters throw FeedbackInboxTransientException for retryable I/O failures.
     Task<bool?> ConfirmRepositoryPrivateAsync(CancellationToken cancellationToken);
     Task UpsertClassifiedAsync(string fingerprint, FeedbackPrivateRecord record, CancellationToken cancellationToken);
     Task StoreUnclassifiedAsync(FeedbackPrivateRecord record, CancellationToken cancellationToken);
@@ -131,9 +137,14 @@ public sealed class FeedbackInboxProcessor(
         {
             throw new InvalidOperationException("Feedback inbox limits must be positive.");
         }
-        if (await privateStore.ConfirmRepositoryPrivateAsync(cancellationToken) is not true)
+        var repositoryIsPrivate = await privateStore.ConfirmRepositoryPrivateAsync(cancellationToken);
+        if (repositoryIsPrivate is null)
         {
-            throw new InvalidOperationException("The private feedback repository is not confirmed private.");
+            throw new FeedbackInboxTransientException("The private feedback repository status is unavailable.");
+        }
+        if (!repositoryIsPrivate.Value)
+        {
+            throw new FeedbackInboxRepositoryNotPrivateException();
         }
 
         await foreach (var name in source.ListPendingAsync(cancellationToken))

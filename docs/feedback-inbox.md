@@ -12,8 +12,9 @@ The first slice defines the processing boundary:
   key-vault implementation. The client-owned #738 envelope format is not guessed here.
 - `IFeedbackPrivateStore` is the only destination for decrypted content. Before listing
   or decrypting bundles, the processor requires an explicit confirmation that the
-  configured repository is private; false or unknown results fail closed. It must upsert
-  idempotently by bundle name and group by fingerprint.
+  configured repository is private. A confirmed-public result pauses the worker, and an
+  unavailable result is retried; neither permits processing. It must upsert idempotently
+  by bundle name and group by fingerprint.
 - `IPublicFeedbackIssueStore` receives a separate, validated type that has no free text,
   logs, screenshots, paths, names, session content or decrypted payload. It owns durable
   hourly creation limiting and fingerprint-based create-or-update behavior.
@@ -34,6 +35,9 @@ and the fingerprint. The worker is disabled unless explicitly enabled;
 `Enabled` is its kill switch, and the default public creation cap is ten per hour.
 Adapters must translate retryable I/O failures to `FeedbackInboxTransientException`; the
 worker logs them and retries on the next poll without discarding pending bundles.
+The private-repository verifier returns `false` only for an explicitly confirmed public
+repository, returns `null` when the status is unavailable, and throws
+`FeedbackInboxTransientException` for retryable GitHub I/O failures.
 Envelope parsers must map malformed/authentication failures to `FeedbackEnvelopeException`;
 key-provider outages must use `FeedbackInboxTransientException`, not
 `CryptographicException`.

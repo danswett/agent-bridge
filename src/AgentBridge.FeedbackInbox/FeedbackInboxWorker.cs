@@ -20,6 +20,12 @@ public sealed class FeedbackInboxWorker(
             {
                 await processor.ProcessAsync(stoppingToken);
             }
+            catch (FeedbackInboxRepositoryNotPrivateException)
+            {
+                logger.LogError(
+                    "Feedback inbox is paused because its configured repository is public; pending bundles are untouched. Rechecking after {PollInterval}.",
+                    options.PollInterval);
+            }
             catch (FeedbackInboxTransientException)
             {
                 logger.LogWarning(

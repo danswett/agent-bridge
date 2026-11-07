@@ -117,8 +117,15 @@ public sealed class FeedbackInboxProcessorTests
         var privateStore = new FakePrivateStore { RepositoryPrivate = confirmation };
         var publicStore = new FakePublicStore();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => Processor(source, decryptor, privateStore, publicStore).ProcessAsync());
+        var processor = Processor(source, decryptor, privateStore, publicStore);
+        if (confirmation is false)
+        {
+            await Assert.ThrowsAsync<FeedbackInboxRepositoryNotPrivateException>(() => processor.ProcessAsync());
+        }
+        else
+        {
+            await Assert.ThrowsAsync<FeedbackInboxTransientException>(() => processor.ProcessAsync());
+        }
 
         Assert.Equal(0, source.ListCalls);
         Assert.Equal(0, source.Reads);
@@ -127,6 +134,48 @@ public sealed class FeedbackInboxProcessorTests
         Assert.Empty(privateStore.Unclassified);
         Assert.Single(source.Pending);
         Assert.Empty(publicStore.Issues);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task Worker_retries_unconfirmed_private_destination_without_processing(bool? initialConfirmation)
+    {
+        var source = new FakeSource(("bundle", [1, 2, 3]));
+        var decryptor = new FakeDecryptor(new DecryptedFeedback(Classified, PrivateMarker));
+        var privateStore = new FakePrivateStore { RepositoryPrivate = initialConfirmation };
+        var publicStore = new FakePublicStore();
+        var options = new FeedbackInboxOptions
+        {
+            Enabled = true,
+            PollInterval = TimeSpan.FromMilliseconds(20),
+            PublicErrorTypes = ["startup-failure"],
+            PublicStages = ["launch"]
+        };
+        var processor = Processor(source, decryptor, privateStore, publicStore, options);
+        var worker = new FeedbackInboxWorker(options, processor, NullLogger<FeedbackInboxWorker>.Instance);
+
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            await privateStore.FirstConfirmationCall.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(0, source.ListCalls);
+            Assert.Equal(0, decryptor.Calls);
+            Assert.Single(source.Pending);
+            Assert.Empty(privateStore.Classified);
+
+            privateStore.RepositoryPrivate = true;
+            await source.DeletedBundle.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            await worker.StopAsync(CancellationToken.None);
+        }
+
+        Assert.True(privateStore.ConfirmationCalls >= 2);
+        Assert.Single(privateStore.Classified);
+        Assert.Empty(source.Pending);
+        Assert.Single(publicStore.Issues);
     }
 
     [Fact]
@@ -275,6 +324,7 @@ public sealed class FeedbackInboxProcessorTests
         public long? ReportedSize { get; init; }
         public int TransientSizeFailures { get; set; }
         public TaskCompletionSource SecondSizeCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource DeletedBundle { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int sizeCalls;
 
         public async IAsyncEnumerable<string> ListPendingAsync([EnumeratorCancellation] CancellationToken cancellationToken)
@@ -308,6 +358,7 @@ public sealed class FeedbackInboxProcessorTests
         public Task DeleteAsync(string bundleName, CancellationToken cancellationToken)
         {
             Pending.Remove(bundleName);
+            DeletedBundle.TrySetResult();
             return Task.CompletedTask;
         }
     }
@@ -341,12 +392,18 @@ public sealed class FeedbackInboxProcessorTests
     {
         readonly HashSet<string> seenBundles = [];
         public bool? RepositoryPrivate { get; set; } = true;
+        public int ConfirmationCalls;
+        public TaskCompletionSource FirstConfirmationCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly List<FeedbackPrivateRecord> Classified = [];
         public readonly List<FeedbackPrivateRecord> Unclassified = [];
         public readonly List<PublicFeedbackIssueReference> Links = [];
 
-        public Task<bool?> ConfirmRepositoryPrivateAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(RepositoryPrivate);
+        public Task<bool?> ConfirmRepositoryPrivateAsync(CancellationToken cancellationToken)
+        {
+            var result = RepositoryPrivate;
+            if (Interlocked.Increment(ref ConfirmationCalls) == 1) { FirstConfirmationCall.TrySetResult(); }
+            return Task.FromResult(result);
+        }
 
         public Task UpsertClassifiedAsync(string fingerprint, FeedbackPrivateRecord record, CancellationToken cancellationToken)
         {
