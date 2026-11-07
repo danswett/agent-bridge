@@ -58,6 +58,22 @@ public class AnswerTests
         var q = Form(new Field { Name = "t", Type = FieldType.Text, Constraints = new FieldConstraints { Pattern = "^(a+)+$" } });
         Assert.Equal("\"t\": its limits cannot be checked here; answer it at the machine", Answers.Check(q, Answer($$"""{"t":"{{new string('a', 40)}}!"}""")));
     }
+
+    // #908 before #766: words for an Other the machine cannot send yet are refused in the words
+    // every client shows beside it, with its code, whatever limits the field also has; checked
+    // against those first, they read as a limit the person could meet.
+    [Fact]
+    public void Other_the_machine_cannot_send_yet_is_refused_in_its_own_words_before_the_fields_limits()
+    {
+        var field = Choice("answer") with { OtherUnavailable = AnswerReasons.OtherNotSendable, Constraints = new FieldConstraints { MaxLength = 2, Pattern = "^[a-z]+$" } };
+
+        var reason = Answers.Check(Form(field), Answer("""{"answer":{"other":"DuckDB, embedded"}}"""));
+
+        Assert.Equal(AnswerReasons.Text(AnswerReasons.OtherNotSendable), reason);
+        Assert.Equal(AnswerReasons.OtherNotSendable, AnswerReasons.Code(reason!));
+        Assert.Null(Answers.Check(Form(field), Answer("""{"answer":"b"}""")));
+    }
+
     [Fact]
     public void A_prompt_marked_for_the_machine_takes_no_answer_however_well_formed()
     {

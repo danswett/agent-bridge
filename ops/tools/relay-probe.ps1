@@ -15,7 +15,7 @@
   alert can be confirmed or ruled out by hand in seconds.
 
 .PARAMETER Target
-  production (default), staging, old (the retired free-trial stamp), or all.
+  production (default), production-slipgates (the same app at relay.slipgates.com), staging, old (the retired free-trial stamp), or all.
 
 .PARAMETER Url
   Probe this base URL instead of a named target.
@@ -39,7 +39,7 @@
 [CmdletBinding(DefaultParameterSetName = 'Named')]
 param(
     [Parameter(ParameterSetName = 'Named')]
-    [ValidateSet('production', 'staging', 'old', 'all')]
+    [ValidateSet('production', 'production-slipgates', 'staging', 'old', 'all')]
     [string] $Target = 'production',
 
     [Parameter(ParameterSetName = 'Url', Mandatory)]
@@ -62,6 +62,13 @@ $targets = [ordered]@{
         CnameTarget = 'agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io'
         # The environment's domain-verification id (public: docs/relay-deploy.md "Custom domain").
         # Any TXT isn't enough: a stale id from another environment also blocks renewal.
+        AsuidValue = '9E5A7D37AE5B378B92399BA82D0EEEF5F4674EE876FF3BF49EB6BB4B53A20E60'
+        Timeout = 15
+    }
+    # The same app under its new name (#540). Both names serve directly: a WebSocket upgrade can't follow a redirect.
+    'production-slipgates' = @{
+        Url = 'https://relay.slipgates.com'
+        CnameTarget = 'agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io'
         AsuidValue = '9E5A7D37AE5B378B92399BA82D0EEEF5F4674EE876FF3BF49EB6BB4B53A20E60'
         Timeout = 15
     }

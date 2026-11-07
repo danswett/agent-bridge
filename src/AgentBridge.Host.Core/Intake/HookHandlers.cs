@@ -231,7 +231,7 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
         using var existing = ReadJson(path);
         var old = existing?.RootElement;
         string Keep(string? value, string field) =>
-            !string.IsNullOrWhiteSpace(value) ? value : old is { } o && o.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+            !string.IsNullOrWhiteSpace(value) ? value : old is { } o && o.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.String ? Json.Text(v) : "";
         if (pid <= 0 && old is { } p) { pid = KeptPid(p, AgentKind.Codex); }
         WriteJson(path, w =>
         {
@@ -569,8 +569,8 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
         // comes as Bash with `description: "network-access <target>"`
         // (PermissionRequestPayload::bash(cmd, Some(format!("network-access {target}")))), and the
         // person approves access to that target, which a card showing the command alone hid (#338).
-        if (input.TryGetProperty("description", out var d) && (d.ValueKind != JsonValueKind.String || NetworkAccess(d.GetString()!))) { return null; }
-        return input.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+        if (input.TryGetProperty("description", out var d) && (d.ValueKind != JsonValueKind.String || NetworkAccess(Json.Text(d)))) { return null; }
+        return input.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String ? Json.Text(c) : null;
     }
 
     // "network-access ..." however Codex or an older or newer build may write it: any case, any
@@ -588,7 +588,7 @@ internal sealed partial class HookHandlers(string runtimeRoot, string claudeHome
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v)
             ? v.ValueKind switch
             {
-                JsonValueKind.String => v.GetString(),
+                JsonValueKind.String => Json.Text(v),
                 JsonValueKind.Null or JsonValueKind.Undefined => null,
                 JsonValueKind.Object or JsonValueKind.Array => null,
                 _ => v.GetRawText(),

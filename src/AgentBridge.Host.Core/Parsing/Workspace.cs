@@ -41,7 +41,9 @@ internal sealed record Workspace(string? Name, string? Cwd, string? Repository, 
         if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
         {
             try { return System.Text.Json.JsonSerializer.Deserialize<string>(value) ?? ""; }
-            catch (System.Text.Json.JsonException) { return value[1..^1]; }
+            // Half a surrogate pair throws InvalidOperationException: the text as written, as JSON
+            // that isn't.
+            catch (Exception e) when (e is System.Text.Json.JsonException or InvalidOperationException) { return value[1..^1]; }
         }
         // A plain scalar ends at a comment.
         var comment = value.IndexOf(" #", StringComparison.Ordinal);

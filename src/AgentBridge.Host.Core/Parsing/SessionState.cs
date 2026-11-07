@@ -17,8 +17,14 @@ internal sealed class SessionState
     // The record UserMessage came from (Copilot's event id, Codex's time), where the parser knows
     // it: the same words sent twice are two prompts, and a driver tells them apart by this.
     public string? UserMessageKey;
+    // The id of the latest turn (activity.turn): of the record that started it, as history gives it.
+    public string? TurnId;
     // The latest text, from whichever agent wrote it last, as older clients have it.
     public string? Response;
+    // The turn the main agent's own latest reply was written in (activity.responseTurn): a new
+    // prompt leaves the last turn's reply showing until the new turn has one, and a client
+    // drawing the latest turn must not put that reply under the new prompt.
+    public string? ResponseTurn;
     public string? Reasoning;
     // The sub-agent that wrote Response or Reasoning, null for the main agent's own.
     public string? ResponseBy;
@@ -121,7 +127,7 @@ internal sealed class SessionState
     public void Reset()
     {
         FirstUserMessage = null;
-        AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; Response = null; Reasoning = null; Model = null;
+        AgentTitle = null; UserMessage = null; UserMessageFrom = null; UserMessageLabel = null; UserMessageKey = null; TurnId = null; ResponseTurn = null; Response = null; Reasoning = null; Model = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null; LastEventAt = null;
         Prompts = 0; LastPromptAt = null; Compactions = 0; Seen = false; UncountedTurn = false;
@@ -173,7 +179,7 @@ internal sealed class SessionState
     public void MainSaid(string? content, string? reasoning, DateTimeOffset? at)
     {
         if (reasoning is not null) { Reasoning = OwnReasoning = reasoning; ReasoningBy = null; OwnAt = at ?? OwnAt; }
-        if (content is not null) { Response = OwnResponse = content; OwnResponseCut = false; ResponseBy = null; OwnAt = at ?? OwnAt; }
+        if (content is not null) { Response = OwnResponse = content; OwnResponseCut = false; ResponseBy = null; OwnAt = at ?? OwnAt; ResponseTurn = TurnId; }
     }
 
     // What a sub-agent wrote: the latest text still, as on agent-ha-bridge's card, now

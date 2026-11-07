@@ -21,9 +21,51 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     // and Count checks the parsed type anyway.
     public void Skim(ReadOnlyMemory<byte> line)
     {
+        // Every turn mark (TurnMarks) is a skim marker, so a line that may start a turn is parsed.
         if (!SkimWants(line.Span)) { return; }
         using var doc = TryParse(line);
-        if (doc is { RootElement.ValueKind: JsonValueKind.Object } d) { Count(d.RootElement); }
+        if (doc is { RootElement.ValueKind: JsonValueKind.Object } d)
+        {
+            _line = line;
+            try { Count(d.RootElement); }
+            // A backstop: text that still can't be read costs this record, never the session.
+            catch (InvalidOperationException) { Unreadable(line.Span); }
+            finally { _line = default; }
+        }
+        else { Unreadable(line.Span); }
+    }
+
+    // The line being read, for the id of a turn its record starts (TurnIds): history gives the
+    // turn the same id from the same bytes.
+    ReadOnlyMemory<byte> _line;
+
+    // The id of the turn the record being read starts, for activity.turn.
+    protected void TurnStarts() => S.TurnId = _line.IsEmpty ? null : Conversation.TurnIds.Of(_line.Span);
+
+    // What a record that may start a turn carries (Conversation.TurnMarks); null for an agent
+    // without history.
+    protected virtual Conversation.TurnMarks? Turns => null;
+
+    bool MayStartTurn(ReadOnlySpan<byte> line) => Turns?.MayStart(line) == true;
+
+    // A line that could not be read but may have started a turn: history shows that turn as one it
+    // can't read, under that line's id, so what follows is not the last prompt's. Its id is not
+    // known here, so the latest turn is unknown until a prompt that can be read.
+    void Unreadable(ReadOnlySpan<byte> line)
+    {
+        if (MayStartTurn(line)) { S.TurnId = null; }
+    }
+
+    // A line longer than the tail reads, of which only its start was seen: as history decides
+    // (HistoryReader.Examine), by that start alone.
+    void ILineSink.Dropped(ReadOnlySpan<byte> head) => Unreadable(head);
+
+    void ILineSink.Skipped()
+    {
+        // The latest turn may have begun in the bytes never read: its id is not known, and the
+        // last one the skim saw is not it.
+        S.TurnId = null;
+        Skipped();
     }
 
     protected virtual bool SkimWants(ReadOnlySpan<byte> line)
@@ -38,13 +80,25 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     public void Parse(ReadOnlyMemory<byte> line)
     {
         using var doc = TryParse(line);
-        if (doc is not { RootElement.ValueKind: JsonValueKind.Object } d) { return; }
+        if (doc is not { RootElement.ValueKind: JsonValueKind.Object } d)
+        {
+            Unreadable(line.Span);
+            return;
+        }
         var before = S.Effective;
         var at = Json.Time(d.RootElement, "timestamp");
         // Only events that can change what a client shows move updatedAt: hook runs,
         // usage records and model internals are a fifth of a Copilot transcript, and
         // counting them sent an upsert for every one.
-        var visible = Apply(d.RootElement, at);
+        _line = line;
+        bool visible;
+        try { visible = Apply(d.RootElement, at); }
+        catch (InvalidOperationException)
+        {
+            Unreadable(line.Span);
+            visible = true;
+        }
+        finally { _line = default; }
         S.Observe(at, before, visible);
     }
 
@@ -63,9 +117,12 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
 
     protected DateTimeOffset Now(DateTimeOffset? at) => at ?? Time.GetUtcNow();
 
+    // Half a surrogate pair ("\uD800") is read as the replacement character (Json.Repaired), as
+    // history reads it: reading its text threw, which left the session unlisted (found in review
+    // of #292). The turn's id is still hashed from the line as written (_line).
     static JsonDocument? TryParse(ReadOnlyMemory<byte> line)
     {
-        try { return JsonDocument.Parse(line, new JsonDocumentOptions { MaxDepth = 256 }); }
+        try { return JsonDocument.Parse(Json.Repaired(line), new JsonDocumentOptions { MaxDepth = 256 }); }
         catch (JsonException) { return null; }
     }
 
@@ -78,6 +135,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
         S.UserMessageFrom = from;
         S.UserMessageLabel = label;
         S.UserMessageKey = key;
+        TurnStarts();
     }
 
     // from and label: who wrote it, when not the person (#489). injected: context the agent was

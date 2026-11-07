@@ -52,6 +52,13 @@ public static class LocalApi
         {
             throw Refuse(op, agent, "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
         }
+        // A whole past conversation of every session, words the person pasted into other sessions
+        // included, is more than an agent reading the latest exchange needs, until agents have a
+        // principal of their own (design §5.5, #45; docs/protocol/v1-history.md).
+        if (op == HistoryProtocol.Op && callers.Classify(channel) is { Kind: CallerKind.Agent } reader)
+        {
+            throw Refuse(op, reader, "reading a session's history is for the person, from the app or a phone", log);
+        }
         // Shaped inside the service, so hello.changed compares what this caller is told (#651).
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {

@@ -99,7 +99,19 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         public long? Pending;
         // What the last commit was made from: Commit made again from the same is the same.
         public Session? CommittedFull;
-        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored, DateTimeOffset? Boundary, bool Prompted, SessionStatus Turn) CommittedWith;
+        public (DateTimeOffset? Touched, DateTimeOffset? Ending, DriverKind? Driver, string? Principal, bool AgentsPrompt, SessionRestored? Restored, DateTimeOffset? Boundary, bool Prompted, SessionStatus Turn, bool PhoneSignIn) CommittedWith;
+        // The turns whose prompt the host showed as an agent's (#489), newest last, as many as
+        // history serves: the transcript does not mark them, and history shows them as live did.
+        // Under the gate.
+        public readonly HashSet<string> AgentTurns = new(StringComparer.Ordinal);
+        public readonly Queue<string> AgentTurnOrder = new();
+
+        public void AgentTurn(string turn)
+        {
+            if (!AgentTurns.Add(turn)) { return; }
+            AgentTurnOrder.Enqueue(turn);
+            if (AgentTurnOrder.Count > HistoryLimits.Kept) { AgentTurns.Remove(AgentTurnOrder.Dequeue()); }
+        }
     }
 
     public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null)
@@ -209,6 +221,44 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             var d = e.Tracker.Discovered;
             return new SessionFiles(d.Agent, d.TranscriptPath, d.Registration?.Path);
         }
+    }
+
+    public bool ServesHistory => true;
+
+    // Reads of history at once: each is bounded (HistoryBudgets), and a client asks for the next
+    // page only as its reader scrolls, so more than this waiting is a client asking too much.
+    readonly SemaphoreSlim _historyReads = new(2, 2);
+    readonly object _historyStart = new();
+    Conversation.HistoryReader? _history;
+
+    // Made once, by one caller: two first requests at once each loading the key could have one
+    // fall back to a key for this run only, and its cursors go stale at the next restart.
+    Conversation.HistoryReader HistoryReader()
+    {
+        lock (_historyStart)
+        {
+            return _history ??= new Conversation.HistoryReader(_options.HistoryBudgets with { MaxLineBytes = _options.MaxLineBytes }, Conversation.HistoryKey.Load(_options.HistoryKeyFile, Log));
+        }
+    }
+
+    // Off the pass and its lock: it reads only the transcript, which the agent keeps writing, and
+    // the main agent's delegates as of the session's last update.
+    public async Task<HistoryResult> HistoryAsync(string id, string? before, int limit, CancellationToken cancellationToken = default)
+    {
+        AgentKind agent;
+        string? transcript;
+        Conversation.HistorySeed seed;
+        lock (_gate)
+        {
+            if (!_entries.TryGetValue(id, out var e)) { return HistoryResult.Gone; }
+            agent = e.Tracker.Discovered.Agent;
+            transcript = e.Tracker.Discovered.TranscriptPath;
+            seed = e.Tracker.MainDelegates with { AgentTurns = new HashSet<string>(e.AgentTurns, StringComparer.Ordinal) };
+        }
+        var reader = HistoryReader();
+        await _historyReads.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await Task.Run(() => reader.Read(id, agent, transcript, before, limit, seed, _options.CopilotRemoteApproval, cancellationToken), cancellationToken).ConfigureAwait(false); }
+        finally { _historyReads.Release(); }
     }
 
     public SessionSubscription Subscribe() => Subscribe(null);
@@ -959,6 +1009,12 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         }
     }
 
+    bool PhoneSignInPinned()
+    {
+        try { return _options.PhoneSignInPinned(); }
+        catch (Exception) { return false; }
+    }
+
     void Commit(Entry entry, Session full)
     {
         entry.Full = full;
@@ -1013,7 +1069,10 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
         // The restore mark too (#780), and what its boundary decides below: the mark is held, cleared
         // and taken away apart from the transcript, so an unchanged session with a changed mark is
         // shown again, its status not left as the interrupted run's.
-        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt, restored, boundary, prompted, turn);
+        // Whether its sign-in is the phone's: held apart from the transcript, in the roster (#972).
+        var phoneSignIn = full.Attention is { Kind: AttentionKind.SignInNeeded, SignIn: null } failing
+            && _options.PhoneSignIn.Contains(failing.Agent ?? full.Agent) && PhoneSignInPinned();
+        var inputs = (entry.Touched, endingSince, driver.Kind, driver.Principal, agentsPrompt, restored, boundary, prompted, turn, phoneSignIn);
         // The tracker hands back the very session it built last when nothing it reads changed.
         // Fitting and serialising it again (about 37 MB/min, #608) found the same JSON every time.
         // Never while a sign-in recovery overlay is held (#800): each step of it (Checking, then
@@ -1039,7 +1098,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 else { _recovery.Remove(full.Id); }
             }
         }
-        if (shown.Attention is { Kind: AttentionKind.SignInNeeded, SignIn: null } needed && _options.PhoneSignIn.Contains(needed.Agent ?? shown.Agent))
+        if (phoneSignIn && shown.Attention is { Kind: AttentionKind.SignInNeeded, SignIn: null } needed)
         {
             shown = shown with { Attention = needed with { SignIn = SignInWhere.Phone } };
         }
@@ -1075,6 +1134,7 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
             if (shown.Activity is { UserMessage: not null, UserMessageFrom: null } activity && agentsPrompt)
             {
                 shown = shown with { Activity = activity with { UserMessageFrom = UserMessageFrom.Agent } };
+                if (activity.Turn is { } agentTurn) { lock (_gate) { entry.AgentTurn(agentTurn); } }
             }
         }
         Commits++;

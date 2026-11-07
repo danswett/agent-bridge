@@ -453,6 +453,13 @@ public sealed record Activity
     public UserMessageFrom? UserMessageFrom { get; init; }
     // A short plain-text label for it, at most Limits.UserMessageLabel bytes: a schedule's number.
     public string? UserMessageLabel { get; init; }
+    // The id of the latest turn, which UserMessage, Reasoning, CurrentTool and the question belong
+    // to: the id session.history gives it (docs/protocol/v1-history.md), so a client merging live
+    // activity with history pages draws it once. Never trimmed by SessionBudget.
+    public string? Turn { get; init; }
+    // The turn the main agent's own latest reply (Own.Response, else Response) was written in:
+    // Turn once the latest turn has replied, an earlier turn's until then. Never trimmed.
+    public string? ResponseTurn { get; init; }
     public int? TurnCount { get; init; }
     public int? Compactions { get; init; }
     // Work the session started that outlives its own turn, still running. Absent when there
@@ -628,6 +635,11 @@ public sealed record Field
     public IReadOnlyList<Option>? Options { get; init; }
     [Strict(Strictness.Security)]
     public bool? AllowOther { get; init; }
+    // Why the agent offers Other here but this machine cannot send it (AnswerReasons), for a
+    // field whose AllowOther is not true: a client shows Other disabled, with the reason's
+    // sentence. Display only, so not strict: read wrong, a client only leaves Other out, as one
+    // that predates it does. It never enables Other or changes what Answers.Check takes (#908).
+    public string? OtherUnavailable { get; init; }
     public JsonElement? Default { get; init; }
     public bool? Required { get; init; }
     // What the agent's schema allows (#766). Not strict: a client that cannot read them checks
@@ -717,8 +729,11 @@ public sealed record AnswerRequest
     public SignedCommand? Confirm { get; init; }
 }
 
-public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null)
+public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null, AnswerStage? Stage = null)
 {
+    // Why, as a code a client says in its own fixed words (AnswerReasons), beside Reason; absent
+    // for every other reason. A client that does not know the code shows Reason.
+    public string? Code { get; init; }
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
 }
@@ -745,6 +760,16 @@ public sealed record DeliveryProgress(string Stage, bool? Working = null)
     // working, so the agent takes it at its next step (queued).
     public const string Typed = "typed";
 }
+
+// How far an unconfirmed answer is known to have got (#467), named as DeliveryTimings names the
+// stages, so a client can say which: typed, every key went and nothing has been recorded for the
+// question since, which may mean it was never submitted (an Enter the CLI took as part of the
+// words); recorded, the session recorded an answer to that very question that is not, or not
+// yet, the one typed. Confirmed is delivered, never a stage. Unlike the progress frames and
+// timings, it is on every unconfirmed answer's result, whether or not the client asked for
+// progress. A stage a client does not know reads as typed, the one that claims least.
+[UnknownAs(Typed)]
+public enum AnswerStage { Typed, Recorded }
 
 // session.reply: a prompt for the session, typed into its own input as if at the machine.
 // Request is the client's UUID for this reply, as for an answer. Attachments name files the

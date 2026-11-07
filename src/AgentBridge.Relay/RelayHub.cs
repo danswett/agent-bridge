@@ -8,7 +8,7 @@ namespace AgentBridge.Relay;
 
 // Routes opaque frames between the devices of one account. It sees routing ids, sizes and
 // timing, and nothing a session says: payloads are Noise ciphertext end to end.
-public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, MachineRoster roster, RelayMetrics metrics, ILogger<RelayHub> log)
+public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, FeedbackService feedback, MachineRoster roster, RelayMetrics metrics, ILogger<RelayHub> log)
 {
     static readonly HashSet<string> Kinds = ["host", "app", "pwa", "phone", "test"];
     // The kinds a person uses. Only these may forget a machine: never a host, which is where an
@@ -154,7 +154,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         // Announce before "ready", so peers learn of a device before it can send them anything.
         await RosterChangedAsync(conn.Account.Id);
         // blobs: present only with a blob store, so a device knows whether files over 256 KiB can go.
-        await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login, blobs = blobs.Advertised });
+        await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login, blobs = blobs.Advertised, feedback = feedback.Advertised });
 
         string end = "closed";
         try { end = await ForwardAsync(conn, devices, aborted); }
@@ -251,6 +251,12 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                     var kind = bt.GetString()!;
                     var message = m.Clone();
                     _ = Task.Run(async () => await c.SendJsonAsync(await blobs.HandleAsync(c.Account, c.DeviceId, kind, message)));
+                }
+                else if (m.TryGetProperty("t", out var fbt) && fbt.GetString() == "feedback-put")
+                {
+                    var c = conn;
+                    var message = m.Clone();
+                    _ = Task.Run(async () => await c.SendJsonAsync(await feedback.HandleAsync(c.Account, message)));
                 }
                 else if (m.TryGetProperty("t", out var ft) && ft.GetString() == "forget")
                 {

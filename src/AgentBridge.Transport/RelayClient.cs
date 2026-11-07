@@ -55,6 +55,8 @@ public sealed class RelayClient : IAsyncDisposable
     public string AccountId { get; private set; } = "";
     // The largest blob (stored bytes) the relay's blob store takes, or 0 when it has none.
     public long BlobMaxBytes { get; private set; }
+    // The largest feedback bundle (stored bytes) the relay takes, or 0 when it takes none.
+    public long FeedbackMaxBytes { get; private set; }
     public string Login { get; private set; } = "";
     PresenceSnapshot snapshot = new([], null);
     // Both lists from the same presence message: read this, not Presence then Known, wherever the
@@ -109,6 +111,14 @@ public sealed class RelayClient : IAsyncDisposable
     {
         var r = await BlobRequestAsync(id => new { t = "blob-put", id, to, size = storedSize }, ct);
         return new BlobSlot(r.GetProperty("blob").GetString()!, r.GetProperty("url").GetString()!, r.GetProperty("expires").GetDateTimeOffset());
+    }
+
+    // Beta feedback (docs/protocol/feedback.md): a create-only URL for one bundle already sealed
+    // to the feedback key, sized to a bucket (BlobFormat.StoredSize). Nothing can be read back.
+    public async Task<BlobSlot> FeedbackPutAsync(long storedSize, CancellationToken ct = default)
+    {
+        var r = await BlobRequestAsync(id => new { t = "feedback-put", id, size = storedSize }, ct);
+        return new BlobSlot("", r.GetProperty("url").GetString()!, r.GetProperty("expires").GetDateTimeOffset());
     }
 
     // A short-lived read URL for a blob sent to this device, and its stored size.
@@ -198,6 +208,7 @@ public sealed class RelayClient : IAsyncDisposable
             if (ready.GetProperty("device").GetString() != c.DeviceId) { throw new CryptographicException("relay assigned a different device id"); }
             c.AccountId = early ? ready.GetProperty("account").GetString()! : challenge.GetProperty("account").GetString()!;
             c.Login = ready.GetProperty("login").GetString() ?? "";
+            if (ready.TryGetProperty("feedback", out var fb) && fb.ValueKind == JsonValueKind.Object && fb.TryGetProperty("max", out var fmax) && fmax.TryGetInt64(out var fm)) { c.FeedbackMaxBytes = Math.Max(0, fm); }
             // Absent from a relay without a blob store, and from one that predates it.
             if (ready.TryGetProperty("blobs", out var blobs) && blobs.ValueKind == JsonValueKind.Object && blobs.TryGetProperty("max", out var max) && max.TryGetInt64(out var m)) { c.BlobMaxBytes = Math.Max(0, m); }
         }
@@ -346,6 +357,7 @@ public sealed class RelayClient : IAsyncDisposable
                             }
                             break;
                         case "blob-result":
+                        case "feedback-result":
                             if (blobRequests.TryRemove(j.GetProperty("id").GetInt64(), out var b)) { b.TrySetResult(j.Clone()); }
                             break;
                         case "forget-result":

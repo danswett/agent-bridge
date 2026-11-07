@@ -100,6 +100,13 @@ internal sealed class SessionTracker
             RefreshWorkspace(Path.Combine(dir, "workspace.yaml"));
             changed |= !ReferenceEquals(workspace, _workspace);
         }
+        if (_state.Background.Version != _delegatesVersion || _state.Background.CallsVersion != _callsVersion)
+        {
+            var (names, calls) = _state.Background.MainAgents();
+            MainDelegates = new Conversation.HistorySeed(names, calls) { CallOwners = _state.Background.CallOwners(), SyncAgents = _state.Background.SyncAgents(), Parents = _state.Background.Parents() };
+            _delegatesVersion = _state.Background.Version;
+            _callsVersion = _state.Background.CallsVersion;
+        }
         // Not responding (#800) comes from the clock and from the delegates' own transcripts, which
         // nothing above looks at: a hung session is exactly one whose transcript stops changing, so
         // skipping its build left it working with no attention for ever (#634 review, H1). Asked
@@ -141,6 +148,12 @@ internal sealed class SessionTracker
 
     // Tests: how many times the session was built.
     internal int Builds { get; private set; }
+
+    // The main agent's own delegates as of the last update, for a history read on another thread:
+    // replaced whole, never changed in place.
+    public Conversation.HistorySeed MainDelegates { get; private set; } = new(new Dictionary<string, string?>(), new Dictionary<string, string>());
+    int _delegatesVersion = -1;
+    int _callsVersion = -1;
 
     // updatedAt moves only when something a client shows changed. An event can be of a
     // kind that usually matters (a turn starting) and still change nothing (the session
@@ -249,7 +262,7 @@ internal sealed class SessionTracker
             // already typed into is never typed into again, so it is answered at the machine.
             if (reg.Approval is { } marker && (question is null || question.Kind == QuestionKind.Approval))
             {
-                question = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted, approve: _options.EscapedApproval);
+                question = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted,                 approve: _options.EscapedApproval, lossy: marker.Lossy);
                 hintAt = question.AskedAt;
             }
             // Codex's hooks report status directly, at UserPromptSubmit and Stop.
@@ -341,6 +354,8 @@ internal sealed class SessionTracker
                 UserMessage = Limits.KeepStart(_state.UserMessage, Limits.UserMessage),
                 UserMessageFrom = _state.UserMessage is null ? null : _state.UserMessageFrom,
                 UserMessageLabel = _state.UserMessage is null ? null : Limits.KeepStart(_state.UserMessageLabel, Limits.UserMessageLabel),
+                Turn = _state.TurnId,
+            ResponseTurn = (ownResponse ?? (source?.Response is null ? response : null)) is null ? null : _state.ResponseTurn,
                 TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle || _state.UncountedTurn ? 0 : 1)) : null,
                 Compactions = _state.Seen ? _state.Compactions : null,
                 Background = Protocol.Background.Of(agents, shells),

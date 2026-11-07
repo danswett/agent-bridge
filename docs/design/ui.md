@@ -1043,8 +1043,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   own. "Main agent" only where the host says whose the words are (`activity.source`, `own`
   or a delegate list); otherwise the label is the agent's name ("Claude"), as such a host may
   send a delegate's words as the response.
-- **Delegate events** (#661). *Proposed: decided by the owner on 2026-11-04, not yet built;
-  #661 builds it. No client draws these lines yet.* A past-tense record of the main agent's own delegates starting and reporting back. The strip, the Delegates tab and
+- **Delegate events** (#661, built in the PWA and the Windows app). A past-tense record of the main agent's own delegates starting and reporting back. The strip, the Delegates tab and
   the chips (§6.3) are the present tense and the only live status, and the
   inspector holds the detail, so a line never says a delegate is working and never shows the
   working glyph. A fold's "still working" count (D3, below) is the one exception: a live count
@@ -1071,10 +1070,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     always closer together than the next line and a wrapped line reads as one. With a pointer,
     lines keep the meta style's own leading.
     One that reports back in the same gap leaves the shared line for its own merged line, in place.
-  - **Runs fold (D3):** more than 3 lines in a row between two messages fold into one, drawn
-    "5 delegates · 4 reported back › 1 still working". It shows no working glyph. It expands in
+  - **Runs fold (D3):** 2 or more lines in a row between two messages fold into one (#1063; it
+    was more than 3), drawn
+    "5 delegates · 4 reported back › 1 still working". It shows no working glyph. It is closed
+    until opened, and expands in
     place to its lines, indented under a rule (Disclosure, §5.3), and is remembered open or
-    closed per session.
+    closed per session for the visit, never saved to disk. The PWA and the Windows app both
+    draw it, with the same words and counts.
     - **The count is live, and never guessed.** Each delegate in the run is in exactly one
       count, from its entry in `subagents` ([v1-sessions](../protocol/v1-sessions.md#subagent))
       while it has one:
@@ -1562,6 +1564,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     | Passed, stalled | `typed` on an idle session, then nothing for 10 s | *line*: Passed to the agent · not picked up yet | text2 | "Reply passed to the agent, not picked up yet" |
     | Still being delivered | a resend met the first copy in flight | *line*: the stage reached · still being delivered | text2 | "Reply still being delivered" |
     | Waiting for the machine | held on this device while the machine isn't connected | *line*: Waiting for *machine* · it goes when *machine* is back; Send's ring stands still | text2 | "Reply waiting for *machine*" |
+    | Waiting for discovery (#1064) | a resume the host holds back while its discovery is held (`busy`, "Held: …") | *line*: *machine* is still finding its sessions. Try Launch again in a moment. (two sentences, no "·"; words only: nothing is resent on its own, Launch stays enabled, and the line is announced politely once) | text2 | the line's words |
     | Not confirmed | result `unconfirmed` (host: a reply 60 s, an answer 15 s), or the client's 9 min | *line*: Sent, but not confirmed. Check the conversation before sending it again. (an answer: Sent, but not confirmed. Check the conversation.) | Needs you's text colour | the sentence |
     | Busy, stale | result `busy` or `stale` | *line*: today's ("Not sent: …") | Needs you's text colour | the words |
     | Refused, failed | result `refused`; the request failed | *line*: today's ("The machine refused this reply: …", "Couldn't send it: …") | Danger | the words |
@@ -1608,7 +1611,10 @@ machine, online ones first, then the account's offline machines (#213):
 - **Line 2:** at most two facts: how many sessions, and the version (with "(dev)" for a build
   from a working copy). A read-only machine says "View only", and a machine whose discovery is
   held says "Discovery held", in the version's place; one that is both says "Discovery held". It
-  says so while the hold stands, whether or not its banner was dismissed (#788). The host's reason
+  says so only once a hold has lasted two minutes, counted for each hold from when the client
+  first saw it: a shorter one (a routine start or end of discovery) changes nothing on the row,
+  one that clears takes the words away at once, and one that comes back counts from its own
+  start (#1064). The host's reason
   is never on the row: it is the line's tooltip and its accessible description, both reasons
   where there are two. No device id on the row.
 - **Inside the row, under its two lines, in its text column:** the machine's updates (what its
@@ -1633,6 +1639,20 @@ machine, online ones first, then the account's offline machines (#213):
     waiting for a question to be answered", and "Needs you" in its log, at most daily).
   - Set in the Windows app's Settings for now. On the phone it is a row in that machine's Settings,
     the current choice in text2; tapping it opens the same two choices with their notes (#801).
+- **Who can sign Copilot in (#972 slice 2; Creative, 6700914747):** inside the row, under its two
+  lines, in its text column like its updates, and only when the machine has "Let my devices sign
+  Copilot in on this machine" on (it offers `signin.devices`). Lines 1 and 2 stay as they are.
+  Read-only: no Add, no Remove and no disabled button, since the setting is the Windows app's.
+  - One line: "Can sign Copilot in: iPhone, Work laptop", with "(this device)" after this device's
+    name. Over three devices it reads "iPhone, Work laptop and 2 more"; every name is in the line's
+    tooltip and its accessible text.
+  - Under it, one line: "Removing a single device comes later."
+  - Empty: "No devices can sign Copilot in here yet.", then "Adding a device comes in a later
+    update."
+  - Unreadable: "Can't read the device list on this machine." alone. Sign-in is refused while the
+    list can't be read; nothing implies a device is allowed when it isn't known.
+  - If Trust rules that names don't go over the relay, the line reads "2 devices can sign Copilot
+    in" instead, in the same place. Trust accepted the lists with names (6700902097).
 - **A machine away (§6.1):** listed once, as offline ("Offline", and "Last seen 2m ago" on line
   2), with Forget, both while its rows are kept and after they have gone. A client whose relay
   keeps no roster lists it so only while its rows are kept.
@@ -1865,8 +1885,12 @@ Checking and the glyphs are **Not built yet (#384 slice 1)**, and Finish (§6.10
 machine's name, Relay and sign-in, "Agents on this machine" (each agent's row, below), "Your
 devices" with the two answer toggles of Workspaces and trust, this app's toggles, and the
 Host log. The host section's "Restore sessions after a reboot or crash" switch (§6.12) is
-**Not built yet (#780)**. The sectioned pane below, its table and the card for an agent
-installed later are **Not built yet (#384 slice 5)**. The PWA's Settings also has Text size
+**Not built yet (#780)**. The sectioned pane below and its table are **Not built yet (#384
+slice 5)**. The card for an agent installed later (#231, slice 1) ships on that page, at its top,
+with its grey dot on the rail's Settings item, "Settings, new agent found", until the Agents item
+exists. It is offered only for Copilot CLI, Claude Code and Codex whose version was read: an
+agent whose version couldn't be read has no card, and its row keeps its Set up. Removing an
+agent's connection also holds its card at that version. The PWA's Settings also has Text size
 (§4.4), on this device only.
 
 **An agent's row today** (the creative director's #784 words; #705's per-row names and
@@ -1923,6 +1947,20 @@ Collaboration (§6.7) keeps its own section, after Accounts, whose Devices it fo
   the person, and the Agents nav item carries the same.
 - **Remove bridge integration** is a subtle button, and removes only Slipgates' own
   registrations and blocks. Uninstalling a CLI or its credentials is never on this page.
+- **Devices that can sign Copilot in** (#972 slice 2; Creative, 6700914747): under "Let my devices
+  sign Copilot in on this machine", and only while that is on in the running host: the switch applies
+  at the host's next start, and until then the list shows who still can. Read-only, from the
+  machine's device roster (#55); the Settings device-list pattern, no new visual language.
+  - Heading: "Devices that can sign Copilot in".
+  - One row per device. Line 1 is the name, with "(this device)" after this app's own entry. Line 2
+    is the kind and platform: "Phone · iOS", "Browser · Windows", "App · Windows". No device id,
+    key, generation or presence code.
+  - Under the list, one line: "Removing a single device comes later. To stop them all, turn this
+    off." No Remove, no Add and no disabled button.
+  - Empty: "No devices can sign Copilot in here yet.", then "Adding a device comes in a later
+    update." Until #55's roster ships, every machine reads this.
+  - Unreadable: "Can't read the device list on this machine." alone. Sign-in is refused while the
+    list can't be read.
 - **Dev Box keep-awake** is shown only on a Dev Box, Off by default, with its consequence on
   its row ("Signs in with az login · an awake Dev Box keeps billing").
 - **Workspaces and trust** is **Parked (#699)**, except its two answer toggles, which ship
@@ -1955,6 +1993,13 @@ Collaboration (§6.7) keeps its own section, after Accounts, whose Devices it fo
 
 **Not built yet (#384 slice 5).** Today there is no guided setup: a machine is set up from
 Settings' page (§6.9), each agent from its row.
+
+**Interim (slice 1):** until the stepper lands, Settings > Agents shows a plain **Get started** list
+above the agent rows (§6.9). It reads the same readiness as the rows, names the one next step, and
+adds no host operation. "Sign in to the CLI itself" is always **Yours to check**, because the host
+cannot verify it yet (#691). The list hides once every step is Done, Yours to check or Optional. Each
+step is read to a screen reader with its state and position first, for example "Next, step 3 of 5,
+Connect its hooks". The stepper below replaces it.
 
 Settings with a guide. Six steps, in a stepper that **replaces Settings' own pane** while setup
 runs; the app rail stays, with Settings selected, so Sessions and Machines are one click away
@@ -2094,9 +2139,9 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 
 **The machine notice** (`hello.machine.restore`, announced through `hello.changed`, #646)
 
-- **Where and how:** one banner per machine, in the same form as the Discovery held banner
-  (#293, #786): an informational InfoBar over every page, in the window's banner area (§7),
-  below that machine's Discovery held banner (Platforms, below, gives each client's place). It is
+- **Where and how:** one banner per machine: an informational InfoBar over every page, in the
+  window's banner area (§7), after the app banners (Platforms, below, gives each client's
+  place). It is
   closable.
 - **Content:** a title and the lines below, with no line limit: every failure and its reason is
   shown. A line whose list is empty is left out. The banner grows to fit, but the banner area as
@@ -2234,12 +2279,11 @@ arrives, as a `question`.
 
 **Platforms**
 
-- **Windows app:** InfoBar (Informational) in the window's banner area over every page, below
-  that machine's Discovery held InfoBar (§7, Windows: Banners); Continue a standard secondary
+- **Windows app:** InfoBar (Informational) in the window's banner area over every page, after
+  the app banners (§7, Windows: Banners); Continue a standard secondary
   Button; the toast through the app's ordinary notification path (§7).
 - **PWA:** the same notice as one of §7's app banners, at the top of the content above the page,
-  over every page, after the app banners §7 lists. The PWA has no Discovery held banner (it
-  says "Discovery held" on the machine's row, §6.6), so there is none to sit below. The restore
+  over every page, after the app banners §7 lists. The restore
   notice alone is an exception to §7's "no icon and no dismiss" app banners; every other PWA
   banner keeps §7's rule. The push through `sw.js`, kind `restored`.
 - **Apple (#260, owner welshofer):** note only. The same fields; the native form is that track's
@@ -2695,21 +2739,28 @@ they are un-parked.
   · 3 need you"). A question's toast follows the rules above: an approval's toast has
   Open only. Every toast is silent (#754): none plays Windows' default sound, and any sound
   comes back only as an owner-approved spec here first.
-- **Banners** sit over every page, `InfoBar`s in this order (#293):
+- **Banners** sit over every page, `InfoBar`s in this order (#293, #1064):
   - What stops the app from its job: the host not running, refusing the app, connecting, or
     view only. Warning, with no close button: it goes once that is put right. On waking from
     sleep or changing network, "connecting" is not raised for it (#950): during §6.1's 3-second
     grace nothing shows, and after it, if the link is still down, the connection strip replaces
     the list header row's content at the same height (§6.1, rules 3 and 4). A banner already
     showing when the app comes back stays put.
-  - "Discovery held: …" ([v1-sessions.md](../protocol/v1-sessions.md#discovery-held)), one per
-    held machine, its name first when there is more than one. Informational, with the
-    `InfoBar`'s close button, named "Dismiss Discovery held on *machine*" (§9.1 A1) and reached
-    by Tab. It hides that banner only, and only how it is shown: the host still holds, and is
-    told nothing. It stays hidden while that machine's hold has the same reason, and comes back
-    when the reason changes, when the hold clears and comes back, or when the app restarts;
-    dismissals are never saved. Focus goes on to what Tab reaches next: the next banner's close
-    button, or the page (§9.1 A4). Nothing is announced.
+  - **There is no "Discovery held" banner** (#1064). A hold is shown on the machine's row once it
+    has lasted two minutes (§6.6), and a resume it holds back says so in the reply line (§6.7).
+
+**The banner rule, in the PWA and the Windows app (#1064):** a banner is for a state that lasts.
+- **Grace:** a state that calls for a banner shows it only once it has stood for 3 seconds
+  (the same grace as §6.1's); one that ends sooner is never shown.
+- **Minimum:** once shown, a banner stays at least 10 seconds, even if its state ends sooner,
+  so it never flashes. If the state returns inside that time the banner simply stays.
+- **Motion:** a banner opens and closes by animating its height with the `toast` motion
+  (§10); under reduced motion it appears and goes at once. Toasts stay overlays and never
+  move the page.
+- **Which:** this governs the banners a state raises (the PWA's "can't update" and "this
+  device was replaced"; the Windows app's host-not-running, refusing, connecting and view-only
+  banner). A banner a person can close, or that carries an action the person asked for (an
+  update, a restore notice, a sign-in), is not held back by it.
 
 **macOS (SwiftUI, #260):**
 - **Sidebar:** a translucent source list (a Needs You · N filter item, Pinned, Sessions,

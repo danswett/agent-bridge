@@ -63,6 +63,8 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
 
+    protected override Conversation.TurnMarks Turns => Conversation.TurnMarks.Copilot;
+
     // The main agent's replies too, for activity.own: a session whose delegates filled the
     // parsed window had no reply of the main agent's in it. A delegate's carries an agentId,
     // and is not wanted; a main reply quoting that word is merely missed, except while the
@@ -101,6 +103,18 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
 
     // A shell's completion notice Copilot delivered while no turn ran: it starts a turn of its own.
     static bool Notice(JsonElement data) => Json.Str(data, "source") == "system" && Json.Str(data, "delivery") != "steering";
+
+    // Whether a record starts a turn (docs/protocol/v1-history.md), and its prompt: exactly the
+    // records that move activity.userMessage, here and in Count, so history's turn ids are
+    // activity.turn's.
+    internal static (string Text, UserMessageFrom? From, string? Label)? TurnStart(JsonElement e)
+    {
+        if (Json.Str(e, "type") != "user.message" || IsSubagent(e)) { return null; }
+        var data = Json.Obj(e, "data") ?? default;
+        if (Text.NonBlank(Json.Str(data, "content")) is not { } text) { return null; }
+        var (from, label, injected) = Source(Json.Str(data, "source"));
+        return injected ? null : (text, from, label);
+    }
 
     // The schedule's number as its label, and only a number: the label is shown as it is.
     static string? ScheduleNumber(string n) =>
@@ -152,7 +166,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     var reasoning = Text.NonBlank(Json.Str(data, "reasoningText"));
                     var content = MainText(data);
                     if (reasoning is not null) { S.OwnReasoning = Limits.KeepEnd(reasoning, Limits.Reasoning).Text; }
-                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); }
+                    if (content is not null) { (S.OwnResponse, S.OwnResponseCut) = Limits.KeepEnd(content, Limits.Response); S.ResponseTurn = S.TurnId; }
                     if (reasoning is not null || content is not null) { S.OwnAt = Json.Time(e, "timestamp"); }
                     break;
                 }
@@ -239,6 +253,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         S.Model = null;
         S.OwnResponse = null;
         S.OwnResponseCut = false;
+        S.ResponseTurn = null;
         S.OwnReasoning = null;
         S.OwnAt = null;
         // Turns may have started and failed unread: a notice in the tail names no error of the
@@ -498,6 +513,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     var arguments = Json.Get(data, "arguments");
                     var agent = sub ? Json.Str(e, "agentId") : null;
                     S.Tools.Start(id, name, ToolSummary.From(arguments), Now(at), agent);
+                    // Remembered as the skim remembers it, for history's seed (CallOwners): the
+                    // tool history keeps it too, but only for so long.
+                    if (agent is not null) { S.Background.RememberCall(id, agent); }
                     // A sub-agent's ask_user is its question (status rule 2). Copilot gives its
                     // sub-agents no ask_user: none of 33,966 sub-agent tool calls in two months
                     // of transcripts was one. Read the same way should a later one.
@@ -572,9 +590,13 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
     // every client, HA and a finished push: it is shown as the host's sentence for the error that
     // ended the turn (AgentErrors.Template), as attention.message is, and none of its words
     // (#846). Redacting them was a blocklist that missed a new shape every round (#840, #841).
-    string? MainText(JsonElement data) =>
+    string? MainText(JsonElement data) => MainText(data, _turnError);
+
+    // History reads it too (HistoryDialects), with the error its own turn read, so an earlier
+    // turn's notice reads as the latest's did.
+    internal static string? MainText(JsonElement data, string? turnError) =>
         TurnErrorNotice(data)
-            ? TurnErrorNoticeText + " " + (_turnError ?? AgentErrors.Template(AttentionKind.Error, ErrorClass.Other, null, AgentKind.Copilot))
+            ? TurnErrorNoticeText + " " + (turnError ?? AgentErrors.Template(AttentionKind.Error, ErrorClass.Other, null, AgentKind.Copilot))
             : Text.NonBlank(Json.Str(data, "content"));
 
     static bool Asked(JsonElement data) => Json.Arr(data, "toolRequests") is { } requests && requests.GetArrayLength() > 0;

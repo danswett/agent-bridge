@@ -441,7 +441,8 @@ public sealed class SettingsTests : IAsyncLifetime
     {
         await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3") });
         await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
-        Assert.True(settings.Agents.Single().CanSetUp);
+        // The card holds the agent's Set up while it shows (ui.md §6.9), and asks for the same setup.
+        Assert.True(settings.AgentOffers.Single().CanSetUp);
         host.On(HostOps.AgentsSetup, data =>
         {
             Assert.Equal("claude", data.GetProperty("agent").GetString());
@@ -606,6 +607,40 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal("InstallAgent_codex", missing.InstallId);
         Assert.False(installed.ShowInstall);
         Assert.False(installed.CanInstall);
+    }
+
+    [Fact]
+    public void Get_started_names_the_one_next_step_and_never_marks_CLI_sign_in_done()
+    {
+        AgentReadinessRow Row(AgentReadiness a) => new(a, canManage: true, canInstall: true, installOffered: true);
+        string Mark(IReadOnlyList<SetupStep> s, string id) => s.Single(x => x.Id == id).Mark;
+
+        var down = SetupGuide.Steps(false, [], false);
+        Assert.Equal(("Next", "Later"), (Mark(down, "bridge"), Mark(down, "install")));
+
+        var fresh = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.NeedsAction, installation: ReadinessState.Missing))], false);
+        Assert.Equal(("Done", "Next", "Later"), (Mark(fresh, "bridge"), Mark(fresh, "install"), Mark(fresh, "hooks")));
+        Assert.Contains("Install CLI on one of the agents below", fresh.Single(x => x.Id == "install").Detail);
+        Assert.Equal("Next, step 2 of 6, Install an agent's CLI. Choose Install CLI on one of the agents below.", fresh.Single(x => x.Id == "install").AccessibleName);
+
+        var installed = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.NeedsAction))], false);
+        Assert.Equal(("Done", "Next"), (Mark(installed, "install"), Mark(installed, "hooks")));
+
+        var setUp = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "An owned setup record exists and setup completed."))], true);
+        Assert.Equal(("Done", "Next", "Yours to check", "Done"), (Mark(setUp, "hooks"), Mark(setUp, "session"), Mark(setUp, "cli-signin"), Mark(setUp, "account")));
+
+        var working = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Working, hooksDetail: "owned setup record"))], false);
+        Assert.Equal("Done", Mark(working, "session"));
+
+        var heard = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record") with { LastHookHandledAt = DateTimeOffset.UtcNow })], false);
+        Assert.Equal("Done", Mark(heard, "session"));
+        Assert.All(heard, s => Assert.True(s.Settled));
+        Assert.Contains(installed, s => !s.Settled);
+
+        var one = SetupGuide.Steps(true, [
+            Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record")),
+            Row(Agent("codex", "Codex", ReadinessState.NeedsAction))], false);
+        Assert.Equal(("Done", "Next"), (Mark(one, "hooks"), Mark(one, "session")));
     }
 
     [Fact]
@@ -1003,6 +1038,212 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(row.ShowSetUp);
     }
 
+    // An agent installed after the bridge (#231; ui.md §6.9): a card at the top of Settings and a grey
+    // dot on the way in, Set up the row's own, and Not now per agent and version.
+    async Task WithAgents(AgentReadiness[] agents, string? readOnly = null, string? agentHaBridge = null)
+    {
+        await ConnectedWith(FakeHost.StatusOf(agentHaBridge: agentHaBridge) with { ReadOnly = readOnly, Agents = new(DateTimeOffset.UtcNow, agents) });
+        await Wait.UntilAsync(() => settings.Agents.Count == agents.Length, "agent readiness");
+    }
+
+    static AgentReadiness NeverSetUp(string id, string label, string version = "1.2.3") =>
+        Agent(id, label, ReadinessState.NeedsAction, hooksDetail: NoRecordIntakeOff) with { Version = version };
+
+    // The host sends a new status, as it does when a check finds something changed.
+    async Task HostNowSays(params AgentReadiness[] agents)
+    {
+        host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, agents) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Agents.Select(a => a.Version).SequenceEqual(agents.Select(a => a.Version)), "the host's new readiness");
+    }
+
+    [Fact]
+    public async Task An_agent_installed_after_the_bridge_is_offered_a_card_with_its_version_and_the_row_keeps_no_second_Set_up()
+    {
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+
+        var offer = Assert.Single(settings.AgentOffers);
+
+        Assert.Equal("claude", offer.Id);
+        Assert.Equal("Claude Code 1.2.3 is installed", offer.Name);
+        Assert.Equal("Claude Code 1.2.3 is installed · Set it up to see its sessions in Slipgates", offer.Text);
+        Assert.Equal(("Set up Claude Code", "Not now, Claude Code"), (offer.SetUpName, offer.NotNowName));
+        // The dot is in the Settings item's name, and follows the card.
+        Assert.True(settings.HasAgentOffers);
+        Assert.Equal("Settings, new agent found", settings.AgentsNavName);
+        // Nothing is drawn twice: the card holds the agent's only Set up while it shows.
+        var row = settings.Agents.Single();
+        Assert.Equal("Set up", row.SetUpVerb);
+        Assert.False(row.ShowSetUp);
+        // First run: the offer holds the Set up, so Get started points at it, not at "can't be changed".
+        var hooks = settings.SetupSteps.Single(s => s.Id == "hooks");
+        Assert.Equal("Next", hooks.Mark);
+        Assert.DoesNotContain("can't be changed", hooks.Detail);
+        Assert.Contains("Set up on Claude Code", hooks.Detail);
+    }
+
+    [Theory]
+    [InlineData("set up and not tested yet")]
+    [InlineData("setup that did not finish")]
+    [InlineData("not installed")]
+    [InlineData("version not read")]
+    [InlineData("older host")]
+    [InlineData("agency")]
+    public async Task Only_an_installed_agent_never_set_up_with_a_known_version_is_offered(string case_)
+    {
+        AgentReadiness agent = case_ switch
+        {
+            "set up and not tested yet" => Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: RecordIntakeOn),
+            "setup that did not finish" => Agent("claude", "Claude Code", ReadinessState.Failed, hooksDetail: DidNotComplete),
+            "not installed" => Agent("claude", "Claude Code", ReadinessState.NeedsAction, installation: ReadinessState.Missing, hooksDetail: NoRecordIntakeOff),
+            "version not read" => NeverSetUp("claude", "Claude Code") with { Version = null },
+            "older host" => Agent("claude", "Claude Code", ReadinessState.NeedsAction, hooksDetail: NoRecordIntakeOff, setup: HookSetupState.Unknown),
+            _ => NeverSetUp("agency", "Agency"),
+        };
+        await WithAgents([agent]);
+
+        Assert.Empty(settings.AgentOffers);
+        Assert.False(settings.HasAgentOffers);
+        Assert.Equal("Settings", settings.AgentsNavName);
+        // With no card, the row keeps whatever verb it has.
+        var row = settings.Agents.Single();
+        Assert.Equal(row.SetUpVerb is not null, row.ShowSetUp);
+    }
+
+    [Theory]
+    [InlineData("read-only")]
+    [InlineData("beside agent-ha-bridge")]
+    public async Task No_card_or_dot_is_offered_on_a_host_the_app_cannot_set_up(string why)
+    {
+        // The agent still reads as never set up, as a host from before these checks may send it.
+        await WithAgents([NeverSetUp("claude", "Claude Code")],
+            readOnly: why == "read-only" ? "this machine's bridge is older" : null,
+            agentHaBridge: why == "read-only" ? null : "agent-ha-bridge is running for this user");
+
+        Assert.Empty(settings.AgentOffers);
+        Assert.False(settings.HasAgentOffers);
+        Assert.Equal("Settings", settings.AgentsNavName);
+        Assert.Equal(settings.Agents.Single().SetUpVerb is not null, settings.Agents.Single().ShowSetUp);
+    }
+
+    [Fact]
+    public async Task Set_up_from_the_card_asks_for_the_agents_setup_by_id_exactly_as_the_row_does_and_takes_the_card_and_dot_away()
+    {
+        AgentReadiness[] now = [NeverSetUp("claude", "Claude Code"), NeverSetUp("codex", "Codex")];
+        await WithAgents(now);
+        host.On(HostOps.AgentsSetup, d =>
+        {
+            var request = d.Deserialize<AgentSetupRequest>(ProtocolJson.Options)!;
+            now = [.. now.Select(a => a.Id == request.Agent ? Agent(a.Id, a.Label, ReadinessState.Unknown, hooksDetail: RecordIntakeOn) : a)];
+            host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, now) };
+            return new AgentSetupResult(true, "Hooks registered. Restart the host, then start a new session to check them.", true);
+        });
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+        settings.DismissAgentOffer("codex");
+
+        // The card's button and the row's both ask for Set up by the agent's id, nothing else.
+        var codexRow = settings.Agents.Single(a => a.Id == "codex");
+        Assert.True(codexRow.ShowSetUp);
+        await settings.SetUpAgentAsync(settings.AgentOffers.Single().Id);
+        await settings.SetUpAgentAsync(codexRow.Id);
+
+        var requests = host.Sent(HostOps.AgentsSetup).Select(d => d.Deserialize<AgentSetupRequest>(ProtocolJson.Options)!).ToList();
+        Assert.Equal([("claude", "install"), ("codex", "install")], requests.Select(r => (r.Agent, r.Action)));
+        Assert.Equal(settings.Agents.Single(a => a.Id == "codex").Status, settings.Agents.Single(a => a.Id == "claude").Status);
+        Assert.Empty(settings.AgentOffers);
+        Assert.False(settings.HasAgentOffers);
+    }
+
+    [Fact]
+    public async Task Not_now_hides_the_card_and_dot_for_that_agent_at_that_version_across_restarts_and_returns_when_the_version_changes()
+    {
+        await WithAgents([NeverSetUp("claude", "Claude Code"), NeverSetUp("codex", "Codex", "0.48.0")]);
+        var preferencesChanged = 0;
+        settings.PreferencesChanged += () => preferencesChanged++;
+
+        settings.DismissAgentOffer("claude");
+
+        Assert.Equal(["codex"], settings.AgentOffers.Select(o => o.Id));
+        Assert.True(settings.HasAgentOffers);
+        // The row stays as it was, with its own Set up back.
+        var claude = settings.Agents.Single(a => a.Id == "claude");
+        Assert.Equal(("Set up", true), (claude.SetUpVerb, claude.ShowSetUp));
+        // Saving it is not a change the update ticks and the cards follow.
+        Assert.Equal(0, preferencesChanged);
+        // It survives the app starting again, from the file the preferences are kept in.
+        var file = Path.Combine(app, "preferences.json");
+        prefs.Save(file);
+        prefs = AppPreferences.Load(file);
+        var restarted = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        try { Assert.Equal(["codex"], restarted.AgentOffers.Select(o => o.Id)); }
+        finally { restarted.Detach(); }
+
+        // Another version is a new offer; the other agent's choice stays its own.
+        await HostNowSays(NeverSetUp("claude", "Claude Code", "1.3.0"), NeverSetUp("codex", "Codex", "0.48.0"));
+        Assert.Equal(["claude", "codex"], settings.AgentOffers.Select(o => o.Id));
+        Assert.Equal("Claude Code 1.3.0 is installed", settings.AgentOffers.First().Name);
+
+        settings.DismissAgentOffer("claude");
+        settings.DismissAgentOffer("codex");
+        Assert.False(settings.HasAgentOffers);
+        Assert.Equal("Settings", settings.AgentsNavName);
+    }
+
+    [Fact]
+    public async Task The_cards_Set_up_is_disabled_while_a_setup_runs_so_a_second_press_cannot_start_another()
+    {
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true));
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+        Assert.True(settings.AgentOffers.Single().CanSetUp);
+        // What the card would be drawn with each time the page is told its offers changed mid-setup.
+        var drawn = new List<bool>();
+        settings.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(SettingsViewModel.AgentOffers) && settings.Busy && settings.AgentOffers.FirstOrDefault() is { } offer) { drawn.Add(offer.CanSetUp); }
+        };
+
+        await settings.SetUpAgentAsync("claude");
+
+        Assert.NotEmpty(drawn);
+        Assert.All(drawn, canSetUp => Assert.False(canSetUp));
+        Assert.True(settings.AgentOffers.Single().CanSetUp);
+    }
+
+    [Fact]
+    public async Task Removing_Agencys_connection_does_not_offer_back_Copilot_CLIs_card_whose_hooks_it_shares()
+    {
+        await WithAgents([Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), Agent("agency", "Agency", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]);
+        host.On(HostOps.AgentsSetup, _ =>
+        {
+            host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, [NeverSetUp("copilot", "Copilot CLI"), NeverSetUp("agency", "Agency")]) };
+            return new AgentSetupResult(true, "Removed this installation's hooks. Existing sessions keep theirs until they end.", true);
+        });
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+
+        await settings.SetUpAgentAsync("agency", remove: true);
+
+        Assert.Empty(settings.AgentOffers);
+        Assert.True(settings.Agents.Single(a => a.Id == "copilot").ShowSetUp);
+    }
+
+    [Fact]
+    public async Task An_agent_whose_connection_the_person_removed_is_not_offered_back_at_that_version()
+    {
+        await WithAgents([Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]);
+        host.On(HostOps.AgentsSetup, _ =>
+        {
+            host.Status = host.Status with { Agents = new(DateTimeOffset.UtcNow, [NeverSetUp("claude", "Claude Code")]) };
+            return new AgentSetupResult(true, "Removed this installation's hooks. Existing sessions keep theirs until they end.", true);
+        });
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+
+        await settings.SetUpAgentAsync("claude", remove: true);
+
+        Assert.Empty(settings.AgentOffers);
+        Assert.True(settings.Agents.Single().ShowSetUp);
+    }
+
     [Fact]
     public async Task A_setup_says_its_progress_and_result_on_its_own_row_and_not_on_the_others()
     {
@@ -1247,6 +1488,39 @@ public sealed class SettingsTests : IAsyncLifetime
         await Wait.UntilAsync(() => settings.RestartRequired && settings.PhoneSignIn, "the restart offer");
     }
 
+    // #972 slice 2, in Creative's words (6700914747): read-only, only while the running host has the
+    // switch on, and nobody until the machine's roster lists someone.
+    [Fact]
+    public async Task Devices_that_can_sign_Copilot_in_are_listed_under_the_switch_only_while_the_host_has_it_on()
+    {
+        await Connected();
+        Assert.False(settings.ShowSignInDevices);
+        // Turned on, not yet applied: the running host says nobody, so nothing is listed.
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, PhoneSignIn: true), RestartRequired = true };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.PhoneSignIn, "the switch");
+        Assert.False(settings.ShowSignInDevices);
+
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, PhoneSignIn: true), SignInDevices = new(SignInDeviceStates.None, []) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.ShowSignInDevices, "the list");
+        Assert.Empty(settings.SignInDevices);
+        Assert.Equal("No devices can sign Copilot in here yet.", settings.SignInDevicesEmpty);
+        Assert.Equal("Adding a device comes in a later update.", settings.SignInDevicesNote);
+
+        host.Status = host.Status with { SignInDevices = new(SignInDeviceStates.Ready, [new("iPhone", "phone", "iOS"), new("Work laptop", "app", "Windows", true), new("Kitchen", "pwa", "Windows")]) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.SignInDevices.Count == 3, "the devices");
+        Assert.Equal(new SignInDeviceRow[] { new("iPhone", "Phone · iOS"), new("Work laptop (this device)", "App · Windows"), new("Kitchen", "Browser · Windows") }, settings.SignInDevices);
+        Assert.Equal("", settings.SignInDevicesEmpty);
+        Assert.Equal("Removing a single device comes later. To stop them all, turn this off.", settings.SignInDevicesNote);
+
+        host.Status = host.Status with { SignInDevices = new(SignInDeviceStates.Unreadable, []) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.SignInDevicesEmpty == "Can't read the device list on this machine.", "unreadable");
+        Assert.Empty(settings.SignInDevices);
+        Assert.Equal("", settings.SignInDevicesNote);
+    }
     [Fact]
     public async Task Keeping_a_Dev_Box_awake_is_offered_on_a_Dev_Box_only_and_turned_on_through_the_host()
     {

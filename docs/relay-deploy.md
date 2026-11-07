@@ -11,7 +11,7 @@ builds an image per commit, rolls it onto **staging**, smoke-tests it there, and
 | | Production | Staging |
 |---|---|---|
 | Container App | `agent-bridge-relay` | `agent-bridge-relay-staging` |
-| URL | **`https://relay.bad-duck.com`** (also `https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io`) | `https://agent-bridge-relay-staging.icyflower-4f71155d.westus2.azurecontainerapps.io` |
+| URL | **`https://relay.bad-duck.com`** and **`https://relay.slipgates.com`** (also `https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io`) | `https://agent-bridge-relay-staging.icyflower-4f71155d.westus2.azurecontainerapps.io` |
 | Replicas | 1–1 (always on: hosts hold a socket open) | 0–1 (scales to zero between deploys) |
 | Size | 0.25 vCPU, 0.5 GiB | 0.25 vCPU, 0.5 GiB |
 | Identity (ACR pull, Key Vault) | `id-agent-bridge-relay` | `id-agent-bridge-relay-staging` |
@@ -43,7 +43,7 @@ and naming changes, and this branch adds operational behaviour. Compared side by
 | Devices | Id = SHA-256 of the device key; nothing stored | Same | None: nothing to migrate |
 | Presence | In memory, rebuilt as devices reconnect | Same | Devices reconnect once (1012), as on any restart |
 | Web Push | `PushGateway`, VAPID key `Relay:VapidPrivateKey`, push-host allowlist, 30/min/account | Same code | **Subscriptions survive only if the VAPID key is carried over** (a browser subscription is bound to the public key). `deploy.ps1` copies it |
-| CORS and origins | `Relay:AllowedOrigins` = `https://danswett.github.io` | Same option and checks | Set the same origin (it is in `regions/westus2.bicepparam`) |
+| CORS and origins | `Relay:AllowedOrigins` = `https://danswett.github.io`, and `https://app.slipgates.com` from #393 (both stamps). Staging alone also allows `https://preview.slipgates.com` (`stagingExtraAllowedOrigins`) | Same origins as staging, without the preview one | Set the same origins (they are in `regions/westus2.bicepparam`) |
 | GitHub sign-in | Device flow through the GitHub App client id | Same | Same client id; nothing for users to do |
 | Limits | 200 frames/s per socket, 32 devices per account, 60 sign-in calls/min per IP | Same, plus 120 new sockets/min per IP, 16 KiB request bodies, 10,000 sockets per replica | None for real clients: hosts and the PWA back off 1 s → 30 s |
 | Logs | GitHub login, account id, device id prefix and device name per connection | None of those: a random per-socket tag, kind and counts; JSON lines | Operational only |
@@ -237,11 +237,41 @@ and Cloudflare's proxy would also cut WebSockets and terminate TLS:
 | CNAME | `relay` | `agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io` |
 | TXT | `asuid.relay` | the environment's verification id, `9E5A7D37AE5B378B92399BA82D0EEEF5F4674EE876FF3BF49EB6BB4B53A20E60` |
 
-The domain is `customDomain` in the region's parameter file. `deploy.ps1` steps it forward
+### Second name: relay.slipgates.com (#540)
+
+Production answers on **both** `relay.bad-duck.com` and `relay.slipgates.com` (`extraCustomDomains` in the
+region's parameter file). Both are served directly by the same app, each with its own managed
+certificate: a WebSocket upgrade does not follow a redirect, so old clients (every paired host, the app
+and PWA already installed) keep working with no re-pairing. Do not put a redirect on either name.
+The relay's Content-Security-Policy follows the request's Host, so it needs no change. DNS for
+`relay.slipgates.com` (DNS-only CNAME to the app, `asuid.relay` TXT) is done; `slipgates.com` has no CAA records.
+
+Rollout, staging first, production on the owner's approval, by someone with Azure access:
+
+1. `./infra/deploy.ps1 -WhatIf -Production -ProductionImage <running digest> -ProductionVersion <running sha>` and read the diff (production is only included with `-Production`): only the new hostname is added;
+   `relay.bad-duck.com`'s binding is unchanged.
+2. `./infra/deploy.ps1 -Production -ProductionImage <running digest> -ProductionVersion <running sha>`. Pass 2
+   puts the hostname on the app, pass 3 issues and binds the certificate (a few minutes). Each hostname steps
+   on its own, so one still waiting for DNS never unbinds the other.
+3. Check both names: `pwsh ops/tools/relay-probe.ps1 -Target production` and `-Target production-slipgates`.
+   For the WebSocket and blob round trip, run `tools/AgentBridge.RelaySmoke` with the token key against each name
+   (`--relay https://relay.bad-duck.com` then `--relay https://relay.slipgates.com`, `--expect-blobs`).
+4. Set the repository variable `RELAY_SLIPGATES_LIVE` to `true` so every later promotion smoke-tests the new name too.
+
+Rollback: first set `RELAY_SLIPGATES_LIVE` to `false` (otherwise every promotion smoke-tests a name that is gone and fails), then remove `extraCustomDomains` from `production` and re-run step 2. The hostname comes off the app
+(an incremental deploy leaves its certificate behind, harmless) and `relay.bad-duck.com` is untouched; nothing else changed, since no client defaults moved. Leave the
+DNS records in place (they are harmless unbound). To delete the leftover certificate:
+`az containerapp env certificate delete -n <environment> -g <resource group> --certificate mc-relay-slipgates-com`.
+
+Moving new pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) to `relay.slipgates.com`
+is a later change, once both names pass step 3. Retiring `relay.bad-duck.com` is the owner's later decision.
+
+The first name's steps work as follows. `deploy.ps1` steps it forward
 as DNS allows: it prints both records while they are missing; once they resolve it puts the
 hostname on the app (pass 2), then issues the managed certificate and binds it with SNI
-(pass 3); after that it re-states the binding. Staging has no custom domain; adding
-`customDomain: 'relay-staging.bad-duck.com'` to `staging` and two more records would give it one.
+(pass 3); after that it re-states the binding. Staging is served at
+`https://relay-staging.slipgates.com` (its `customDomain`; DNS-only CNAME `relay-staging` and TXT
+`asuid.relay-staging`), so the new-hostname steps can be exercised there before production.
 
 **Renewal** is automatic as long as the CNAME keeps pointing at the app and stays DNS only.
 Moving the record, proxying it, or deleting the TXT makes renewal fail silently until the
@@ -433,6 +463,27 @@ Azure Storage on URLs the relay signs; no blob byte passes through a relay node.
   `Relay__Blobs__Container`, `Relay__Blobs__ManagedIdentityClientId`. Not a secret among
   them. An app without them (`Backend` empty) says `blobs: null` in `ready`, and every
   client keeps to 256 KiB in its channels.
+* A second private container, `feedback` (docs/protocol/feedback.md): the relay takes each
+  beta-feedback bundle itself (exact ticketed size, 8 MiB cap) and writes it with
+  create-only semantics. Its role assignment there is Blob Data Contributor with a condition
+  that removes read, list, tags and delete, and a 30-day time-based retention policy on the
+  container means the relay cannot overwrite or delete a bundle before the
+  30 days are up. A lifecycle rule deletes `feedback/` at 31 days; the `blobs` rule is
+  scoped to its own container. Reading feedback is a role given to the feedback lead's
+  identity (SRE), never to the relay. Environment: `Relay__Feedback__Backend`,
+  `AccountUrl`, `Container`, `ManagedIdentityClientId`; empty `Backend` turns it off.
+* The retention policy deploys **unlocked**. Until it is locked, someone with write access
+  to the storage account (not the relay) could shorten or remove it, so "no one can
+  overwrite or delete" holds against the relay and any data-plane identity, not against an
+  account owner. After the first production apply, a person locks it (this cannot be
+  undone, and a locked policy can only be extended):
+
+  ```powershell
+  $etag = az storage container immutability-policy show --account-name <account> --container-name feedback --query etag -o tsv
+  az storage container immutability-policy lock --account-name <account> --container-name feedback --if-match $etag
+  ```
+
+  Until then the accepted risk is account-owner tampering; record the lock on #731.
 
 Staging has its account (`abblobstgwus2`, applied with `./infra/deploy.ps1` on 2026-10-29,
 which also registered `Microsoft.Storage` in the subscription). Production gets
