@@ -307,13 +307,17 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Assert.Equal(typed, injector.Plans.Count);
     }
 
-    // #1093 review (Sol): the first request's own UUID replayed by another sender is looked up
-    // after the sender is checked, not before: it gets the refusal other text gets, whether the
-    // request's own record is still there or not, and never the first's outcome.
+    // #1093 review (Sol): a request UUID belongs to the sender, session and question it was
+    // admitted for. Another sender replaying the first request's own UUID, with that question or
+    // any other, gets what its own fresh request would (the refusal other text gets, or stale for
+    // a question the session is not asking), whether the request's own record is still there or
+    // not, and never the first's outcome or its progress.
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Another_sender_replaying_the_first_requests_own_UUID_gets_the_same_refusal_and_not_its_outcome(bool forgotten)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Another_sender_replaying_the_first_requests_own_UUID_gets_what_a_request_of_its_own_would_and_not_its_outcome(bool forgotten, bool otherQuestion)
     {
         var answerer = Answerer(remembered: forgotten ? TimeSpan.FromTicks(-1) : null);
         var request = Request(ClaudeId, "toolu_1", Chosen);
@@ -321,14 +325,65 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
         var typed = injector.Plans.Count;
         var other = new Dictionary<string, object> { ["Which database?"] = "DuckDB", ["Which features?"] = new[] { "Auth", "Search" } };
+        var question = otherQuestion ? "toolu_elsewhere" : "toolu_1";
+        var heard = 0;
 
-        var replayed = await answerer.AnswerAsync(request, sender: "laptop");
-        var missed = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", other), sender: "laptop");
+        var replayed = await answerer.AnswerAsync(request with { Question = question }, watch: new DeliveryWatch(_ => heard++), sender: "laptop");
+        var missed = await answerer.AnswerAsync(Request(ClaudeId, question, otherQuestion ? Chosen : other), sender: "laptop");
 
-        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "an answer was already typed into this prompt once, and is never typed again"), replayed);
+        Assert.Equal(otherQuestion ? AnswerOutcome.Stale : AnswerOutcome.Refused, replayed.Outcome);
         Assert.Equal(missed, replayed);
+        Assert.Equal(0, heard);
         // The first sender's own resend is unaffected.
         Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, await answerer.AnswerAsync(request, sender: "phone"));
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // #1093 review (Sol): whether a call is a repeat is decided where the request is admitted,
+    // so calls racing for one request cannot each be taken for the first: exactly one is typed
+    // and gives the real outcome, every other says nothing was typed again.
+    [Fact]
+    public async Task Identical_calls_racing_for_one_request_type_once_and_every_other_says_nothing_was_typed_again()
+    {
+        for (var round = 0; round < 6; round++)
+        {
+            if (File.Exists(ledger)) { File.Delete(ledger); }
+            injector.Plans.Clear();
+            injector.OnInject = _ => Thread.Sleep(30);
+            var answerer = Answerer();
+            var request = Request(ClaudeId, "toolu_1", Chosen);
+            using var start = new ManualResetEventSlim();
+
+            var calls = Enumerable.Range(0, 16).Select(_ => Task.Run(() => { start.Wait(); return answerer.AnswerAsync(request, sender: "phone"); })).ToList();
+            start.Set();
+            var results = await Task.WhenAll(calls);
+
+            Assert.Equal(2, injector.Plans.Count);
+            Assert.All(results, r => Assert.Equal(AnswerOutcome.Unconfirmed, r.Outcome));
+            Assert.Single(results, r => r.Reason != DeliveryReasons.AnswerNotConfirmed);
+            Assert.Equal(15, results.Count(r => r.Reason == DeliveryReasons.AnswerNotConfirmed));
+        }
+    }
+
+    // The same, for retries of a settled unconfirmed answer, under its own UUID and new ones at once.
+    [Fact]
+    public async Task Identical_retries_racing_after_an_unconfirmed_answer_all_say_nothing_was_typed_again_and_type_nothing()
+    {
+        var answerer = Answerer();
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        var first = await answerer.AnswerAsync(request, sender: "phone");
+        Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
+        var typed = injector.Plans.Count;
+
+        for (var wave = 0; wave < 5; wave++)
+        {
+            using var start = new ManualResetEventSlim();
+            var calls = Enumerable.Range(0, 16)
+                .Select(i => Task.Run(() => { start.Wait(); return answerer.AnswerAsync(i % 2 == 0 ? request : Request(ClaudeId, "toolu_1", Chosen), sender: "phone"); })).ToList();
+            start.Set();
+
+            Assert.All(await Task.WhenAll(calls), r => Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, r));
+        }
         Assert.Equal(typed, injector.Plans.Count);
     }
 

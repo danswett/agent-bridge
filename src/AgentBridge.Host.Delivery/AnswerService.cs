@@ -159,37 +159,30 @@ public sealed class AnswerService : ISessionAnswerer
         // first one's record gone), from the same sender, is that first request sent again: it is
         // given the first outcome and nothing is typed (#1093). Its own UUID stays unknown. From
         // another sender, or saying anything else, it goes the usual way and is refused the same.
-        // That holds for the first request's own UUID too: the sender is checked before any
-        // outcome is looked up by UUID, so another sender replaying it learns nothing.
+        // A request UUID belongs to the sender, session and question it was admitted for: any
+        // other asking for it, whether the first's record is still held or not, is a request of
+        // its own under a new UUID, so that no outcome, stage or progress is given to it.
         var prompt = (request.Id, request.Question);
-        var seenBefore = requests.Knows(key);
         var first = SameAnswerBefore(prompt, key, AnswerDigest.Of(request), sender, out var foreign);
-        if (foreign)
-        {
-            key = Guid.NewGuid();
-            request = request with { Request = key.ToString("D") };
-        }
-        // Sent again, under this UUID or another: what it came to, said as an answer sent again is.
-        var retry = first is not null || seenBefore && !foreign;
+        Task<AnswerResult> AsAnother() => AnswerAsync(request with { Request = Guid.NewGuid().ToString("D") }, cancellationToken, watch, confirmed, sender);
+        if (foreign) { return AsAnother(); }
         if (first is not null)
         {
             log($"answer {key.ToString()[..8]} to {Short(request.Id)}: the outcome of {first.Request.ToString()[..8]}, the same answer, is returned and nothing is typed");
-            if (!requests.Knows(first.Request)) { return ReadAgain(first, retry); }
+            if (!requests.Knows(first.Request)) { return ReadAgain(first, true); }
         }
         var flow = first?.Request ?? key;
         var outcome = requests.Once(flow, watch, () => new DeliveryTimeline(options.Time, "answer", flow, log),
-            t => first is null ? DeliverAsync(request, key, t, confirmed) : Task.FromResult(first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed)),
+            t => first is null ? DeliverAsync(request, key, t, confirmed) : Task.FromResult(AsRetried(first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed), true)),
             result =>
             {
                 log($"answer {flow.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
                 Settled(prompt, flow, result);
             },
-            Recheck(flow));
+            Recheck(flow), (sender, request.Id, request.Question), AsAnother, result => AsRetried(result, true));
         if (first is null) { Started(prompt, key); }
-        return retry ? Retried(outcome) : outcome;
+        return outcome;
     }
-
-    async Task<AnswerResult> Retried(Task<AnswerResult> outcome) => AsRetried(await outcome, true);
 
     // The first answer's outcome once its request has been forgotten: an unconfirmed one is read
     // again from the session, as a resend within the request's memory is, so it turns delivered
@@ -262,18 +255,18 @@ public sealed class AnswerService : ISessionAnswerer
         {
             var now = options.Time.GetUtcNow();
             foreach (var old in firstAnswers.Where(a => now - a.Value.At > AttemptLedger.Keep).Select(a => a.Key).ToList()) { firstAnswers.Remove(old); }
+            // A UUID is the sender's, for the prompt it was first admitted for, whatever question
+            // or sender comes with it now and however long ago the request's own record went.
+            foreach (var (admitted, owner) in firstAnswers)
+            {
+                if (owner.Request == key && (admitted != prompt || !string.Equals(owner.Sender, sender, StringComparison.Ordinal))) { foreign = true; return null; }
+            }
             if (firstAnswers.TryGetValue(prompt, out var known))
             {
                 // Both compared, whatever the first says, and the digests in constant time.
                 var sameSender = string.Equals(known.Sender, sender, StringComparison.Ordinal);
                 var same = CryptographicOperations.FixedTimeEquals(known.Digest, digest) & sameSender;
-                if (known.Request == key)
-                {
-                    // The first's own UUID, from another sender: not a resend, and nothing of the
-                    // first's is returned for it.
-                    foreign = !sameSender;
-                    return sameSender && known.Last is not null && !requests.Knows(key) ? known : null;
-                }
+                if (known.Request == key) { return known.Last is not null && !requests.Knows(key) ? known : null; }
                 if (!same) { return null; }
                 // Still known, or settled and forgotten with its outcome kept.
                 if (requests.Knows(known.Request) || known.Last is not null) { return known; }

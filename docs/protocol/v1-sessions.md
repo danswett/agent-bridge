@@ -695,8 +695,9 @@ above, however long after, so it becomes `delivered` once the session has record
 nothing is recorded it stays `unconfirmed`, with a reason that says only that nothing was
 typed again because the request repeats an answer already typed once; that holds for every
 repeat of an unconfirmed answer, under its own UUID or another, and whatever its stage (which
-still says how far the first got). The sender is checked before a request's outcome is looked
-up by UUID, so another sender replaying the first's UUID is refused as below. Only a *different* answer, or the same words from **another sender**,
+still says how far the first got). A request UUID belongs to the sender, session and question it
+was first admitted for: replayed by another sender, or under another question, it is a request
+of its own, and nothing of the first's outcome or progress is given. Only a *different* answer, or the same words from **another sender**,
 is `refused` for a prompt already typed into, and the two are refused alike, so that no
 sender can learn what a first answer said by guessing it. A sender is the channel's peer (a
 device); the host has no person-level identity, so a second device of the same person gets the

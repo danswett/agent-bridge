@@ -323,10 +323,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         probe.Reason = null;
         Assert.Equal(("refused", "agent-ha-bridge is running for this user"), await AnswerAsync(ch, new { pick = "b" }, refusedId));
 
-        // Stale for a question not asked; the same request stays stale.
+        // Stale for a question not asked; the same request stays stale (an id belongs to its question).
         var staleId = Guid.NewGuid().ToString();
         Assert.Equal("stale", (await AnswerAsync(ch, new { pick = "b" }, staleId, question: "q0")).Outcome);
-        Assert.Equal("stale", (await AnswerAsync(ch, new { pick = "b" }, staleId, question: "q1")).Outcome);
+        Assert.Equal("stale", (await AnswerAsync(ch, new { pick = "b" }, staleId, question: "q0")).Outcome);
 
         // Busy behind another answer; repeated once that one has finished, still busy.
         var release = new TaskCompletionSource();
