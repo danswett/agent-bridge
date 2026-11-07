@@ -1042,7 +1042,7 @@ jobs:
           grep -q -- '--blob-origin must be an origin' "$RUNNER_TEMP/bad-blobs.err" || { cat "$RUNNER_TEMP/bad-blobs.err"; echo "::error::build-site.mjs failed, but not by refusing the blob origin"; exit 1; }
       - name: The lab nightly's gate refuses every run today, and its verdict passes only a cut both roles pass
         # Offline: nothing reaches Azure or GitHub.
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-nightly')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-nightly')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/lab/test-nightly.ps1
       # Relative links and their anchors (quality/catalog.yml, docs-links), so renaming a doc or a
