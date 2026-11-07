@@ -10,6 +10,10 @@ status card did both through Home Assistant). Implemented by `AgentBridge.Relay`
 Everything here is relay text control messages, outside any channel, as for the blob store
 ([blobs.md](blobs.md)). Nothing about a session is in it.
 
+Draft extension, not implemented: [host planned state and offline observation](host-liveness.md)
+proposes optional offline reasons in `known`, bounded lifecycle storage and no-return
+notifications (#805), shared with #801. It does not change this roster v1 contract yet.
+
 ## What is recorded, and by whom
 
 * **Hosts only.** When a socket of kind `host` is admitted, the relay records the device id
