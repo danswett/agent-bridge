@@ -37,12 +37,12 @@ public static class HostConfigFile
         return clean.TrimEnd();
     }
 
-    // Sets permissions.remoteApproval, launch.remoteFolderTrust(Devices), devBox.keepAwake and name (an
+    // Sets permissions.remoteApproval and phoneSignIn, launch.remoteFolderTrust(Devices), devBox.keepAwake and name (an
     // empty name removes it). A file that is not valid JSON is left alone and the change refused, rather than
     // replaced by one that has lost whatever the person meant it to say. check, if given, sees the
     // text about to be written and throws to refuse it, leaving the file as it was.
     public static void Patch(string folder, bool? remoteApproval, string? name, bool? remoteFolderTrust = null, IReadOnlyList<string>? remoteFolderTrustDevices = null,
-        bool? devBoxKeepAwake = null, Action<string, string>? check = null)
+        bool? devBoxKeepAwake = null, Action<string, string>? check = null, bool? phoneSignIn = null)
     {
         var path = Path.Combine(folder, HostSettings.FileName);
         JsonObject root;
@@ -61,14 +61,15 @@ public static class HostConfigFile
         {
             throw new InvalidOperationException($"{path} is version {version}, written by a newer {Product.Name}; update this one first");
         }
-        if (remoteApproval is { } approve)
+        if (remoteApproval is not null || phoneSignIn is not null)
         {
             if (root["permissions"] is not JsonObject permissions)
             {
                 if (root["permissions"] is not null) { throw new InvalidOperationException($"permissions in {path} is not an object; fix it by hand first"); }
                 root["permissions"] = permissions = [];
             }
-            permissions["remoteApproval"] = approve;
+            if (remoteApproval is { } approve) { permissions["remoteApproval"] = approve; }
+            if (phoneSignIn is { } phone) { permissions["phoneSignIn"] = phone; }
         }
         if (remoteFolderTrust is not null || remoteFolderTrustDevices is not null)
         {

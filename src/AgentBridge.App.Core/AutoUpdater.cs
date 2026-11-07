@@ -29,7 +29,8 @@ namespace AgentBridge.App.Core;
 //
 // Installing takes a person's press, unless When an update is ready is Install between turns
 // (above), by the same path every way: the host stopped over the pipe,
-// then Velopack's ApplyUpdatesAndRestart, whose new version starts the host again; its first start
+// then Update.exe handed the checked copy of the package (PackageHandoff, #984), whose new version
+// starts the host again; its first start
 // shows a toast saying what changed (Announce).
 // * Restart to update, at this machine (RestartToUpdateAsync): at once, whatever the sessions are
 //   doing, since the app has warned the person first when a session here has a turn running or a

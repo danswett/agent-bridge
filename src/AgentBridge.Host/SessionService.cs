@@ -112,10 +112,10 @@ public sealed class SessionService
     }
     readonly ManageService? manage;
 
-    // Framework only: no production auth factory/entrypoint is registered. Both gates
-    // remain off until Engineering approves the agent-owned private login path.
+    // sessions.signin (#972): set only where the machine's permissions.phoneSignIn is on and an
+    // adapter exists for the agent (PhoneSignInSetup). Off by default: nothing is offered.
     internal SignIn.AgentSignInService? SignIn { get; init; }
-    internal bool SignInEntrypointApproved { get; init; } = AgentSignIn.EnabledByDefault;
+    internal bool SignInEntrypointApproved { get; init; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,

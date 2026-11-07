@@ -19,7 +19,8 @@ follow.
     "remoteApproval": true,
     "trustedPeers": false,
     "escapedApproval": "confirm",
-    "escapedApprovalDevices": null
+    "escapedApprovalDevices": null,
+    "phoneSignIn": false
   },
   "push": { "enabled": true },
   "delivery": { "readOnly": false },
@@ -82,6 +83,7 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `permissions.escapedApprovalDevices` | absent | The devices, by device id, that may confirm one. Absent or `null`: the devices approved for folder trust (`launch.remoteFolderTrustDevices`, as the Windows app's Settings changes them), and only while `launch.remoteFolderTrust` is on, so a device approved there needs no second visit and turning folder trust off (for a lost phone, say) takes Approve from them too. A list, even an empty one, replaces that. Invalid ids are ignored with a problem; a value that is not a list approves none. At most 64. Applies when the host restarts |
 | `permissions.remoteManage` | `true` | A person's other device (a phone or browser, or the app on another machine; never this machine's app, an agent or Home Assistant) may restart this host and repair the hooks of an agent this installation set up, through the relay, each press signed by that device (#801). Restarts are capped at 2 in 6 hours and wait for the host to be quiet; a read-only host never offers it. Read when the host starts |
 | `permissions.trustedPeers` | `false` | Transitional full-key remote authorization floor (#402), for disposable-host evaluation only. Restart-only; requires explicitly seeded pins. See [trusted peers](#trusted-peers-disposable-host-foundation) |
+| `permissions.phoneSignIn` | `false` | Signing Copilot in again from a person's device (`sessions.signin`, #972): the host runs Copilot's own `copilot login --device-code` and shows the one-time code on that device only. While it runs, **the machine opens a browser and copies the code**. Only a device pinned as a person here is offered it, and only on Windows. A value that is not `true` or `false` turns everything off, as `remoteApproval`'s does. Applies when the host restarts. See [phone sign-in](#phone-sign-in) |
 | `delivery.readOnly` | `false` | A host that only shows sessions: it takes no answer, reply, stop, launch, permission approval or transfer from any device, whatever agent-ha-bridge is doing, and says so in `hello` (`machine.readOnly`, "this is a read-only comparison host"), refusing each with that reason. The shadow host beside agent-ha-bridge sets it ([host-shadow.md](host-shadow.md)), so a daemon restart never leaves it acting. Without it, a host is held only while agent-ha-bridge runs (design G5) |
 | `sessions.restoreOnStart` | `true` | After a reboot or a crash of the host, the sessions that died with it are restored, idle, through the resume path, one at a time, and what cannot be is offered to resume ([host-launch.md](host-launch.md#restoring-after-a-reboot-or-a-crash)). Nothing is ever typed into them. `false` restores nothing, only says what went, in `hello` and one notification, and keeps nothing waiting. A value that is not `true` or `false`, or a file that cannot be read, turns it off, but keeps what died offered (the person may have meant it on). Per machine
 | `push.enabled` | `true` | Notifications (Web Push) to the account's phones. `false` sends none and takes no subscription: `hello` leaves `push` out, and `push.subscribe` fails saying the machine doesn't send notifications. For a machine that should be seen but not heard from, as the shadow host beside agent-ha-bridge ([host-shadow.md](host-shadow.md#on-the-phone--relay)) |
@@ -238,6 +240,45 @@ cannot be detected from those rolled-back files alone. Restoring a backup requir
 owner-controlled reset and reapproval, not automatic old-grant activation. Signed
 account rosters, relay credentials/revocation anchors, HA key storage, recovery,
 enrollment and production enablement remain separately gated.
+
+## Phone sign-in
+
+`permissions.phoneSignIn` (#972) lets a person sign Copilot in again from their own device when
+its sessions on this machine need it, without going to the machine
+([v1-sessions.md](protocol/v1-sessions.md#phone-sign-in-800-slice-2-enabled-per-machine-by-972)).
+It is **off by default** and set on each machine separately. What it runs is Copilot's own
+`copilot login --device-code`, unpatched: the one-time code goes only to the device that asked,
+over its encrypted channel, and **this machine opens a browser and copies the code** while it
+runs (accepted by Engineering, #800); a browser the login started is closed when the flow ends. Nothing is typed into a session, and the code never reaches
+a log, a notification, Home Assistant or a transcript.
+
+It is offered to a device only when all of these hold:
+
+- `permissions.phoneSignIn` is `true`, and the host has restarted since;
+- the machine runs Windows, and when the host started it found Copilot as an `.exe` the way
+  launching does (`launch.agents.copilot.path`, else `PATH`; a `.cmd` shim is never run);
+- the device is **pinned as a person at this machine** ([trusted peers](#trusted-peers-disposable-host-foundation)),
+  with a current pin. Being signed in to the account is not enough. Pins are made only through the
+  app-only `host.peers.put`; the app has no screen for them yet;
+- the machine is not read-only (`delivery.readOnly`, or agent-ha-bridge running for this user).
+
+**To turn it on for one machine** (the owner, at that machine or over RDP; an agent session is
+refused, #67):
+
+1. Open the Slipgates app → **Settings**, and turn on **Let my devices sign Copilot in on this
+   machine**. Or, in a terminal that is not inside an agent session:
+   `agent-bridge-host config set permissions.phoneSignIn true`
+2. Restart the host: **Restart** in Settings (shown once a change needs it).
+3. Check the host log (Settings → the log, or `logs\host.log` in the profile folder) for
+   `sign-in from devices is on for Copilot (permissions.phoneSignIn)`. "is set ... but off" means
+   the host is not on Windows or did not find Copilot's `.exe`; "is off" means the setting did not take.
+4. On the phone, a session needing sign-in on that machine shows **Sign in** in its banner. Press it,
+   open `https://github.com/login/device` and enter the code shown. The session then reads "Signed in ·
+   waiting for the session to confirm" until its next reply clears it.
+
+**To turn it off:** the same switch off (or `config set permissions.phoneSignIn false`), then
+Restart. A value that is not `true` or `false` turns every permission off and is said in the log.
+Devices cannot change it yet; that waits for #801's settings path.
 
 ## Approving a workspace at the machine
 
