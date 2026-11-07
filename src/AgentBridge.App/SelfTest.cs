@@ -76,6 +76,7 @@ static partial class SelfTest
             Check(form is not null && ById<Button>(form, "SendAnswer") is not null && ById<TextBox>(form, "Field:notes") is not null,
                 "draws a form question with its fields and Send");
             Check(Message(form) is { Approval: false }, "draws a question that is not an approval as written");
+            await CheckAtMachineShape(window, main, demo, Check, outFile);
             var withResponse = main.AllCards.FirstOrDefault(c => c.HasResponse);
             var responding = withResponse is null ? null : await Choose(window, main, withResponse.Id, "Response");
             Check(responding is not null && await Until(() => ById<MarkdownView>(responding, "ResponseBlock") is { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");
