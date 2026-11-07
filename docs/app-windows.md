@@ -413,6 +413,10 @@ into one folder with one version. An app update is a host update, so they never 
   * says how old its copy is (`Age`, which the relay must send, `0` for a fresh fetch) and that
     is at most an hour: a copy of unknown age is not used.
 
+  A relay's list kept in the shared file is judged again, the same way, for each check that
+  would be answered from it (its channel, pre-release choice, floor and installed version may
+  differ from the check that fetched it); one that fails for that check sends it to GitHub.
+
   Feeds and packages still download from those GitHub URLs and are still checked against their
   checksums as before (#719). A list from the relay counts as old as the relay says (`FetchedAt`
   is when its copy was made, so `UpdateState.CheckedAt` and Settings say that), and it doesn't

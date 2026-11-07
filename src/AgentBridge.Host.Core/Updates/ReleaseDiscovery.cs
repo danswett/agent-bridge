@@ -155,13 +155,25 @@ public sealed class ReleaseDiscovery : IDisposable
             // the relay gave since GitHub refused is not GitHub's answer, and that refusal doesn't
             // touch it.
             var holding = state.NotBefore is { } wait && now < wait;
-            if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn)) { return releases; }
-            if (cdn && url == GitHubList && channel is not null)
+            // The floor is only ever GitHub's: a relay's list, however it checked out, never
+            // raises it, so a forged high version can't make later genuine lists look old.
+            var floor = channel is not null && state.Url == url && state.Floors?.TryGetValue(Floor(channel, prereleases), out var f) == true ? f : null;
+            var askCdn = cdn && url == GitHubList && channel is not null;
+            if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn))
             {
-                // The floor is only ever GitHub's: a relay's list, however it checked out, never
-                // raises it, so a forged high version can't make later genuine lists look old.
-                var floor = state.Url == url && state.Floors?.TryGetValue(Floor(channel, prereleases), out var f) == true ? f : null;
-                var (body, age, refused) = await AskCdnAsync(floor, installed, channel, prereleases, cancellationToken);
+                if (state.Source != Sources.Cdn) { return releases; }
+                // A relay's list kept here is judged for every caller as a fresh one would be: it
+                // passed for the caller that fetched it, whose channel or pre-release choice may
+                // not be this one's (a list with a pre-release above GitHub's floor and an older
+                // stable release would take a stable caller back; review 6712185589).
+                var problem = channel is null ? "this check's channel isn't known" : CdnProblem(state.Body!, channel, prereleases, floor, installed);
+                if (problem is null) { return releases; }
+                log?.Invoke($"update check: the CDN's release list kept here was not used for this check, as {problem}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
+                askCdn = false;
+            }
+            if (askCdn)
+            {
+                var (body, age, refused) = await AskCdnAsync(floor, installed, channel!, prereleases, cancellationToken);
                 now = time.GetUtcNow();
                 if (body is not null && age is { } a && Readable(body, read, out var relayed))
                 {

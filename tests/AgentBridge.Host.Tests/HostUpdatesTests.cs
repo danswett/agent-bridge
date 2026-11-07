@@ -267,8 +267,8 @@ public sealed class HostUpdatesTests : IDisposable
     // the CDN's can't be trusted. Releases name their feeds under this repository's GitHub releases.
     static string Downloaded(string version, string file) => $"{ReleaseDiscovery.DownloadPrefix}v{version}/{file}";
 
-    static string Listed(string version, string? feed = null, string index = "releases.win.json") => $$"""
-        {"tag_name":"v{{version}}","name":"Agent Bridge {{version}}","draft":false,"prerelease":true,"published_at":"2026-11-07T18:00:00Z","assets":[
+    static string Listed(string version, string? feed = null, string index = "releases.win.json", bool pre = true) => $$"""
+        {"tag_name":"v{{version}}","name":"Agent Bridge {{version}}","draft":false,"prerelease":{{(pre ? "true" : "false")}},"published_at":"2026-11-07T18:00:00Z","assets":[
           {"name":"{{index}}","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/1","browser_download_url":"{{feed ?? Downloaded(version, index)}}","content_type":"application/json"}]}
         """;
 
@@ -292,7 +292,7 @@ public sealed class HostUpdatesTests : IDisposable
 
     // What an installed copy is offered through the shared source, its feeds served from here:
     // each version's own, and one elsewhere offering 0.1.666, which no trusted list names.
-    async Task<string?> OfferedAsync(ReleaseDiscovery discovery, string installed = "0.1.600")
+    async Task<string?> OfferedAsync(ReleaseDiscovery discovery, string installed = "0.1.600", bool prereleases = true)
     {
         var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
         var copy = new TestVelopackLocator("AgentBridgeApp", installed, packages, null, null, null, "win");
@@ -301,11 +301,12 @@ public sealed class HostUpdatesTests : IDisposable
             [Downloaded("0.1.599", "releases.win.json")] = ChannelFeed("0.1.599"),
             [Downloaded("0.1.601", "releases.win.json")] = ChannelFeed("0.1.601"),
             [Downloaded("0.1.602", "releases.win.json")] = ChannelFeed("0.1.602"),
+            [Downloaded("0.1.603", "releases.win.json")] = ChannelFeed("0.1.603"),
             [Foreign] = ChannelFeed("0.1.666"),
             ["https://github.com/someone/agent-bridge/releases/download/v0.1.666/releases.win.json"] = ChannelFeed("0.1.666"),
             [Downloaded("0.1.665", "releases.win.json")] = ChannelFeed("0.1.666"),
         });
-        var source = new DiscoveredGithubSource(VelopackHostUpdates.Repository, true, discovery, feeds, () => installed);
+        var source = new DiscoveredGithubSource(VelopackHostUpdates.Repository, prereleases, discovery, feeds, () => installed);
         return (await new UpdateManager(source, null, copy).CheckForUpdatesAsync())?.TargetFullRelease.Version.ToString();
     }
 
@@ -481,6 +482,26 @@ public sealed class HostUpdatesTests : IDisposable
         Assert.Equal("0.1.602", await OfferedAsync(discovery));
 
         Assert.Equal((2, 0), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    // Review 6712185589: a list kept from the relay is judged again for each caller. One a
+    // pre-release caller took (a pre-release above GitHub's floor, beside an older stable release)
+    // would take a stable caller below the stable floor GitHub set.
+    [Fact]
+    public async Task A_cdn_list_kept_for_a_pre_release_check_is_not_served_to_a_stable_check_below_githubs_floor()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero));
+        var web = new FakeWeb { GitHub = () => Listing($"[{Listed("0.1.602", pre: false)},{Listed("0.1.601", pre: false)}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, time, random: () => 0, cdn: true);
+        Assert.Equal("0.1.602", await OfferedAsync(discovery, prereleases: false));
+
+        time.Advance(ReleaseDiscovery.Interval);
+        web.Cdn = () => Relayed($"[{Listed("0.1.603")},{Listed("0.1.601", pre: false)}]");
+        Assert.Equal("0.1.603", await OfferedAsync(discovery));
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
+
+        Assert.Equal("0.1.602", await OfferedAsync(discovery, prereleases: false));
+        Assert.Equal((2, 2), (web.CdnRequests, web.GitHubRequests));
     }
 
     [Fact]
