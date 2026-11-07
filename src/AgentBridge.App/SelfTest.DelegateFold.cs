@@ -207,25 +207,32 @@ static partial class SelfTest
         await Open();
     }
 
-    // The open fold in Windows' high contrast (#1063): its button, chevron, "still working" link,
-    // the lines' names and their failed icon in system colours, taken in high contrast's own pass.
+    // The fold in Windows' high contrast (#1063), closed and open, taken in high contrast's own pass.
+    // The session pane has no fill of its own, so it is drawn on the window's colour, as the pages
+    // (whose root has one) are: system text is white on a black window, and on the viewer's white
+    // it would not show.
     static async Task PictureFoldInHighContrast(MainWindow window, MainViewModel main, Action<bool, string> check, string outFile)
     {
-        var saved = false;
+        var taken = new List<string>();
         Resize(window, 1440, 1000);
         if (window.Sessions.Layout is { } layout) { await Until(() => layout.Mode == PaneMode.Three, TimeSpan.FromSeconds(10)); }
         if (await Choose(window, main, DelegatingId, "DelegateStrip") is { Card: { } card } view)
         {
-            card.Delegates.EventsOpen = true;
             var rule = ById<Border>(view, "EventsRule");
-            saved = await Until(() => rule is { ActualHeight: > 0, Visibility: Visibility.Visible }, TimeSpan.FromSeconds(5));
-            await Task.Delay(600);
-            if (saved)
+            var shell = Application.Current.Resources.MergedDictionaries
+                .Select(d => d.ThemeDictionaries.TryGetValue("HighContrast", out var td) && td is ResourceDictionary rd && rd.TryGetValue("AbShell", out var b) && b is SolidColorBrush s ? s.Color : (Windows.UI.Color?)null)
+                .FirstOrDefault(c => c is not null) ?? default;
+            foreach (var open in new[] { false, true })
             {
-                await Picture(view, Path.ChangeExtension(outFile, ".delegates.fold.open.highcontrast.png"));
-                card.Delegates.EventsOpen = false;
+                card.Delegates.EventsOpen = open;
+                var drawn = await Until(() => open == (rule is { ActualHeight: > 0, Visibility: Visibility.Visible }), TimeSpan.FromSeconds(5));
+                await Task.Delay(600);
+                if (!drawn) { continue; }
+                await Picture(view, Path.ChangeExtension(outFile, $".delegates.fold.{(open ? "open" : "closed")}.highcontrast.png"), shell);
+                taken.Add(open ? "open" : "closed");
             }
+            card.Delegates.EventsOpen = false;
         }
-        check(saved, "pictures the open delegate fold in high contrast");
+        check(taken.Count == 2, $"pictures the delegate fold in high contrast, closed and open ({(taken.Count > 0 ? string.Join(", ", taken) : "none")})");
     }
 }
