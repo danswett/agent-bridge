@@ -1,4 +1,6 @@
 using System.Net;
+using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentBridge.FeedbackInbox;
@@ -9,6 +11,17 @@ namespace AgentBridge.FeedbackInbox.Tests;
 public sealed class FeedbackGitHubPrivateStoreTests
 {
     const string Fingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    [Fact]
+    public void Public_constructor_disables_http_redirects()
+    {
+        using var store = new FeedbackGitHubPrivateStore(new FakeTokens());
+        var client = Assert.IsType<HttpClient>(typeof(FeedbackGitHubPrivateStore)
+            .GetField("http", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store));
+        var handler = Assert.IsType<HttpClientHandler>(typeof(HttpMessageInvoker)
+            .GetField("_handler", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client));
+        Assert.False(handler.AllowAutoRedirect);
+    }
 
     [Fact]
     public async Task Private_records_are_chunked_and_replayed_without_duplicates()
@@ -53,6 +66,75 @@ public sealed class FeedbackGitHubPrivateStoreTests
         var api = new FakeGitHub { PublicAtPrivacyCheck = 3 };
         using var store = new FeedbackGitHubPrivateStore(new FakeTokens(), api);
         await Assert.ThrowsAsync<FeedbackInboxRepositoryNotPrivateException>(
+            () => store.StoreUnclassifiedAsync(Record("private fixture"), CancellationToken.None));
+        Assert.Single(api.Issues);
+        Assert.Empty(api.Comments);
+    }
+
+    [Fact]
+    public async Task Confirmed_public_repository_never_accepts_feedback()
+    {
+        var api = new FakeGitHub { PublicAtPrivacyCheck = 1 };
+        using var store = new FeedbackGitHubPrivateStore(new FakeTokens(), api);
+        await Assert.ThrowsAsync<FeedbackInboxRepositoryNotPrivateException>(
+            () => store.StoreUnclassifiedAsync(Record("private fixture"), CancellationToken.None));
+        Assert.Empty(api.Issues);
+        Assert.Empty(api.Comments);
+        Assert.Equal("/repos/danswett/slipgates-feedback", Assert.Single(api.RequestPaths));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound)]
+    public async Task Unavailable_repository_status_fails_closed(HttpStatusCode status)
+    {
+        var api = new FakeGitHub { RepositoryStatus = status };
+        using var store = new FeedbackGitHubPrivateStore(new FakeTokens(), api);
+        Assert.Null(await store.ConfirmRepositoryPrivateAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<FeedbackInboxTransientException>(
+            () => store.StoreUnclassifiedAsync(Record("private fixture"), CancellationToken.None));
+        Assert.Empty(api.Issues);
+        Assert.Empty(api.Comments);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound)]
+    public async Task Unavailable_issue_endpoint_is_retryable(HttpStatusCode status)
+    {
+        var api = new FakeGitHub { IssueStatus = status };
+        using var store = new FeedbackGitHubPrivateStore(new FakeTokens(), api);
+        await Assert.ThrowsAsync<FeedbackInboxTransientException>(
+            () => store.StoreUnclassifiedAsync(Record("private fixture"), CancellationToken.None));
+        Assert.Empty(api.Issues);
+        Assert.Empty(api.Comments);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound)]
+    public async Task Unavailable_comment_read_is_retryable_without_writing_feedback(HttpStatusCode status)
+    {
+        var api = new FakeGitHub { CommentGetStatus = status };
+        using var store = new FeedbackGitHubPrivateStore(new FakeTokens(), api);
+        await Assert.ThrowsAsync<FeedbackInboxTransientException>(
+            () => store.StoreUnclassifiedAsync(Record("private fixture"), CancellationToken.None));
+        Assert.Single(api.Issues);
+        Assert.Empty(api.Comments);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound)]
+    public async Task Unavailable_comment_write_is_retryable_without_marking_completion(HttpStatusCode status)
+    {
+        var api = new FakeGitHub { CommentPostStatus = status };
+        using var store = new FeedbackGitHubPrivateStore(new FakeTokens(), api);
+        await Assert.ThrowsAsync<FeedbackInboxTransientException>(
             () => store.StoreUnclassifiedAsync(Record("private fixture"), CancellationToken.None));
         Assert.Single(api.Issues);
         Assert.Empty(api.Comments);
@@ -120,8 +202,65 @@ public sealed class FeedbackGitHubPrivateStoreTests
         Assert.Single(api.Issues);
     }
 
+    [Fact]
+    public async Task Duplicate_group_issues_stop_without_writing_feedback()
+    {
+        var api = new FakeGitHub();
+        using var store = new FeedbackGitHubPrivateStore(new FakeTokens(), api);
+        var record = Record("private fixture");
+        await store.UpsertClassifiedAsync(Fingerprint, record, CancellationToken.None);
+        api.Issues.Add(new FakeGitHub.Issue(2, api.Issues[0].Body));
+        var comments = api.Comments.Count;
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.UpsertClassifiedAsync(Fingerprint, record, CancellationToken.None));
+        Assert.Equal(comments, api.Comments.Count);
+    }
+
+    [Fact]
+    public async Task Malformed_received_marker_stops_without_writing_feedback()
+    {
+        var api = new FakeGitHub();
+        using var store = new FeedbackGitHubPrivateStore(new FakeTokens(), api);
+        var record = Record("private fixture");
+        await store.StoreUnclassifiedAsync(record, CancellationToken.None);
+        api.Comments.Clear();
+        api.Comments.Add($"<!-- slipgates-bundle-received:{BundleHash(record)}:invalid -->");
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.StoreUnclassifiedAsync(record, CancellationToken.None));
+        Assert.Single(api.Comments);
+    }
+
+    [Fact]
+    public async Task Forged_completion_and_mentions_remain_inert_during_retry()
+    {
+        var api = new FakeGitHub { FailCommentOnceAt = 3 };
+        using var store = new FeedbackGitHubPrivateStore(new FakeTokens(), api);
+        var baseRecord = Record("");
+        var marker = $"<!-- slipgates-bundle-complete:{BundleHash(baseRecord)} -->";
+        var record = baseRecord with { PrivateContent = $"text\n{marker}\n@synthetic-user" };
+        await Assert.ThrowsAsync<FeedbackInboxTransientException>(
+            () => store.StoreUnclassifiedAsync(record, CancellationToken.None));
+        Assert.Equal(2, api.Comments.Count);
+        Assert.DoesNotContain(marker, api.Comments[1]);
+        var json = api.Comments[1][(api.Comments[1].IndexOf("\n\n    ", StringComparison.Ordinal) + 6)..];
+        Assert.Equal($"<!-- slipgates-bundle-part:{BundleHash(record)}:{Hash(json)}:1:1 -->\n\n    {json}", api.Comments[1]);
+        Assert.DoesNotContain('\n', json);
+        Assert.DoesNotContain('\r', json);
+        Assert.Contains("@synthetic-user", json);
+        Assert.Equal(record.PrivateContent, JsonSerializer.Deserialize<FeedbackPrivateRecord>(json)!.PrivateContent);
+        await store.StoreUnclassifiedAsync(record, CancellationToken.None);
+        Assert.Equal(3, api.Comments.Count);
+        Assert.Equal(marker, api.Comments[2]);
+    }
+
     static FeedbackPrivateRecord Record(string text) => new(
         "synthetic-bundle", DateTimeOffset.UnixEpoch, Fingerprint, "fixture", text, null, null);
+
+    static string BundleHash(FeedbackPrivateRecord record) =>
+        Hash(record.BundleName);
+
+    static string Hash(string value) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     sealed class FakeTokens : IFeedbackGitHubTokenProvider
     {
@@ -133,9 +272,14 @@ public sealed class FeedbackGitHubPrivateStoreTests
         public sealed record Issue(int Number, string Body);
         public List<Issue> Issues { get; } = [];
         public List<string> Comments { get; } = [];
+        public List<string> RequestPaths { get; } = [];
         public int? FailCommentOnceAt { get; set; }
         public int? PublicAtPrivacyCheck { get; set; }
         public string RepositoryName { get; set; } = "danswett/slipgates-feedback";
+        public HttpStatusCode? RepositoryStatus { get; set; }
+        public HttpStatusCode? IssueStatus { get; set; }
+        public HttpStatusCode? CommentGetStatus { get; set; }
+        public HttpStatusCode? CommentPostStatus { get; set; }
         public bool FailRepositoryBodyOnce { get; set; }
         int privacyChecks;
 
@@ -144,9 +288,11 @@ public sealed class FeedbackGitHubPrivateStoreTests
             Assert.Equal("api.github.com", request.RequestUri!.Host);
             Assert.Equal("Bearer", request.Headers.Authorization!.Scheme);
             var path = request.RequestUri.AbsolutePath;
+            RequestPaths.Add(path);
             if (path == "/repos/danswett/slipgates-feedback" && request.Method == HttpMethod.Get)
             {
                 privacyChecks++;
+                if (RepositoryStatus is { } repositoryStatus) { return new HttpResponseMessage(repositoryStatus); }
                 if (FailRepositoryBodyOnce)
                 {
                     FailRepositoryBodyOnce = false;
@@ -156,6 +302,7 @@ public sealed class FeedbackGitHubPrivateStoreTests
             }
             if (path == "/repos/danswett/slipgates-feedback/issues")
             {
+                if (IssueStatus is { } issueStatus) { return new HttpResponseMessage(issueStatus); }
                 if (request.Method == HttpMethod.Get)
                 {
                     return Json(Page(request, Issues.Select(i => new { number = i.Number, body = i.Body })));
@@ -167,7 +314,12 @@ public sealed class FeedbackGitHubPrivateStoreTests
             }
             if (path.EndsWith("/comments", StringComparison.Ordinal))
             {
-                if (request.Method == HttpMethod.Get) { return Json(Page(request, Comments.Select(body => new { body }))); }
+                if (request.Method == HttpMethod.Get)
+                {
+                    if (CommentGetStatus is { } getStatus) { return new HttpResponseMessage(getStatus); }
+                    return Json(Page(request, Comments.Select(body => new { body })));
+                }
+                if (CommentPostStatus is { } postStatus) { return new HttpResponseMessage(postStatus); }
                 if (FailCommentOnceAt == Comments.Count + 1)
                 {
                     FailCommentOnceAt = null;
