@@ -248,7 +248,7 @@ The relay's Content-Security-Policy follows the request's Host, so it needs no c
 
 Rollout, staging first, production on the owner's approval, by someone with Azure access:
 
-1. `./infra/deploy.ps1 -WhatIf` and read the diff: only the new hostname and its certificate are added;
+1. `./infra/deploy.ps1 -WhatIf -Production -ProductionImage <running digest> -ProductionVersion <running sha>` and read the diff (production is only included with `-Production`): only the new hostname is added;
    `relay.bad-duck.com`'s binding is unchanged.
 2. `./infra/deploy.ps1 -Production -ProductionImage <running digest> -ProductionVersion <running sha>`. Pass 2
    puts the hostname on the app, pass 3 issues and binds the certificate (a few minutes). Each hostname steps
@@ -258,7 +258,7 @@ Rollout, staging first, production on the owner's approval, by someone with Azur
    (`--relay https://relay.bad-duck.com` then `--relay https://relay.slipgates.com`, `--expect-blobs`).
 4. Set the repository variable `RELAY_SLIPGATES_LIVE` to `true` so every later promotion smoke-tests the new name too.
 
-Rollback: remove `extraCustomDomains` from `production` and re-run step 2. The hostname comes off the app
+Rollback: first set `RELAY_SLIPGATES_LIVE` to `false` (otherwise every promotion smoke-tests a name that is gone and fails), then remove `extraCustomDomains` from `production` and re-run step 2. The hostname comes off the app
 (an incremental deploy leaves its certificate behind, harmless) and `relay.bad-duck.com` is untouched; nothing else changed, since no client defaults moved. Leave the
 DNS records in place (they are harmless unbound). To delete the leftover certificate:
 `az containerapp env certificate delete -n <environment> -g <resource group> --certificate mc-relay-slipgates-com`.
