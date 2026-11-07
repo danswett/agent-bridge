@@ -99,7 +99,7 @@ review, Low). A client sends it only to a machine whose state says `canUpdateNow
 | `updateNowAt` | time? | **#1159, not built.** With `updateNowWhy` `restart-cap`: when the first slot frees, of its own allowance or the shared cap |
 | `busy` | `UpdateBusy`? | **#1159, not built.** Only with `canUpdateNow`: what Update now would go over, from the host's own session snapshot ([What the phone sees](#what-the-phone-sees-before-the-press)) |
 | `requestNow` | bool | **#1159, not built.** The press in `request` is an Update now |
-| `waitingCode` | string? | **#1159, not built.** With phase `waiting`: why, as a code a client words itself (`turn-running`, `question-waiting`, `unknown`), never showing `waiting`'s text ([The confirmation](#the-confirmation)) |
+| `waitingCode` | string? | **#1159, not built.** With phase `waiting`: why, as a code a client words itself (`turn-running`, `question-waiting`, `unknown`, `usage-check`), never showing `waiting`'s text ([The confirmation](#the-confirmation)) |
 
 An unknown `phase` reads as `idle`. Text fields are cut to 64 bytes (versions), 512 (reasons)
 and 4 KiB (notes).
@@ -133,7 +133,7 @@ again": an install pressed hours before must not go ahead on sessions never watc
 | `outcome` | `accepted` `refused` `confirm` | `confirm` (#1159, not built): an Update now that would go over more than the person accepted; nothing was asked, and `state.busy` says what is busy now. An unknown outcome reads as `refused`. `accepted`: the machine's app has been asked, and how it goes is in the state (`request`, then `last` with this request). A Check that finds a newer release ends instead with `request` gone and `available` and `checkedAt` set (`last` stays how the last update, or a check finding nothing, ended). `refused`: nothing was asked |
 | `reason` | string? | Why it was refused |
 | `state` | `UpdateState`? | The state as the press found it |
-| `code` | string? | **#1159, not built.** Only for a press with `now`: why it was refused or needs confirming, as a code: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`release-changed`, `other-profile`, `old-app`, `restart-cap`, `sign-in`). Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
+| `code` | string? | **#1159, not built.** Only for a press with `now`: why it was refused or needs confirming, as a code: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`release-changed`, `other-profile`, `old-app`, `restart-cap`, `sign-in`, `usage-check`). Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
 
 The host refuses a device that is not connected to the relay now, one that is not a person's,
 and a press with no app to carry it out. The app's refusals (another profile running, the host
@@ -249,6 +249,7 @@ Update now interrupts what Install would wait for.
 | A signature that doesn't verify, is older than 2 minutes or from the future, or names another machine or action | `bad-signature`, `expired`, `future` | #801's bound on a disruptive press: whoever pressed did so in the last two minutes, on that device |
 | Another profile's app or host running from the same installation | `other-profile` (the app's, in `last`) | Velopack stops every process in the package, busy or not, and restarts only the profile that installed. The app refuses at once, before anything is downloaded, and again just before the host stops |
 | The app not running, a build folder rather than an installed copy, or an app too old for Update now | `unavailable`, `old-app` | Nothing would carry it out. An old app is told apart, since Install still works there |
+| A Codex usage check still running after the 11 minutes every install waits for it (#238) | `usage-check` (the app's, in `last`) | Stopping the host cuts the app-server's input and can sign Codex out; Product kept the wait for now (settled Q5) |
 | #800's agent sign-in entrypoint on | `sign-in` | A restart cancels a pending sign-in, as for `manage.restart` (Connection, Q-C8) |
 | More than 3 presses of Update now from one device in 10 minutes; 8 presses waiting already; another Update now downloading or leaving on the machine | `rate-limited`, `busy` | As today. Update now is its own kind for the per-device limit, so Install stays usable. An Update now **waiting for a quiet moment** is not "under way": a new press replaces it, keeping its download (decision 3) |
 | Update now's **own allowance** (1 committed restart per machine in 6 hours) **and** the **shared cap** (2 committed restarts in 6 hours, counted together with `manage.restart`; 6 an hour once #55's roster is enforced) both used | `restart-cap` | The owner's ruling (settled Q7): an Update now spends its own allowance first, and only when that is used does it spend a slot of the shared cap, so it adds at most one restart in 6 hours beyond what `manage.restart` may do. `manage.restart` never spends Update now's allowance. The words say when it works again |
@@ -332,7 +333,7 @@ waiting. A quiet machine updates on one press.
   forgotten press can't restart the bridge hours later, unwatched.
 
 `UpdateState` gains, for this, **`waitingCode`** (#1159, not built): with phase `waiting`, why,
-as a code a client words itself: `turn-running`, `question-waiting` or `unknown`. The host's
+as a code a client words itself: `turn-running`, `question-waiting`, `unknown` or `usage-check`. The host's
 `waiting` text stays for the log and older clients, and is never shown by a client that knows
 the code.
 
@@ -369,7 +370,8 @@ host's own text (#826). "Bridge", never "host".
 * **Waiting for a quiet moment** (decision 3), on the update line, from `waitingCode`:
   `turn-running` "Update ready · waiting for the current turn to finish"; `question-waiting`
   "Update ready · waiting for a question to be answered" (the line #719 already uses);
-  `unknown` "Update ready · waiting until the bridge can tell the sessions are quiet". **Update
+  `unknown` "Update ready · waiting until the bridge can tell the sessions are quiet";
+  `usage-check` "Update ready · waiting for a Codex usage check to finish". **Update
   now** stays offered beside it, and brings up the confirmation.
 * **While it goes:** "Downloading *v* · 40%", then **"Restarting to update…"**, the Windows app's
   words for its own restart ([app-windows.md](../app-windows.md#updates-velopack-one-version-for-app-and-host)),
@@ -392,6 +394,7 @@ host's own text (#826). "Bridge", never "host".
   | `sign-in` | an agent sign-in is under way there |
   | `announce-failed` | the bridge couldn't tell your devices it was restarting |
   | `other-profile` | another bridge profile is running there |
+  | `usage-check` | a Codex usage check was running there; try again in a few minutes |
   | `disabled`, `read-only` | Update now is off on this machine |
   | `expired` | the request expired before it could go; press Update now again |
   | `future`, `bad-signature` | the request didn't verify; try again |
@@ -416,7 +419,10 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
    (`HostStatus.UpdateAsks`), marked `now` with its `release` and `accept`.
 2. The app takes it, refuses at once what it refuses today (another profile, a build folder),
    then downloads and checks the package **outside the lease** (`DownloadMark`, and #984's
-   per-profile copy). It holds the usage probes (#238) as every install does. It does not wait
+   per-profile copy). It holds the usage probes (#238) as every install does, waiting up to 11
+   minutes for a Codex usage check to end (settled Q5), with `waitingCode` `usage-check`; if
+   those 11 minutes run out first, the press ends `refused` with code `usage-check` (its own
+   15-minute life running out first is `expired`, as below). It does not wait
    for a quiet machine unless, when it is ready, what is busy isn't covered by the person's
    confirmation: then it keeps the download and waits for the next quiet moment ([After the
    press](#the-confirmation)), never going on sessions the confirmation didn't cover. Throughout,
@@ -488,7 +494,10 @@ shown "Restarting to update…" for 90 s after its channel closes, then Offline 
   twice (#1100). What crosses the restart less well is the answer's **outcome**: the record that
   lets an identical retry get the first outcome (#1093, #1100) is the host's memory only. A phone
   that missed the result and retries after the restart is told the prompt was already answered
-  (the ledger's refusal), not "delivered". **Open question 4.**
+  (the ledger's refusal), not "delivered". **Settled Q4** (Product): the result is saved with
+  the durable record of typed answers, so an identical retry after the restart gets the first
+  outcome, as before it; the 3 s wait at the departure is not lengthened. Update now can't ship
+  until that record carries the result ([build plan](#build-plan), slice 0).
 * **A question or approval waiting.** The agents keep running, and a question still pending when
   the new host starts is notified again ([v1-sessions.md](v1-sessions.md#when-a-host-notifies)).
   An approval the host carries through the agent's hook may not survive (#954). So, until #954
@@ -535,9 +544,30 @@ remedy is the one #801 has: `permissions.remoteManage` off, and #55's roster.
 
 ### Build plan
 
-Each slice is its own PR. Slices 1 and 2 are sensitive (protocol, updater and install path) and
+Each slice is its own PR. Slices 0, 1 and 2 are sensitive (answer delivery, protocol, updater and install path) and
 need an independent review and a second model family; 3 and 4 touch how a confirmation renders,
 so they need one too.
+
+0. **Answer results across the restart** (settled Q4; must land before Update now ships). The
+   durable record of typed answers, `AttemptLedger` (`answer-attempts.json`, written through
+   before any key), today keeps only which prompts were claimed; the record that answers an
+   identical retry with the first outcome is `AnswerService`'s, kept in the host's memory while
+   the prompt's claim is (#1093, #1100). Each ledger entry gains that answer's result: its
+   outcome and stage, the sender, session and question it was admitted for, and a hash of the
+   answer, which tells an identical retry from a different answer; and, while the
+   result is `unconfirmed`, what `AnswerService`'s re-read needs to read the session again (its
+   context today, `FirstAnswer.Read`): the agent, the transcript path, the call or tool-use id,
+   the read offset, and the typed plan the re-read compares with. The plan is the answer's
+   words, kept only in the host's private profile folder (the agent's own transcript holds the
+   same words) and dropped once the result is `delivered` or the claim ends. It is updated when
+   the outcome settles and when an `unconfirmed` one is read again as `delivered`. A host that
+   starts reads it back, so an identical retry from the
+   same sender after a restart gets the first outcome, and a different answer or sender still
+   gets the plain refusal, as before the restart. The 3 s `LeaveAnyway` wait is unchanged.
+   Tests: "an answer delivered before a restart is told delivered when retried after it"; "an
+   unconfirmed answer retried after a restart is read again and never typed again"; "a
+   different answer after a restart is still refused"; "a delivered answer's words are dropped
+   from the ledger".
 
 1. **Host and protocol.** `Update.cs`: `now` on the command, `canUpdateNow`, `busy`,
    `requestNow`, `waitingCode`, outcome `confirm`, `code`. `UpdateService` verifies `now` through the same
@@ -600,7 +630,7 @@ so they need one too.
    `ContentDialog` with the same list, words and buttons, focus on Cancel, as #1142's model
    confirmation, through `App.Core` view-model tests mirroring the PWA's.
 
-Order: 1, then 2, then 3 and 4 together.
+Order: 0 (Update now ships only once it has landed), 1, then 2, then 3 and 4 together.
 
 ### Settled decisions
 
@@ -655,18 +685,21 @@ Order: 1, then 2, then 3 and 4 together.
    once its own slot is used, and both are checked when the update commits.
    Specified in [What still refuses](#what-still-refuses-and-why) and
    [Going](#going-the-lease-and-the-departure) step 3.
+- **Q4. An answer's outcome across the restart** (Product, 2026-11-07 12:00 PT, on #1161): "(a):
+   save the answer result with the durable record of typed answers, so a person never loses or
+   retypes an answer across the restart; do NOT lengthen the 3 s wait." Specified in
+   [Questions and answers across the restart](#questions-and-answers-across-the-restart) and
+   [build plan](#build-plan) slice 0, which extends `AttemptLedger` with `AnswerService`'s
+   first-outcome record and must land before Update now ships.
+- **Q5. Usage probes** (Product, 2026-11-07 12:00 PT, on #1161): "keep the 11-minute wait for a
+   Codex usage check (#238) for now; if Update now is refused for that reason, the phone shows
+   why in plain words." Specified in [Going](#going-the-lease-and-the-departure) step 2
+   (`waitingCode` and code `usage-check`) and the reasons table in
+   [What the person sees](#what-the-person-sees).
 
 ### Open questions
 
-Labelled as first raised; Q1, Q2, Q3, Q6, Q7 and Q8 are settled above.
-
-- **Q4. An answer's outcome across the restart.** Persist the first-outcome record with the attempt
-   ledger, so a retry after the restart is told "delivered" or "unconfirmed" rather than the
-   ledger's refusal; or wait longer than 3 s at the departure for answer results to reach their
-   devices? Related to #1101. Trust and Connection.
-- **Q5. Usage probes.** An install waits up to 11 minutes for a Codex usage probe (#238). Keep that
-   for Update now, or bound it lower and accept the Codex sign-out risk? Proposed: keep it; the
-   line says why it waits.
+None open: Q1 to Q8 are settled above.
 
 ## Between the host and its app
 
