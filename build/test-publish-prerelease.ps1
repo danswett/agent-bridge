@@ -48,6 +48,7 @@ $global:PpDownload = $null
 $global:PpCompare = @()
 $global:PpPackSaw = $null
 $global:PpPackArgs = $null
+$global:PpPackHashes = @{}
 $global:PpPublishRids = [Collections.Generic.List[string]]::new()
 $global:PpBuildsFor = $null
 $global:PpFeedExtra = $null
@@ -248,13 +249,27 @@ function global:vpk {
     } elseif ($a[0] -eq 'pack') {
         $global:PpPackArgs = $a
         $global:PpPackSaw = @(Get-ChildItem (Arg '-o') -Filter *.nupkg -ErrorAction SilentlyContinue | ForEach-Object Name)
+        $channel = Arg '-c'
+        New-Item -ItemType Directory -Force (Arg '-o') | Out-Null
+        # The pinned vpk emits pack-id download names, even with --packTitle Slipgates.
+        $packedAssets = @(
+            @{ RelativeFileName = "AgentBridgeApp-$channel-Setup.exe"; Type = 'Installer' }
+            @{ RelativeFileName = "AgentBridgeApp-$channel-Portable.zip"; Type = 'Portable' }
+            @{ RelativeFileName = (Get-PpFull $channel (Arg '-v')); Type = 'Full' }
+        )
+        ConvertTo-Json -InputObject $packedAssets | Set-Content (Join-Path (Arg '-o') "assets.$channel.json")
         if ($global:PpPackMakes) {
-            $channel = Arg '-c'
             $machine = if ((Arg '--runtime') -eq 'win-arm64') { 'arm64' } else { 'x64' }
-            New-Item -ItemType Directory -Force (Arg '-o') | Out-Null
             New-Package (Join-Path (Arg '-o') (Get-PpFull $channel (Arg '-v'))) 'dev' $machine
             New-PpExe (Join-Path (Arg '-o') "AgentBridgeApp-$channel-Setup.exe") $machine
             New-PpPortable (Join-Path (Arg '-o') "AgentBridgeApp-$channel-Portable.zip") $machine
+        } else {
+            foreach ($asset in $packedAssets | Where-Object Type -NE 'Full') {
+                Set-Content (Join-Path (Arg '-o') $asset.RelativeFileName) "packed $($asset.Type)"
+            }
+        }
+        foreach ($asset in $packedAssets | Where-Object Type -NE 'Full') {
+            $global:PpPackHashes[$asset.Type] = (Get-FileHash (Join-Path (Arg '-o') $asset.RelativeFileName)).Hash
         }
     } else { throw "stand-in vpk: unexpected $($a -join ' ')" }
 }
@@ -290,7 +305,7 @@ function global:dotnet {
 # --- Fixtures.
 function Reset([int]$prereleases = 0) {
     $global:PpReleases.Clear(); $global:PpTags.Clear(); $global:PpCalls.Clear(); $global:PpPublishRids.Clear()
-    $global:PpDownload = $null; $global:PpPackSaw = $null; $global:PpPackArgs = $null; $global:PpIgnoreRelease = $false; $global:PpCompare = @()
+    $global:PpDownload = $null; $global:PpPackSaw = $null; $global:PpPackArgs = $null; $global:PpPackHashes = @{}; $global:PpIgnoreRelease = $false; $global:PpCompare = @()
     $global:PpBuildsFor = $null; $global:PpFeedExtra = $null; $global:PpPackMakes = $false; $global:PpTamper = $null; $global:PpSign = @{}
     $global:PpGeneratedNotes = "## What's Changed`n* A change (#200)`n`n**Full Changelog**: https://github.com/$repo/compare/v0.1.503...v0.1.600"
     $global:PpPublishedBody = $null
@@ -334,14 +349,14 @@ function New-PpPortable([string]$path, [string]$machine) {
 function Get-PpDir([string]$channel = 'win') { Join-Path $scratch $(if ($channel -eq 'win') { 'releases' } else { "releases-$channel" }) }
 
 function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string]$Channel = 'win', [string]$Machine) {
-    # As vpk pack leaves it: with -DeltaFrom, a delta from that version and its full package beside.
+    # As pack-app leaves it after normalizing public names: with -DeltaFrom, a delta and its base.
     if (-not $Machine) { $Machine = if ($Channel -eq 'win') { 'x64' } else { 'arm64' } }
     $suffix = if ($Channel -eq 'win') { '' } else { "-$Channel" }
     $dir = Get-PpDir $Channel
     New-Item -ItemType Directory -Force $dir | Out-Null
     $assets = [Collections.Generic.List[object]]::new()
-    $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$Channel-Setup.exe"; Type = 'Installer' })
-    $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$Channel-Portable.zip"; Type = 'Portable' })
+    $assets.Add([ordered]@{ RelativeFileName = "Slipgates-$Channel-Setup.exe"; Type = 'Installer' })
+    $assets.Add([ordered]@{ RelativeFileName = "Slipgates-$Channel-Portable.zip"; Type = 'Portable' })
     $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$version$suffix-full.nupkg"; Type = 'Full' })
     if ($DeltaFrom) {
         $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$version$suffix-delta.nupkg"; Type = 'Delta' })
@@ -458,12 +473,12 @@ Check 'Failed or empty generated notes leave releases unpublished and existing d
 }
 
 Check 'x64 goes up exactly as before Arm64 builds: the win channel, creating the draft, under the names installed copies read' {
-    # Every copy installed so far is x64 and reads releases.win.json: its channel, file names and
-    # the upload that creates the release must not move.
+    # Existing x64 copies read releases.win.json: its channel, package names and the upload
+    # that creates the release must not move. Only public Setup/Portable names change.
     Reset 3
     $plan = Invoke-Publish '0.1.600' -DeltaFrom '0.1.503' -Plan
     Assert (@(Uploads)[0] -eq "vpk upload github --channel win --tag v0.1.600 --targetCommitish $commit pre=True publish=False merge=False") "upload: $(Uploads)"
-    $x64 = 'AgentBridgeApp-win-Setup.exe, AgentBridgeApp-win-Portable.zip, AgentBridgeApp-0.1.600-full.nupkg, AgentBridgeApp-0.1.600-delta.nupkg, releases.win.json, RELEASES, assets.win.json'
+    $x64 = 'Slipgates-win-Setup.exe, Slipgates-win-Portable.zip, AgentBridgeApp-0.1.600-full.nupkg, AgentBridgeApp-0.1.600-delta.nupkg, releases.win.json, RELEASES, assets.win.json'
     Assert ($plan -match "v0\.1\.600 win \(win-x64, release build\) from $commit, .*: $([regex]::Escape($x64))\r?\n") "plan: $plan"
     Assert (-not (@(Get-Asset 'win').RelativeFileName -match 'arm64')) "x64's assets: $(@(Get-Asset 'win').RelativeFileName)"
 }
@@ -472,14 +487,14 @@ Check 'Arm64 joins the same draft in its own channel, and the release is publish
     Reset 3
     $plan = Invoke-Publish '0.1.600' -DeltaFrom '0.1.503' -Plan
     Assert (@(Uploads)[1] -eq "vpk upload github --channel win-arm64 --tag v0.1.600 --targetCommitish $commit pre=True publish=False merge=True") "upload: $(Uploads)"
-    $arm64 = 'AgentBridgeApp-win-arm64-Setup.exe, AgentBridgeApp-win-arm64-Portable.zip, AgentBridgeApp-0.1.600-win-arm64-full.nupkg, AgentBridgeApp-0.1.600-win-arm64-delta.nupkg, releases.win-arm64.json, assets.win-arm64.json'
+    $arm64 = 'Slipgates-win-arm64-Setup.exe, Slipgates-win-arm64-Portable.zip, AgentBridgeApp-0.1.600-win-arm64-full.nupkg, AgentBridgeApp-0.1.600-win-arm64-delta.nupkg, releases.win-arm64.json, assets.win-arm64.json'
     Assert ($plan -match "v0\.1\.600 win-arm64 \(win-arm64, release build\) from $commit, .*: $([regex]::Escape($arm64))\r?\n") "plan: $plan"
     Assert ((Get-Delta 'win-arm64') -eq 'delta 0.1.503->0.1.600') "arm64 delta: $(Get-Delta 'win-arm64')"
     Assert (@($global:PpReleases | Where-Object tag_name -EQ 'v0.1.600').Count -eq 1) 'not exactly one v0.1.600'
     $published = CallIndex 'gh api -X PATCH*'
     Assert ($published -gt (CallIndex '*--channel win-arm64*merge=True') -and $published -gt (CallIndex 'gh release upload v0.1.600 *assets.win-arm64.json*')) "calls: $($global:PpCalls -join '; ')"
     $notes = $global:PpPublishedBody
-    Assert ($notes -like '*AgentBridgeApp-win-Setup.exe on an x64 PC*' -and $notes -like '*AgentBridgeApp-win-arm64-Setup.exe on a Windows on Arm PC*') "notes: $notes"
+    Assert ($notes -like '*Slipgates-win-Setup.exe on an x64 PC*' -and $notes -like '*Slipgates-win-arm64-Setup.exe on a Windows on Arm PC*') "notes: $notes"
 }
 
 Check 'A release without the Arm64 folder is refused before anything is uploaded' {
@@ -681,7 +696,7 @@ Check 'A newer draft does not stop a version being published' {
 Check 'A folder without its Setup.exe is refused before anything is uploaded' {
     Reset 3
     $threw = $false
-    try { Invoke-Publish '0.1.600' -Skip 'AgentBridgeApp-win-Setup.exe' } catch { $threw = $_.Exception.Message -like '*AgentBridgeApp-win-Setup.exe*' }
+    try { Invoke-Publish '0.1.600' -Skip 'Slipgates-win-Setup.exe' } catch { $threw = $_.Exception.Message -like '*Slipgates-win-Setup.exe*' }
     Assert $threw 'the missing Setup.exe was not refused'
     Assert ($global:PpCalls.Count -eq 0) "calls: $($global:PpCalls -join '; ')"
 }
@@ -880,7 +895,7 @@ Check 'A signed release is checked, uploaded as a draft, downloaded back and che
     Assert (Published) 'not published'
     $downloads = @($global:PpCalls | Where-Object { $_ -like 'gh release download v0.1.600 *' })
     Assert ($downloads.Count -eq 2) "downloads: $($downloads -join '; ')"
-    Assert ($downloads[0] -like '*-p AgentBridgeApp-0.1.600-full.nupkg*-p AgentBridgeApp-win-Setup.exe*-p AgentBridgeApp-win-Portable.zip*-p AgentBridgeApp-0.1.600-delta.nupkg*-p releases.win.json*') "download: $($downloads[0])"
+    Assert ($downloads[0] -like '*-p AgentBridgeApp-0.1.600-full.nupkg*-p Slipgates-win-Setup.exe*-p Slipgates-win-Portable.zip*-p AgentBridgeApp-0.1.600-delta.nupkg*-p releases.win.json*') "download: $($downloads[0])"
     Assert ((CallIndex 'gh release download*') -lt (CallIndex 'gh api -X PATCH*')) "calls: $($global:PpCalls -join '; ')"
     Assert ($global:PpPublishedBody -like '*Signed by CN=Agent Bridge Test Publisher with Azure Artifact Signing*SmartScreen may still warn*') "notes: $global:PpPublishedBody"
     Assert ($global:PpPublishedBody -notlike '*Unsigned*') "notes: $global:PpPublishedBody"
@@ -889,7 +904,7 @@ Check 'A signed release is checked, uploaded as a draft, downloaded back and che
 foreach ($case in @(
         @{ Name = 'an unsigned NativeAOT injector'; Sign = @{ 'agent-bridge-injector.exe' = 'unsigned' }; Says = '*agent-bridge-injector.exe: NotSigned*' }
         @{ Name = "Velopack's Update.exe signed by another publisher"; Sign = @{ 'Squirrel.exe' = 'other' }; Says = '*Squirrel.exe: signed by CN=Someone Else, not the pinned publisher*' }
-        @{ Name = 'a Setup.exe without a timestamp'; Sign = @{ 'AgentBridgeApp-win-arm64-Setup.exe' = 'notimestamp' }; Says = '*AgentBridgeApp-win-arm64-Setup.exe: no timestamp*' }
+        @{ Name = 'a Setup.exe without a timestamp'; Sign = @{ 'Slipgates-win-arm64-Setup.exe' = 'notimestamp' }; Says = '*Slipgates-win-arm64-Setup.exe: no timestamp*' }
         @{ Name = 'a launcher stub whose certificate is not Public Trust'; Sign = @{ 'Slipgates_ExecutionStub.exe' = 'nopublictrust' }; Says = '*Slipgates_ExecutionStub.exe: the signer has no 1.3.6.1.4.1.311.97.1.0 EKU*' }
         @{ Name = 'an unsigned runtime file'; Sign = @{ 'Microsoft.Runtime.dll' = 'unsigned' }; Says = '*Microsoft.Runtime.dll: NotSigned*' }
         @{ Name = 'a portable launcher signed by another publisher'; Sign = @{ 'Slipgates.exe' = 'other' }; Says = '*Portable.zip Slipgates.exe: signed by CN=Someone Else*' }
@@ -924,19 +939,19 @@ Check 'A portable zip without its launcher is refused' {
     Reset 3
     $global:PpSign = @{}
     $dirs = @(foreach ($channel in 'win', 'win-arm64') { New-Folder '0.1.600' -Channel $channel })
-    $portable = Join-Path $dirs[1] 'AgentBridgeApp-win-arm64-Portable.zip'
+    $portable = Join-Path $dirs[1] 'Slipgates-win-arm64-Portable.zip'
     $zip = [IO.Compression.ZipFile]::Open($portable, 'Update')
     $zip.GetEntry('Slipgates.exe').Delete()
     $zip.Dispose()
     $threw = $false
-    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like '*AgentBridgeApp-win-arm64-Portable.zip has no Slipgates.exe*' }
+    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like '*Slipgates-win-arm64-Portable.zip has no Slipgates.exe*' }
     Assert $threw 'a portable zip without its launcher passed'
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
 
 # What vpk 1.2.161 packs, exactly: a signed executable where it puts none is still refused.
 foreach ($case in @(
-        @{ Name = 'a portable zip with another executable at its root'; File = 'AgentBridgeApp-win-arm64-Portable.zip'; Entry = 'Helper.exe'; Says = '*AgentBridgeApp-win-arm64-Portable.zip has Helper.exe at its root, which vpk does not pack*' }
+        @{ Name = 'a portable zip with another executable at its root'; File = 'Slipgates-win-arm64-Portable.zip'; Entry = 'Helper.exe'; Says = '*Slipgates-win-arm64-Portable.zip has Helper.exe at its root, which vpk does not pack*' }
         @{ Name = 'a package with a second launcher stub'; File = 'AgentBridgeApp-0.1.600-win-arm64-full.nupkg'; Entry = 'lib/app/Other_ExecutionStub.exe'; Says = '*AgentBridgeApp-0.1.600-win-arm64-full.nupkg has a launcher stub Other_ExecutionStub.exe, not only Slipgates_ExecutionStub.exe*' }
     )) {
     Check "$($case.Name) is refused" {
@@ -1064,6 +1079,77 @@ function Invoke-Pack([string]$version, [string]$Runtime = 'win-x64') {
     & $packScript -Version $version -Runtime $Runtime -Out $scratch -DeltaFrom "https://github.com/$repo" 6>$null 3>$null
 }
 function PackArg([string]$name) { $i = [array]::IndexOf($global:PpPackArgs, $name); if ($i -ge 0) { $global:PpPackArgs[$i + 1] } }
+
+Check 'Both architectures get branded downloads and matching upload indexes without changing package identity' {
+    foreach ($runtime in 'win-x64', 'win-arm64') {
+        Reset
+        Invoke-Pack '0.1.600' -Runtime $runtime
+        $channel = if ($runtime -eq 'win-x64') { 'win' } else { 'win-arm64' }
+        $dir = Join-Path $scratch 'releases'
+        $assets = @(Get-Content (Join-Path $dir "assets.$channel.json") -Raw | ConvertFrom-Json)
+        Assert ((PackArg '-u') -ceq 'AgentBridgeApp') "pack id: $(PackArg '-u')"
+        Assert (($assets | Where-Object Type -EQ 'Full').RelativeFileName -ceq (Get-PpFull $channel '0.1.600')) 'the full package identity moved'
+        foreach ($type in 'Installer', 'Portable') {
+            $tail = if ($type -eq 'Installer') { 'Setup.exe' } else { 'Portable.zip' }
+            $name = "Slipgates-$channel-$tail"
+            Assert (($assets | Where-Object Type -EQ $type).RelativeFileName -ceq $name) "upload index does not name $name"
+            Assert ((Get-FileHash (Join-Path $dir $name)).Hash -ceq $global:PpPackHashes[$type]) "renaming changed $name's bytes"
+            Assert (-not (Test-Path (Join-Path $dir "AgentBridgeApp-$channel-$tail"))) 'a legacy public name was left behind'
+            Set-Content (Join-Path $dir $name) 'stale previous pack'
+        }
+        & $packScript -Version '0.1.600' -Runtime $runtime -Out $scratch -PackOnly 6>$null 3>$null
+        Assert ((Get-Content (Join-Path $dir "Slipgates-$channel-Setup.exe")) -ceq 'packed Installer') 'a repeat pack retained the old public installer'
+        Assert ((Get-Content (Join-Path $dir "Slipgates-$channel-Portable.zip")) -ceq 'packed Portable') 'a repeat pack retained the old public portable'
+    }
+}
+
+Check 'Incomplete or unexpected packed download metadata is refused before either file or index is renamed' {
+    . (Join-Path $PSScriptRoot 'app-channels.ps1')
+    foreach ($case in 'missing-portable', 'duplicate-installer', 'foreign-name', 'blocked-destination') {
+        Reset
+        $dir = New-Item -ItemType Directory -Force (Join-Path $scratch 'releases')
+        $assets = @(
+            @{ Type = 'Installer'; RelativeFileName = 'AgentBridgeApp-win-Setup.exe' }
+            @{ Type = 'Portable'; RelativeFileName = 'AgentBridgeApp-win-Portable.zip' }
+        )
+        Set-Content (Join-Path $dir 'AgentBridgeApp-win-Setup.exe') 'packed installer'
+        if ($case -ne 'missing-portable') { Set-Content (Join-Path $dir 'AgentBridgeApp-win-Portable.zip') 'packed portable' }
+        if ($case -eq 'duplicate-installer') { $assets += $assets[0] }
+        if ($case -eq 'foreign-name') { $assets[1].RelativeFileName = '..\foreign.zip' }
+        if ($case -eq 'blocked-destination') { New-Item -ItemType Directory (Join-Path $dir 'Slipgates-win-Portable.zip') | Out-Null }
+        $index = Join-Path $dir 'assets.win.json'
+        ConvertTo-Json -InputObject $assets | Set-Content $index
+        $before = (Get-FileHash $index).Hash
+        $threw = $false
+        try { Set-AppDownloadNames $dir 'win' } catch {
+            $threw = $_.Exception.Message -like '*missing packed download*' -or
+                $_.Exception.Message -like '*entries, not one*' -or $_.Exception.Message -like '*unexpected Portable name*' -or
+                $_.Exception.Message -like '*destination is a directory*'
+        }
+        Assert $threw "not refused: $case"
+        Assert (Test-Path (Join-Path $dir 'AgentBridgeApp-win-Setup.exe')) "installer moved before validation: $case"
+        Assert (-not (Test-Path (Join-Path $dir 'Slipgates-win-Setup.exe'))) "branded installer created before validation: $case"
+        Assert ((Get-FileHash $index).Hash -ceq $before) "upload index changed before validation: $case"
+    }
+}
+
+Check 'Legacy-only public download names are refused before any repository call' {
+    Reset
+    $dir = New-Folder '0.1.600'
+    $assets = @(Get-Asset)
+    foreach ($asset in $assets | Where-Object Type -IN @('Installer', 'Portable')) {
+        $old = $asset.RelativeFileName
+        $asset.RelativeFileName = $old -creplace '^Slipgates-', 'AgentBridgeApp-'
+        Move-Item -LiteralPath (Join-Path $dir $old) -Destination (Join-Path $dir $asset.RelativeFileName)
+    }
+    ConvertTo-Json -InputObject $assets | Set-Content (Join-Path $dir 'assets.win.json')
+    $threw = $false
+    try { & $publishScript -Version '0.1.600' -ReleasesDir $dir -Repository $repo -Commit $commit -DryRun 6>$null } catch {
+        $threw = $_.Exception.Message -like '*unexpected asset*AgentBridgeApp-win-Setup.exe*'
+    }
+    Assert $threw 'legacy public downloads were admitted'
+    Assert ($global:PpCalls.Count -eq 0) 'legacy public downloads reached the repository'
+}
 
 Check 'An older release is put beside the new package for vpk to build a delta from' {
     Reset

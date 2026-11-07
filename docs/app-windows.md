@@ -746,16 +746,26 @@ connector's Install button on a machine the dashboard drives.
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
   `v<version>` on the exact commit; a client never sees half a release, nor a release with one
-  architecture (the script refuses to publish without both folders). Assets, x64's exactly as on
-  the first release (`v0.1.583`, published by hand) plus the delta:
+  architecture (the script refuses to publish without both folders). Assets retain x64's original
+  package/feed identities (`v0.1.583`, published by hand), with branded public downloads:
   `AgentBridgeApp-<v>-full.nupkg`, `AgentBridgeApp-<v>-delta.nupkg`,
-  `AgentBridgeApp-win-Setup.exe`, `AgentBridgeApp-win-Portable.zip`, `releases.win.json`
+  `Slipgates-win-Setup.exe`, `Slipgates-win-Portable.zip`, `releases.win.json`
   (this version's packages), `RELEASES` and `assets.win.json`; and Arm64's beside them,
   `AgentBridgeApp-<v>-win-arm64-full.nupkg`, `AgentBridgeApp-<v>-win-arm64-delta.nupkg`,
-  `AgentBridgeApp-win-arm64-Setup.exe`, `AgentBridgeApp-win-arm64-Portable.zip`,
+  `Slipgates-win-arm64-Setup.exe`, `Slipgates-win-arm64-Portable.zip`,
   `releases.win-arm64.json` and `assets.win-arm64.json`. Before anything goes up it checks that
   each folder's app is built for its channel's machine, so an Arm64 package can never land in
   x64's feed.
+  `vpk 1.2.161` derives Setup/Portable names from pack ID, not `--packTitle`, and has no separate
+  filename option. After packing, `pack-app.ps1` renames only those two downloads and their
+  `assets.<channel>.json` upload-index entries, before signature verification or upload.
+  The files' bytes and signatures, pack ID `AgentBridgeApp`, `.nupkg`/delta names, channel feeds
+  and `%LOCALAPPDATA%\AgentBridgeApp` install folder stay unchanged. `releases.<channel>.json`
+  lists only the unchanged packages. Older releases keep their actual historical asset names;
+  do not construct new-name URLs for them or replace historical CDN evidence with invented names.
+  Manifest v1 and site links must use the actual uploaded branded installers together (#1177),
+  with complete dual-architecture metadata and required SHA-256; otherwise keep the release-page
+  fallback rather than a partial or old-name manifest. Portable files do not expand schema v1.
 * **Release notes:** `build/release-notes.ps1` lists the commits since the latest release, newest
   first (GitHub's compare API; the commit alone when that cannot be read), and `pack-app.ps1
   -ReleaseNotes` packs them (`vpk pack --releaseNotes`), so they are in the feed's
@@ -828,7 +838,7 @@ connector's Install button on a machine the dashboard drives.
   (the workflow run and commit that built it) and its architecture's CycloneDX SBOM (every
   NuGet package and project in the published folder, read from its `.deps.json` files by Trivy
   in the `app` job, which keeps it as the `sbom-<runtime>-<version>` artifact on every build).
-  To check a download: `gh attestation verify AgentBridgeApp-win-Setup.exe -R
+  To check a download: `gh attestation verify Slipgates-win-Setup.exe -R
   danswett/agent-bridge`, and add `--predicate-type https://cyclonedx.org/bom` for the SBOM.
 
 To install the latest, download the installer for the machine from the newest pre-release at
@@ -837,8 +847,8 @@ SmartScreen does not know yet: More info, then Run anyway):
 
 | Machine | Installer |
 |---|---|
-| x64 (Intel or AMD) | `AgentBridgeApp-win-Setup.exe` |
-| Windows on Arm (Snapdragon and other Arm64) | `AgentBridgeApp-win-arm64-Setup.exe` |
+| x64 (Intel or AMD) | `Slipgates-win-Setup.exe` |
+| Windows on Arm (Snapdragon and other Arm64) | `Slipgates-win-arm64-Setup.exe` |
 
 Settings, System, About, "System type" says which. The Arm64 installer refuses an x64 machine.
 The x64 one does install on Windows on Arm, but runs under emulation, which is untested (#222),
@@ -847,7 +857,7 @@ the Arm64 one (the host's profile in `%LOCALAPPDATA%\AgentBridge` stays). From a
 
 ```powershell
 $arm = (Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture -eq 12   # 12: ARM64, also from an emulated shell
-$setup = if ($arm) { 'AgentBridgeApp-win-arm64-Setup.exe' } else { 'AgentBridgeApp-win-Setup.exe' }
+$setup = if ($arm) { 'Slipgates-win-arm64-Setup.exe' } else { 'Slipgates-win-Setup.exe' }
 $tag = gh release list -R danswett/agent-bridge -L 1 --exclude-drafts --json tagName --jq '.[0].tagName'
 gh release download $tag -R danswett/agent-bridge -p $setup
 & ".\$setup"
