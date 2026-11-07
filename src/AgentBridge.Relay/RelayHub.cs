@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -18,6 +19,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     long presenceVersion;
 
     public int Online => accounts.Values.Sum(a => a.Count);
+    // Sockets by device kind, for the live-sockets gauge. Kinds only, never an account or device.
+    public IEnumerable<KeyValuePair<string, int>> OnlineByKind() =>
+        accounts.Values.SelectMany(a => a.Values).GroupBy(c => c.Kind).Select(g => new KeyValuePair<string, int>(g.Key, g.Count())).ToList();
 
     // Set when the process is told to stop. Readiness then fails and new sockets are refused,
     // so a device told to reconnect (1012) lands on a replica that is staying, not this one.
@@ -118,6 +122,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // early: the device asked for the challenge with the WebSocket's opening (?admit=1).
     public async Task RunAsync(WebSocket ws, CancellationToken aborted, bool early = false)
     {
+        var opened = Stopwatch.GetTimestamp();
         using var handshakeTimeout = CancellationTokenSource.CreateLinkedTokenSource(aborted);
         handshakeTimeout.CancelAfter(TimeSpan.FromSeconds(15));
         Connection? conn;
@@ -155,6 +160,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         await RosterChangedAsync(conn.Account.Id);
         // blobs: present only with a blob store, so a device knows whether files over 256 KiB can go.
         await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login, blobs = blobs.Advertised, feedback = feedback.Advertised });
+        metrics.ConnectTime(conn.Kind, Stopwatch.GetElapsedTime(opened));
 
         string end = "closed";
         try { end = await ForwardAsync(conn, devices, aborted); }
@@ -271,6 +277,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 return "rate limited";
             }
             if (data.Length <= 1 + Wire.IdBytes || data[0] != Wire.DataFrame) { continue; }
+            var received = Stopwatch.GetTimestamp();
             conn.FramesIn++;
             conn.BytesIn += data.Length;
             var to = Wire.Hex(data.AsSpan(1, Wire.IdBytes));
@@ -293,6 +300,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             Interlocked.Increment(ref target.FramesOut);
             Interlocked.Add(ref target.BytesOut, outFrame.Length);
             metrics.Forwarded(outFrame.Length);
+            metrics.ForwardLatency(conn.Kind, Stopwatch.GetElapsedTime(received));
         }
         return "closed";
     }
