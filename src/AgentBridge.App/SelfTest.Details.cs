@@ -162,25 +162,21 @@ static partial class SelfTest
         {
             Resize(window, 1440, 1000);
             await Until(() => layout.Mode == PaneMode.Three, TimeSpan.FromSeconds(10));
-            if (DetailsTable() is not var (all, full, sparse))
-            {
-                check(false, "finds docs/design/session-details.json from the app, for the Details check");
-                return;
-            }
-            // What the drawn pane must hold, from the table: every row for the full session, all but
-            // the silence for a Needs sign-in, and the always-present rows (and the machine's) for the sparse.
-            var expected = new Dictionary<string, List<string>>
+            // The installed copy runs away from the repo, where the table is not: it checks the drawn rows
+            // against the card's alone, and the run from the build's own output checks them against the table.
+            var table = DetailsTable();
+            var expected = table is var (all, full, sparse) ? new Dictionary<string, List<string>>
             {
                 ["full"] = full,
                 ["long"] = [.. full.Where(l => l != "Not responding since")],
                 ["sparse"] = [.. all.Where(l => sparse.Contains(l) || l == "Machine")],
-            };
+            } : null;
             foreach (var name in new[] { "full", "long", "sparse" })
             {
                 if (await ShowDetails(window, main, demo, original, name) is not var (card, pane)) { check(false, $"draws the {name} session's Details"); continue; }
                 var problems = DrawnRows(pane, card, name, out var labels);
-                if (!labels.SequenceEqual(expected[name])) { problems += $"{(problems.Length > 0 ? "; " : "")}drawn [{string.Join(", ", labels)}], not the table's [{string.Join(", ", expected[name])}]"; }
-                check(problems.Length == 0, $"draws the {name} session's Details as the table's rows, each once and in its order, one under another, none cut off, then End session{(problems.Length > 0 ? $": {problems}" : "")}");
+                if (expected is not null && !labels.SequenceEqual(expected[name])) { problems += $"{(problems.Length > 0 ? "; " : "")}drawn [{string.Join(", ", labels)}], not the table's [{string.Join(", ", expected[name])}]"; }
+                check(problems.Length == 0, $"draws the {name} session's Details as {(expected is null ? "the card's" : "the table's")} rows, each once and in its order, one under another, none cut off, then End session{(problems.Length > 0 ? $": {problems}" : "")}");
                 foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
                 {
                     window.RootElement.RequestedTheme = theme;
