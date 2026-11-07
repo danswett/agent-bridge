@@ -69,11 +69,11 @@ public sealed class World
 
     // An add of `device` by `by`. A copy (`copyBy`) carries the device's dh with the copier's own
     // sign key, as a hostile approver's copy would.
-    public Signed Add(string label, string by, string device, string parent, string kind = "phone", string? signAs = null, bool copy = false, string presence = Presence.Key)
+    public Signed Add(string label, string by, string device, string parent, string kind = "phone", string? signAs = null, bool copy = false, string presence = Presence.Key, byte[]? transcript = null)
     {
         var b = Body("add", by, [parent]);
         b["device"] = Device(device, kind, copy ? by : null, presence);
-        b["approval"] = new JsonObject { ["method"] = "code", ["transcript"] = Codec.Base64Url(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(label))) };
+        b["approval"] = new JsonObject { ["method"] = "code", ["transcript"] = Codec.Base64Url(transcript ?? System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(label))) };
         return Put(label, b, by, signAs: signAs);
     }
 
