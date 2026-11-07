@@ -109,15 +109,30 @@ public sealed partial class MainViewModel : Observable
     string? localId;
     public string? LocalMachineId => localId = host.Hello?.Machine.Id ?? host.Status?.Machine.Id ?? localId;
 
-    // A line across the top when something stops the app from doing its job.
-    public string? Banner => host.State switch
+    // A line across the top when something stops the app from doing its job, and only once that
+    // has lasted (LastingBanner): its words are kept while it stays up its minimum after the state ends.
+    public string? Banner => Stops ?? (bannerRule.Shown ? lastBanner : null);
+    string? lastBanner;
+    readonly LastingBanner bannerRule = new();
+    string? Stops => host.State switch
     {
         LinkState.NotRunning => $"The {Product.HostName} is not running on this machine. Start it from Settings.",
         LinkState.Refused => $"The {Product.HostName} refused this app: {host.StateDetail}",
         LinkState.Connecting => $"Connecting to the {Product.HostName}…",
         _ => ReadOnlyWhy,
     };
-    public bool HasBanner => Banner is not null;
+    public bool HasBanner => bannerRule.Shown;
+
+    // Called when the link or the host's status changes, and every second: a banner's grace and
+    // minimum are measured in time, not in changes.
+    void SyncBanner()
+    {
+        var was = bannerRule.Shown;
+        if (Stops is { } words) { lastBanner = words; }
+        bannerRule.Update(Stops is not null, Time.GetUtcNow());
+        Raise(nameof(Banner));
+        if (was != bannerRule.Shown) { Raise(nameof(HasBanner)); }
+    }
 
     // Why answers, replies and End session are off on this machine's cards, when its host says so.
     public string? ReadOnlyWhy => host.Status?.AgentHaBridge is { Length: > 0 } ha
@@ -230,10 +245,8 @@ public sealed partial class MainViewModel : Observable
         Note();
     }
 
-    // What holds each host's discovery, as agent-ha-bridge's status line said it: while it holds,
-    // a session that ended stays on its card, and nothing is offered for resume or reclaimed.
-    void OnHeldChanged() => SyncHeld();
-
+    // What holds each machine's discovery shows on its Machines row once the hold has lasted two
+    // minutes (#1064); there is no banner. The row is drawn again when the hold starts or ends.
     public Machine? MachineOf(string? key) => machines.FirstOrDefault(m => m.Key == (key ?? Machine.LocalKey));
 
     // Adds a machine and its cards; on the UI thread.
@@ -254,8 +267,7 @@ public sealed partial class MainViewModel : Observable
         sessions.Removed += removed;
         sessions.Synced += synced;
         sessions.SnapshotBegun += begun;
-        sessions.HeldChanged += OnHeldChanged;
-        // Its Machines row says "Discovery held" while the hold stands (#788).
+        // Its Machines row says "Discovery held" once the hold has lasted two minutes (#1064).
         sessions.HeldChanged += SyncMachineRows;
         m.Host.Changed += changed;
         m.Host.AgentSignIn += signIn;
@@ -267,7 +279,6 @@ public sealed partial class MainViewModel : Observable
             sessions.Removed -= removed;
             sessions.Synced -= synced;
             sessions.SnapshotBegun -= begun;
-            sessions.HeldChanged -= OnHeldChanged;
             sessions.HeldChanged -= SyncMachineRows;
             m.Host.Changed -= changed;
             m.Host.AgentSignIn -= signIn;
@@ -337,7 +348,6 @@ public sealed partial class MainViewModel : Observable
         MachinesChanged();
         SyncNeedsYou();
         Raise(nameof(Empty));
-        OnHeldChanged();
         UpdateUsage();
     }
 
@@ -430,13 +440,11 @@ public sealed partial class MainViewModel : Observable
         Raise(nameof(Connected));
         Raise(nameof(Empty));
         Raise(nameof(EmptyText));
-        Raise(nameof(Banner));
-        Raise(nameof(HasBanner));
+        SyncBanner();
         Raise(nameof(ReadOnlyWhy));
         Raise(nameof(MachineName));
         Raise(nameof(FleetNote));
         Raise(nameof(HasFleetNote));
-        OnHeldChanged();
         // Its sign-ins needed (#800) come as a change to the host.
         SyncSignIns();
     }
@@ -599,7 +607,6 @@ public sealed partial class MainViewModel : Observable
     void Refilter()
     {
         Rearrange();
-        OnHeldChanged();
     }
 
     // Every second, on the UI thread.
@@ -607,6 +614,7 @@ public sealed partial class MainViewModel : Observable
     {
         foreach (var m in machines) { m.Toasts?.Tick(); }
         foreach (var o in OfflineMachines) { o.Tick(); }
+        SyncBanner();
         if (++ticks % 5 == 0)
         {
             foreach (var c in byId.Values) { c.RefreshTimes(); }
@@ -614,8 +622,9 @@ public sealed partial class MainViewModel : Observable
             RefreshNeedsYou();
             // A code runs out, and "signed in" goes, with nothing from the machine (#800).
             SyncSignIns();
-            // A machine kept offline says when it was last seen, which moves on.
-            if (machines.Any(m => m.Offline)) { SyncMachineRows(); }
+            // A machine kept offline says when it was last seen, which moves on; a hold waiting for
+            // its two minutes is drawn when they are up (#1064).
+            if (machines.Any(m => m.Offline) || machines.Any(m => m.Host.Sessions.Held is not null)) { SyncMachineRows(); }
             Order.Flush();
             // A flush that failed turned the list to Most recent: arrange it so, and tell the picker.
             if (Order.Sort != toldSort) { Rearrange(); }
