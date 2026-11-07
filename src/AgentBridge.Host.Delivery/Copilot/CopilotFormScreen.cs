@@ -316,7 +316,27 @@ public static partial class CopilotFormScreen
 
     const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
     const string NotForm = "the session's screen no longer showed the question's form";
-    const string Narrow = "the session's window is too narrow for phone answers to this question (its form cannot show every field's title to check); widen it and answer again, or answer it at the machine";
+
+    // A bar windowed to some of the form's titles (bar-window): said with how wide the window
+    // must be for the whole bar, the console's width less four (`$fn`), as a lower bound (each
+    // title counted a column a character; a wide character takes two). Wider than the console
+    // the host launches sessions with, widening is no advice: a maximized window on the owner's
+    // screen was still too narrow, and the card told him to widen it (#1123), so it says to
+    // answer at the machine or ask with shorter titles. Said "Slipgates", never "phone": a
+    // browser or the Windows app answers the same way.
+    internal static string Narrow(IReadOnlyList<string> labels)
+    {
+        var needed = BarColumns(labels);
+        return needed > Launch.LaunchService.ConsoleColumns
+            ? "this question's titles are too long for Slipgates to check which field is open; answer it at the machine, or ask with shorter titles"
+            : $"the session's window is too narrow for Slipgates to check which field this question's form is at (its titles need a window at least {needed} columns wide); widen it or make its font smaller, then answer again, or answer it at the machine";
+    }
+
+    // The fewest columns a console needs for the bar to show every label: each ` <label> ` (or
+    // `[<label>]`), one column between them, within the console's width less four.
+    internal static int BarColumns(IReadOnlyList<string> labels) =>
+        labels.Sum(l => new System.Globalization.StringInfo(l).LengthInTextElements + 2) + Math.Max(0, labels.Count - 1) + 4;
+
     // The tab bar under the question names other fields, or reads as no bar the CLI draws at
     // this field. A form at this point has its own heading and the question's message, so this
     // is seldom a form gone; it was said so, and a bar too long for its row was read as one (#1123).
@@ -396,9 +416,9 @@ public static partial class CopilotFormScreen
                 // question before the one title that tells them apart showed (#1137 review).
                 // Named, it is refused with nothing typed, for the machine, rather than read as
                 // no form at all (#1123).
-                if (windowed) { return found.Fail(FormCheck.BarWindow, at, Narrow); }
+                if (windowed) { return found.Fail(FormCheck.BarWindow, at, Narrow(labels)); }
             }
-            else if (at < rows.Count && Wrapped(rows, at, labels, index)) { return found.Fail(FormCheck.BarWindow, at, Narrow); }
+            else if (at < rows.Count && Wrapped(rows, at, labels, index)) { return found.Fail(FormCheck.BarWindow, at, Narrow(labels)); }
             else { return found.Fail(FormCheck.Bar, at, Unchecked); }
             at++;
         }

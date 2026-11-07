@@ -75,7 +75,7 @@ test('demo mode shows every session from the worked example, with every field', 
   await expect(q.locator('.field[data-field="urgent"] .opt.chosen .label')).toHaveText('No');
   await expect(q.locator('.field[data-field="notes"] .answer-box')).toHaveText('Free text');
   await expect(q.locator('.field[data-field="count"] .answer-box')).toHaveText('A number');
-  await expect(q.locator('.read-only-why')).toHaveText("This machine doesn't take answers from the phone yet. Answer at the machine on Demo machine.");
+  await expect(q.locator('.read-only-why')).toHaveText("This machine doesn't take answers from Slipgates yet. Answer at the machine on Demo machine.");
   // Read-only: nothing in the question can be operated.
   await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
 
@@ -116,7 +116,7 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
   await expect(status.locator('.machine-flag .sr-only')).toHaveText(`: ${reason}`);
   await expect(status).toHaveAttribute('title', `4 sessions · 0.1.0 (dev) · view only: ${reason}`);
   const q = card(page, COPILOT).locator('.question');
-  await expect(q.locator('.read-only-why')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
+  await expect(q.locator('.read-only-why')).toHaveText(`This machine is read-only from Slipgates: ${reason}.`);
   await expect(q.locator('button, input, select, textarea')).toHaveCount(0);
   await expect(page.locator('form.reply')).toHaveCount(0);
   await expect(page.locator('.end-session')).toHaveCount(0);
@@ -128,7 +128,7 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
   const prompt = (await page.evaluate((id) => window.agentBridgeDemo.host.get(id), COPILOT)).question;
   await upsert(page, COPILOT, { question: { ...prompt, id: 'q-at-machine', answerAtMachine: true }, updatedAt: later() });
   await expect(q.locator('.read-only-why')).toHaveText('This prompt can only be answered at the machine on Demo machine.');
-  await expect(q.locator('.read-only-machine')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
+  await expect(q.locator('.read-only-machine')).toHaveText(`This machine is read-only from Slipgates: ${reason}.`);
 });
 
 test('only the host shape reason adds a quiet explanation after the at-machine line, including same-id updates', async ({ page }) => {

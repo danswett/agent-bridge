@@ -416,7 +416,7 @@ test.describe('on a phone', () => {
     const q = await ask(page, { ...permission, answerAtMachine: true }, COPILOT);
     await expect(q).toHaveAttribute('data-answerable', 'false');
     await expect(q.locator('.question-message')).toContainText('git push origin main --force-with-lease');
-    await expect(q.locator('.read-only-why')).toHaveText('Approving permission prompts from the phone is turned off on this machine. Answer at the machine on Demo machine.');
+    await expect(q.locator('.read-only-why')).toHaveText('Approving permission prompts from Slipgates is turned off on this machine. Answer at the machine on Demo machine.');
     // Nothing that answers.
     await expect(q.locator(':is(button, input, select, textarea):not(.md-copy)')).toHaveCount(0);
   });

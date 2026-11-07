@@ -130,23 +130,23 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
   // A prompt only the machine could answer anyway still says why the machine is read-only.
   if (readOnly && why !== 'machine') {
     section.append(h('p', { class: 'note warn read-only-machine', role: 'note' },
-      `This machine is read-only from the phone: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`));
+      `This machine is read-only from Slipgates: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`));
   }
   section.append(why === 'truncated'
     ? h('p', { class: 'note warn read-only-why', role: 'note' },
       `Part of this question didn't fit in the message from the machine, so it can't be answered from here. Answer at the machine${at}.`)
     : why === 'approvalOff'
       ? h('p', { class: 'note warn read-only-why', role: 'note' },
-        `Approving permission prompts from the phone is turned off on this machine. Answer at the machine${at}.`)
+        `Approving permission prompts from Slipgates is turned off on this machine. Answer at the machine${at}.`)
       : why === 'atMachine'
         ? h('p', { class: 'note warn read-only-why', role: 'note' },
           shape ? `Answer at the machine${machineName ? ` · ${machineName}` : ''}` : `This prompt can only be answered at the machine${at}.`)
         : readOnly
           // The machine said why (agent-ha-bridge runs there): its words say where to answer.
           ? h('p', { class: 'note warn read-only-why', role: 'note' },
-            `This machine is read-only from the phone: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`)
+            `This machine is read-only from Slipgates: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`)
           : h('p', { class: 'note read-only-why', role: 'note' },
-            `This machine doesn't take answers from the phone yet. Answer at the machine${at}.`));
+            `This machine doesn't take answers from Slipgates yet. Answer at the machine${at}.`));
   if (shape) {
     section.append(h('p', { class: 'note warn at-machine-explanation' },
       'This kind of question can only be answered at the machine.'));
