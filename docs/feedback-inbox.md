@@ -63,3 +63,21 @@ format. This library does not select or persist keys, send feedback, or enable t
 exercises both directions across bucket boundaries with freshly generated, synthetic
 keys; no fixture private key is checked in. Run the process-category test explicitly
 when validating interoperability, since the local fast ring excludes process tests.
+
+`FeedbackGitHubPrivateStore` is a private-issue adapter for the fixed repository
+`danswett/slipgates-feedback`. It confirms that exact repository is private before each
+write and does not follow redirects. The token provider is supplied by the host; this
+slice does not provision or store credentials. The GitHub identity must not have permission
+to change repository visibility, and administrators must keep it private throughout
+processing: GitHub's privacy check and issue write are separate requests, not an atomic
+operation.
+
+The adapter records each feedback bundle as bounded JSON chunks in comments on its private
+group issue, with a completion marker written last. Retries reuse completed chunks; a
+private first-seen timestamp marker keeps chunk content stable across retries, even when
+the processor observes a different time. A completed bundle is not written twice even
+when its receipt has not yet been saved.
+Unclassified bundles use a separate issue keyed by a hash of the bundle name. This design
+requires exactly one writer at a time; the deployment must enforce that invariant. Duplicate
+group issues stop processing for manual reconciliation. The adapter does not implement a
+receipt store, credential provider or scheduled worker and is tested only against fakes.
