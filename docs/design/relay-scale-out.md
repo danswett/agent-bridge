@@ -19,7 +19,7 @@ Recommendations:
 
 5. **Plan for many regions from the start** (section 11): a relay stamp per region, devices connect to the nearest, and the directory is a replicated, routing-only store, so relay compute can run anywhere without degradation.
 
-Nothing here is approved to build. The owner decides after the load test and the review of this note.
+Nothing here is approved to build beyond what section 12 records: the owner decided to build the code dark (flag off, no new resources, no new monthly cost). Turning anything on in production (a second replica, a backplane resource, autoscale) still needs owner approval (#55) and the load test.
 
 ## 2. What the relay keeps in memory today, and why
 
@@ -98,7 +98,10 @@ Per `docs/relay-deploy.md`: on shutdown the relay sends close code 1012 to every
 - **Reconnect storm control.** The per-IP limit (120 new sockets per minute) and client backoff are the guard. The load test must measure reconnects per second a surviving replica absorbs; that number sets the safe rollout step.
 - **Replica loss (crash, node move, out of memory).** Its sockets drop without a close frame; devices notice and reconnect to a healthy replica within their backoff window. Its directory entries expire on their own (design goal: a few seconds), so presence heals without a clean shutdown. Frames for a device on a dead replica count as undeliverable, as for any offline device. Nothing is persisted per replica, so only in-flight frames are lost.
 - **Backplane loss.** Each replica keeps serving its own sockets. Cross-replica delivery stops until it returns. The relay reports this (metric and alert) and does not crash. The owner decided (section 12) that it stays up and alerts rather than failing `/readyz`, because failing readiness on every replica would turn a partial degradation into a full outage.
-- **Ordering.** Frames from one sender to one target stay in order: a sender socket uses one path for a given target, direct when local, the bus otherwise.
+- **Ordering.** Frames from one sender to one target stay in order only while placement is stable: the sender socket and the target socket each stay on one replica, and the path (direct when local, the bus otherwise) does not change. Across a reconnect, a move to another replica or a region failover, order is not guaranteed; frames in flight around the move may arrive late or be dropped, and the protocol's own sequence handling (not the relay) must tolerate that. The load test measures reordering during these events (section 7).
+- **Split-brain and fencing.** A device can reconnect to replica B while replica A still holds its stale socket (A has not yet noticed the drop). Each directory entry therefore carries an **epoch** that increases on every registration. A registration with a higher epoch wins; when A sees a newer epoch for a device it holds, it closes its stale socket (code 1012) and stops delivering to it. Delivery to a device always goes to the entry with the highest epoch, so a stale holder never receives new frames after the new one is registered. This is the same rule as "a newer connection replaces an older one" that the relay applies locally today, made global.
+- **Account cap across replicas.** The 32-devices-per-account cap (`RelayHub.cs`, enforced from the local `accounts` map) and device replacement only see local sockets. With a backplane, admission counts the account's registered devices in the directory: the directory entry set per account is the source of truth, and registering the 33rd device is refused or replaces the oldest by the same rule as today. Races between two replicas admitting at once can briefly exceed the cap by a small amount; the directory resolves it by evicting the lowest-priority duplicate on the next heartbeat. The load test includes a concurrent-admission check. The per-replica 10,000-socket cap stays per replica (it protects that process), so total capacity is that cap times replicas.
+- **Heartbeat and re-registration herd.** Each replica refreshes its devices' directory entries on an interval shorter than the expiry. After a backplane outage, replicas must not all re-register everything at once: re-registration is spread with random jitter over a window sized from the load test, and entries are written in batches. A replica that finds its entries expired re-registers them quietly rather than closing sockets.
 
 ## 6. Autoscale
 
@@ -108,11 +111,12 @@ Proposed rules, only after approval and the load test:
 
 | Setting | Production | Staging | Reason |
 | --- | --- | --- | --- |
-| Minimum replicas | 2 once the backplane ships (1 until then) | 0, or 2 during a load test | Hosts hold sockets open, so scale-to-zero is wrong in production. Two removes the single point of failure and makes deploys rolling. |
+| Minimum replicas | 1 until the owner approves a second replica (section 12); 2 after that, once the backplane is on | 0, or 2 during a load test | Hosts hold sockets open, so scale-to-zero is wrong in production. Two removes the single point of failure and makes deploys rolling, at added cost. |
 | Maximum replicas | Start at 3, raise from measurements | 3 | A small cap limits cost and reconnect storms if a rule misfires. |
-| Scale-out trigger | Connected sockets per replica at the alert level (60 percent of the measured ceiling); CPU as a second trigger | Same | For mostly idle connections, sockets are the real capacity signal. |
+| Scale-out trigger | Connected sockets per replica at the alert level (the lower of 60 percent of the measured ceiling and the N-1 level, below); CPU as a second trigger | Same | For mostly idle connections, sockets are the real capacity signal. |
+| N-1 headroom | Alert level = the lower of 60 percent and (N-1)/N times 80 percent of the ceiling: 50 percent at 2 replicas, 60 percent from 3 on | Same | If one replica is lost (or drains in a deploy), the survivors take its sockets. At 60 percent on two replicas the survivor would be at 120 percent. Reconnects use jitter (client backoff 1 to 30 seconds) and the per-IP limit, and the load test confirms the survivors absorb a lost replica's reconnects. |
+| Cost guard | Existing monthly budget alert plus the max replica cap. The current budget is 40 (`budgetAmount` in `westus2.bicepparam`); a second replica plus a Redis tier will likely exceed it, so the owner raises the budget as part of the approval to switch the backplane on. Price the exact figure before then | Same | A runaway rule cannot spend past the cap. |
 | Scale-in | Only when sockets stay under about 30 percent of the ceiling for a long window | Same | Scaling in drops sockets. Avoid flapping. |
-| Cost guard | Existing monthly budget alert plus the max replica cap | Same | A runaway rule cannot spend past the cap. |
 
 Safety rules:
 - Never scale in below the minimum during a deploy.
@@ -168,7 +172,7 @@ SRE posts the table on #1148. The first run is single-replica. Once a backplane 
 The threshold is stated in users, because that is how Product and the owner think, and derived from devices, because that is what the relay counts.
 
 - **Ceiling C** = measured per-replica ceiling in connected devices (section 7).
-- **Alert** at 60 percent of C connected sockets on any replica (SRE's alert, per the plan).
+- **Alert** at 60 percent of C connected sockets on any replica when running one replica or three or more (SRE's alert, per the plan), and at 50 percent at two replicas so that losing one still leaves the survivor under the ceiling (section 6, N-1 headroom).
 - **Scale-out ships before connected devices reach 60 percent of C.** The work (backplane, two replicas, rings) takes weeks, so 60 to 100 percent is the runway. Reaching about 80 percent of C is an incident.
 - **User-count form:** threshold users = (0.6 x C) divided by measured peak concurrent sockets per user. A user typically holds a few sockets at once (a host, an app or PWA, a phone); use the measured figure from #1134 production data, not the account cap of 32.
 
@@ -176,7 +180,7 @@ First estimate, a placeholder until the load test replaces it: if the first-pass
 
 Ship earlier, regardless of user count, if the owner wants a second replica to remove the single point of failure, if deploy gaps become unacceptable, or if the load test shows memory or CPU binding at a number that growth would reach before the build finishes.
 
-The per-IP and push limits are per replica today, so the effective limit multiplies by replica count. The backplane PR decides whether to move them into the shared layer; the default is to keep them per replica and note the multiplier.
+The per-IP, sign-in and push limits are per replica today, so the effective limit multiplies by replica count. The 10,000-socket cap is per process by design. The 32-devices-per-account cap and device replacement are the ones that must not multiply: they move to the directory (section 5, account cap across replicas). The backplane PR decides whether the other limits also move into the shared layer; the default is to keep them per replica and note the multiplier.
 
 ## 9. Privacy
 
@@ -232,7 +236,7 @@ Device A connects to its nearest region, peer B to another. A frame goes A, regi
 
 Rules:
 - Deliver locally when the peer is local; use the cross-region path only when the directory says the peer is elsewhere.
-- One path per sender and target keeps ordering (section 5).
+- One path per sender and target while placement is stable; ordering across reconnects and failover is not guaranteed (section 5).
 - Frames cross regions encrypted in transit on the platform's private or TLS links; the relay still does not read payloads.
 - Set a latency budget for cross-region forwarding (proposed: p95 under inter-region round trip plus 100 ms) and alert on exceeding it.
 - A cross-region bus is one more thing to size. Prefer a regional bus per region plus a thin inter-region forwarder, over one global bus, so a distant region's slowness cannot slow local delivery.
@@ -254,7 +258,7 @@ Rules:
 
 ### Per-region capacity and rollout rings
 
-- **Capacity.** Each region has its own min, max and alert (60 percent of that region's measured ceiling), by the section 6 rules. Start a new region at min 2, max 3. Region size follows measured concurrent sockets per region, not a global figure.
+- **Capacity.** Each region has its own min, max and alert (the lower of 60 percent and the N-1 level of that region's measured ceiling), by the section 6 rules. A new region starts at min 2, max 3 only when the owner has approved it and its cost. Region size follows measured concurrent sockets per region, not a global figure.
 - **Rings across regions.** Staging remains one stamp (West US 2) for the code. New code rolls to production regions in order: the least busy region first, then the others one at a time, then the busiest, with a soak in each and one-step rollback per region (the same digest rollback, region by region). Never deploy all regions at once; never deploy a region while another is degraded.
 - **Adding a region** is its own ring: stamp built from the existing Bicep (a new `regions/<name>.bicepparam`), empty traffic, synthetic probes from nearby, then a small share of devices through the entry point, then full. Every step needs owner approval (#55).
 - **Version skew.** During a rollout two regions run different relay versions and can exchange frames. Cross-region frames and directory entries must therefore stay compatible across adjacent versions; that is a rule for the backplane PR and a check in ring 2.
@@ -277,7 +281,11 @@ Add to section 7, once a second region exists on staging (a throwaway second sta
 | Cross-region frames and bytes per second | Cost forecast and the cross-region link capacity |
 | Reconnect rate and time to healthy after killing a whole region | Validates failover and the headroom rule |
 | Per-region ceiling at two and three regions, for devices and frames per second | Checks that a region's ceiling does not drop when peers are elsewhere |
-| Frame loss and ordering violations during a region drill | Confirms the ordering rule and the "undeliverable, not lost silently" behaviour |
+| Frame loss and ordering violations during a region drill, with ordering claimed only for stable placement | Confirms the ordering limits and the "undeliverable, not lost silently" behaviour |
+| Stale-socket fencing: time from a reconnect on another replica to the old socket closing, and frames delivered to a stale holder (target: none after registration) | Validates the epoch rule |
+| Concurrent admission of devices of one account on different replicas: how far the 32-device cap is exceeded and how fast it resolves | Validates the account cap in the directory |
+| Re-registration after a backplane outage: peak directory writes per second with and without jitter | Sizes the herd window |
+| A replica lost at the N-1 alert level: survivors' peak sockets, CPU and reconnect time | Validates the 50 percent alert at two replicas |
 | Behaviour with an adjacent-version pair | Version skew during rollout |
 | Entry-point routing: which region a probe lands in and failover time | Validates nearest-region routing |
 
