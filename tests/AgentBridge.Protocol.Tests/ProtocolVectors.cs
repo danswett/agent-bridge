@@ -324,7 +324,9 @@ public static class ProtocolVectors
             .Valid("restored", new RestoreRunResult { Outcome = RestoreRunOutcome.Restored, Sessions = [runStarted] })
             .Valid("partial", new RestoreRunResult { Outcome = RestoreRunOutcome.Partial, Sessions = [runStarted, runRefused] })
             .Valid("busy-nothing-tried", new RestoreRunResult { Outcome = RestoreRunOutcome.Busy, Reason = "another restore is under way" })
-            .Reads("an-unknown-outcome-reads-as-partial", """{"outcome":"later"}""");
+            .Reads("an-unknown-outcome-reads-as-partial", """{"outcome":"later"}""")
+            .Refused("a-session-entry-without-an-id", $$"""{"outcome":"partial","sessions":[{"id":"{{SessionId}}","outcome":"started"},{"outcome":"started"}]}""")
+            .Refused("a-session-entry-that-is-not-an-object", $$"""{"outcome":"partial","sessions":[{"id":"{{SessionId}}","outcome":"started"},7]}""");
         f.Record<RestoreRunProgress>(Host)
             .Valid("first-of-two", new RestoreRunProgress { Session = RestoredMidTurn.Id, Outcome = LaunchOutcome.Started, Done = 1, Of = 2 })
             .Valid("a-session-refused", new RestoreRunProgress { Session = RestoredAsking.Id, Outcome = LaunchOutcome.Refused, Done = 2, Of = 2 });

@@ -13,7 +13,9 @@ public static class RestoreProtocol
     public const string RunCapability = "sessions.restore.run";
     public const string RunOp = "restore.run";
 
-    // A run names 1 to this many sessions: the notice names at most MaxOffered.
+    // A run names 1 to this many sessions: the notice names at most MaxOffered. The host's restore.run
+    // enforces the count and the no-repeats rule (restore-run.md); the record, like most requests,
+    // reads any list.
     public const int MaxRunSessions = MaxOffered;
 
     // At most this many sessions are named in a notice; the rest are counted in offeredMore.
@@ -145,6 +147,8 @@ public sealed record RestoreRunResult
 {
     public required RestoreRunOutcome Outcome { get; init; }
     public string? Reason { get; init; }
+    // [Strict]: an entry left out would read as a session the run never touched.
+    [Strict(Strictness.Identity)]
     public IReadOnlyList<RestoreRunSession> Sessions { get; init; } = [];
 }
 
