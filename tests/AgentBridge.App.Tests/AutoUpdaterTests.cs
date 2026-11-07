@@ -1309,6 +1309,42 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_newer_release_is_not_held_by_the_backoff_of_the_release_that_failed()
+    {
+        InstallBetweenTurns();
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        prefs = prefs with { UpdateFailures = 3, UpdateRetryAt = time.GetUtcNow() + TimeSpan.FromMinutes(40), UpdateFailedRelease = "0.1.5" };
+
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await Wait.UntilAsync(() => updater.Applied, "the newer release installing at its first gap", TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public void A_holder_whose_path_cannot_be_read_or_that_is_this_process_is_not_a_blocker()
+    {
+        const string root = @"C:\Users\u\AppData\Local\AgentBridge\";
+        Assert.False(InstallHolder.Blocks(10, 99, null, root));
+        Assert.False(InstallHolder.Blocks(99, 99, @"C:\Windows\System32\svchost.exe", root));
+        Assert.False(InstallHolder.Blocks(10, 99, root + @"current\agent-bridge-host.exe", root));
+        Assert.True(InstallHolder.Blocks(10, 99, @"C:\Windows\System32\svchost.exe", root));
+    }
+
+    [Fact]
+    public void A_retry_time_further_off_than_the_cap_is_the_cap_from_now_and_another_release_starts_its_count_again()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var p = new AppPreferences { UpdateFailures = 4, UpdateRetryAt = now + TimeSpan.FromDays(3), UpdateFailedRelease = "0.2.0" };
+
+        Assert.Equal(now + UpdateBackoff.Cap, UpdateBackoff.RetryAt(p, now, "0.2.0"));
+        Assert.Null(UpdateBackoff.RetryAt(p, now, "0.3.0"));
+
+        UpdateBackoff.Failed(p, now, "0.3.0", out var retryAt);
+        Assert.Equal(now + UpdateBackoff.First, retryAt);
+    }
+
+    [Fact]
     public void An_update_that_did_not_take_is_counted_and_names_what_holds_the_installation_and_one_that_took_clears_the_count()
     {
         prefs = prefs with { UpdatedFrom = "0.1.0" };

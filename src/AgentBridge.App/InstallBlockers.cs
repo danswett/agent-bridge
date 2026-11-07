@@ -10,8 +10,9 @@ namespace AgentBridge.App;
 // every three minutes. Asked through the Restart Manager, best effort: names and process ids only,
 // and never an exception. Processes running from the installation itself are not blockers: the
 // update stops them (the host is stopped for it, and Update.exe ends the rest of the package).
-// Unelevated, Restart Manager still lists a service's process; only its path can't be read, and
-// a process whose path can't be read is counted as outside.
+// Unelevated, Restart Manager still lists a service's process; only its path can't be read by
+// MainModule, so it is read with QueryFullProcessImageName, and a process whose path still can't
+// be read is not counted (InstallHolder.Blocks).
 static class InstallBlockers
 {
     const int MoreData = 234;
@@ -30,7 +31,7 @@ static class InstallBlockers
             if (!Directory.Exists(current)) { return null; }
             var files = Directory.EnumerateFiles(current, "*", SearchOption.AllDirectories).ToList();
             var own = Path.GetFullPath(root).TrimEnd('\\') + "\\";
-            var found = Held(files).Where(p => p.Pid != Environment.ProcessId && !RunsFrom(p.Pid, own)).ToList();
+            var found = Held(files).Where(p => InstallHolder.Blocks(p.Pid, Environment.ProcessId, ImagePath(p.Pid), own)).ToList();
             if (found.Count == 0) { return null; }
             var names = found.Take(MostNamed).Select(p => p.Service.Length > 0 ? $"{p.Name} ({p.Service}, pid {p.Pid})" : $"{p.Name} (pid {p.Pid})");
             return string.Join(", ", names) + (found.Count > MostNamed ? $" and {found.Count - MostNamed} more" : "");
@@ -38,15 +39,33 @@ static class InstallBlockers
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { return null; }
     }
 
-    static bool RunsFrom(int pid, string root)
+    // OpenProcess with limited query rights works for elevated and other users' processes, which
+    // Process.MainModule does not; null when the path still can't be read.
+    static string? ImagePath(int pid)
     {
+        var handle = OpenProcess(ProcessQueryLimitedInformation, false, pid);
+        if (handle == IntPtr.Zero) { return null; }
         try
         {
-            using var p = System.Diagnostics.Process.GetProcessById(pid);
-            return p.MainModule?.FileName is { } path && path.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+            var buffer = new StringBuilder(1024);
+            var size = buffer.Capacity;
+            return QueryFullProcessImageName(handle, 0, buffer, ref size) ? buffer.ToString(0, size) : null;
         }
-        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or ArgumentException or NotSupportedException) { return false; }
+        finally { CloseHandle(handle); }
     }
+
+    const uint ProcessQueryLimitedInformation = 0x1000;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int pid);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool QueryFullProcessImageName(IntPtr process, int flags, StringBuilder name, ref int size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool CloseHandle(IntPtr handle);
 
     static List<(int Pid, string Name, string Service)> Held(List<string> files)
     {

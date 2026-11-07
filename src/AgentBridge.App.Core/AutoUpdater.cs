@@ -332,7 +332,7 @@ public sealed class AutoUpdater
         }
         // Install between turns: the gap settling, or the backstop's time.
         var now = time.GetUtcNow();
-        if (InstallFailedLately(now)) { return $"update failed, retrying at {prefs().UpdateRetryAt!.Value.ToLocalTime():t}, or at Restart to update"; }
+        if (InstallFailedLately(now)) { return $"update failed, retrying at {UpdateBackoff.RetryAt(prefs(), now, Pending)!.Value.ToLocalTime():t}, or at Restart to update"; }
         var at = ForcedAt(now);
         var until = at > now ? $"; it installs anyway at {at.ToLocalTime():g} unless a question is waiting then" : "";
         return Idle ? "it installs between turns, as soon as this machine's sessions are read and still idle"
@@ -515,7 +515,7 @@ public sealed class AutoUpdater
         return null;
     }
 
-    bool InstallFailedLately(DateTimeOffset now) => prefs().UpdateRetryAt is { } retry && now < retry;
+    bool InstallFailedLately(DateTimeOffset now) => UpdateBackoff.RetryAt(prefs(), now, Pending) is not null;
 
     // A session went idle, or the snapshot was read again: set to Install between turns with a
     // release ready, a gap starts, and the tick is due once it has settled.
@@ -1113,7 +1113,7 @@ public sealed class AutoUpdater
             save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null });
             if (updater.Ready != to) { Pending = null; }
             checkedAt = time.GetUtcNow();
-            save(UpdateBackoff.Failed(prefs(), checkedAt.Value, out var retryAt));
+            save(UpdateBackoff.Failed(prefs(), checkedAt.Value, to, out var retryAt));
             log($"auto-update: installing {to} failed: {e.Message}; update failed, retrying at {retryAt.ToLocalTime():t}");
             installing = false;
             // Kept for the devices whether a device asked for it or the person here did: the old
@@ -1129,7 +1129,7 @@ public sealed class AutoUpdater
     // that is the Install a device pressed and the app has not yet carried out: Settings installs
     // the release it would have.
     public static void Record(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, string? request = null) =>
-        save(prefs() with { UpdatedFrom = updater.InstalledVersion, UpdateNotes = updater.PendingNotes, UpdateRequest = request ?? prefs().UpdateInstallAsked });
+        save(UpdateBackoff.Attempting(prefs(), updater.Ready) with { UpdatedFrom = updater.InstalledVersion, UpdateNotes = updater.PendingNotes, UpdateRequest = request ?? prefs().UpdateInstallAsked });
 
     // Settings' Update and restart failed, the old release still running: kept for the devices as
     // an automatic install that fails is. The press a device made, if Settings took it on, is left
@@ -1174,7 +1174,7 @@ public sealed class AutoUpdater
             // Update.exe failed after this app's earlier run ended (error 5 moving a held file, say)
             // and started this one: the failure and its next try are kept (UpdateBackoff), and what
             // holds the files is named, best effort.
-            save(UpdateBackoff.Failed(prefs(), at, out var retryAt));
+            save(UpdateBackoff.Failed(prefs(), at, prefs().UpdateFailedRelease, out var retryAt));
             string? held = null;
             try { held = blockers?.Invoke(); }
             catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { }

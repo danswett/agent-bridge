@@ -114,6 +114,8 @@ public sealed record AppPreferences
     // kept because a failed update restarts the app.
     public int? UpdateFailures { get; init; }
     public DateTimeOffset? UpdateRetryAt { get; init; }
+    // The release those failures were of: a different release pending is not held by them.
+    public string? UpdateFailedRelease { get; init; }
     public UpdateResult? LastUpdate { get; init; }
     // The presses from other devices this app has taken on, the latest last: one the host still
     // lists after the app restarts (its report that it took them lost) is not carried out twice.
