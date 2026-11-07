@@ -5,6 +5,7 @@ namespace AgentBridge.Host.Delivery.Launch;
 public interface IAgentLocator
 {
     string? Find(Launcher launcher, AgentConfig config);
+    string? ChildPath() => null;
 }
 
 // The machine's own, as agent-ha-bridge finds them (Get-BridgeCopilotPath and its siblings):
@@ -22,6 +23,8 @@ public sealed class AgentLocator(TimeProvider? time = null) : IAgentLocator
     {
         lock (gate) { readAt = DateTimeOffset.MinValue; }
     }
+
+    public string ChildPath() => string.Join(Path.PathSeparator, SearchPath());
 
     public string? Find(Launcher launcher, AgentConfig config)
     {

@@ -876,17 +876,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var sessionId = newId ?? plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
                 extras, plan.Profile, prompt);
-            var environment = new Dictionary<string, string?>
-            {
-                [Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched",
-            };
-            // CLAUDE_CONFIG_DIR changes the account file even when its path is unchanged.
-            // Restore recorded mode; older records keep the inherited mode when homes match.
-            var inherited = SessionSourceOptions.ForCurrentUser();
-            if (!Folders.Same(options.CopilotHome, inherited.CopilotHome)) { environment["COPILOT_HOME"] = options.CopilotHome; }
-            if (options.ClaudeConfigDirExplicit is { } explicitConfigDir) { environment["CLAUDE_CONFIG_DIR"] = explicitConfigDir ? options.ClaudeHome : null; }
-            else if (!Folders.Same(options.ClaudeHome, inherited.ClaudeHome)) { environment["CLAUDE_CONFIG_DIR"] = options.ClaudeHome; }
-            if (!Folders.Same(options.CodexHome, inherited.CodexHome)) { environment["CODEX_HOME"] = options.CodexHome; }
+            var environment = AgentEnvironment.For(options.CopilotHome, options.ClaudeHome,
+                options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath());
+            environment[Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched";
             var spec = new StartSpec(plan.Executable, args, directory, environment);
             if (starter.CommandLine(spec, out var tooLong) is null)
             {
