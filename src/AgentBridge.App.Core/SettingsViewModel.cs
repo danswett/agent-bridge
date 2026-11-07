@@ -734,6 +734,23 @@ public sealed class SettingsViewModel : Observable
         CaughtUp();
         DrawDevices();
         RaiseAll();
+        OfferGuide();
+    }
+
+    // Slice 2 of #384: the installed app opens on the Get started list once, the first time the host
+    // reports agents and none has its hooks connected. Taken on the first report, so a tester who goes
+    // to Sessions is not pulled back, and one whose agents are already set up (a machine that ran
+    // agent-ha-bridge, say) never sees it. Only the installed app asks for it: not the demo, a
+    // development copy or the self-test.
+    public bool OpenGuideAtFirstLaunch { get; init; }
+    public event Action? GuideWanted;
+    void OfferGuide()
+    {
+        if (!OpenGuideAtFirstLaunch || prefs().GuideOpened || !HostRunning || Agents.Count == 0) { return; }
+        var steps = SetupSteps;
+        if (steps.Any(s => s.Id == "hooks" && s.State == SetupStepState.Done)) { return; }
+        savePrefs(prefs() with { GuideOpened = true });
+        GuideWanted?.Invoke();
     }
 
     public Task StartHostAsync() => RunAsync(() => manager.StartAsync());

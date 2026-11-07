@@ -1082,6 +1082,53 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Contains("Set up on Claude Code", hooks.Detail);
     }
 
+    [Fact]
+    public async Task The_installed_app_opens_Get_started_once_at_a_first_launch_with_no_agent_set_up()
+    {
+        var wanted = 0;
+        var first = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        first.GuideWanted += () => Interlocked.Increment(ref wanted);
+
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+        await Wait.UntilAsync(() => wanted == 1, "Get started opened");
+        // Taken: later reports, and a restart's new page, do not pull the person back.
+        await HostNowSays(NeverSetUp("claude", "Claude Code", version: "1.2.4"));
+        var restarted = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        var again = 0;
+        restarted.GuideWanted += () => again++;
+        restarted.Refresh();
+
+        Assert.Equal(1, wanted);
+        Assert.Equal(0, again);
+        Assert.True(prefs.GuideOpened);
+        first.Detach();
+        restarted.Detach();
+    }
+
+    [Fact]
+    public async Task Get_started_is_not_opened_when_an_agent_is_already_set_up_or_the_copy_did_not_ask()
+    {
+        var wanted = 0;
+        var notAsked = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        notAsked.GuideWanted += () => wanted++;
+
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+        Assert.Equal(0, wanted);
+        Assert.False(prefs.GuideOpened);
+
+        // Asked only after the agent is set up, as a restart of the app would be.
+        await HostNowSays(Agent("claude", "Claude Code", ReadinessState.Unknown,         hooksDetail: "owned setup record") with { Version = "1.2.9" });
+        var asked = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        asked.GuideWanted += () => wanted++;
+        asked.Refresh();
+        await Wait.UntilAsync(() => asked.SetupSteps.Single(s => s.Id == "hooks").Mark == "Done", "hooks connected");
+
+        Assert.Equal(0, wanted);
+        Assert.False(prefs.GuideOpened);
+        asked.Detach();
+        notAsked.Detach();
+    }
+
     [Theory]
     [InlineData("set up and not tested yet")]
     [InlineData("setup that did not finish")]
