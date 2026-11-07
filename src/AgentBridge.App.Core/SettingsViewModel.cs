@@ -41,7 +41,7 @@ public interface IAppAtSignIn
 // The Settings page: this machine's host (running, version, start at sign-in, start, stop,
 // restart, its log), its relay sign-in and name, what it lets other devices do, and the app's
 // own preferences and updates.
-public sealed class SettingsViewModel : Observable
+public sealed partial class SettingsViewModel : Observable
 {
     readonly HostConnection host;
     readonly HostManager manager;
@@ -562,7 +562,7 @@ public sealed class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
     }
     // The card's Set up follows what the row's would (CanManageAgents), so it is drawn again wherever the rows are.
     void RaiseOffers() { Raise(nameof(AgentOffers)); Raise(nameof(HasAgentOffers)); Raise(nameof(AgentsNavName)); }
