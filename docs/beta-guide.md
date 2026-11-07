@@ -48,8 +48,9 @@ the D2 design (#732).]** Nothing leaves your PC beyond that.
 
 ## Getting help and sending feedback
 
-**[confirm: the private channel the owner names (#738, #739).]** Please do not file feedback as a
-public issue.
+Until the in-app Send feedback button lands (#738, #739), send feedback to the owner by email or
+Teams message **[confirm: the address the owner names]**. Please do not file it as a public
+issue.
 
 ## Uninstall
 
