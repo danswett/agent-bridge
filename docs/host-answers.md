@@ -122,14 +122,21 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     frame closed by the same rule with nothing drawn under it (the CLI draws a prompt in place
     of its input box and footer, so another form or an input under it is refused, Copilot
     4479698033, and everything below is read inside the frame), the whole question under it
-    (its lines, each wrapped onto as many rows as it takes), with more than one field the tab
+    (its lines, each wrapped onto as many rows as it takes, compared with every white space
+    left out: 1.0.105's renderer, `gVr`, breaks a line wherever Unicode line breaking allows,
+    after a hyphen or inside a word too long for its row as well as at a space, so a question
+    broken after "ag-" was refused on a steady screen every time it was answered, #1123,
+    #848), with more than one field the tab
     bar naming exactly this form's fields in order (titles as written, brackets included; the
-    field being answered may be in the bar's own brackets), the field's own heading on a row
+    field being answered may be in the bar's own brackets; read with white space left out
+    across the rows it wraps onto inside the frame, and taken wrapped only while every field's
+    heading fits on a row of the frame), the field's own heading on a row
     of its own (`<title ?? name>:` for a list, a Yes/No or a multi-select; the title alone,
     with no colon, for a text or number box, `Fxn` and `Lxn`; only the field being answered
     is drawn), and under it the hints
     row (the last row ending "esc cancel", with the rows it wrapped from, every part one of
-    the form's hints): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
+    the form's hints, read with white space left out so a narrow window that breaks a hint,
+    or a word of one, across rows still reads, #910): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
     place by "tab next" and "shift+tab prev" when there is more than one, read from that row
     alone, since the question or the words typed may say them too; and no permission prompt
     drawn against the form: one ending just above its frame or drawn under it, read by its
@@ -151,7 +158,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     control character, which splits its heading across rows while the tab bar's first row
     still reads as the labels, is refused before the first key. Both, like a `requestedSchema`
     encoded as JSON twice (read once, it is text, not a form), are listed `answerAtMachine`,
-    so no client offers what would be refused; a heading or question the
+    so no client offers what would be refused; a field heading the
     console wraps mid-word is refused rather than typed into (#848). With more than one
     field, the tab bar read at the first field, before any key, vouches for every later
     field's width and characters: a bar too wide for the window shows only some labels,
@@ -168,10 +175,32 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     approving what it highlights (#510 review). Anything else stops the answer there, as
     below. A field whose title is not a non-empty string has no heading to look for, so is
     never typed into this way.
+  * One read is never the end (#1123): a read that does not show the form at the field the
+    next keys go to is read again, every poll interval for up to 2 s (`FormRecheck`), and
+    the keys go held to the first read that does; read in the middle of a redraw (streaming
+    output, the conversation scrolling), the form can be half drawn. A write the worker
+    refused because the screen changed, nothing of it typed, is tried again within the same
+    2 s held to a fresh read, but only when that read shows the form at the same field with
+    the field itself (its options and pointer, or what is typed into it) drawn exactly as in
+    the rows the write was held to: what changed was elsewhere on the screen, and the keys do
+    the same there. A field drawn otherwise gets nothing more. Each refusal logs which check
+    failed (`heading`, `bottom-rule`, `under`, `message`, `bar`, `field`, `field-heading`,
+    `hints` or `prompted`, with the row) and the screen's outline (its row count, widest
+    row, blank rows, where its rules and form headings are), never what any row says. A form
+    left part answered across attempts is not yet resumed by a later answer: the attempt that
+    stopped says which fields were answered, for the person to finish at the machine.
+  * Every answer to a Copilot form logs one line (`CopilotAnswerTrace`), whatever it ended
+    in, with no word of the question, the screen or the answer: `answer-attempt v=1
+    request=<8> session=<8> cli=<version> fields=<n> shape=<kind[options]+...>
+    reads=<n> rereads=<n> steady=yes|no retries=<n> check=<name@row|none> taken=<k>/<n>
+    stages=slot:<ms>,typed:<ms>,confirmed:<ms> total=<ms> outcome=<outcome>`. Its keys keep
+    their order and names; new ones are only added at the end, so what reads it (#1132's
+    feedback reports) keeps reading it.
   * It fails closed: such an answer is not typed at all into a screen the host cannot
     read, nor words made only of spaces and line-drawing characters, which leave nothing to
     look for (`refused`, nothing typed); and a field or words that do not show, or a screen
-    that does not settle, within 3 s, a screen that changed under a write, or a question no
+    that does not settle, within 3 s, a screen that changed under a write and did not show the
+    field as it was within 2 s, or a question no
     longer asked, leave it there, with nothing more pressed (`unconfirmed`, stage `typed`,
     for the person to finish at the machine). An Enter sent into a screen nobody has read is
     how #467 happened. What remains: keys reach the CLI in the order they were written, so a

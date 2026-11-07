@@ -1429,6 +1429,142 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Attempts);
     }
 
+    // The answer-attempt line the answer logged (CopilotAnswerTrace).
+    async Task<string> AttemptLineAsync()
+    {
+        static bool Mine(string m) => m.StartsWith("answer-attempt v=1 ", StringComparison.Ordinal);
+        await Wait.UntilAsync(() => { lock (logged) { return logged.Any(Mine); } }, "the answer-attempt line", Patience);
+        lock (logged) { return Assert.Single(logged, Mine); }
+    }
+
+    [Theory]
+    // Copilot CLI 1.0.105 breaks a question's line wherever Unicode line breaking allows: after a
+    // hyphen, as the question refused all morning was (#1123), or inside a word too long for its
+    // row (#848). The form, steady on screen, is still this question's.
+    [InlineData("from ag-\ntest-ops)")]
+    [InlineData("from ag-te\nst-ops)")]
+    public async Task A_three_field_form_whose_question_wraps_inside_a_word_is_still_answered_field_by_field(string drawn)
+    {
+        const string Message = "Which mailbox should the test mail go out from (from ag-test-ops)?";
+        var answer = new { first = "b", second = "c", feedback = Feedback };
+        string[] names = ["first", "second", "feedback"];
+        await AskFieldsAsync(new
+        {
+            first = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            second = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            feedback = new { type = "string" },
+        }, 3, answer, Message);
+        injector.Screen = () => FieldsScreen(names, message: Message.Replace("from ag-test-ops)", drawn, StringComparison.Ordinal));
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(3, Enters());
+        Assert.Contains("rereads=0 steady=yes", (await AttemptLineAsync()));
+    }
+
+    [Theory]
+    // A window too narrow for the key hints wraps them, between two of them, inside one, or
+    // inside a word of one (#910): they still say the form is at its field.
+    [InlineData(" enter accept · ctrl+d decline ·", " esc cancel")]
+    [InlineData(" enter accept · ctrl+d decline · esc", " cancel")]
+    [InlineData(" enter accept · ctrl+d dec", " line · esc cancel")]
+    public async Task Key_hints_a_narrow_window_wraps_still_let_a_single_lists_answer_go(string first, string second)
+    {
+        IEnumerable<string> Narrow(string row) => row.Contains("esc cancel", StringComparison.Ordinal) ? [first, second] : [row];
+        injector.Screen = () => [.. WhichOne.SelectMany(Narrow)];
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal(("delivered", (string?)null), (outcome, reason));
+        Assert.Equal(1, Enters());
+    }
+
+    [Fact]
+    public async Task A_form_read_mid_redraw_is_read_again_and_its_answer_goes_once_it_shows()
+    {
+        // Streaming output redraws the screen: read in the middle of it, the form had no bottom
+        // rule yet, and that one read refused the answer (#1123). Read again, it shows.
+        DateTime? first = null;
+        injector.Screen = () =>
+        {
+            first ??= DateTime.UtcNow;
+            return DateTime.UtcNow - first < TimeSpan.FromMilliseconds(300) ? [.. WhichOne.Take(WhichOne.Count - 3)] : WhichOne;
+        };
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal(("delivered", (string?)null), (outcome, reason));
+        lock (logged) { Assert.Contains(logged, m => m.Contains("showed the form at its next field when read again", StringComparison.Ordinal)); }
+        Assert.Contains("steady=no", (await AttemptLineAsync()));
+    }
+
+    [Fact]
+    public async Task Keys_refused_because_output_scrolled_above_the_form_are_typed_again_at_the_same_field()
+    {
+        // Output drawn above the form between the host's read and its keys: the worker refuses
+        // keys held to rows that moved, and that one refusal left the form unanswered (#1123).
+        // Read again, the form shows the same field drawn the same, so they go again.
+        var scrolled = false;
+        injector.Screen = () => scrolled ? ["\u25CF more output", .. WhichOne] : WhichOne;
+        injector.Holding = _ => { if (injector.Attempts.Count == 1) { scrolled = true; } };
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal(("delivered", (string?)null), (outcome, reason));
+        Assert.Single(injector.Refused);
+        Assert.Equal(1, Enters());
+        Assert.Contains("retries=1", (await AttemptLineAsync()));
+    }
+
+    [Fact]
+    public async Task A_field_drawn_differently_when_its_Enter_was_refused_gets_no_Enter()
+    {
+        // The pointer moved off the option the keys walked to before its Enter (something else
+        // pressed a key): an Enter now would pick another option, so it is never typed again.
+        var moved = false;
+        injector.Screen = () => moved ? Framed("Which one?", ["pick"], 0, ["    a", "    b", "  \u276F c"]) : WhichOne;
+        injector.Holding = plan => { if (HasEnterOnly(plan)) { moved = true; } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("unconfirmed", outcome);
+        Assert.Contains("screen changed", reason);
+        Assert.Equal(0, Enters());
+        Assert.True(HasEnterOnly(Assert.Single(injector.Refused)));
+    }
+
+    [Fact]
+    public async Task A_refusal_logs_which_check_failed_and_the_screens_outline_but_never_its_words()
+    {
+        injector.Screen = () => [.. WhichOne.Select(r => r.Replace("Which one?", "Which branch?", StringComparison.Ordinal))];
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("refused", outcome);
+        var attempt = await AttemptLineAsync();
+        Assert.Contains("fields=1 shape=choice3 ", attempt);
+        Assert.Contains("steady=no", attempt);
+        Assert.Contains("check=message@2 ", attempt);
+        Assert.EndsWith("outcome=refused", attempt);
+        lock (logged)
+        {
+            var refusal = Assert.Single(logged, m => m.Contains("is not the form at its next field", StringComparison.Ordinal));
+            Assert.Contains($"rows={WhichOne.Count} ", refusal);
+            Assert.Contains("check=message@2", refusal);
+            Assert.DoesNotContain(logged, m => m.Contains("branch", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
     [Theory]
     // The session's own output above the form, an agent's numbered list in it reading "1. Yes":
     // right above the form, as it is drawn into the console (no pointer, the conversation's

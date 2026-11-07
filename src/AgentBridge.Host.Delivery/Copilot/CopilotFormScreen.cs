@@ -14,7 +14,8 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //   * The form (`MIo`) is a box drawn with its top and bottom rules alone (paddingX 1), its
 //     first row inside "Copilot needs information." for ask_user (its source is
 //     Copilot's own, `JD`); an MCP server's reads "<server> needs information.". Under the
-//     heading, the question's message.
+//     heading, the question's message, wrapped by the renderer (`gVr`) wherever Unicode line
+//     breaking allows, so it is compared with its spaces left out.
 //   * Then the fields (`Uxn`): with more than one, a tab bar (`Da`) naming each in order
 //     (` <label> `, the selected one `[<label>]` where colour is unavailable); then only the
 //     field being answered, headed on a row of its own: a list, a Yes/No or a multi-select
@@ -34,6 +35,32 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //     box's sides (docs/host-answers.md), one of its options under the pointer; a form's
 //     options are never numbered. `cxo` draws one prompt at a time in the session's prompt
 //     place, so a live one replaces the form; one drawn against it is refused all the same.
+// Each check Locate makes, named, so a refusal says which one failed (#1123): the reason the
+// person reads is one sentence for several of them, and a refusal that could not be told
+// apart from the log took a morning to trace to a question wrapped after a hyphen.
+public enum FormCheck
+{
+    Shown,
+    // Not exactly one heading of this form's own (none, as when its top is off the window, or two).
+    Heading,
+    // No row under the heading repeats the top's rule.
+    BottomRule,
+    // Something drawn under the form's frame.
+    Under,
+    // The rows under the heading do not read as the question's message.
+    Message,
+    // The tab bar does not name the fields.
+    Bar,
+    // The form has no such field, or one the host cannot say how it is headed.
+    Field,
+    // The field being answered is not the one headed.
+    FieldHeading,
+    // The key hints do not say this field.
+    Hints,
+    // A permission prompt drawn in the form's place or against it.
+    Prompted,
+}
+
 public static partial class CopilotFormScreen
 {
     const string Heading = "Copilot needs information.";
@@ -87,6 +114,40 @@ public static partial class CopilotFormScreen
     // them, each below the last.
     public static string? Showing(IReadOnlyList<string> rows, CopilotForm form, int index) => Locate(rows, form, index, out _, out _);
 
+    // Showing's reason, with the check that gave it and the screen's outline for the log: where
+    // its rules and headings are and the row the check failed at, never what any row says.
+    public static (string? Why, FormCheck Check, int Row, string Outline) Diagnose(IReadOnlyList<string> rows, CopilotForm form, int index)
+    {
+        var why = Locate(rows, form, index, out _, out _, out var check, out var at);
+        return (why, check, at, Outline(rows, check, at));
+    }
+
+    static string Outline(IReadOnlyList<string> rows, FormCheck check, int at)
+    {
+        var rules = Enumerable.Range(0, rows.Count).Where(r => IsRule(rows[r])).Select(r => $"{r}:{Indent(rows[r])}+{rows[r].Trim(' ').Length}");
+        var headings = Enumerable.Range(0, rows.Count).Where(r => Heads(rows, r));
+        var blank = rows.Count(r => r.Trim(' ').Length == 0);
+        var widest = rows.Count == 0 ? 0 : rows.Max(r => r.TrimEnd(' ').Length);
+        return $"rows={rows.Count} widest={widest} blank={blank} rules=[{string.Join(',', rules)}] headings=[{string.Join(',', headings)}] check={Name(check)}{(at >= 0 ? $"@{at}" : "")}";
+    }
+
+    // A check's name as the log says it: stable, for whatever reads the log.
+    public static string Name(FormCheck check) => check switch
+    {
+        FormCheck.Shown => "shown",
+        FormCheck.Heading => "heading",
+        FormCheck.BottomRule => "bottom-rule",
+        FormCheck.Under => "under",
+        FormCheck.Message => "message",
+        FormCheck.Bar => "bar",
+        FormCheck.Field => "field",
+        FormCheck.FieldHeading => "field-heading",
+        FormCheck.Hints => "hints",
+        _ => "prompted",
+    };
+
+    static bool IsRule(string row) => row.Trim(' ') is { Length: > 0 } line && line.All(c => c == '\u2500');
+
     // The rows of the field being answered, strictly between its heading and the hints, where
     // what is typed into it is drawn; null when the rows do not show this form at that field.
     // Words are looked for here alone, the rows read as one so a long answer is found across the
@@ -112,14 +173,38 @@ public static partial class CopilotFormScreen
         return form.Fields[index].Kind == CopilotFieldKind.Choice ? [.. region.Select(Unplaceheld)] : [.. region];
     }
 
-    static string? Locate(IReadOnlyList<string> rows, CopilotForm form, int index, out int fieldHeading, out int hintsStart)
+    static string? Locate(IReadOnlyList<string> rows, CopilotForm form, int index, out int fieldHeading, out int hintsStart) =>
+        Locate(rows, form, index, out fieldHeading, out hintsStart, out _, out _);
+
+    static string? Locate(IReadOnlyList<string> rows, CopilotForm form, int index, out int fieldHeading, out int hintsStart, out FormCheck check, out int failedAt)
     {
-        (fieldHeading, hintsStart) = (-1, -1);
-        const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
-        const string NotForm = "the session's screen no longer showed the question's form";
-        const string Under = "something other than the question's form was drawn under it on the session's screen";
+        var found = new Found();
+        var why = Find(rows, form, index, found);
+        (fieldHeading, hintsStart, check, failedAt) = why is null ? (found.Heading, found.Hints, FormCheck.Shown, -1) : (-1, -1, found.Check, found.Row);
+        return why;
+    }
+
+    // What Find found: the field's heading and hints row, or the check that failed and where.
+    sealed class Found
+    {
+        public int Heading = -1, Hints = -1, Row = -1;
+        public FormCheck Check = FormCheck.Shown;
+
+        public string Fail(FormCheck check, int row, string reason)
+        {
+            (Check, Row) = (reason == Prompted ? FormCheck.Prompted : check, row);
+            return reason;
+        }
+    }
+
+    const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
+    const string NotForm = "the session's screen no longer showed the question's form";
+    const string Under = "something other than the question's form was drawn under it on the session's screen";
+
+    static string? Find(IReadOnlyList<string> rows, CopilotForm form, int index, Found found)
+    {
         var headed = Enumerable.Range(0, rows.Count).Where(r => Heads(rows, r)).ToList();
-        if (headed.Count != 1) { return CopilotPermissionScreen.Ends(rows, rows.Count) ? Prompted : NotForm; }
+        if (headed.Count != 1) { return found.Fail(FormCheck.Heading, headed.Count > 1 ? headed[1] : -1, CopilotPermissionScreen.Ends(rows, rows.Count) ? Prompted : NotForm); }
         // The form's frame closes with the top's own rule again (`MIo`), and the frame is the
         // last thing drawn: the CLI draws a prompt (`ekn`, an elicitation among them) in place of
         // its input box and that box's footer, so nothing is under a form it is showing. Read to
@@ -130,28 +215,35 @@ public static partial class CopilotFormScreen
         var top = rows[headed[0] - 1].TrimEnd(' ');
         var bottom = headed[0] + 1;
         while (bottom < rows.Count && rows[bottom].TrimEnd(' ') != top) { bottom++; }
-        if (bottom >= rows.Count) { return CopilotPermissionScreen.Ends(rows, rows.Count) ? Prompted : NotForm; }
-        if (rows.Skip(bottom + 1).Any(r => r.Trim(' ').Length > 0)) { return CopilotPermissionScreen.Ends(rows, rows.Count) ? Prompted : Under; }
+        if (bottom >= rows.Count) { return found.Fail(FormCheck.BottomRule, -1, CopilotPermissionScreen.Ends(rows, rows.Count) ? Prompted : NotForm); }
+        if (rows.Skip(bottom + 1).Any(r => r.Trim(' ').Length > 0)) { return found.Fail(FormCheck.Under, bottom + 1, CopilotPermissionScreen.Ends(rows, rows.Count) ? Prompted : Under); }
         var frame = rows;
         rows = [.. rows.Take(bottom)];
         var at = headed[0] + 1;
-        // The whole question, as drawn: its lines, each wrapped onto as many rows as it takes.
-        if (Collapse(form.Message ?? "") is { Length: > 0 } message)
+        // The whole question, as drawn: its lines, each wrapped onto as many rows as it takes,
+        // compared with every space left out. Copilot CLI 1.0.105's renderer (`gVr`) breaks a line
+        // wherever Unicode line breaking allows (`lineBreakPositions`), not only at a space: after
+        // a hyphen, between CJK characters, inside a word too long for a row. Joined with a space,
+        // "from ag-" over "agent-bridge-ops" read "ag- agent", and every answer to that question
+        // was refused, the form steady on screen (#1123, #848). Left out on both sides, a break
+        // reads the same wherever it falls; what is compared is still every other character the
+        // question has, in order.
+        if (Squeeze(form.Message ?? "") is { Length: > 0 } message)
         {
             var shown = "";
             while (shown != message)
             {
-                if (at >= rows.Count) { return NotForm; }
-                var more = Collapse(shown + " " + rows[at++]);
-                if (!message.StartsWith(more, StringComparison.Ordinal)) { return NotForm; }
+                if (at >= rows.Count) { return found.Fail(FormCheck.Message, at, NotForm); }
+                var more = shown + Squeeze(rows[at++]);
+                if (!message.StartsWith(more, StringComparison.Ordinal)) { return found.Fail(FormCheck.Message, at - 1, NotForm); }
                 shown = more;
             }
         }
-        if (index < 0 || index >= form.Fields.Count) { return "the question's form has no such field"; }
+        if (index < 0 || index >= form.Fields.Count) { return found.Fail(FormCheck.Field, -1, "the question's form has no such field"); }
         if (form.Fields.Any(f => f.Label is null))
         {
             var unheaded = form.Fields.First(f => f.Label is null);
-            return $"the host cannot tell how the form heads its field \"{unheaded.Name}\", so it cannot see that the form shows it";
+            return found.Fail(FormCheck.Field, -1, $"the host cannot tell how the form heads its field \"{unheaded.Name}\", so it cannot see that the form shows it");
         }
         var label = form.Fields[index].Label!;
         var off = $"the form on the session's screen was not at the field \"{label}\"";
@@ -159,18 +251,34 @@ public static partial class CopilotFormScreen
         if (form.Fields.Count > 1)
         {
             // Each label as it is, brackets in a title included; the field being answered alone
-            // may be in brackets of the bar's own, where colour is unavailable.
+            // may be in brackets of the bar's own, where colour is unavailable. Spaces are left
+            // out as in the question: the bar (`Da`) measures itself against the console's width,
+            // not the frame's, so it can wrap inside the frame, and where it breaks is the
+            // renderer's. Wrapped, it still vouches for every later field's heading only while
+            // each fits on a row of the frame, so it is taken so only then.
             var labels = form.Fields.Select(f => f.Label!).ToList();
-            var plain = Collapse(string.Join(' ', labels));
-            var marked = Collapse(string.Join(' ', labels.Select((l, i) => i == index ? $"[{l}]" : l)));
+            var plain = Squeeze(string.Concat(labels));
+            var marked = Squeeze(string.Concat(labels.Select((l, i) => i == index ? $"[{l}]" : l)));
             at = Next(rows, at);
-            if (at >= rows.Count || Collapse(rows[at]) is var bar && bar != plain && bar != marked) { return NotForm; }
-            at++;
+            var bar = "";
+            var barRows = 0;
+            while (bar != plain && bar != marked)
+            {
+                var more = at < rows.Count ? bar + Squeeze(rows[at]) : bar;
+                if (more.Length == bar.Length || !plain.StartsWith(more, StringComparison.Ordinal) && !marked.StartsWith(more, StringComparison.Ordinal))
+                {
+                    return found.Fail(FormCheck.Bar, at, NotForm);
+                }
+                (bar, barRows) = (more, barRows + 1);
+                at++;
+            }
+            var inside = top.Trim(' ').Length - 2;
+            if (barRows > 1 && form.Fields.Any(f => Headed(f).Length > inside)) { return found.Fail(FormCheck.Bar, at - 1, NotForm); }
         }
         at = Next(rows, at);
-        if (at >= rows.Count || Collapse(rows[at]) != heading) { return off; }
-        if (Hints(rows, at + 1, index, form.Fields.Count) is not var (start, end)) { return off; }
-        (fieldHeading, hintsStart) = (at, start);
+        if (at >= rows.Count || Collapse(rows[at]) != heading) { return found.Fail(FormCheck.FieldHeading, at, off); }
+        if (Hints(rows, at + 1, index, form.Fields.Count) is not var (start, end)) { return found.Fail(FormCheck.Hints, at + 1, off); }
+        (found.Heading, found.Hints) = (at, start);
         // A permission prompt drawn against the form: one ending just above its frame, read by
         // its structure (CopilotPermissionScreen.Ends), not by any row of the session's output
         // above it reading "1. Yes", which refused every answer to a form under an agent's
@@ -178,7 +286,7 @@ public static partial class CopilotFormScreen
         // below its hints, where the form draws nothing of its own. What is inside the form
         // above that (an option, or words typed into a field, reading "1. Yes") is the form's
         // own.
-        return CopilotPermissionScreen.Ends(frame, headed[0] - 1) || rows.Skip(end + 1).Any(Permission) ? Prompted : null;
+        return CopilotPermissionScreen.Ends(frame, headed[0] - 1) || rows.Skip(end + 1).Any(Permission) ? found.Fail(FormCheck.Prompted, end + 1, Prompted) : null;
     }
 
     static bool Permission(string row) => PermissionRow().IsMatch(row);
@@ -219,27 +327,34 @@ public static partial class CopilotFormScreen
     static (int Start, int End)? Hints(IReadOnlyList<string> rows, int from, int index, int count)
     {
         if (HintParts(rows, from) is not ({ } parts, var start, var end)) { return null; }
-        if (!parts.Contains("enter accept") || !parts.Contains("ctrl+d decline") || !parts.Contains("esc cancel")) { return null; }
-        return count <= 1 || (parts.Contains("tab next") == index < count - 1 && parts.Contains("shift+tab prev") == index > 0) ? (start, end) : null;
+        if (!parts.Contains("enteraccept") || !parts.Contains("ctrl+ddecline") || !parts.Contains("esccancel")) { return null; }
+        return count <= 1 || (parts.Contains("tabnext") == index < count - 1 && parts.Contains("shift+tabprev") == index > 0) ? (start, end) : null;
     }
 
-    // What `Ft` can say under the form (`Uxn`'s hints), each "<key> <action>".
-    static readonly HashSet<string> HintItems = new(StringComparer.Ordinal)
+    // What `Ft` can say under the form (`Uxn`'s hints), each "<key> <action>", read with its
+    // spaces left out, as the rows it wraps onto are joined (HintParts).
+    static readonly HashSet<string> HintItems = new(new[]
     {
         "\u2191/\u2193 select", "\u2191/\u2193 adjust", "space toggle", "enter accept", "tab next", "shift+tab prev", "ctrl+d decline", "esc cancel",
-    };
+    }.Select(Squeeze), StringComparer.Ordinal);
 
-    // The hints row's parts: the last row below `from` that ends with "esc cancel", the hints'
-    // last, and the rows it wrapped from just above it, as far up as every part read is one of
-    // the hints. Null when there is no such row.
+    // The hints row's parts: the last row below `from` whose rows up to three above it end the
+    // hints ("esc cancel"), and the rows it wrapped from just above it, as far up as every part
+    // read is one of the hints. Null when there is no such row. The renderer breaks a row
+    // wherever line breaking allows, a hint's own words or a hint itself included: joined with
+    // a space, "esc" over "cancel" or "esc can" over "cel" were not the hints, and every answer
+    // in a narrow window was refused (#910). Joined with the spaces left out, a break reads the
+    // same wherever it falls; each part must still be a whole hint.
     static (List<string> Parts, int Start, int End)? HintParts(IReadOnlyList<string> rows, int from)
     {
         for (var end = rows.Count - 1; end >= from; end--)
         {
-            if (!Collapse(rows[end]).EndsWith("esc cancel", StringComparison.Ordinal)) { continue; }
+            if (Squeeze(rows[end]).Length == 0) { continue; }
+            if (!Squeeze(string.Concat(rows.Skip(Math.Max(from, end - 3)).Take(end - Math.Max(from, end - 3) + 1))).EndsWith("esccancel", StringComparison.Ordinal)) { continue; }
             for (var start = Math.Max(from, end - 3); start <= end; start++)
             {
-                var parts = Collapse(string.Join(' ', rows.Skip(start).Take(end - start + 1))).Split('\u00B7').Select(p => p.Trim()).ToList();
+                if (Squeeze(rows[start]).Length == 0) { continue; }
+                var parts = Squeeze(string.Concat(rows.Skip(start).Take(end - start + 1))).Split('\u00B7').ToList();
                 if (parts.All(HintItems.Contains)) { return (parts, start, end); }
             }
             return null;
@@ -254,6 +369,9 @@ public static partial class CopilotFormScreen
     }
 
     static string Collapse(string text) => Spaces().Replace(text, " ").Trim();
+
+    // Text with every space left out, so that where a row was broken does not change it.
+    static string Squeeze(string text) => Spaces().Replace(text, "");
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex Spaces();
