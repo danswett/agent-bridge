@@ -710,10 +710,14 @@ where this section differs. Of the pieces below, only a draft of the provisionin
   through OIDC, like `relay.yml`, with a `lab` environment and its own principal scoped to
   `rg-agent-bridge-lab` only. Nothing in it can reach the owner's machines, Home Assistant or
   broker.
-- **Accounts:** for v1, the owner's GitHub account through a dedicated lab token (owner
-  decision B3, [lab/README.md §8](lab/README.md#8-outcomes-retries-and-credentials)); for v2,
-  test accounts for each agent, with per-agent caps (the soak already caps Codex). Tokens are
-  `lab` environment secrets, never printed, as AGENTS.md requires.
+- **Accounts:** for v1, `Slipgates-lab-bot`, a dedicated, revocable GitHub account that is
+  never the owner's identity, which the owner alone signs in to the relay by GitHub device
+  flow once per lab VM, or once on a golden image if one is separately approved (owner
+  decision B3, its credential plan superseded by Trust's choice A,
+  [lab/README.md §8](lab/README.md#8-outcomes-retries-and-credentials)). No GitHub token for
+  it is a `lab` environment or vault secret. For v2, test accounts for each agent, with
+  per-agent caps (the soak already caps Codex). No credential is ever printed, as AGENTS.md
+  requires.
 - **Cost guard:** cost and age alerts on the resource group (SRE). Every run deletes its
   resources in a `finally`, but that is best effort, so a durable sweeper deletes run-owned
   resources past their expiry (at most 4 hours) before any run may start, by exact name from
