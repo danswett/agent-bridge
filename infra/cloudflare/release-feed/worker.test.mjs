@@ -17,6 +17,7 @@ globalThis.fetch = async (u) => {
   calls.push(u);
   const next = upstream.shift();
   if (next instanceof Error) throw next;
+  if (next.bodyError) return { status: 200, text: async () => { throw new Error('stream reset'); } };
   return new Response(next.body, { status: next.status });
 };
 const get = async (path) => {
@@ -62,6 +63,15 @@ assert.equal(r.status, 502);
 upstream = [ok('{"message":"rate limit"}')];
 r = await get(`${P}?per_page=9&page=1`);
 assert.equal(r.status, 502, 'non-array 200 is not a list');
+
+// a body read that rejects must take the same fallbacks as a failed fetch
+upstream = [{ bodyError: true }];
+r = await get(`${P}?per_page=11&page=1`);
+assert.equal(r.status, 502, 'body read failure with no copy is an error');
+upstream = [{ bodyError: true }];
+r = await get(`${P}?per_page=10&page=1`);
+assert.equal(r.status, 200, 'body read failure serves the stale copy');
+assert.ok(Number(r.headers.get('age')) >= 600);
 
 assert.equal((await get('/other')).status, 404);
 assert.equal((await get(`${P}?per_page=abc`)).status, 400);

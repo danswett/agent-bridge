@@ -35,22 +35,17 @@ function answer(body, ageSeconds) {
 }
 
 async function refresh(perPage, page) {
-  let upstream;
+  // Reading the body can reject mid-stream; that must fall back to the stale copy or 502 like any other failure.
   try {
-    upstream = await fetch(`${UPSTREAM}?per_page=${perPage}&page=${page}`, {
+    const upstream = await fetch(`${UPSTREAM}?per_page=${perPage}&page=${page}`, {
       headers: { accept: 'application/vnd.github+json', 'user-agent': 'agent-bridge-release-feed' },
     });
+    if (upstream.status !== 200) return null;
+    const body = await upstream.text();
+    return Array.isArray(JSON.parse(body)) ? body : null;
   } catch {
     return null;
   }
-  if (upstream.status !== 200) return null;
-  const body = await upstream.text();
-  try {
-    if (!Array.isArray(JSON.parse(body))) return null;
-  } catch {
-    return null;
-  }
-  return body;
 }
 
 export default {
