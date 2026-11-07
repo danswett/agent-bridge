@@ -105,21 +105,38 @@ function run(el, keyframes, entry, t, options = {}) {
   }
 }
 
-// Shows a hidden element (a banner) as the catalogue's Toast and banner does: in from its edge
-// (dy -1, from above; 1, from below).
-export function reveal(el, { entry = 'toast', dy = -1 } = {}) {
-  if (!el || !el.hidden) { return; }
-  el.hidden = false;
-  enter(el, entry, { dy });
+// What a banner has none of at its smallest, so that its height closes to nothing (#1064).
+const COLLAPSED = { height: '0px', opacity: 0, paddingTop: '0px', paddingBottom: '0px', marginTop: '0px', marginBottom: '0px', borderTopWidth: '0px', borderBottomWidth: '0px' };
+
+// A banner's height, from nothing to what it is (or back) over the Toast and banner's time, with
+// its content fading as it goes (ui.md §7: banners push what is below them, so they open and close
+// rather than jump). Under reduced motion (no distance) there is no animation: it is instant.
+function openClose(el, entry, opening) {
+  el.getAnimations?.().filter((a) => a.id === `ab-motion-${entry}`).forEach((a) => a.cancel());
+  const t = timing(entry, { exit: !opening, doc: el.ownerDocument });
+  if (!(t.distance > 0)) { return null; }
+  const full = { height: `${el.getBoundingClientRect().height}px`, opacity: 1 };
+  const box = { boxSizing: 'border-box', overflow: 'hidden' };
+  const frames = opening ? [{ ...COLLAPSED, ...box }, { ...box, ...full }] : [{ ...box, ...full }, { ...COLLAPSED, ...box }];
+  return run(el, frames, entry, t, opening ? {} : { fill: 'forwards' });
 }
 
-// Hides a shown banner as the catalogue's Toast and banner has it leave: the way it came, quicker.
-// Its space closes at once and a copy slides back toward its edge as it fades over the exit time;
-// under reduced motion (no distance) the copy only fades.
-export function conceal(el, { entry = 'toast', dy = -1 } = {}) {
+// Shows a hidden element (a banner) as the catalogue's Toast and banner does: it opens to its
+// height. Never from an edge as a toast does: a banner takes room, and what is below it moves.
+export function reveal(el, { entry = 'toast' } = {}) {
+  if (!el || !el.hidden) { return; }
+  el.hidden = false;
+  openClose(el, entry, true);
+}
+
+// Hides a shown banner the way it came, quicker: its height closes over the exit time and it goes
+// then. Under reduced motion it goes at once.
+export function conceal(el, { entry = 'toast' } = {}) {
   if (!el || el.hidden) { return; }
-  leave(el, entry, { dy });
-  el.hidden = true;
+  const a = openClose(el, entry, false);
+  if (!a) { el.hidden = true; return; }
+  const done = () => { if (a.playState === 'finished') { el.hidden = true; } a.cancel(); };
+  a.finished.then(done, () => {});
 }
 
 // Disclosures (Reasoning, Tool history, a delegate's details, Ended): when the person opens
