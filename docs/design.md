@@ -820,6 +820,41 @@ anywhere in it.
   the period. Users can turn it off in settings; relay-side metrics and synthetic probes
   still give full coverage without it.
 
+**Amendment: optional, opt-in delivery diagnostics (decided 2026-11-07, #732/#741/#1132).**
+The anonymous, aggregated client health above stays as written. A **separate beta tier**
+may send per-event, pseudonymous diagnostics about failed or slow attempts (setup,
+update, answer delivery, connection), so beta reports can be triaged. It is *not*
+anonymous, it carries identifiers, and it is held to its own rules:
+
+* **Opt-in worldwide, off by default.** One genuine choice, no region shortcut. The first
+  run offers "Not now" and "Allow diagnostics", neither preselected. Settings has "Send
+  optional diagnostics" (off). While it is off nothing is collected, queued or uploaded,
+  and refusing costs no functionality. Withdrawing stops collection and upload and deletes
+  unsent events; re-enabling uploads nothing from the off period. Withdrawal does not
+  erase events already received. Notice text follows Compliance's wording (#741).
+* **Strict versioned allowlist, enforced in CI.** Event type, a finite approved outcome and
+  reason vocabulary (no exception text or stack frames), app and host version, channel,
+  bounded timing and count buckets, and an optional screen outline of locally generated
+  structural enums and buckets. Never prompts, answers, commands, code, titles, paths,
+  names, screen words or pixels, arbitrary strings, or raw exceptions. Daily caps apply.
+* **Identifiers.** The install id is random, created only after opt-in, rotated at least
+  every 30 days and on reset or re-consent, never derived from a device or account id, and
+  no old-to-new mapping is kept. Each attempt has its own random id, never reused and not
+  containing the install id.
+* **Link to manual reports.** An explicit "Report this" may attach the attempt id, shown
+  in the exact send preview, only if a diagnostic was recorded. Reports stay in the
+  encrypted feedback store, never in the telemetry pipeline or a public issue. This join
+  means the records must never be described as "joined to nothing else".
+* **Destination and retention.** A separate Application Insights health-event pipeline,
+  least-privilege access. 30 days is a proposed maximum counted from original collection
+  (not restarted by retry, export or join), covering derived copies, with a bounded local
+  queue. Upload stays disabled until SRE proves per-table and total retention (including
+  the 31-day Log Analytics behaviour), exports and deletion on the real pipeline.
+* **Gates before upload is enabled:** this amendment, the published notice, the two-family
+  #732 technical review, SRE's retention proof, and legal review of the regional rules,
+  which engineering cannot certify. Local allowlisted per-attempt records may ship
+  before then; the beta does not wait on diagnostics.
+
 **What is measured:**
 
 | Area | Signals |
