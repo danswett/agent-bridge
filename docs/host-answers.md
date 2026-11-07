@@ -521,13 +521,14 @@ In order, for every answer:
    new UUID, and gets the first outcome instead of the refusal in step 6 (#1093). An
    `unconfirmed` one is read again from the session each time (step 9), so it turns
    `delivered` once recorded; while it is not, the retry (under the same UUID or a new one, at
-      any stage) is told only that nothing was typed
-      again, because it repeats an answer already typed once (`DeliveryReasons.AnswerNotConfirmed`,
-      shown by the clients inside their own unconfirmed line); the stage still says how far the
-      first got. A request id belongs to the sender, session and question it was first admitted for
-      (decided with the admission itself): another sender, or the same id under another question,
-      replaying it gets the answer a request of its own would, never the first's outcome or
-      progress. That
+   any stage) is told only that nothing was typed again, because it repeats an answer already
+   typed once (`DeliveryReasons.AnswerNotConfirmed`, shown by the clients inside their own
+   unconfirmed line); the stage still says how far the first got. A call that arrives while
+   the first is still being admitted joins that one delivery: there is one delivery per prompt.
+   A request id belongs to the sender, session and question it was first admitted for
+   (decided with the admission itself): another sender, or the same id under another question,
+   replaying it gets the answer a request of its own would, never the first's outcome or
+   progress. That
    record is the host's memory only, and is kept while the prompt's claim is; it never
    covers an answer that typed nothing, nor a different answer.
 4. The session's process is still the live agent process; it does not run elevated
