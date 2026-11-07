@@ -224,6 +224,41 @@ public sealed class DelegatesViewModel : Observable
     public ObservableCollection<DelegateEvent> Events { get; } = [];
     public DelegateDetail Detail { get; } = new();
 
+    // Two or more event lines fold into one row (ui.md §6.4, "Runs fold"; #1063), drawn as the
+    // PWA's: "5 delegates · 4 reported back › 1 still working". The count is per delegate, not per
+    // line: a delegate that started and reported back has two lines here and is one delegate.
+    public const int FoldFrom = 2;
+    bool eventsOpen;
+    string foldText = "";
+    string foldLink = "";
+    string foldLinkName = "";
+    string foldName = "";
+    string? foldWorkingId;
+
+    public bool HasFold => Events.Count >= FoldFrom;
+    // Closed by default, and open or closed as the person left it for as long as the session's card
+    // lives: not saved, so a new run of the app starts closed.
+    public bool EventsOpen
+    {
+        get => eventsOpen;
+        set
+        {
+            if (Set(ref eventsOpen, value)) { Raise(nameof(ShowLines)); }
+        }
+    }
+    // The lines themselves: all of them when there is no fold, else only while it is open.
+    public bool ShowLines => Events.Count > 0 && (!HasFold || eventsOpen);
+    // The button's words, then the link's after it as a target of its own, never inside the button.
+    public string FoldText { get => foldText; private set => Set(ref foldText, value); }
+    public string FoldLink { get => foldLink; private set { if (Set(ref foldLink, value)) { Raise(nameof(HasFoldLink)); } } }
+    public bool HasFoldLink => foldLink.Length > 0;
+    // The link opens the earliest started of those still working: said when it is not the only one.
+    public string FoldLinkName { get => foldLinkName; private set => Set(ref foldLinkName, value); }
+    // The button's name is the whole summary, in the order shown; whether it is open is the
+    // ExpandCollapse pattern's, never in the name.
+    public string FoldName { get => foldName; private set => Set(ref foldName, value); }
+    public string? FoldWorkingId { get => foldWorkingId; private set => Set(ref foldWorkingId, value); }
+
     // The host lists its delegates: Copilot today. Otherwise (Claude, Codex, an older host) there
     // is no strip or list, only the counts (status rule 8).
     public bool Listed => groups is not null;
@@ -505,7 +540,35 @@ public sealed class DelegatesViewModel : Observable
         foreach (var gone in events.Keys.Where(k => !wanted.Any(e => e.Key == k)).ToList()) { events.Remove(gone); }
         // Stable, so events at the same moment keep the order they were built in.
         Sync(Events, wanted.OrderBy(e => e.At));
+        // Every delegate with a line, once, in the order they started: those that reported back
+        // with no start time the host knows come last, as in the PWA.
+        SyncFold([.. starts, .. mine.Where(a => a.StartedAt is null && a.EndedAt is not null && a.Status is SubagentStatus.Idle or SubagentStatus.Ended)]);
         Raise(nameof(HasEvents));
+        Raise(nameof(HasFold));
+        Raise(nameof(ShowLines));
+    }
+
+    // What the fold counts each delegate as (ui.md §6.4, D3), from its status and outcome alone:
+    // still working (a live entry wins over anything known before), reported back, failed, or
+    // ended when the host never saw it end. One neither working nor stopped is in the total only.
+    void SyncFold(List<Subagent> counted)
+    {
+        string? Said(Subagent a) => a.Status switch
+        {
+            SubagentStatus.Working or SubagentStatus.Waiting => "working",
+            _ => a.Outcome switch { SubagentOutcome.Failed => "failed", SubagentOutcome.Done => "reported back", _ => "ended" },
+        };
+        var said = counted.Select(Said).ToList();
+        int Count(string s) => said.Count(x => x == s);
+        var parts = new[] { "reported back", "failed", "ended" }.Select(s => (N: Count(s), S: s)).Where(p => p.N > 0).Select(p => $"{p.N} {p.S}").ToList();
+        var working = Count("working");
+        var head = $"{Words.Plural(counted.Count, "delegate", "delegates")}{(parts.Count > 0 ? $" · {string.Join(", ", parts)}" : "")}";
+        var link = working > 0 ? $"{working} still working" : "";
+        FoldText = head;
+        FoldLink = link;
+        FoldName = link.Length == 0 ? head : $"{head}{(parts.Count > 0 ? "," : " ·")} {link}";
+        FoldLinkName = working > 1 ? $"{link}, opens the first" : link;
+        FoldWorkingId = working > 0 ? counted[said.IndexOf("working")].Id : null;
     }
 
     static string NameOf(Subagent a) => DelegateLabel.For(a.Name, a.Id);

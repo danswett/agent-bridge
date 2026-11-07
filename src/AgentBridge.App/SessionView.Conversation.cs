@@ -202,6 +202,7 @@ public sealed partial class SessionView
     void OnFocusMoving(object? sender, GettingFocusEventArgs e)
     {
         if (e.Cancel || !DispatcherQueue.HasThreadAccess || !IsLoaded) { return; }
+        if (RedirectFoldFocus(e)) { return; }
         var (from, to) = (e.OldFocusedElement, e.NewFocusedElement);
         var (fromHere, toHere) = (Within(from), Within(to));
         if (ConversationKeyboard.Unrouted(fromHere && from is UIElement, toHere && to is UIElement, fromHere, toHere)) { OnReachingBlock(this, e); }
