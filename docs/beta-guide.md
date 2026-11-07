@@ -41,10 +41,14 @@ are.
 
 1. On your PC, open Slipgates > **Settings** and, under **Your devices**, choose
    **Sign in with GitHub**. It shows a code and a GitHub link.
-2. On your phone, open <https://danswett.github.io/agent-bridge/app/> and choose
+2. On your phone, open <https://app.slipgates.com/> and choose
    **Sign in with GitHub**. Open the GitHub link it shows, enter the code, and use the same
    GitHub account as your PC.
 3. Return to the phone app. Your PC's sessions appear there.
+
+Installed the app earlier from `danswett.github.io/agent-bridge/app/`? Open the new address,
+install it again and sign in again: the old copy's sign-in and settings do not move across.
+What you lose and what to do is in [the address move notes](app-domain.md#if-you-installed-the-app-from-the-old-address).
 
 ## Known issues
 
