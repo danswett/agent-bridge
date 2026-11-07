@@ -908,6 +908,20 @@ jobs:
           $sign = @{}
           if ($env:APP_SIGNING -eq 'true') { $sign = @{ RequireSignature = $true; SignerEku = $env:SIGNING_EKU } }
           ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -MainHead (git -C main-head rev-parse HEAD) -MainRepo main-head @sign
+      - name: Publish the static Beta download manifest
+        if: steps.publish.outputs.manifest-tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          MANIFEST_TAG: ${{ steps.publish.outputs.manifest-tag }}
+        run: |
+          $json = gh api "repos/$env:REPOSITORY/releases/tags/$env:MANIFEST_TAG"
+          if ($LASTEXITCODE) { throw "couldn't read the published Beta metadata ($LASTEXITCODE)" }
+          $json | Set-Content out/beta-release-input.json -Encoding utf8NoBOM
+          ./build/release-manifest.ps1 -ReleaseJson out/beta-release-input.json -Repository $env:REPOSITORY -Out out/beta-release.json
+          gh release upload $env:MANIFEST_TAG out/beta-release.json --repo $env:REPOSITORY --clobber
+          if ($LASTEXITCODE) { throw "Beta manifest upload failed ($LASTEXITCODE)" }
 
   attest:
     # Build provenance and an SBOM attestation for each package publish uploaded (quality/README.md
@@ -1107,6 +1121,10 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/lab/test-scripts.ps1
+      - name: Beta download metadata accepts only complete published pre-releases
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'beta-release-manifest')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File build/test-release-manifest.ps1
       - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
         run: bash .github/actions/playwright-system-packages/test.sh

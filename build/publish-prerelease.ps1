@@ -188,6 +188,11 @@ $newer = @($released | Where-Object { $_ -gt $semver })
 $publishing = -not $published -and -not $newer
 if ($published) {
     Write-Plan "$tag is already published; nothing to upload"
+    # A previous attempt may have published the app but failed to upload the site's manifest.
+    # This signal is not 'published': a retry must not attest rebuilt packages as the old ones.
+    if (-not $DryRun -and $env:GITHUB_OUTPUT -and @($releases | Where-Object { -not $_.draft -and $_.prerelease -and $_.tag_name -ceq $tag }).Count -eq 1) {
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "manifest-tag=$tag"
+    }
 } elseif ($newer) {
     # Two merges close together: the later one's build published first. Installed copies take
     # the highest version, so this one would only be noise, and a delta base nobody has.
@@ -406,7 +411,9 @@ if ($publishing) {
         if ($LASTEXITCODE) { throw "gh release publication failed ($LASTEXITCODE)" }
         # For CI's attest job: these assets are this run's, so its SBOMs describe them. A run that
         # uploads nothing (a re-run, or an older version) leaves it unset and attests nothing.
-        if ($env:GITHUB_OUTPUT) { Add-Content -Path $env:GITHUB_OUTPUT -Value 'published=true' }
+        if ($env:GITHUB_OUTPUT) {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value @('published=true', "manifest-tag=$tag")
+        }
     }
     Write-Plan "$(if ($DryRun) { 'would publish' } else { 'published' }) $tag as a pre-release ($($builds.Channel -join ', '))"
 }

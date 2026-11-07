@@ -666,11 +666,17 @@ Check "Only a run that uploads the release tells CI's attest job so, never a re-
         (Get-Content $out -Raw).Trim()
     }
     $said = Get-Said { Invoke-Publish '0.1.600' }
-    Assert ($said -eq 'published=true') "a run that published said: '$said'"
+    Assert (($said -replace "`r", '') -ceq "published=true`nmanifest-tag=v0.1.600") "a run that published said: '$said'"
     $said = Get-Said { New-PpRelease 'v0.1.600'; Invoke-Publish '0.1.600' }
-    Assert ($said -eq '') "a re-run of a published version said: '$said'"
+    Assert ($said -eq 'manifest-tag=v0.1.600') "a re-run must repair the manifest without attesting rebuilt packages: '$said'"
+    $said = Get-Said { New-PpRelease 'v0.1.600'; Invoke-Publish '0.1.600' -DryRun }
+    Assert ($said -eq '') "a dry run of a published version must not request a manifest upload: '$said'"
     $said = Get-Said { New-PpRelease 'v0.1.601'; Invoke-Publish '0.1.600' }
     Assert ($said -eq '') "an older version said: '$said'"
+    $said = Get-Said { New-PpRelease 'v0.1.600' $false; Invoke-Publish '0.1.600' }
+    Assert ($said -eq '') "a stable release must not become a Beta manifest: '$said'"
+    $said = Get-Said { $global:PpTags.Add('refs/tags/v0.1.600'); Invoke-Publish '0.1.600' }
+    Assert ($said -eq '') "a tag without a published release must not request a manifest: '$said'"
     $said = Get-Said { Invoke-Publish '0.1.600' -DryRun }
     Assert ($said -eq '') "a dry run said: '$said'"
     Remove-Item $out

@@ -1,0 +1,93 @@
+# Beta download manifest (#735)
+
+The landing site in `danswett/slipgates-site` consumes a static snapshot, not GitHub's
+visitor-facing API. Landing Site Team owns its pages and workflow; Platform owns
+this release contract. SRE owns Pages settings, DNS and go-live proof. Engineering
+staffs review and Quality admits the PRs. This contract does not authorize deployment.
+
+## Publication
+
+After the existing app publish step completes both architectures, authenticated CI
+reads the published release metadata and runs
+[`build/release-manifest.ps1`](../build/release-manifest.ps1). It uploads
+`beta-release.json` alongside the installers:
+
+```text
+https://github.com/danswett/agent-bridge/releases/download/<tag>/beta-release.json
+```
+
+Only a non-draft pre-release with a `v<major>.<minor>.<patch>` tag, a publication
+timestamp, and exactly one uploaded, nonempty installer for each architecture is
+accepted. Installer and release-note URLs must belong to that repository and tag.
+Names come from [the existing channel definitions](../build/app-channels.ps1).
+Unrelated release assets are not exposed as installers.
+
+An app publish rerun can regenerate/upload the manifest for its already-published
+Beta without republishing the installers. This is separate from `published=true`,
+which still means only a new upload and controls the existing attest job. A tag
+without a published release, an unpublished older version and a stable release
+do not request a Beta manifest.
+
+Before the producer lands and an actual asset is verified, consumers must retain
+their clearly marked placeholder. A documented URL is not publication evidence.
+
+## Version 1
+
+Example shape (not a claim that this example manifest has been published):
+
+```json
+{
+  "schemaVersion": 1,
+  "channel": "beta",
+  "version": "0.1.600",
+  "tag": "v0.1.600",
+  "publishedAt": "2026-11-06T12:30:00Z",
+  "releaseNotesUrl": "https://github.com/danswett/agent-bridge/releases/tag/v0.1.600",
+  "downloads": {
+    "win-x64": {
+      "fileName": "AgentBridgeApp-win-Setup.exe",
+      "url": "https://github.com/danswett/agent-bridge/releases/download/v0.1.600/AgentBridgeApp-win-Setup.exe",
+      "sizeBytes": 123
+    },
+    "win-arm64": {
+      "fileName": "AgentBridgeApp-win-arm64-Setup.exe",
+      "url": "https://github.com/danswett/agent-bridge/releases/download/v0.1.600/AgentBridgeApp-win-arm64-Setup.exe",
+      "sizeBytes": 456
+    }
+  }
+}
+```
+
+`publishedAt` is the release's UTC ISO timestamp, not the snapshot-generation time.
+`sizeBytes` is a positive integer from GitHub's uploaded asset metadata, not a
+signature, hash or proof of installer execution. The runtime keys distinguish the
+real Windows architectures; a browser's user-agent string is not architecture proof.
+Additive fields may be ignored; an unsupported `schemaVersion` must not be used.
+
+## Site build and failure handling
+
+The site's authenticated CI selects the highest semantic version among complete,
+published Betas that have both installers and `beta-release.json`. Include
+pre-releases; do not use `releases/latest`, draft releases or a newer release that
+has not finished uploading its manifest. Verify the manifest's version, tag and
+installer URLs against that selected release, then copy it into the site artifact
+as `beta-release.json` using a base-aware local URL. No token ships in that file.
+
+Visitors read the site's static snapshot and make no GitHub API requests. Missing,
+invalid or incomplete metadata keeps the explicit GitHub Releases fallback or
+marked placeholder, never a fabricated version or dead download button. Build
+fetch/validation failures must be reported, not silently turned into a successful
+refresh. The manifest refresh belongs to the site workflow, not a visitor request.
+
+Architecture choices follow Creative's approved brief, including an explicit
+Arm64 choice when hints are unavailable or unclear. Native wrong-package protection
+is separate work in #1059. A valid snapshot does not select the owner's invitation
+build, establish signing, prove #54 setup/approval, or admit the beta.
+
+## Validation
+
+`pwsh -NoProfile -File build/test-release-manifest.ps1` exercises offline metadata
+fixtures in `ci.yml`'s fast `light` job. Existing Windows publisher fixtures also
+cover the new-upload versus manifest-repair outputs, without changing attest's
+meaning. CI is the validation venue for the restricted Platform VM4 session;
+neither fixture suite authorizes local target execution or a live upload.

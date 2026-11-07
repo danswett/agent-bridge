@@ -366,6 +366,17 @@ suites:
     where: ci.yml product
     status: exists
 
+  - id: beta-release-manifest
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [linux-x64]
+    runner: local
+    triggers: [build/release-manifest.ps1, build/test-release-manifest.ps1, build/app-channels.ps1]
+    command: pwsh -NoProfile -File build/test-release-manifest.ps1
+    where: ci.yml light
+    status: exists
+
   - id: build-scripts
     kind: unit
     ring: 1
