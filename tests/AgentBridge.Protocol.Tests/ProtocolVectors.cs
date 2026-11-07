@@ -53,6 +53,7 @@ public static class ProtocolVectors
         Manage(catalog.File("manage.json", "v1-sessions.md", "Restarting a machine and repairing its hooks from a person's other device (#801)."));
         Usage(catalog.File("usage.json", "v1-usage.md", "How much of each agent's allowance is gone."));
         History(catalog.File("history.json", "v1-history.md", "A session's earlier turns, a page at a time, for the conversation pane."));
+        AgentPrincipals(catalog.File("agent-principals.json", "local-pipe.md#agent-principals-agenthello", "An agent session opening its local pipe connection as itself (Windows, local pipe only)."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
     }
@@ -941,5 +942,13 @@ public static class ProtocolVectors
         f.Record<UsageReport>(Host)
             .Valid("two-agents", new UsageReport([reading, new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, Windows = [new UsageWindow { Key = "weekly", Label = "Weekly", Percent = 90 }], MeasuredAt = T0 }]))
             .Valid("none", UsageReport.Empty);
+    }
+
+    static void AgentPrincipals(VectorFileBuilder f)
+    {
+        f.Record<AgentHelloRequest>(Client)
+            .Valid("a-token", new AgentHelloRequest { Token = AgentProtocol.TokenPrefix + Repeat('A', 43) });
+        f.Record<AgentHelloResult>(Host)
+            .Valid("a-reader", new AgentHelloResult("agent:machine1/session-1", AgentProtocol.ScopeRead));
     }
 }
