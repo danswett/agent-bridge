@@ -161,10 +161,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     so no client offers what would be refused; a field heading the
     console wraps mid-word is refused rather than typed into (#848). With more than one
     field, the tab bar read at the first field, before any key, vouches for every later
-    field's width and characters: a bar too wide for the window shows only some labels,
-    between arrows, and is refused there; one that fits holds every label, so no later
-    heading can wrap; and a character the console draws other than as written is drawn so
-    in the bar too, and refused there.
+    field's width and characters: one that fits holds every label, so no later heading can
+    wrap, and a character the console draws other than as written is drawn so in the bar
+    too, and refused there. A bar too wide for the console shows only the labels around the
+    field being answered, between arrows ("←" when labels are hidden before them, "→" when
+    after, `Da`'s `Hfn` window), and is taken only as exactly such a window at that field,
+    and only while every field's heading fits on a row of the frame; each later field's own
+    heading is still read before its keys. A six-field form with long titles at 102 columns
+    showed two labels and "→", and every answer was refused at its first read (#1123).
     What cannot be known beforehand (a permission prompt opening over a later field, or a
     long field scrolling the form's heading off a short window) still stops the keys there:
     the answer is then `unconfirmed`, and its reason names the fields that were answered,
@@ -207,8 +211,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     count taken too early can only send the words' Enter early, behind the words, which is
     reported `typed`, not `delivered`; rows are compared whole, so an animated form would be
     refused rather than typed into; a form drawn taller than the console's window, its
-    heading or hints scrolled out of sight, is stopped rather than typed into, and so is a
-    form whose tab bar is too wide to name every field.
+    heading or hints scrolled out of sight, is stopped rather than typed into.
   * An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.

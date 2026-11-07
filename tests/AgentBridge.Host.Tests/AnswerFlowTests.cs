@@ -1464,6 +1464,120 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains("rereads=0 steady=yes", (await AttemptLineAsync()));
     }
 
+    // The six fields of a form refused live at its first read (#1123): titles too
+    // long together for the console, so Copilot CLI 1.0.105's tab bar showed only some.
+    static readonly string[] SixTitles =
+    [
+        "1. Automatic diagnostics default", "1b. Who answers the EEA/UK personal-data question?", "2. Part-answered forms",
+        "3. Narrower key check", "4. Structured channel (if the trial works)", "5. CLI updates for launched sessions",
+    ];
+
+    const string SixMessage = "Five decisions from the #1135 host answer delivery design. My recommendation is the default on each.";
+
+    async Task<string[]> AskSixAsync(object answer)
+    {
+        string[] names = ["diagnostics", "eea", "partial", "keys", "channel", "updates"];
+        string[] Options(int n) => [.. Enumerable.Range(0, n).Select(i => $"Option {i + 1}")];
+        await AskFieldsAsync(new
+        {
+            diagnostics = new { type = "string", title = SixTitles[0], description = "Whether a report is sent.", @enum = Options(2) },
+            eea = new { type = "string", title = SixTitles[1], description = "Who is asked.", @enum = Options(3) },
+            partial = new { type = "string", title = SixTitles[2], description = "What the host does.", @enum = Options(4) },
+            keys = new { type = "string", title = SixTitles[3], description = "How narrow.", @enum = Options(2) },
+            channel = new { type = "string", title = SixTitles[4], description = "Which channel.", @enum = Options(3) },
+            updates = new { type = "string", title = SixTitles[5], description = "When to update.", @enum = Options(2) },
+        }, 6, answer, SixMessage);
+        return names;
+    }
+
+    // The form as Copilot CLI 1.0.105 draws it in a console `columns` wide: its rules across it,
+    // the question wrapped, and the tab bar `bar` draws at the field it is at.
+    List<string> SixScreen(string[] names, int columns, Func<int, string> bar)
+    {
+        var rows = FieldsScreen(names, message: SixMessage, labels: SixTitles, wrap: columns - 4);
+        var at = Array.FindIndex(SixTitles, t => rows.Contains($" {t}:"));
+        if (at < 0) { return rows; }
+        var whole = $" {string.Join("   ", SixTitles)}";
+        return [.. rows.Select(r => r.Trim('\u2500').Length == 0 && r.Length > 0 ? new string('\u2500', columns - 2) : r == whole ? $" {bar(at)}" : r)];
+    }
+
+    // `Da`'s bar at field `at` in a console `columns` wide: as many labels as `$fn` fits around
+    // it, in the window `Hfn` centres on it, an arrow on each side with labels hidden, counted
+    // again with the arrows' room taken out; each label ` <label> `, gaps of one, the selected
+    // one `[<label>]` where colour is unavailable.
+    static string CliBar(string[] labels, int at, int columns, bool marked)
+    {
+        int Fits(int room)
+        {
+            var (used, n, left, right) = (labels[at].Length + 2, 1, at - 1, at + 1);
+            while (left >= 0 || right < labels.Length)
+            {
+                if (right < labels.Length && used + labels[right].Length + 3 <= room) { (used, n, right) = (used + labels[right].Length + 3, n + 1, right + 1); }
+                else { right = labels.Length; }
+                if (left >= 0 && used + labels[left].Length + 3 <= room) { (used, n, left) = (used + labels[left].Length + 3, n + 1, left - 1); }
+                else { left = -1; }
+            }
+            return n;
+        }
+        (int Start, int End) Window(int n)
+        {
+            if (labels.Length <= n) { return (0, labels.Length); }
+            var start = Math.Clamp(at - n / 2, 0, labels.Length - n);
+            return (start, start + n);
+        }
+        var room = columns - 4;
+        var (s, e) = Window(Fits(room));
+        if (s > 0 || e < labels.Length) { (s, e) = Window(Fits(room - (s > 0 ? 2 : 0) - (e < labels.Length ? 2 : 0))); }
+        var shown = string.Join(" ", labels[s..e].Select((l, i) => marked && s + i == at ? $"[{l}]" : $" {l} "));
+        return $"{(s > 0 ? "\u2190 " : "")}{shown}{(e < labels.Length ? " \u2192" : "")}  ";
+    }
+
+    [Theory]
+    // In colour, and with the field being answered in the bar's brackets where colour is
+    // unavailable.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_six_field_form_whose_tab_bar_shows_only_the_labels_around_each_field_is_answered_field_by_field(bool marked)
+    {
+        // At 102 columns the six titles do not fit across the bar: it shows two of them and an
+        // arrow for those hidden, and every answer to this form was refused at its first read
+        // (#1123). Each field is still read by its own heading before its keys.
+        var answer = new { diagnostics = "Option 1", eea = "Option 2", partial = "Option 3", keys = "Option 1", channel = "Option 2", updates = "Option 1" };
+        var names = await AskSixAsync(answer);
+        injector.Screen = () => SixScreen(names, 102, at => CliBar(SixTitles, at, 102, marked));
+        Assert.Contains("\u2192", CliBar(SixTitles, 0, 102, marked));
+        Assert.Contains("\u2190", CliBar(SixTitles, 5, 102, marked));
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(6, Enters());
+        Assert.Contains("check=none", (await AttemptLineAsync()));
+    }
+
+    [Theory]
+    // Labels hidden with no arrow to say so, and a window that is not the one the CLI draws at
+    // this field (the next field's labels, the field being answered not among them).
+    [InlineData("no-arrow")]
+    [InlineData("elsewhere")]
+    public async Task A_tab_bar_that_is_not_the_window_drawn_at_this_field_gets_no_keys(string bar)
+    {
+        var answer = new { diagnostics = "Option 1", eea = "Option 2", partial = "Option 3", keys = "Option 1", channel = "Option 2", updates = "Option 1" };
+        var names = await AskSixAsync(answer);
+        injector.Screen = () => SixScreen(names, 102, at => bar == "no-arrow"
+            ? $" {SixTitles[0]}   {SixTitles[1]}  "
+            : $"\u2190  {SixTitles[2]}    {SixTitles[3]}   \u2192  ");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("no longer showed the question's form", reason);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=bar@", (await AttemptLineAsync()));
+    }
+
     [Theory]
     // A window too narrow for the key hints wraps them, between two of them, inside one, or
     // inside a word of one (#910): they still say the form is at its field.

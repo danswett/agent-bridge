@@ -22,12 +22,13 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //     (`Dxn`, `Oxn`, `Nxn`) as `<title ?? name>:`, a text or number box (`Fxn`, `Lxn`) as
 //     `<title ?? name>` with no colon (and " * <error>" beside it while its input is invalid).
 //     The bar shows every label only while they all fit across the window; otherwise it
-//     shows those around the selected one, between arrows (`Da`), which the bar check refuses
-//     at the first field, before any key. So the bar read there vouches for every later
-//     field's title before the first key: one that fits holds every label and more, so each
-//     heading, drawn in the same column, fits on its row too; and a title the console draws
-//     other than as written (a line break, a character it shows otherwise) is drawn so in the
-//     bar too, and refused there.
+//     shows those around the selected one, between arrows (`Da`, read in Bars). Whole, the bar
+//     read at the first field vouches for every later field's title before the first key:
+//     it holds every label and more, so each heading, drawn in the same column, fits on its
+//     row too; and a title the console draws other than as written (a line break, a character
+//     it shows otherwise) is drawn so in the bar too, and refused there. Windowed, it is taken
+//     only while every title fits on a row of the frame, and each later field's own heading is
+//     still read before its keys.
 //   * Under it, the key hints (`Ft`, joined by " · ", wrapping): "enter accept", "tab next"
 //     unless at the last field, "shift+tab prev" unless at the first, "ctrl+d decline",
 //     "esc cancel".
@@ -254,18 +255,18 @@ public static partial class CopilotFormScreen
             // may be in brackets of the bar's own, where colour is unavailable. Spaces are left
             // out as in the question: the bar (`Da`) measures itself against the console's width,
             // not the frame's, so it can wrap inside the frame, and where it breaks is the
-            // renderer's. Wrapped, it still vouches for every later field's heading only while
-            // each fits on a row of the frame, so it is taken so only then.
-            var labels = form.Fields.Select(f => f.Label!).ToList();
-            var plain = Squeeze(string.Concat(labels));
-            var marked = Squeeze(string.Concat(labels.Select((l, i) => i == index ? $"[{l}]" : l)));
+            // renderer's. Too wide for the console, it shows only the labels around the field
+            // being answered, between arrows (Bars). Wrapped or windowed, it still vouches for
+            // every later field's heading only while each fits on a row of the frame, so it is
+            // taken so only then.
+            var bars = Bars([.. form.Fields.Select(f => f.Label!)], index);
             at = Next(rows, at);
             var bar = "";
             var barRows = 0;
-            while (bar != plain && bar != marked)
+            while (!bars.TryGetValue(bar, out _))
             {
                 var more = at < rows.Count ? bar + Squeeze(rows[at]) : bar;
-                if (more.Length == bar.Length || !plain.StartsWith(more, StringComparison.Ordinal) && !marked.StartsWith(more, StringComparison.Ordinal))
+                if (more.Length == bar.Length || !bars.Keys.Any(b => b.StartsWith(more, StringComparison.Ordinal)))
                 {
                     return found.Fail(FormCheck.Bar, at, NotForm);
                 }
@@ -273,7 +274,7 @@ public static partial class CopilotFormScreen
                 at++;
             }
             var inside = top.Trim(' ').Length - 2;
-            if (barRows > 1 && form.Fields.Any(f => Headed(f).Length > inside)) { return found.Fail(FormCheck.Bar, at - 1, NotForm); }
+            if ((barRows > 1 || bars[bar]) && form.Fields.Any(f => Headed(f).Length > inside)) { return found.Fail(FormCheck.Bar, at - 1, NotForm); }
         }
         at = Next(rows, at);
         if (at >= rows.Count || Collapse(rows[at]) != heading) { return found.Fail(FormCheck.FieldHeading, at, off); }
@@ -308,6 +309,38 @@ public static partial class CopilotFormScreen
     }
 
     static int Indent(string row) => row.Length - row.TrimStart(' ').Length;
+
+    // Every way the tab bar (`Da`) can draw the form's labels at field `index`, with its spaces
+    // left out, each with whether it is windowed. Each label ` <label> ` (`wlo`), the field being
+    // answered `[<label>]` where colour is unavailable. Every label while they all fit across the
+    // console (`$fn` counts how many do around the selected one); otherwise `n` of them, the
+    // window `Hfn` centres on the selected one (from `index - n / 2`, kept inside the list), "←"
+    // before it when labels are hidden on the left and "→" after it when on the right. A window
+    // is one of these alone: the selected field in it, the arrows saying exactly which ends are
+    // hidden, and the labels in it in the form's order. Six long titles at 102 columns showed two
+    // and "→", and every answer was refused at its first read (#1123). A label with an arrow of
+    // its own could read as a window it is not, so such a form's bar is taken only whole.
+    static Dictionary<string, bool> Bars(IReadOnlyList<string> labels, int index)
+    {
+        string Run(int start, int end, bool mark) =>
+            Squeeze(string.Concat(labels.Skip(start).Take(end - start).Select((l, i) => mark && start + i == index ? $"[{l}]" : l)));
+        var bars = new Dictionary<string, bool>(StringComparer.Ordinal)
+        {
+            [Run(0, labels.Count, false)] = false,
+            [Run(0, labels.Count, true)] = false,
+        };
+        if (labels.Any(l => l.Contains('\u2190', StringComparison.Ordinal) || l.Contains('\u2192', StringComparison.Ordinal))) { return bars; }
+        for (var n = 1; n < labels.Count; n++)
+        {
+            var start = Math.Clamp(index - n / 2, 0, labels.Count - n);
+            var end = start + n;
+            foreach (var mark in new[] { false, true })
+            {
+                bars.TryAdd((start > 0 ? "\u2190" : "") + Run(start, end, mark) + (end < labels.Count ? "\u2192" : ""), true);
+            }
+        }
+        return bars;
+    }
 
     // The field's heading as drawn (CopilotFieldSchema.Heading).
     static string Headed(CopilotField field) =>
