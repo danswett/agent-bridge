@@ -424,6 +424,11 @@ const NOT_REPLAYED = {
   HistoryPart: 'the PWA does not page a session\'s history yet (#292)',
   DelegateEvent: 'the PWA does not page a session\'s history yet (#292)',
 
+  // restore.run's PWA half is slice 2 of #948.
+  RestoreRunRequest: 'the PWA does not send restore.run yet (#948 slice 2)',
+  RestoreRunSession: 'the PWA does not read restore.run yet (#948 slice 2)',
+  RestoreRunResult: 'the PWA does not read restore.run yet (#948 slice 2)',
+  RestoreRunProgress: 'the PWA does not read restore.run yet (#948 slice 2)',
 };
 
 // ---- the replay ----

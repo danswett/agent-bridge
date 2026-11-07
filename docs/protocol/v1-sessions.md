@@ -91,6 +91,7 @@ with the wrong type):
 | `DiscoveryHeld` | `reason` | `agents` (whole) |
 | `SessionList`, `SessionsSynced`, `DiscoveryChanged` | | `discoveryHeld` |
 | `SessionsSynced` | `live` (whole) | |
+| `RestoreRunResult` | `sessions` (whole) | |
 | `SessionPatch` | `id`, `base`, `set`, `append`, `subagents` | |
 | `SubagentsPatch` | `set`, `remove`, `order` (each whole) | |
 | `session.remove` data | `id` | |
@@ -100,7 +101,7 @@ with the wrong type):
 | `LaunchAgent` ([v1-launch.md](v1-launch.md)) | `id` | |
 | `LaunchWorkspace` | `label` | |
 | `ResumableSession` | `id`, `launcher` | |
-| `RestoreSession` | `id` | |
+| `RestoreSession`, `RestoreRunSession` | `id` | |
 | `LaunchDefaults`, `LaunchedWith` | | `permissions` |
 | `LaunchedTransfer` | `from` | |
 | `TrustQuestion` | | `id`, `agent`, `kind`, `folder`, `root`, `rootNote`, `warning`, `answerable` |

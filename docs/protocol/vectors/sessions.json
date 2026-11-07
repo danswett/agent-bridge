@@ -6126,6 +6126,360 @@
       ],
       "refused": []
     },
+    "RestoreRunRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "two-sessions-with-progress",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "offer": "2026-10-28T04:25:43.182Z",
+            "sessions": [
+              "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d"
+            ],
+            "progress": true
+          }
+        },
+        {
+          "name": "one-session",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "offer": "2026-10-28T04:25:43.182Z",
+            "sessions": [
+              "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b"
+            ]
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-request",
+          "json": {
+            "offer": "2026-10-28T04:25:43.182Z",
+            "sessions": [
+              "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d"
+            ],
+            "progress": true
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-offer",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "sessions": [
+              "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d"
+            ],
+            "progress": true
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-sessions",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "offer": "2026-10-28T04:25:43.182Z",
+            "progress": true
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-request",
+          "json": {
+            "request": 42,
+            "offer": "2026-10-28T04:25:43.182Z",
+            "sessions": [
+              "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d"
+            ],
+            "progress": true
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "RestoreRunSession": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "started",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "outcome": "started"
+          }
+        },
+        {
+          "name": "refused-no-longer-offered",
+          "json": {
+            "id": "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d",
+            "outcome": "refused",
+            "reason": "no longer offered"
+          }
+        },
+        {
+          "name": "an-unknown-outcome-reads-as-unconfirmed",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "outcome": "queued"
+          },
+          "reads": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "outcome": "unconfirmed"
+          }
+        },
+        {
+          "name": "missing-outcome",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b"
+          },
+          "reads": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "outcome": "unconfirmed"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-id",
+          "json": {
+            "outcome": "started"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-id",
+          "json": {
+            "id": 42,
+            "outcome": "started"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "RestoreRunResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "restored",
+          "json": {
+            "outcome": "restored",
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "outcome": "started"
+              }
+            ]
+          }
+        },
+        {
+          "name": "partial",
+          "json": {
+            "outcome": "partial",
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "outcome": "started"
+              },
+              {
+                "id": "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d",
+                "outcome": "refused",
+                "reason": "no longer offered"
+              }
+            ]
+          }
+        },
+        {
+          "name": "busy-nothing-tried",
+          "json": {
+            "outcome": "busy",
+            "reason": "another restore is under way",
+            "sessions": []
+          }
+        },
+        {
+          "name": "an-unknown-outcome-reads-as-partial",
+          "json": {
+            "outcome": "later"
+          },
+          "reads": {
+            "outcome": "partial",
+            "sessions": []
+          }
+        },
+        {
+          "name": "missing-outcome",
+          "json": {
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "outcome": "started"
+              }
+            ]
+          },
+          "reads": {
+            "outcome": "partial",
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "outcome": "started"
+              }
+            ]
+          }
+        },
+        {
+          "name": "wrong-type-reason",
+          "json": {
+            "outcome": "restored",
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "outcome": "started"
+              }
+            ],
+            "reason": 42
+          },
+          "reads": {
+            "outcome": "restored",
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "outcome": "started"
+              }
+            ]
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "a-session-entry-without-an-id",
+          "json": {
+            "outcome": "partial",
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "outcome": "started"
+              },
+              {
+                "outcome": "started"
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-session-entry-that-is-not-an-object",
+          "json": {
+            "outcome": "partial",
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "outcome": "started"
+              },
+              7
+            ]
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "RestoreRunProgress": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "first-of-two",
+          "json": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "outcome": "started",
+            "done": 1,
+            "of": 2
+          }
+        },
+        {
+          "name": "a-session-refused",
+          "json": {
+            "session": "7a21c3d4-5e6f-4a1b-9c2d-3e4f5a6b7c8d",
+            "outcome": "refused",
+            "done": 2,
+            "of": 2
+          }
+        },
+        {
+          "name": "missing-session",
+          "json": {
+            "outcome": "started",
+            "done": 1,
+            "of": 2
+          },
+          "reads": {
+            "session": "",
+            "outcome": "started",
+            "done": 1,
+            "of": 2
+          }
+        },
+        {
+          "name": "missing-outcome",
+          "json": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "done": 1,
+            "of": 2
+          },
+          "reads": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "outcome": "unconfirmed",
+            "done": 1,
+            "of": 2
+          }
+        },
+        {
+          "name": "missing-done",
+          "json": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "outcome": "started",
+            "of": 2
+          },
+          "reads": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "outcome": "started",
+            "done": 0,
+            "of": 2
+          }
+        },
+        {
+          "name": "missing-of",
+          "json": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "outcome": "started",
+            "done": 1
+          },
+          "reads": {
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "outcome": "started",
+            "done": 1,
+            "of": 0
+          }
+        },
+        {
+          "name": "wrong-type-session",
+          "json": {
+            "session": 42,
+            "outcome": "started",
+            "done": 1,
+            "of": 2
+          },
+          "reads": {
+            "session": "",
+            "outcome": "started",
+            "done": 1,
+            "of": 2
+          }
+        }
+      ],
+      "refused": []
+    },
     "ListRequest": {
       "direction": "client",
       "valid": [
