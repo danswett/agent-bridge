@@ -1656,9 +1656,11 @@ Nothing is built before #55 and AP5 (AP11, §11.2).
     detected (§5.8), and the design has no rollback counter or host-signed epoch for the taint
     store: Q53 (owner decision, 2026-11-03) declined the off-machine anchor that would be one. So
     if the store is rolled back to before a member's tainting read, the record that would keep
-    it paused is gone, and **Resume them** can re-admit a member that read hostile content. This
-    is the residual §5.8 already accepts for O (Q53), and H1 (owner decision, 2026-11-05) chose
-    re-admission with presence over ending the group at every restart. No new
+    it paused is gone, and **Resume them** can re-admit a member that read hostile content.
+    Product's #912 decision accepts this residual for the group, under H1 (owner decision,
+    2026-11-05), which chose re-admission with presence over ending the group at every restart.
+    Q53 accepts running without an off-machine anchor, with O still failing closed after a
+    restore; it does not accept re-admitting a possibly compromised conversation. No new
     mechanism is added here. The confirm says so in words: "The machine can't prove what these
     sessions read before it restarted."
   * **Open follow-up.** Make Resume's restart exemption require a rollback-detecting anchor (the
