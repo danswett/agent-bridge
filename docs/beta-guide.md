@@ -15,8 +15,8 @@ are.
 
 ## Install on Windows
 
-1. Open the newest pre-release (v0.1.3215 at the time of writing) at
-   <https://github.com/danswett/agent-bridge/releases/tag/v0.1.3215>
+1. Open the newest pre-release at
+   <https://github.com/danswett/agent-bridge/releases>
    **[confirm: a stable download link replaces this when #735 lands]**.
 2. Download the installer for your PC:
 
@@ -31,11 +31,11 @@ are.
 3. Run it. Windows shows a blue box, **Windows protected your PC**. This is expected: the beta
    installer is not signed yet, and Windows warns about any installer it does not recognize.
    Click **More info**, then **Run anyway**.
-4. Slipgates opens. Under **Agents on this machine** it shows whether your coding tools are
-   ready and offers **Set up** or **Repair** for the hooks. Slipgates doesn't install your coding
-      CLI, sign you in to it or trust your project folder; do those yourself first. If **Set up**
-      can't make an agent ready, tell us which step it stopped at. The app keeps itself up to date and offers **Restart to update**
-   when there is a newer version.
+4. Slipgates opens. In **Settings**, the **Agents on this machine** section shows whether your
+   coding tools are ready and offers **Set up** or **Repair** for the hooks. Slipgates doesn't
+   install your coding CLI, sign you in to it or trust your project folder; do those yourself
+   first. If **Set up** can't make an agent ready, tell us which step it stopped at. The app
+   keeps itself up to date and offers **Restart to update** when there is a newer version.
 
 ## Connect your phone
 
@@ -71,5 +71,9 @@ sign-in codes.
 ## Uninstall
 
 Settings > Apps > Installed apps > Slipgates > **Uninstall**. This stops the background service and
-removes what Slipgates added: its scheduled task, its hooks in your CLIs and its app data. It
-never removes a CLI or signs you out of an account. Your project files are untouched.
+removes what Slipgates added: its scheduled task, its hooks in your CLIs and its install folder.
+It never removes a CLI or signs you out of an account. Your project files are untouched.
+
+Your profile (device key, account, settings and logs) stays in `%LOCALAPPDATA%\AgentBridge`, so a
+reinstall picks up where you left off. To remove it too, close Slipgates, uninstall, then delete
+that folder.
