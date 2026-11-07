@@ -38,6 +38,50 @@ public static partial class CopilotFormScreen
 {
     const string Heading = "Copilot needs information.";
 
+    // Recognition only: neither result proves the box empty or authorizes a key.
+    internal enum PinnedOtherView { Unrecognized, PlaceholderOrDraft, TextOrDraft }
+
+    // The one pinned layout captured for 1.0.105: the open Other label inside the form,
+    // followed immediately by the rail box below its bottom rule. The capture did not
+    // distinguish the placeholder from an identical draft, or establish that a blank row
+    // is empty. Other layouts and multi-row boxes remain unrecognized.
+    internal static PinnedOtherView PinnedOther(IReadOnlyList<string> rows, CopilotForm form)
+    {
+        if (form.Fields is not [{ Kind: CopilotFieldKind.Choice }]) { return PinnedOtherView.Unrecognized; }
+        var headed = Enumerable.Range(0, rows.Count).Where(r => Heads(rows, r)).ToList();
+        if (headed.Count != 1) { return PinnedOtherView.Unrecognized; }
+        var rule = rows[headed[0] - 1].TrimEnd(' ');
+        var bottom = headed[0] + 1;
+        while (bottom < rows.Count && rows[bottom].TrimEnd(' ') != rule) { bottom++; }
+        if (bottom + 3 >= rows.Count || rows.Skip(bottom + 4).Any(r => r.Trim(' ').Length != 0)) { return PinnedOtherView.Unrecognized; }
+        var frame = rows.Take(bottom + 1).ToList();
+        if (Locate(frame, form, 0, out var field, out var hints) is not null) { return PinnedOtherView.Unrecognized; }
+        if (frame.Skip(field + 1).Take(hints - field - 1).Count(r => r.Trim(' ') == "\u276F Other (type your answer below)") != 1)
+        {
+            return PinnedOtherView.Unrecognized;
+        }
+        var indent = rule.Length - rule.TrimStart(' ').Length;
+        var width = rule.Length - indent;
+        if (width < 2) { return PinnedOtherView.Unrecognized; }
+        var prefix = new string(' ', indent);
+        if (rows[bottom + 1].TrimEnd(' ') != prefix + "\u257B" + new string('\u2584', width - 1)
+            || rows[bottom + 3].TrimEnd(' ') != prefix + "\u2579" + new string('\u2580', width - 1))
+        {
+            return PinnedOtherView.Unrecognized;
+        }
+        var textRow = rows[bottom + 2].TrimEnd(' ');
+        var textPrefix = prefix + "\u2503 ";
+        if (!textRow.StartsWith(textPrefix, StringComparison.Ordinal)) { return PinnedOtherView.Unrecognized; }
+        var text = textRow[textPrefix.Length..];
+        if (text.Length == 0 || text.Length > width - 2 || text.Any(char.IsControl)) { return PinnedOtherView.Unrecognized; }
+        if (text != OtherPlaceholder && (OtherPlaceholder.StartsWith(text, StringComparison.Ordinal)
+            || text.EndsWith('\u2026') && OtherPlaceholder.StartsWith(text[..^1], StringComparison.Ordinal)))
+        {
+            return PinnedOtherView.Unrecognized;
+        }
+        return text == "Type your answer..." ? PinnedOtherView.PlaceholderOrDraft : PinnedOtherView.TextOrDraft;
+    }
+
     // Null when the rows show this form at field `index`; otherwise why not, said as a reason
     // for stopping before the next key. The parts are looked for in the order the CLI draws
     // them, each below the last.

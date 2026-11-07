@@ -705,14 +705,17 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         ? ["    a", "    b", "    c", "  ❯ Other (type your answer below)"]
         : ["  ❯ a", "    b", "    c", "    Other (type your answer)"]);
 
-    [Fact]
-    public async Task An_Other_answer_to_a_lone_list_is_refused_before_any_key_saying_why_as_the_list_already_does()
+    [Theory]
+    [InlineData("Type your answer...")]
+    [InlineData("")]
+    [InlineData("a local draft")]
+    public async Task An_Other_answer_to_a_lone_list_is_refused_before_any_key_saying_why_as_the_list_already_does(string box)
     {
         // Live, the words go into a box drawn apart from the form, which no key is held to; the
         // host typed them into the form it modelled, which the session never draws, and either
         // stopped with Other left open or withheld the Enter. The listing shows Other unavailable,
         // and the refusal carries the same reason, as a code and its sentence (#908).
-        injector.Screen = () => OtherScreen(injector.Plans.Count > 0);
+        injector.Screen = () => [.. OtherScreen(open: true), "\u257B\u2584\u2584\u2584", "\u2503 " + box, "\u2579\u2580\u2580\u2580"];
         var ch = await OpenAsync();
 
         var result = await AnswerResultAsync(ch, new { pick = new { other = OtherWords } }, Guid.NewGuid().ToString(), question: "q1");
