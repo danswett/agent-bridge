@@ -123,16 +123,25 @@ function New-AppNotices(
             $provenancePath = Get-AppNoticePath $RepositoryRoot $provenanceRelative
             $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json -AsHashtable
             $repository = $metadata.SelectSingleNode('*[local-name()="repository"]')
+            $declarationMatches = if ($licenseType -ceq 'expression') {
+                $licenseValue -and $provenance['licenseExpression'] -ceq $licenseValue -and
+                $provenance['repositoryCommit'] -cmatch '^[0-9a-f]{40}$' -and
+                $provenance['repositoryUrl'] -and $repository -and
+                $repository.GetAttribute('type') -ceq 'git' -and
+                $repository.GetAttribute('url') -ceq $provenance['repositoryUrl'] -and
+                $repository.GetAttribute('commit') -ceq $provenance['repositoryCommit']
+            } elseif (-not $license -and $licenseUrl) {
+                $copyright = $metadata.SelectSingleNode('*[local-name()="copyright"]')
+                $copyrightValue = if ($copyright) { $copyright.InnerText } else { '' }
+                $provenance['licenseUrl'] -ceq $licenseUrl -and
+                $provenance['noticeSourceUrl'] -ceq $licenseUrl -and
+                $provenance['copyright'] -ceq $copyrightValue -and -not $provenance['licenseExpression']
+            } else { $false }
             if ($provenance['schemaVersion'] -ne 1 -or $provenance['packageId'] -ine $id -or
-                $provenance['packageVersion'] -cne $packageVersion -or $licenseType -cne 'expression' -or
-                -not $licenseValue -or $provenance['licenseExpression'] -cne $licenseValue -or
+                $provenance['packageVersion'] -cne $packageVersion -or -not $declarationMatches -or
                 $provenance['packageSha512'] -cnotmatch '^[0-9a-f]{128}$' -or
                 $provenance['noticeSha256'] -cnotmatch '^[0-9a-f]{64}$' -or
-                $provenance['repositoryCommit'] -cnotmatch '^[0-9a-f]{40}$' -or
-                -not $provenance['repositoryUrl'] -or -not $provenance['noticeSourceUrl'] -or
-                -not $repository -or $repository.GetAttribute('type') -cne 'git' -or
-                $repository.GetAttribute('url') -cne $provenance['repositoryUrl'] -or
-                $repository.GetAttribute('commit') -cne $provenance['repositoryCommit']) {
+                -not $provenance['noticeSourceUrl']) {
                 throw "upstream notice provenance does not identify $id/$packageVersion and its declared licence/repository"
             }
             $archive = Get-AppNoticePath $folder "$($id.ToLowerInvariant()).$($packageVersion.ToLowerInvariant()).nupkg"
@@ -147,7 +156,7 @@ function New-AppNotices(
             $legal = @($notice, $provenancePath)
             $index.Add("`nPinned upstream notice for $id/$($packageVersion): $($provenance['noticeSourceUrl'])")
         }
-        if (-not $licenseValue) { Write-Warning "$id/$packageVersion has no declared licence; its bundled notices are not licence clearance" }
+        if (-not $licenseValue) { Write-Warning "$id/$packageVersion has no declared licence expression or file; its bundled notices are not licence clearance" }
         $packageFiles = @(foreach ($source in $legal) {
                 $relative = [IO.Path]::GetRelativePath($legalRoot, $source) -replace '\\', '/'
                 $source = Get-AppNoticePath $legalRoot $relative

@@ -1,2 +1,3 @@
 # Preserve the audited upstream notice verbatim, including whitespace and line endings.
 build/notices/markdig/0.43.0/license.txt -text -whitespace
+build/notices/microsoft.windows.sdk.net.ref/10.0.22621.57/sdk_license.rtf -text -whitespace

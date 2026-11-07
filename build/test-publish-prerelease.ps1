@@ -1288,7 +1288,8 @@ Check 'Packages cannot substitute metadata, omit declared terms or escape their 
 }
 
 Check 'Offline upstream notices preserve exact bytes and refuse unpinned packages, metadata or notice material' {
-    foreach ($case in 'valid', 'archive', 'metadata', 'notice', 'version', 'unreviewed') {
+    foreach ($case in 'valid', 'archive', 'metadata', 'notice', 'version', 'unreviewed',
+        'url-valid', 'url-metadata', 'url-source', 'url-copyright', 'url-expression') {
         Reset
         . (Join-Path $PSScriptRoot 'app-notices.ps1')
         $publish = Join-Path $scratch 'publish'
@@ -1304,18 +1305,35 @@ Check 'Offline upstream notices preserve exact bytes and refuse unpinned package
             ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $publish 'app.deps.json')
         $nuspec = Join-Path $folder 'notice.curated.nuspec'
         $archive = Join-Path $folder 'notice.curated.1.0.0.nupkg'
-        $notice = Join-Path $upstream 'license.txt'
+        $urlOnly = $case.StartsWith('url-')
+        $noticeName = if ($urlOnly) { 'license.rtf' } else { 'license.txt' }
+        $notice = Join-Path $upstream $noticeName
         $provenancePath = Join-Path $upstream 'provenance.json'
-        $metadata = "<package><metadata><id>Notice.Curated</id><version>1.0.0</version><license type=`"expression`">BSD-2-Clause</license><repository type=`"git`" url=`"https://github.com/example/notice`" commit=`"$commit`" /></metadata></package>"
+        $declaration = if ($urlOnly) {
+            '<licenseUrl>https://example.test/SDK-LICENSE.rtf</licenseUrl><copyright>Copyright fixture</copyright>'
+        } else {
+            "<license type=`"expression`">BSD-2-Clause</license><repository type=`"git`" url=`"https://github.com/example/notice`" commit=`"$commit`" />"
+        }
+        $metadata = "<package><metadata><id>Notice.Curated</id><version>1.0.0</version>$declaration</metadata></package>"
         Set-Content -LiteralPath $nuspec $metadata
         Set-Content -LiteralPath $archive 'Exact archive fixture bytes, hashed but never unpacked or executed.'
-        [IO.File]::WriteAllBytes($notice, [Text.Encoding]::UTF8.GetBytes("Copyright fixture`nVerbatim terms and disclaimer. `n"))
+        $noticeText = if ($urlOnly) { "{\rtf1\ansi Copyright fixture\par Verbatim terms and disclaimer. }`n" } else { "Copyright fixture`nVerbatim terms and disclaimer. `n" }
+        [IO.File]::WriteAllBytes($notice, [Text.Encoding]::UTF8.GetBytes($noticeText))
         $provenance = @{
             schemaVersion = 1; packageId = 'Notice.Curated'; packageVersion = '1.0.0'
-            licenseExpression = 'BSD-2-Clause'; packageSha512 = (Get-FileHash $archive -Algorithm SHA512).Hash.ToLowerInvariant()
-            repositoryUrl = 'https://github.com/example/notice'; repositoryCommit = $commit
-            noticeFile = 'license.txt'; noticeSourceUrl = "https://github.com/example/notice/blob/$commit/license.txt"
+            packageSha512 = (Get-FileHash $archive -Algorithm SHA512).Hash.ToLowerInvariant()
+            noticeFile = $noticeName
             noticeSha256 = (Get-FileHash $notice -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        if ($urlOnly) {
+            $provenance.licenseUrl = 'https://example.test/SDK-LICENSE.rtf'
+            $provenance.noticeSourceUrl = $provenance.licenseUrl
+            $provenance.copyright = 'Copyright fixture'
+        } else {
+            $provenance.licenseExpression = 'BSD-2-Clause'
+            $provenance.repositoryUrl = 'https://github.com/example/notice'
+            $provenance.repositoryCommit = $commit
+            $provenance.noticeSourceUrl = "https://github.com/example/notice/blob/$commit/license.txt"
         }
         $expectedNotice = [Convert]::ToBase64String([IO.File]::ReadAllBytes($notice))
         switch ($case) {
@@ -1323,19 +1341,27 @@ Check 'Offline upstream notices preserve exact bytes and refuse unpinned package
             'metadata' { Set-Content -LiteralPath $nuspec ($metadata.Replace('BSD-2-Clause', 'MIT')) }
             'notice' { Add-Content -LiteralPath $notice 'changed' }
             'version' { $provenance.packageVersion = '1.0.1' }
+            'url-metadata' { Set-Content -LiteralPath $nuspec ($metadata.Replace('SDK-LICENSE.rtf', 'OTHER-LICENSE.rtf')) }
+            'url-source' { $provenance.noticeSourceUrl = 'https://example.test/OTHER-LICENSE.rtf' }
+            'url-copyright' { $provenance.copyright = 'Different copyright' }
+            'url-expression' { Set-Content -LiteralPath $nuspec ($metadata.Replace('<licenseUrl>', '<license type="expression">MIT</license><licenseUrl>')) }
         }
         $provenance | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $provenancePath
         if ($case -eq 'unreviewed') { Remove-Item -LiteralPath $provenancePath }
         $failure = $null
         try { New-AppNotices $repositoryRoot $publish '0.1.600' 'win-x64' $commit $packageRoot }
         catch { $failure = $_.Exception.Message }
-        if ($case -eq 'valid') {
+        if ($case -in 'valid', 'url-valid') {
             Assert ($null -eq $failure) "reviewed upstream notice refused: $failure"
             $manifest = Get-AppNotices $publish '0.1.600' 'win-x64'
             $bundled = Join-Path $publish 'ThirdPartyNotices' 'packages' 'Notice.Curated' '1.0.0'
-            Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $bundled 'license.txt'))) -ceq $expectedNotice) 'upstream notice bytes changed'
+            Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $bundled $noticeName))) -ceq $expectedNotice) 'upstream notice bytes changed'
             Assert ((Get-FileHash (Join-Path $bundled 'provenance.json')).Hash -ceq (Get-FileHash $provenancePath).Hash) 'upstream provenance bytes changed'
             Assert ($manifest.packages[0].files.Count -eq 2) 'upstream notice or provenance omitted from the hashed inventory'
+            if ($urlOnly) {
+                Assert ($manifest.packages[0].licenseUrl -ceq $provenance.licenseUrl) 'package-declared licence URL lost'
+                Assert (-not $manifest.packages[0].licenseType -and -not $manifest.packages[0].licenseValue) 'URL-only terms were relabelled as a declared expression or file'
+            }
         } else {
             $expected = switch ($case) {
                 'archive' { '*upstream notice package hash mismatch*' }
@@ -1343,6 +1369,7 @@ Check 'Offline upstream notices preserve exact bytes and refuse unpinned package
                 'notice' { '*upstream notice hash mismatch*' }
                 'version' { '*upstream notice provenance does not identify*' }
                 'unreviewed' { '*has no restored notice files*' }
+                { $_ -in 'url-metadata', 'url-source', 'url-copyright', 'url-expression' } { '*upstream notice provenance does not identify*' }
             }
             Assert ($failure -like $expected) "wrong or missing upstream refusal for $case`: $failure"
         }

@@ -1124,7 +1124,14 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   identity, declared SPDX expression and repository URL/commit, the restored `.nupkg` SHA-512,
   and the upstream notice's SHA-256. The notice and provenance are bundled verbatim and hashed;
   no network lookup or SPDX-only fallback is allowed. Markdig 0.43.0 supplies its upstream
-  BSD-2-Clause notice this way. Different versions, unreviewed packages or changed material
+  BSD-2-Clause notice this way. A package declaring only a licence URL may instead pin the
+  material obtained through that exact declared URL: provenance must match the package's
+  licence URL and copyright, its notice source must be that URL, and both archive and notice
+  hashes are still mandatory. Microsoft.Windows.SDK.NET.Ref 10.0.22621.57 supplies the
+  Microsoft SDK's verbatim RTF terms this way, recording the resolved source URL without
+  inventing an SPDX expression or a repository commit. Its licence remains UNKNOWN in SBOM
+  enrichment rather than being relabelled as an open-source licence.
+  Different versions, unreviewed packages or changed material
   fail closed; this does not assert licence compatibility or invitation clearance.
   A pack-only signing operation verifies this bundle without regenerating it or requiring
   restored packages on the credential-bearing signer.
