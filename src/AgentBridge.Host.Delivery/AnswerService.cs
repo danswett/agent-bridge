@@ -67,6 +67,12 @@ public sealed class AnswerOptions
     // their Enter is never pressed, and the person finishes the answer at the machine (#467).
     public TimeSpan WordsWait { get; init; } = TimeSpan.FromSeconds(3);
 
+    // How long the screen is read again, when a read does not show the question's form at the
+    // field the next keys go to, or the worker refused a write because the screen changed,
+    // before the answer stops there (#1123). One read mid-redraw (streaming output, a spinner,
+    // the conversation scrolling) was enough to refuse an answer or leave a form part answered.
+    public TimeSpan FormRecheck { get; init; } = TimeSpan.FromSeconds(2);
+
     // How long a request's outcome is returned again for a resend. The contract says at
     // least 10 minutes.
     public TimeSpan RememberFor { get; init; } = TimeSpan.FromMinutes(15);
@@ -426,11 +432,28 @@ public sealed class AnswerService : ISessionAnswerer
         ? $"{Name(agent)} permission prompts can only be answered at the machine"
         : $"this {Name(agent)} prompt can only be answered at the machine";
 
+    // Every answer to a Copilot form leaves one line in the log saying how it went
+    // (CopilotAnswerTrace), whatever it ended in, the screen reads it made counted against it.
     async Task<AnswerResult> CopilotAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline)
+    {
+        var trace = new CopilotAnswerTrace(options.Time, request.Request, session.Id);
+        CopilotAnswerTrace.Current.Value = trace;
+        AnswerResult? result = null;
+        try { return result = await CopilotFormAsync(session, question, request, timeline, trace); }
+        finally
+        {
+            CopilotAnswerTrace.Current.Value = null;
+            trace.Stage("confirmed");
+            log(trace.Line(result));
+        }
+    }
+
+    async Task<AnswerResult> CopilotFormAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, CopilotAnswerTrace trace)
     {
         // The session id names a folder; only the agent's own id shape is accepted.
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Refused("the session's id is not a Copilot session id"); }
         var transcript = Path.Combine(options.CopilotHome, "session-state", session.Id, "events.jsonl");
+        trace.Cli(CopilotAnswerTrace.CliOf(transcript));
         if (Target(session, AgentKind.Copilot) is { } unfit) { return unfit; }
         var pid = session.ProcessId!.Value;
 
@@ -492,6 +515,7 @@ public sealed class AnswerService : ISessionAnswerer
         }
 
         await gate.WaitToTypeAsync();
+        trace.Stage("slot");
         timeline.Turn();
         CopilotPlan plan;
         long from;
@@ -529,6 +553,7 @@ public sealed class AnswerService : ISessionAnswerer
 
             var (form, unreadable) = CopilotForm.Read(arguments);
             if (form is null) { return Refused(unreadable!); }
+            trace.Form(form);
             // An ask_user with no form schema: how Copilot CLI 1.0.105 draws it cannot be told
             // from its code (its elicitations require a schema), so there is nothing to hold the
             // keys to, and they are not typed blind (#510 review).
@@ -548,6 +573,7 @@ public sealed class AnswerService : ISessionAnswerer
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
             (typed, held, partial) = await TypeWordsApartAsync(session.Id, pid, form, plan.Keys, StillAsked, timeline);
+            trace.Stage("typed");
         }
         finally { gate.DoneTyping(); }
 
@@ -621,6 +647,7 @@ public sealed class AnswerService : ISessionAnswerer
     {
         var progress = new FormProgress();
         var (result, held) = await TypeFieldsAsync(sessionId, pid, form, plan, stillAsked, progress, timeline);
+        CopilotAnswerTrace.Current.Value?.Taken(progress.Taken);
         return (result, held, held is not null && progress.Taken > 0 ? progress.Said(form) : null);
     }
 
@@ -665,34 +692,66 @@ public sealed class AnswerService : ISessionAnswerer
         }
         var pending = new List<KeySend>();
         var typedAny = false;
+        // The rows the last write that went was held to: the screen it went into.
+        IReadOnlyList<string> wrote = [];
         // Stopped here: nothing more goes. Held once anything has been typed; nothing typed, and
         // the prompt free to be answered again, otherwise.
         (InjectionResult, string?) Stop(string why) => typedAny
             ? (new InjectionResult(InjectionStatus.Typed, "ok"), why)
             : (new InjectionResult(InjectionStatus.NothingTyped, why.Contains("at the machine", StringComparison.Ordinal) ? why : $"{why}; answer at the machine"), null);
-        // One write, still asked for once the injector holds the typing slot. A write that typed
-        // nothing (its rows read differently, or the question no longer held) stops it as above;
-        // one cut short is interrupted. Null when it went.
-        async Task<(InjectionResult, string?)?> WriteAsync(List<KeySend> sends, bool last)
+        // One write, still asked for once the injector holds the typing slot, held to rows: the
+        // worker types nothing of it unless the screen still reads exactly so. A write it refused
+        // that way, nothing of it typed, is tried again on the screen read anew, but only once
+        // that shows the form at the same field with the field itself drawn as it was (SameField):
+        // what changed was elsewhere on the screen (output scrolling above the form, a spinner),
+        // and the keys do the same there. Refused for that once, a form was left part answered
+        // (#1123). A write that typed nothing otherwise (its question no longer held) stops it as
+        // above; one cut short is interrupted. Null when it went.
+        async Task<(InjectionResult, string?)?> WriteAsync(List<KeySend> sends, bool last, IReadOnlyList<string> rows)
         {
-            if (stillAsked() is { } gone) { return Stop(gone); }
-            var result = await TypeAsync(pid, new KeyPlan(sends) { Proceed = stillAsked }, timeline, last);
-            switch (result.Status)
+            var started = options.Time.GetTimestamp();
+            while (true)
             {
-                case InjectionStatus.Typed:
+                if (stillAsked() is { } gone) { return Stop(gone); }
+                sends[0] = sends[0] with { Expect = Rows(rows), Checks = Below(rows) };
+                var result = await TypeAsync(pid, new KeyPlan(sends) { Proceed = stillAsked }, timeline, last);
+                if (result.Status == InjectionStatus.Typed)
+                {
                     typedAny = true;
                     progress.Partway = true;
+                    wrote = rows;
                     return null;
+                }
+                if (result.Status != InjectionStatus.NothingTyped) { return (AfterPart(result, typedAny), null); }
+                var changed = result.Detail == Windows.WorkerInjector.ScreenChanged;
                 // Nothing typed yet, for a reason of the injector's own (an elevated session, say):
                 // said as the injector says it, as any other answer refused there is.
-                case InjectionStatus.NothingTyped when !typedAny && result.Detail != Windows.WorkerInjector.ScreenChanged:
-                    return (result, null);
-                case InjectionStatus.NothingTyped:
-                    log($"typing into {Short(sessionId)} (pid {pid}) stopped before {(sends is [{ Text: "", Enter: true }] ? "an Enter" : "its next keys")}: {result.Detail}");
-                    return Stop(result.Detail == Windows.WorkerInjector.ScreenChanged ? "the session's screen changed before the next key could go" : result.Detail);
-                default:
-                    return (AfterPart(result, typedAny), null);
+                if (!typedAny && !changed) { return (result, null); }
+                if (changed && await SameFieldAsync(rows, started) is { } again)
+                {
+                    log($"the screen of {Short(sessionId)} (pid {pid}) changed before {(sends is [{ Text: "", Enter: true }] ? "an Enter" : "its next keys")}, and read again shows the form at the same field as it was; they are held to it and typed again");
+                    CopilotAnswerTrace.Current.Value?.Retried();
+                    rows = again;
+                    continue;
+                }
+                log($"typing into {Short(sessionId)} (pid {pid}) stopped before {(sends is [{ Text: "", Enter: true }] ? "an Enter" : "its next keys")}: {result.Detail}");
+                return Stop(changed ? "the session's screen changed before the next key could go" : result.Detail);
             }
+        }
+
+        // The screen read again, within FormRecheck of started, once it shows the form at the
+        // field the next keys go to, that field drawn exactly as in rows (its options and where
+        // the pointer is, or what is typed into it); null if it does not by then.
+        async Task<IReadOnlyList<string>?> SameFieldAsync(IReadOnlyList<string> rows, long started)
+        {
+            if (CopilotFormScreen.Input(rows, form, Field()) is not { } field) { return null; }
+            while (options.Time.GetElapsedTime(started) < options.FormRecheck)
+            {
+                await Task.Delay(options.ScreenPollInterval ?? options.PollInterval, options.Time);
+                if (await ReadRowsAsync(pid) is not { } now) { return null; }
+                if (CopilotFormScreen.Input(now, form, Field()) is { } drawn && drawn.SequenceEqual(field)) { return now; }
+            }
+            return null;
         }
 
         // The screen the last Enter was pressed on. Whatever goes next waits for the form to move
@@ -701,15 +760,37 @@ public sealed class AnswerService : ISessionAnswerer
         IReadOnlyList<string>? leaving = null;
         // The field the next keys are for: one on from each Enter.
         var at = 0;
-        // Null when the rows keys are about to be held to show the form at that field. A screen
-        // that has settled, or moved on, is not enough: a permission dialog that opens before the
+        // The rows keys are about to be held to, when they show the form at that field, or rows
+        // read again within FormRecheck that do; null, and why, when none does. A screen that has
+        // settled, or moved on, is not enough: a permission dialog that opens before the
         // transcript says so is just as steady, and keys held to its rows go into it, an Enter
-        // picking what it highlights (#510 review).
-        string? OffForm(IReadOnlyList<string> rows)
+        // picking what it highlights (#510 review). Nor is one read that does not show it the
+        // end: read mid-redraw, a form on screen did not show, and the answer was refused or the
+        // form left part answered (#1123). Each refusal logs which check failed and the screen's
+        // outline (CopilotFormScreen.Diagnose), never what it says.
+        async Task<(IReadOnlyList<string>? Rows, string? Why)> OnFormAsync(IReadOnlyList<string> rows)
         {
-            if (CopilotFormScreen.Showing(rows, form, Field()) is not { } off) { return null; }
-            log($"the screen of {Short(sessionId)} (pid {pid}) is not the form at its next field: {off}; nothing more is typed");
-            return off;
+            var (why, check, row, outline) = CopilotFormScreen.Diagnose(rows, form, Field());
+            if (why is null) { return (rows, null); }
+            var started = options.Time.GetTimestamp();
+            var again = 0;
+            while (options.Time.GetElapsedTime(started) < options.FormRecheck)
+            {
+                await Task.Delay(options.ScreenPollInterval ?? options.PollInterval, options.Time);
+                CopilotAnswerTrace.Current.Value?.Reread();
+                again++;
+                if (await ReadRowsAsync(pid) is not { } now) { break; }
+                var read = CopilotFormScreen.Diagnose(now, form, Field());
+                if (read.Why is null)
+                {
+                    log($"the screen of {Short(sessionId)} (pid {pid}) showed the form at its next field when read again ({again} more read{(again == 1 ? "" : "s")}; the first failed check {CopilotFormScreen.Name(check)}: {outline})");
+                    return (now, null);
+                }
+                (why, check, row, outline) = read;
+            }
+            CopilotAnswerTrace.Current.Value?.Failed(check, row);
+            log($"the screen of {Short(sessionId)} (pid {pid}) is not the form at its next field: {why}; read {again} more time{(again == 1 ? "" : "s")}; {outline}; nothing more is typed");
+            return (null, why);
         }
         int Field() => Math.Min(at, Math.Max(0, form.Fields.Count - 1));
         // How often tail shows in the input of the field the next keys go to; none on rows that
@@ -723,12 +804,17 @@ public sealed class AnswerService : ISessionAnswerer
             if (leaving is null)
             {
                 if (await ReadRowsAsync(pid) is not { } rows) { return (null, 0, "the session's screen could no longer be read"); }
-                return OffForm(rows) is { } off ? (null, 0, off) : (rows, Shows(tail)(rows), null);
+                var (on, off) = await OnFormAsync(rows);
+                return on is null ? (null, 0, off) : (on, Shows(tail)(on), null);
             }
             var moved = await FieldShownAsync(pid, leaving, Shows(tail));
             leaving = null;
             if (moved.Rows is null) { log($"the next field in {Short(sessionId)} (pid {pid}) did not show: {moved.Why}; nothing more is typed"); }
-            else if (OffForm(moved.Rows) is { } off) { return (null, 0, off); }
+            else
+            {
+                var (on, off) = await OnFormAsync(moved.Rows);
+                return on is null ? (null, 0, off) : (on, Shows(tail)(on), null);
+            }
             return moved;
         }
         // One field's keys, which end with the Enter that commits it: held to that field, the keys
@@ -745,19 +831,19 @@ public sealed class AnswerService : ISessionAnswerer
             if (commit.Text.Length > 0) { first.Add(commit with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0 }); }
             if (first.Count > 0)
             {
-                first[0] = first[0] with { Expect = Rows(shown), Checks = Below(shown) };
-                if (await WriteAsync(first, false) is { } stopped) { return stopped; }
+                if (await WriteAsync(first, false, shown) is { } stopped) { return stopped; }
                 var (settled, unsettled) = await SettledAsync(pid);
                 if (settled is null)
                 {
                     log($"the screen of {Short(sessionId)} (pid {pid}) did not settle before the field's Enter: {unsettled}; nothing more is typed");
                     return Stop(unsettled!);
                 }
-                if (OffForm(settled) is { } off) { return Stop(off); }
-                shown = settled;
+                var (on, off) = await OnFormAsync(settled);
+                if (on is null) { return Stop(off!); }
+                shown = on;
             }
-            if (await WriteAsync([new KeySend("", true, 0, commit.PauseAfterMs, Rows(shown), Below(shown))], last) is { } committed) { return committed; }
-            leaving = shown;
+            if (await WriteAsync([new KeySend("", true, 0, commit.PauseAfterMs)], last, shown) is { } committed) { return committed; }
+            leaving = wrote;
             at++;
             (progress.Taken, progress.Partway) = (at, false);
             return null;
@@ -784,29 +870,30 @@ public sealed class AnswerService : ISessionAnswerer
                 // Other's walk, which has no Enter: held to the list it walks, and the words wait
                 // for the change it makes, Other opening.
                 var shown = field;
-                pending[0] = pending[0] with { Expect = Rows(shown), Checks = Below(shown) };
-                if (await WriteAsync(pending, false) is { } walked) { return walked; }
+                if (await WriteAsync(pending, false, shown) is { } walked) { return walked; }
                 pending = [];
-                var (rows, count, why) = await FieldShownAsync(pid, shown, Shows(tail));
+                var (rows, _, why) = await FieldShownAsync(pid, wrote, Shows(tail));
                 if (rows is null)
                 {
                     log($"the field the words go to in {Short(sessionId)} (pid {pid}) did not show: {why}; nothing more is typed");
                     return Stop(why!);
                 }
-                if (OffForm(rows) is { } off) { return Stop(off); }
-                (field, before) = (rows, count);
+                var (on, off) = await OnFormAsync(rows);
+                if (on is null) { return Stop(off!); }
+                (field, before) = (on, Shows(tail)(on));
             }
-            if (await WriteAsync([send with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0, Expect = Rows(field), Checks = Below(field) }], false) is { } held) { return held; }
+            if (await WriteAsync([send with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0 }], false, field) is { } held) { return held; }
             if (await AwaitOnScreenAsync(pid, Shows(tail), before) is not { } showing)
             {
                 log($"the words typed into {Short(sessionId)} (pid {pid}) did not show on its screen within {options.WordsWait.TotalSeconds:0.#} s; their Enter is not pressed");
                 return (new InjectionResult(InjectionStatus.Typed, "ok"), $"the words did not show on the session's screen within {options.WordsWait.TotalSeconds:0.#} seconds");
             }
-            if (OffForm(showing) is { } away) { return Stop(away); }
+            // Shown in the field's input (Shows reads only the form at that field), the words
+            // were typed into this form at this field.
             // Seen on screen, they reached the CLI apart from anything after them, so their Enter
             // needs no pause of its own; held to the rows that show them, it goes into nothing else.
-            if (await WriteAsync([new KeySend("", true, 0, send.PauseAfterMs, Rows(showing), Below(showing))], i == plan.Sends.Count - 1) is { } entered) { return entered; }
-            leaving = showing;
+            if (await WriteAsync([new KeySend("", true, 0, send.PauseAfterMs)], i == plan.Sends.Count - 1, showing) is { } entered) { return entered; }
+            leaving = wrote;
             at++;
             (progress.Taken, progress.Partway) = (at, false);
         }
@@ -815,8 +902,7 @@ public sealed class AnswerService : ISessionAnswerer
         // field they go to, like any other.
         var (rest, _, gone) = await NextFieldAsync("");
         if (rest is null) { return Stop(gone!); }
-        pending[0] = pending[0] with { Expect = Rows(rest), Checks = Below(rest) };
-        return await WriteAsync(pending, true) ?? (new InjectionResult(InjectionStatus.Typed, "ok"), null);
+        return await WriteAsync(pending, true, rest) ?? (new InjectionResult(InjectionStatus.Typed, "ok"), null);
     }
 
     static bool IsWords(KeySend send) => send.Enter && CopilotPlanner.HasWords(send.Text);
@@ -841,6 +927,7 @@ public sealed class AnswerService : ISessionAnswerer
     // The session's screen, or null when it cannot be read.
     async Task<IReadOnlyList<string>?> ReadRowsAsync(int pid)
     {
+        CopilotAnswerTrace.Current.Value?.Read();
         try { return (await injector.ReadScreenAsync(pid)).Rows; }
         catch (Exception e)
         {

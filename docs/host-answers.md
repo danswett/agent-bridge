@@ -122,14 +122,31 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     frame closed by the same rule with nothing drawn under it (the CLI draws a prompt in place
     of its input box and footer, so another form or an input under it is refused, Copilot
     4479698033, and everything below is read inside the frame), the whole question under it
-    (its lines, each wrapped onto as many rows as it takes), with more than one field the tab
-    bar naming exactly this form's fields in order (titles as written, brackets included; the
-    field being answered may be in the bar's own brackets), the field's own heading on a row
+    (its lines, each wrapped onto as many rows as it takes: each row, read as drawn from the
+    question's column, must be the question's next characters exactly, its spaces as they
+    are (the question itself read with its runs of white space as one, or as written), a
+    space being missing, or drawn at the next row's start, only where a row breaks. 1.0.105's
+    renderer, `gVr`, breaks a line wherever Unicode line
+    breaking allows, so with no space at a break the break must be one it allows: after a
+    hyphen, a dash or a slash, beside a wide character, or inside a word longer than the
+    frame is wide, and the next row then starts at the question's column, so "ag-" over
+    " test-ops" is refused. A question broken after "ag-" was refused on a steady screen every time it
+    was answered, #1123, #848; read with every space left out, "Now here" read as "Nowhere",
+    #1137 review. What a break hides stays unseen: two questions that differ only by a space
+    at a break, such as "ag-test-ops" and "ag- test-ops" broken after the hyphen, or "Now here"
+    and "Nowhere" broken inside a word too long for the row, draw the same rows; the tab bar,
+    the field's heading and the hints must still match exactly), with more than one field the tab
+    bar naming exactly this form's fields in order, on one row read exactly as `Da` draws it
+    (titles as written, brackets included, each ` <title> ` with a column between; the field
+    being answered may be in the bar's own brackets; the bar fits the console's width less
+    four columns, within the frame, so it is not taken across rows), the field's own heading on a row
     of its own (`<title ?? name>:` for a list, a Yes/No or a multi-select; the title alone,
     with no colon, for a text or number box, `Fxn` and `Lxn`; only the field being answered
     is drawn), and under it the hints
     row (the last row ending "esc cancel", with the rows it wrapped from, every part one of
-    the form's hints): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
+    the form's hints, its spaces read as drawn but a space allowed missing where a row breaks,
+    so a narrow window that breaks a hint, or a word of one, across rows still reads, #910,
+    while "enteraccept" in a row is not "enter accept"): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
     place by "tab next" and "shift+tab prev" when there is more than one, read from that row
     alone, since the question or the words typed may say them too; and no permission prompt
     drawn against the form: one ending just above its frame or drawn under it, read by its
@@ -144,20 +161,29 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     So is a form with two fields of the same heading the tab hints cannot tell apart (both
     between the first and the last): the tab bar marks the field being answered by colour
     alone, which the screen read does not carry, so a repaint while the CLI still showed the
-    first could pass for the second. Headings are compared with every run of whitespace, a
-    no-break space included, as one space and the ends trimmed, a list's colon taken with its
-    title as the CLI draws them together, untrimmed ("Pick one " is "Pick one :"); a title of
+    first could pass for the second. Headings are compared exactly as drawn, their ends
+    trimmed, a list's colon taken with its title as the CLI draws them together, so with no
+    tab bar "Pick  one:" or "Pick one:" with a no-break space is not "Pick one:" (#1137
+    review). A title whose spaces the host cannot be sure how the CLI draws (white space at
+    its ends, a run of spaces, or a space of another kind, such as a no-break space) is
+    refused before the first key, as is a title of
     white space alone, drawn as a blank row or a lone colon, or with a line break or another
     control character, which splits its heading across rows while the tab bar's first row
-    still reads as the labels, is refused before the first key. Both, like a `requestedSchema`
+    still reads as the labels. All, like a `requestedSchema`
     encoded as JSON twice (read once, it is text, not a form), are listed `answerAtMachine`,
-    so no client offers what would be refused; a heading or question the
+    so no client offers what would be refused; a field heading the
     console wraps mid-word is refused rather than typed into (#848). With more than one
     field, the tab bar read at the first field, before any key, vouches for every later
-    field's width and characters: a bar too wide for the window shows only some labels,
-    between arrows, and is refused there; one that fits holds every label, so no later
-    heading can wrap; and a character the console draws other than as written is drawn so
-    in the bar too, and refused there.
+    field's width and characters: one that fits holds every label, so no later heading can
+    wrap, and a character the console draws other than as written is drawn so in the bar
+    too, and refused there. A bar too wide for the console shows only the labels around the
+    field being answered, between arrows ("←" when labels are hidden before them, "→" when
+    after, `Da`'s `Hfn` window). Read as exactly such a window at that field, it is refused
+    with nothing typed and named (`bar-window`), for the machine or a wider window: a form
+    that differs from the question only in a hidden title reads the same, and each field's
+    own heading is read only once the keys reach it, after earlier fields are already filled
+    (#1137 review). A six-field form with long titles at 102 columns showed two labels and
+    "→", and was refused as no form at all, unnamed (#1123).
     What cannot be known beforehand (a permission prompt opening over a later field, or a
     long field scrolling the form's heading off a short window) still stops the keys there:
     the answer is then `unconfirmed`, and its reason names the fields that were answered,
@@ -168,10 +194,32 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     approving what it highlights (#510 review). Anything else stops the answer there, as
     below. A field whose title is not a non-empty string has no heading to look for, so is
     never typed into this way.
+  * One read is never the end (#1123): a read that does not show the form at the field the
+    next keys go to is read again, every poll interval for up to 2 s (`FormRecheck`), and
+    the keys go held to the first read that does; read in the middle of a redraw (streaming
+    output, the conversation scrolling), the form can be half drawn. A write the worker
+    refused because the screen changed, nothing of it typed, is tried again within the same
+    2 s held to a fresh read, but only when that read shows the form at the same field with
+    the field itself (its options and pointer, or what is typed into it) drawn exactly as in
+    the rows the write was held to: what changed was elsewhere on the screen, and the keys do
+    the same there. A field drawn otherwise gets nothing more. Each refusal logs which check
+    failed (`heading`, `bottom-rule`, `under`, `message`, `bar`, `bar-window`, `field`,
+    `field-heading`, `hints` or `prompted`, with the row) and the screen's outline (its row count, widest
+    row, blank rows, where its rules and form headings are), never what any row says. A form
+    left part answered across attempts is not yet resumed by a later answer: the attempt that
+    stopped says which fields were answered, for the person to finish at the machine.
+  * Every answer to a Copilot form logs one line (`CopilotAnswerTrace`), whatever it ended
+    in, with no word of the question, the screen or the answer: `answer-attempt v=1
+    request=<8> session=<8> cli=<version> fields=<n> shape=<kind[options]+...>
+    reads=<n> rereads=<n> steady=yes|no retries=<n> check=<name@row|none> taken=<k>/<n>
+    stages=slot:<ms>,typed:<ms>,confirmed:<ms> total=<ms> outcome=<outcome>`. Its keys keep
+    their order and names; new ones are only added at the end, so what reads it (#1132's
+    feedback reports) keeps reading it.
   * It fails closed: such an answer is not typed at all into a screen the host cannot
     read, nor words made only of spaces and line-drawing characters, which leave nothing to
     look for (`refused`, nothing typed); and a field or words that do not show, or a screen
-    that does not settle, within 3 s, a screen that changed under a write, or a question no
+    that does not settle, within 3 s, a screen that changed under a write and did not show the
+    field as it was within 2 s, or a question no
     longer asked, leave it there, with nothing more pressed (`unconfirmed`, stage `typed`,
     for the person to finish at the machine). An Enter sent into a screen nobody has read is
     how #467 happened. What remains: keys reach the CLI in the order they were written, so a
@@ -179,7 +227,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     reported `typed`, not `delivered`; rows are compared whole, so an animated form would be
     refused rather than typed into; a form drawn taller than the console's window, its
     heading or hints scrolled out of sight, is stopped rather than typed into, and so is a
-    form whose tab bar is too wide to name every field.
+    form whose tab bar is too wide to name every field (`bar-window`).
   * An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.
