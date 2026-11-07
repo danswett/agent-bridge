@@ -107,6 +107,19 @@ public sealed class FeedbackGitHubPrivateStoreTests
         Assert.Equal(before, api.Comments.Count);
     }
 
+    [Fact]
+    public async Task Failed_response_body_is_retried_without_writing_feedback()
+    {
+        var api = new FakeGitHub { FailRepositoryBodyOnce = true };
+        using var store = new FeedbackGitHubPrivateStore(new FakeTokens(), api);
+        var record = Record("private fixture");
+        await Assert.ThrowsAsync<FeedbackInboxTransientException>(
+            () => store.StoreUnclassifiedAsync(record, CancellationToken.None));
+        Assert.Empty(api.Issues);
+        await store.StoreUnclassifiedAsync(record, CancellationToken.None);
+        Assert.Single(api.Issues);
+    }
+
     static FeedbackPrivateRecord Record(string text) => new(
         "synthetic-bundle", DateTimeOffset.UnixEpoch, Fingerprint, "fixture", text, null, null);
 
@@ -123,6 +136,7 @@ public sealed class FeedbackGitHubPrivateStoreTests
         public int? FailCommentOnceAt { get; set; }
         public int? PublicAtPrivacyCheck { get; set; }
         public string RepositoryName { get; set; } = "danswett/slipgates-feedback";
+        public bool FailRepositoryBodyOnce { get; set; }
         int privacyChecks;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -133,6 +147,11 @@ public sealed class FeedbackGitHubPrivateStoreTests
             if (path == "/repos/danswett/slipgates-feedback" && request.Method == HttpMethod.Get)
             {
                 privacyChecks++;
+                if (FailRepositoryBodyOnce)
+                {
+                    FailRepositoryBodyOnce = false;
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new FailingContent() };
+                }
                 return Json(new { full_name = RepositoryName, @private = privacyChecks != PublicAtPrivacyCheck });
             }
             if (path == "/repos/danswett/slipgates-feedback/issues")
@@ -170,6 +189,18 @@ public sealed class FeedbackGitHubPrivateStoreTests
         {
             var page = int.Parse(request.RequestUri!.Query.Split("page=")[^1]);
             return values.Skip((page - 1) * 100).Take(100);
+        }
+    }
+
+    sealed class FailingContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            throw new IOException("Synthetic response-body failure.");
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
         }
     }
 }

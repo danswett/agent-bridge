@@ -208,7 +208,8 @@ public sealed class FeedbackGitHubPrivateStore : IFeedbackPrivateStore, IDisposa
         if (body is not null) { request.Content = JsonContent.Create(body); }
         try { return await http.SendAsync(request, cancellationToken); }
         catch (HttpRequestException) { throw new FeedbackInboxTransientException("Private feedback service is unavailable."); }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (IOException) { throw new FeedbackInboxTransientException("Private feedback service is unavailable."); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw new FeedbackInboxTransientException("Private feedback service timed out.");
         }
@@ -217,7 +218,7 @@ public sealed class FeedbackGitHubPrivateStore : IFeedbackPrivateStore, IDisposa
     static Task RequireSuccessAsync(HttpResponseMessage response)
     {
         if (response.IsSuccessStatusCode) { return Task.CompletedTask; }
-        if ((int)response.StatusCode is 403 or 408 or 429 || (int)response.StatusCode >= 500)
+        if ((int)response.StatusCode is 401 or 403 or 404 or 408 or 429 || (int)response.StatusCode >= 500)
         {
             throw new FeedbackInboxTransientException("Private feedback service is unavailable.");
         }
@@ -232,6 +233,12 @@ public sealed class FeedbackGitHubPrivateStore : IFeedbackPrivateStore, IDisposa
             return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
         }
         catch (JsonException) { throw InvalidResponse(); }
+        catch (HttpRequestException) { throw new FeedbackInboxTransientException("Private feedback service is unavailable."); }
+        catch (IOException) { throw new FeedbackInboxTransientException("Private feedback service is unavailable."); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new FeedbackInboxTransientException("Private feedback service timed out.");
+        }
     }
 
     static FeedbackInboxTransientException InvalidResponse() => new("Private feedback service returned an invalid response.");
