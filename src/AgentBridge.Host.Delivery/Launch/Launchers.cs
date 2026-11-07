@@ -33,6 +33,9 @@ public static class Launchers
     // command line reads to tell that it is running inside a session (§6.3 invariant 13).
     public const string SessionVariable = "AGENT_BRIDGE_SESSION";
 
+    // The agent's credential for the host's pipe (agent.hello), when the launch issues one.
+    public const string TokenVariable = "AGENT_BRIDGE_TOKEN";
+
     public static readonly IReadOnlyList<Launcher> All =
     [
         new("agency", "Agency", AgentKind.Copilot, "agency", "copilot", TakesProfile: true, TakesAttachments: true, RegistersBeforeReady: true),

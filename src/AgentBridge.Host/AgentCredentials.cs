@@ -29,7 +29,7 @@ public sealed record AgentHelloDecision(AgentCredential? Accepted, string? Refus
 // safety rail, not a boundary: a same-user process that spoofs its parent or joins the session's
 // Job object gets through (§3.4, "The residuals"). What it stops is a token pasted into another
 // session, or used by a helper that didn't try.
-public sealed class AgentCredentials
+public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredentials
 {
     public const string FileName = "agent-credentials.json";
     public const int MaxCredentials = 1024;
@@ -89,6 +89,7 @@ public sealed class AgentCredentials
         {
             if (problem is not null) { throw new InvalidOperationException($"agent credentials are unavailable: {problem}"); }
             Prune(now);
+            RevokeEnded(rootAlive);
             if (records.Count >= MaxCredentials) { throw new InvalidOperationException("too many live agent credentials"); }
             // One credential per session: a resume or a relaunch gets a new one and the old one is dead (§3.4).
             records.RemoveAll(r => r.Credential.Session == session);
@@ -96,6 +97,28 @@ public sealed class AgentCredentials
             Save();
         }
         return token;
+    }
+
+    // A launch's token is issued before its process exists, so it is bound to none and answers to
+    // nobody until Bind. Launched agents may read only: the agents policy (§5.1) widens that later.
+    public string? Prepare(string session, string launchId) => Mint(session, launchId, 0, default, AgentProtocol.ScopeRead);
+
+    public void Bind(string launchId, int processId, DateTimeOffset startedAt)
+    {
+        lock (gate)
+        {
+            var i = records.FindIndex(r => r.Credential.LaunchId == launchId && r.Credential.RootPid == 0);
+            if (i < 0) { return; }
+            records[i] = records[i] with { Credential = records[i].Credential with { RootPid = processId, RootStartUtc = startedAt } };
+            try { Save(); }
+            catch (IOException e) { Fault($"could not save: {e.Message}"); }
+            catch (UnauthorizedAccessException e) { Fault($"could not save: {e.Message}"); }
+        }
+    }
+
+    public void Abandon(string launchId)
+    {
+        lock (gate) { Remove(r => r.Credential.LaunchId == launchId && r.Credential.RootPid == 0, "its launch did not start"); }
     }
 
     // Whether this ancestry may hold this token. Every refusal says why, for the log.
@@ -119,6 +142,7 @@ public sealed class AgentCredentials
             }
         }
         if (match is null) { return AgentHelloDecision.Refused("no live credential matches that token"); }
+        if (match.RootPid <= 0) { return Outside(match, "its launch has not started"); }
         if (!ancestry.Complete)
         {
             return Outside(match, "the caller's ancestry could only be read in part");
@@ -192,7 +216,7 @@ public sealed class AgentCredentials
         lock (gate)
         {
             var before = records.Count;
-            Remove(r => !sameProcessAlive(r.Credential.RootPid, r.Credential.RootStartUtc), "its session's process ended");
+            Remove(r => r.Credential.RootPid > 0 && !sameProcessAlive(r.Credential.RootPid, r.Credential.RootStartUtc), "its session's process ended");
             return before - records.Count;
         }
     }
