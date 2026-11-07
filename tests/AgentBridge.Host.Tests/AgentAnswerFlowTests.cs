@@ -180,7 +180,8 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         else
         {
             Assert.Equal((AnswerOutcome.Unconfirmed, AnswerStage.Recorded), (again.Outcome, again.Stage));
-            Assert.Contains("different answer", again.Reason);
+            // A resend says only that nothing was typed again; the stage still says what the session recorded.
+            Assert.Equal(DeliveryReasons.AnswerNotConfirmed, again.Reason);
         }
         Assert.Equal(typed, injector.Plans.Count);
     }
@@ -280,7 +281,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
         var typed = injector.Plans.Count;
 
-        Assert.Equal(first, await answerer.AnswerAsync(request));
+        Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, await answerer.AnswerAsync(request));
         Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen)));
         Assert.Equal(typed, injector.Plans.Count);
     }
@@ -303,6 +304,77 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "an answer was already typed into this prompt once, and is never typed again"), guessed);
         Assert.Equal(missed, guessed);
         Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone"));
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // #1093 review (Sol): the first request's own UUID replayed by another sender is looked up
+    // after the sender is checked, not before: it gets the refusal other text gets, whether the
+    // request's own record is still there or not, and never the first's outcome.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Another_sender_replaying_the_first_requests_own_UUID_gets_the_same_refusal_and_not_its_outcome(bool forgotten)
+    {
+        var answerer = Answerer(remembered: forgotten ? TimeSpan.FromTicks(-1) : null);
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        var first = await answerer.AnswerAsync(request, sender: "phone");
+        Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
+        var typed = injector.Plans.Count;
+        var other = new Dictionary<string, object> { ["Which database?"] = "DuckDB", ["Which features?"] = new[] { "Auth", "Search" } };
+
+        var replayed = await answerer.AnswerAsync(request, sender: "laptop");
+        var missed = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", other), sender: "laptop");
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "an answer was already typed into this prompt once, and is never typed again"), replayed);
+        Assert.Equal(missed, replayed);
+        // The first sender's own resend is unaffected.
+        Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, await answerer.AnswerAsync(request, sender: "phone"));
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // #1093 review (Sol): every identical retry of an unconfirmed answer says the same, under the
+    // same UUID or a new one, whatever the stage: the first attempt's own words are not its to say.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Every_identical_retry_of_an_unconfirmed_answer_says_nothing_was_typed_again_until_the_session_confirms_it(bool sameRequest, bool forgotten)
+    {
+        var answerer = Answerer(remembered: forgotten ? TimeSpan.FromTicks(-1) : null);
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        var first = await answerer.AnswerAsync(request);
+        Assert.Equal((AnswerOutcome.Unconfirmed, AnswerStage.Typed), (first.Outcome, first.Stage));
+        Assert.NotEqual(DeliveryReasons.AnswerNotConfirmed, first.Reason);
+        var typed = injector.Plans.Count;
+
+        for (var retry = 0; retry < 2; retry++)
+        {
+            var again = await answerer.AnswerAsync(sameRequest ? request : Request(ClaudeId, "toolu_1", Chosen));
+            Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, again);
+        }
+
+        Fixture.Append(claude, Recorded());
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), await answerer.AnswerAsync(sameRequest ? request : Request(ClaudeId, "toolu_1", Chosen)));
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task A_retry_of_an_answer_the_session_recorded_differently_keeps_its_stage_and_says_nothing_was_typed_again(bool sameRequest, bool forgotten)
+    {
+        var answerer = Answerer(remembered: forgotten ? TimeSpan.FromTicks(-1) : null);
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await answerer.AnswerAsync(request)).Outcome);
+        var typed = injector.Plans.Count;
+
+        Fixture.Append(claude, Recorded(database: "DuckDB"));
+        var again = await answerer.AnswerAsync(sameRequest ? request : Request(ClaudeId, "toolu_1", Chosen));
+
+        Assert.Equal((AnswerOutcome.Unconfirmed, AnswerStage.Recorded, DeliveryReasons.AnswerNotConfirmed), (again.Outcome, again.Stage, again.Reason));
         Assert.Equal(typed, injector.Plans.Count);
     }
 

@@ -9,9 +9,10 @@ public static class DeliveryReasons
 
     // What an answer sent again says when the first, typed, could not be confirmed and the
     // session has recorded nothing since (#1093). Nothing is typed again, so it is neither
-    // delivered nor refused: the person looks at the session before sending it once more. The
-    // wording is for Creative to settle; it is kept here alone.
-    public const string AnswerNotConfirmed = "the bridge could not confirm this answer reached the session; check the session before sending it again";
+    // delivered nor refused. It is shown inside the clients' own unconfirmed line ("... Check
+    // the conversation. (reason)"), so it says only that this send typed nothing, and why.
+    // Wording settled by Creative; kept here alone.
+    public const string AnswerNotConfirmed = "nothing was typed again: this repeats an answer already typed once";
 
     // An injector's detail as a reply's or an answer's reason: a worker that did not start is
     // CouldNotDeliver, any other detail as it is.

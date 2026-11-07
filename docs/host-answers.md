@@ -515,8 +515,12 @@ In order, for every answer:
    cannot be told from a miss): a phone that reloaded sends it under a
    new UUID, and gets the first outcome instead of the refusal in step 6 (#1093). An
    `unconfirmed` one is read again from the session each time (step 9), so it turns
-   `delivered` once recorded; while it is not, the retry is told only that the bridge could not
-   confirm it (`DeliveryReasons.AnswerNotConfirmed`) and nothing is typed. That
+   `delivered` once recorded; while it is not, the retry (under the same UUID or a new one, at
+      any stage) is told only that nothing was typed
+      again, because it repeats an answer already typed once (`DeliveryReasons.AnswerNotConfirmed`,
+      shown by the clients inside their own unconfirmed line); the stage still says how far the
+      first got. The sender is checked before any outcome is looked up, even by the first's own
+      UUID: another sender replaying it gets the refusal of step 6. That
    record is the host's memory only, and is kept while the prompt's claim is; it never
    covers an answer that typed nothing, nor a different answer.
 4. The session's process is still the live agent process; it does not run elevated

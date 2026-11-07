@@ -2241,7 +2241,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var again = await AnswerResultAsync(await OpenAsync(), FormAnswer, request);
 
         Assert.Equal(("unconfirmed", "recorded"), (again.GetProperty("outcome").GetString(), Stage(again)));
-        Assert.Contains("different answer", again.GetProperty("reason").GetString());
+        // A resend says only that nothing was typed again; the stage says what the session recorded.
+        Assert.Equal(DeliveryReasons.AnswerNotConfirmed, again.GetProperty("reason").GetString());
         Assert.Equal(typed, injector.Plans.Count);
     }
 

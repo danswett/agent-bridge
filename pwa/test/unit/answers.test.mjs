@@ -112,6 +112,9 @@ test('an unconfirmed answer says how far it got: typed into the prompt, or recor
   assert.equal(readAnswerResult({ outcome: 'delivered', stage: 'typed' }).stage, null);
   const done = (stage) => ({ state: 'done', outcome: 'unconfirmed', reason: 'why', detail: { outcome: 'unconfirmed', stage } });
   assert.match(describeAnswer(done('typed'), 'DEV-VM1').text, /^Typed into the prompt, but not confirmed as submitted\. Check the conversation\. \(why\)$/);
+  // A retry of an answer already typed (#1093): the bridge's reason only adds that this send typed nothing.
+  const retried = { state: 'done', outcome: 'unconfirmed', reason: 'nothing was typed again: this repeats an answer already typed once', detail: { outcome: 'unconfirmed', stage: 'typed' } };
+  assert.equal(describeAnswer(retried, 'DEV-VM1').text, 'Typed into the prompt, but not confirmed as submitted. Check the conversation. (nothing was typed again: this repeats an answer already typed once)');
   assert.match(describeAnswer(done('recorded'), 'DEV-VM1').text, /^The session recorded something for this question, but not confirmed as this answer\./);
   assert.match(describeAnswer(done(null), 'DEV-VM1').text, /^Sent, but not confirmed\./);
 });

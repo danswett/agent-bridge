@@ -692,9 +692,11 @@ sender** (a phone that was reloaded keeps its UUIDs in memory only) is that requ
 again, not a second attempt: while the host still has the first answer in memory, it gets the
 first outcome and nothing is typed. An `unconfirmed` one is read again from the session as
 above, however long after, so it becomes `delivered` once the session has recorded it; while
-nothing is recorded it stays `unconfirmed`, with a reason that says only that the bridge could
-not confirm the answer reached the session and that the person should check the session
-before sending it again. Only a *different* answer, or the same words from **another sender**,
+nothing is recorded it stays `unconfirmed`, with a reason that says only that nothing was
+typed again because the request repeats an answer already typed once; that holds for every
+repeat of an unconfirmed answer, under its own UUID or another, and whatever its stage (which
+still says how far the first got). The sender is checked before a request's outcome is looked
+up by UUID, so another sender replaying the first's UUID is refused as below. Only a *different* answer, or the same words from **another sender**,
 is `refused` for a prompt already typed into, and the two are refused alike, so that no
 sender can learn what a first answer said by guessing it. A sender is the channel's peer (a
 device); the host has no person-level identity, so a second device of the same person gets the

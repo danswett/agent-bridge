@@ -159,10 +159,18 @@ public sealed class AnswerService : ISessionAnswerer
         // first one's record gone), from the same sender, is that first request sent again: it is
         // given the first outcome and nothing is typed (#1093). Its own UUID stays unknown. From
         // another sender, or saying anything else, it goes the usual way and is refused the same.
+        // That holds for the first request's own UUID too: the sender is checked before any
+        // outcome is looked up by UUID, so another sender replaying it learns nothing.
         var prompt = (request.Id, request.Question);
-        var first = SameAnswerBefore(prompt, key, AnswerDigest.Of(request), sender);
-        // Sent again under another UUID: what it came to, said as an answer sent again is.
-        var retry = first is not null && first.Request != key;
+        var seenBefore = requests.Knows(key);
+        var first = SameAnswerBefore(prompt, key, AnswerDigest.Of(request), sender, out var foreign);
+        if (foreign)
+        {
+            key = Guid.NewGuid();
+            request = request with { Request = key.ToString("D") };
+        }
+        // Sent again, under this UUID or another: what it came to, said as an answer sent again is.
+        var retry = first is not null || seenBefore && !foreign;
         if (first is not null)
         {
             log($"answer {key.ToString()[..8]} to {Short(request.Id)}: the outcome of {first.Request.ToString()[..8]}, the same answer, is returned and nothing is typed");
@@ -210,10 +218,11 @@ public sealed class AnswerService : ISessionAnswerer
     }
 
     // Typed, and nothing recorded for it since: the first attempt's own words (what was typed
-    // and what was held back) are not the retry's to say; it only knows it cannot confirm. One
-    // the session recorded differently keeps its reason, which says so.
+    // and what was held back, or what the session recorded instead) are not the retry's to say;
+    // it only knows nothing was typed again. Whatever the stage, which still says how far the
+    // first got.
     static AnswerResult AsRetried(AnswerResult result, bool retry) =>
-        retry && result is { Outcome: AnswerOutcome.Unconfirmed, Stage: not AnswerStage.Recorded } ? result with { Reason = DeliveryReasons.AnswerNotConfirmed } : result;
+        retry && result.Outcome == AnswerOutcome.Unconfirmed ? result with { Reason = DeliveryReasons.AnswerNotConfirmed } : result;
 
     // What each prompt's first answer was, by session and question: kept as long as the ledger
     // keeps the prompt's claim, in memory only. A host that restarts forgets it and refuses a
@@ -246,8 +255,9 @@ public sealed class AnswerService : ISessionAnswerer
     // memory answers, or another sender or a different answer, which goes the usual way and is
     // refused by the ledger once anything was typed: the same refusal for both, so a guess
     // cannot be told from a miss. A request seen first is recorded as the prompt's first.
-    FirstAnswer? SameAnswerBefore((string Session, string Question) prompt, Guid key, byte[] digest, string? sender)
+    FirstAnswer? SameAnswerBefore((string Session, string Question) prompt, Guid key, byte[] digest, string? sender, out bool foreign)
     {
+        foreign = false;
         lock (firstGate)
         {
             var now = options.Time.GetUtcNow();
@@ -255,8 +265,15 @@ public sealed class AnswerService : ISessionAnswerer
             if (firstAnswers.TryGetValue(prompt, out var known))
             {
                 // Both compared, whatever the first says, and the digests in constant time.
-                var same = CryptographicOperations.FixedTimeEquals(known.Digest, digest) & string.Equals(known.Sender, sender, StringComparison.Ordinal);
-                if (known.Request == key) { return known.Last is not null && !requests.Knows(key) && string.Equals(known.Sender, sender, StringComparison.Ordinal) ? known : null; }
+                var sameSender = string.Equals(known.Sender, sender, StringComparison.Ordinal);
+                var same = CryptographicOperations.FixedTimeEquals(known.Digest, digest) & sameSender;
+                if (known.Request == key)
+                {
+                    // The first's own UUID, from another sender: not a resend, and nothing of the
+                    // first's is returned for it.
+                    foreign = !sameSender;
+                    return sameSender && known.Last is not null && !requests.Knows(key) ? known : null;
+                }
                 if (!same) { return null; }
                 // Still known, or settled and forgotten with its outcome kept.
                 if (requests.Knows(known.Request) || known.Last is not null) { return known; }
