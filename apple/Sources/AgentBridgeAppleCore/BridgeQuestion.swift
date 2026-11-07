@@ -90,8 +90,8 @@ public struct BridgeQuestionField: Identifiable, Sendable, Equatable {
         guard text.utf8.count <= 4096 else { throw problem("The text is longer than 4 KiB.") }
     }
 
-    private func problem(_ text: String) -> BridgeOperationError {
-        BridgeOperationError("\(title): \(text)")
+    private func problem(_ text: StaticString) -> BridgeOperationError {
+        BridgeOperationError(text)
     }
 }
 
@@ -143,8 +143,8 @@ public struct BridgeQuestion: Identifiable, Sendable, Equatable {
     public func answer(sessionID: String, currentQuestionID: String?, values: [String: JSONValue] = [:], text: String? = nil,
                        capabilities: Set<String>, sessionAgent: String, requestID: UUID = UUID()) throws -> BridgeOperation
     {
-        if let reason = readOnlyReason(capabilities: capabilities, sessionAgent: sessionAgent) {
-            throw BridgeOperationError(reason)
+        if readOnlyReason(capabilities: capabilities, sessionAgent: sessionAgent) != nil {
+            throw BridgeOperationError("This question cannot be answered from this app. Answer at the machine.")
         }
         guard !sessionID.isEmpty, currentQuestionID == id else { throw BridgeOperationError("This question has changed or is no longer pending.") }
         var data: [String: JSONValue] = ["id": .string(sessionID), "question": .string(id), "request": .string(requestID.uuidString.lowercased())]
@@ -158,13 +158,13 @@ public struct BridgeQuestion: Identifiable, Sendable, Equatable {
             for field in fields {
                 guard let value = values[field.name], value != .null else {
                     if field.required {
-                        throw BridgeOperationError("\(field.title) needs an answer.")
+                        throw BridgeOperationError("A required field needs an answer.")
                     }
                     continue
                 }
                 try field.validate(value)
                 if sessionAgent == "claude", field.kind == .multi, value.array?.isEmpty == true {
-                    throw BridgeOperationError("\(field.title) needs at least one choice.")
+                    throw BridgeOperationError("A field needs at least one choice.")
                 }
             }
             data["fields"] = .object(values)

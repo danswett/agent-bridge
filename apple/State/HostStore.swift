@@ -254,7 +254,7 @@ final class HostStore: Identifiable {
         }
         do {
             let response = try await transport.send(.init(id: id, op: op, data: data), timeout)
-            guard response.ok == true else { throw RelayError.refused(BridgeShownError.refused) }
+            guard response.ok == true else { throw RelayError.hostRefused }
             return response.result ?? .null
         } catch {
             // A previous connection's late failure must not remove a reused request ID.
@@ -410,7 +410,7 @@ final class HostStore: Identifiable {
         let id = allocate()
         state.expectSubscription(id)
         let response = try await transport.send(.init(id: id, op: "sessions.subscribe"), .seconds(15))
-        guard response.ok == true else { throw RelayError.refused(BridgeShownError.refused) }
+        guard response.ok == true else { throw RelayError.hostRefused }
         try Task.checkCancellation()
         guard token == generation else { throw CancellationError() }
         status = "Synchronizing…"

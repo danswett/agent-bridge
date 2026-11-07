@@ -42,6 +42,6 @@ public enum BridgeKeychain {
     }
 
     private static func failure(_ status: OSStatus) -> RelayError {
-        .refused("Keychain access failed (\(status)). Unlock this device and try again.")
+        .refused("Keychain access failed. Unlock this device and try again.")
     }
 }

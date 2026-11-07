@@ -218,7 +218,7 @@ private func pollingCode(interval: Int = 2, expiresIn: Int = 30) throws -> Relay
     let http = SignInHTTP([.init(302, "", location: destination.origin.appendingPathComponent("collect"))])
     let (client, session) = try http.client(clock)
     defer { session.invalidateAndCancel(); SignInURLProtocol.fixtures.remove(http); SignInURLProtocol.fixtures.remove(destination) }
-    await #expect(throws: RelayError.refused("Sign-in is unavailable (302).")) { try await client.start() }
+    await #expect(throws: RelayError.refused("Sign-in is unavailable. Try again later.")) { try await client.start() }
     #expect(http.requests.count == 1)
     #expect(destination.requests.isEmpty)
 }
