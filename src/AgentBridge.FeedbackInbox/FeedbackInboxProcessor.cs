@@ -55,7 +55,7 @@ public interface IEncryptedFeedbackBundleSource
     IAsyncEnumerable<string> ListPendingAsync(CancellationToken cancellationToken);
     Task<long?> GetSizeAsync(string bundleName, CancellationToken cancellationToken);
     Task<ReadOnlyMemory<byte>?> ReadAsync(string bundleName, long maximumBytes, CancellationToken cancellationToken);
-    Task DeleteAsync(string bundleName, CancellationToken cancellationToken);
+    Task MarkProcessedAsync(string bundleName, CancellationToken cancellationToken);
 }
 
 public interface IFeedbackPrivateKeyProvider
@@ -155,7 +155,7 @@ public sealed class FeedbackInboxProcessor(
             if (size <= 0 || size > options.MaxBundleBytes)
             {
                 await SaveUnclassifiedAsync(name, "size-limit", null, null, cancellationToken);
-                await source.DeleteAsync(name, cancellationToken);
+                await source.MarkProcessedAsync(name, cancellationToken);
                 continue;
             }
 
@@ -164,13 +164,13 @@ public sealed class FeedbackInboxProcessor(
             if (ciphertext.Value.Length == 0 || ciphertext.Value.Length > options.MaxBundleBytes)
             {
                 await SaveUnclassifiedAsync(name, "size-limit", null, null, cancellationToken);
-                await source.DeleteAsync(name, cancellationToken);
+                await source.MarkProcessedAsync(name, cancellationToken);
                 continue;
             }
             if (ciphertext.Value.Length != size)
             {
                 await SaveUnclassifiedAsync(name, "size-mismatch", null, ciphertext.Value, cancellationToken);
-                await source.DeleteAsync(name, cancellationToken);
+                await source.MarkProcessedAsync(name, cancellationToken);
                 continue;
             }
 
@@ -182,7 +182,7 @@ public sealed class FeedbackInboxProcessor(
             catch (Exception exception) when (exception is FeedbackEnvelopeException or CryptographicException)
             {
                 await SaveUnclassifiedAsync(name, "invalid-envelope", null, ciphertext.Value, cancellationToken);
-                await source.DeleteAsync(name, cancellationToken);
+                await source.MarkProcessedAsync(name, cancellationToken);
                 continue;
             }
 
@@ -190,7 +190,7 @@ public sealed class FeedbackInboxProcessor(
             {
                 await SaveUnclassifiedAsync(
                     name, "unclassified", decoded.PrivateContent, null, cancellationToken, decoded.Metadata);
-                await source.DeleteAsync(name, cancellationToken);
+                await source.MarkProcessedAsync(name, cancellationToken);
                 continue;
             }
 
@@ -208,7 +208,7 @@ public sealed class FeedbackInboxProcessor(
                 await privateStore.LinkPublicIssueAsync(fingerprint, reference, cancellationToken);
             }
 
-            await source.DeleteAsync(name, cancellationToken);
+            await source.MarkProcessedAsync(name, cancellationToken);
         }
     }
 
