@@ -4,7 +4,7 @@
 import { RosterFormatError, REFUSAL } from './refusal.js';
 import { base64Url, fromBase64Url, tryBase64Url, isId, hex, compare } from './codec.js';
 import { frame, utf8, sha256, LABEL } from './framing.js';
-import { point, checkRosterSignature, checkAssertionSignature } from './p256.js';
+import { point, checkRosterSignature } from './p256.js';
 import { parseStrict, members, object, string, bool, integer, scalars, utf8Bytes, hasControl } from './strict-json.js';
 
 export const MAX_BYTES = 8 * 1024;
@@ -236,7 +236,7 @@ function parseAssertion(node, what) {
   const authenticatorData = fromBase64Url(string(a.get('authenticatorData'), `${what}.authenticatorData`), `${what}.authenticatorData`);
   const clientDataJSON = fromBase64Url(string(a.get('clientDataJSON'), `${what}.clientDataJSON`), `${what}.clientDataJSON`);
   const sig = fromBase64Url(string(a.get('signature'), `${what}.signature`), `${what}.signature`);
-  checkAssertionSignature(sig, `${what}.signature`);
+  checkRosterSignature(sig, `${what}.signature`);
   return { authenticatorData, clientDataJSON, signature: sig };
 }
 

@@ -85,7 +85,7 @@ public sealed class Entry
         var authenticatorData = Codec.FromBase64Url(StrictJson.String(a.GetProperty("authenticatorData"), $"{what}.authenticatorData"), $"{what}.authenticatorData");
         var clientData = Codec.FromBase64Url(StrictJson.String(a.GetProperty("clientDataJSON"), $"{what}.clientDataJSON"), $"{what}.clientDataJSON");
         var signature = Codec.FromBase64Url(StrictJson.String(a.GetProperty("signature"), $"{what}.signature"), $"{what}.signature");
-        P256.CheckAssertionSignature(signature, $"{what}.signature");
+        P256.CheckRosterSignature(signature, $"{what}.signature");
         return new Assertion(authenticatorData, clientData, signature);
     }
 

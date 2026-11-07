@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { RosterFormatError } from '../../js/roster/refusal.js';
 import { base64Url, tryBase64Url, fromBase64Url, fromHex, hex } from '../../js/roster/codec.js';
 import { frame, utf8 } from '../../js/roster/framing.js';
-import { point, checkRosterSignature, checkAssertionSignature, verify, fromRaw } from '../../js/roster/p256.js';
+import { point, checkRosterSignature, verify, fromRaw } from '../../js/roster/p256.js';
 import { parseEntry, deviceId, fingerprint, signedBy, signedByCosigner, presenceChallenge, isUtc } from '../../js/roster/entry.js';
 import { checkAssertion } from '../../js/roster/webauthn.js';
 import * as enrollment from '../../js/roster/enrollment.js';
@@ -50,19 +50,10 @@ test('points are uncompressed and on the curve, and a device id is the start of 
   assert.equal(fingerprint(b64(vectors.fingerprint.genesis)), vectors.fingerprint.fingerprint);
 });
 
-test('a roster signature is minimal low-S DER; an assertion\'s may be high-S', async () => {
-  for (const h of vectors.der.valid) {
-    checkRosterSignature(fromHex(h), 'sig');
-    checkAssertionSignature(fromHex(h), 'sig');
-  }
-  for (const h of vectors.der.highS) {
-    assert.equal(await refusal(() => checkRosterSignature(fromHex(h), 'sig')), 'high-s');
-    checkAssertionSignature(fromHex(h), 'sig');
-  }
-  for (const h of vectors.der.refused) {
-    assert.equal(await refusal(() => checkRosterSignature(fromHex(h), 'sig')), 'der', h);
-    assert.equal(await refusal(() => checkAssertionSignature(fromHex(h), 'sig')), 'der', h);
-  }
+test('a roster or assertion signature is minimal low-S DER', async () => {
+  for (const h of vectors.der.valid) checkRosterSignature(fromHex(h), 'sig');
+  for (const h of vectors.der.highS) assert.equal(await refusal(() => checkRosterSignature(fromHex(h), 'sig')), 'high-s');
+  for (const h of vectors.der.refused) assert.equal(await refusal(() => checkRosterSignature(fromHex(h), 'sig')), 'der', h);
 });
 
 test('a raw WebCrypto signature becomes low-S DER that verifies', async () => {

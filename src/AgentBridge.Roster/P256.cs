@@ -64,19 +64,15 @@ public static class P256
     public static bool IsLowS(BigInteger s) => s <= HalfN;
 
     // A roster signature (`sig`, `cosig`, and the signatures of person commands, attestations'
-    // keys and vetoes): minimal DER with low-S. Signers normalize; verifiers refuse the rest.
+    // keys and vetoes) and every `uv` assertion signature (§3.2): minimal DER with low-S. Signers
+    // normalize; verifiers refuse the rest, so nobody without the key can flip (r, s) to (r, n − s)
+    // and enlarge an entry that sits at its size limit.
     public static void CheckRosterSignature(ReadOnlySpan<byte> der, string what)
     {
         if (ReadDer(der) is not { } rs) { throw new RosterFormatException(Refusal.Der, what); }
         if (!IsLowS(rs.S)) { throw new RosterFormatException(Refusal.HighS, what); }
     }
 
-    // A WebAuthn assertion's signature: minimal DER, so nobody but the signer can enlarge an
-    // entry, but high-S accepted, since authenticators produce it (§3.2).
-    public static void CheckAssertionSignature(ReadOnlySpan<byte> der, string what)
-    {
-        if (ReadDer(der) is null) { throw new RosterFormatException(Refusal.Der, what); }
-    }
 
     public static byte[] Der(BigInteger r, BigInteger s)
     {
@@ -126,7 +122,7 @@ public static class P256
     }
 
     // ECDSA with SHA-256 over message, under a point already checked by IsPoint. The DER must
-    // already have passed CheckRosterSignature or CheckAssertionSignature.
+    // already have passed CheckRosterSignature.
     public static bool Verify(ReadOnlySpan<byte> point, ReadOnlySpan<byte> message, ReadOnlySpan<byte> der)
     {
         using var key = ECDsa.Create(new ECParameters

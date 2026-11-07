@@ -166,11 +166,16 @@ public sealed class RosterVectorTests
         Text("uv-empty", Refusal.Value, add.Wire[..^1] + ",\"uv\":{}}");
         Text("uv-unknown-role", Refusal.Unknown, add.Wire[..^1] + ",\"uv\":{\"approver\":{}}}");
         Text("uv-assertion-missing-signature", Refusal.Missing, addHost.Wire.Replace(",\"signature\":\"" + Codec.Base64Url(addHost.UvBy!.Signature) + "\"", "", StringComparison.Ordinal));
+        Text("uv-assertion-high-s", Refusal.HighS, (addHost with { UvBy = addHost.UvBy! with { Signature = P256.Flip(addHost.UvBy.Signature) } }).Wire);
+        Text("uv-cosigner-assertion-high-s", Refusal.HighS, (remove with { UvCosigner = remove.UvCosigner! with { Signature = P256.Flip(remove.UvCosigner.Signature) } }).Wire);
         Text("uv-assertion-non-minimal-der", Refusal.Der, (addHost with { UvBy = addHost.UvBy! with { Signature = LongR(addHost.UvBy.Signature) } }).Wire);
 
         // Sizes, over fixed content.
         var big = Padded("x", addHost, Entry.MaxBytes + 1);
         Text("add-over-8-kib", Refusal.Size, big.Wire);
+        // A flipped assertion signature can grow by a byte, so at the limit it is refused as high-S rather than let through or sized out.
+        var atLimit = Padded("x", addHost, Entry.MaxBytes);
+        Text("assertion-flipped-at-the-8-kib-limit", Refusal.HighS, (atLimit with { UvBy = atLimit.UvBy! with { Signature = P256.Flip(atLimit.UvBy.Signature) } }).Wire);
         Text("remove-over-46-kib", Refusal.Size, Padded("x", remove, Entry.MaxRemoveBytes + 1).Wire);
         Text("any-entry-over-46-kib-before-its-body-is-read", Refusal.Size, (big with { Body = Encoding.UTF8.GetBytes("not json"), UvBy = Padded("x", addHost, Entry.MaxRemoveBytes + addHost.Body.Length).UvBy }).Wire);
 
@@ -363,7 +368,6 @@ public sealed class RosterVectorTests
         var cases = new List<AssertionCase>
         {
             new("valid", credential, challenge, good, null),
-            new("valid-high-s", credential, challenge, good with { Signature = P256.Flip(good.Signature) }, null),
             new("valid-extra-client-data-member", credential, challenge, Authenticate(challenge, clientData: ClientData(challenge, extra: ",\"other_keys_can_be_added_here\":\"x\"")), null),
             new("authenticator-data-38-bytes", credential, challenge, good with { AuthenticatorData = [.. good.AuthenticatorData, 0] }, Refusal.UvAuthenticatorData),
             new("attested-credential-data-flag", credential, challenge, Authenticate(challenge, flags: 0x45), Refusal.UvAuthenticatorData),
@@ -384,6 +388,7 @@ public sealed class RosterVectorTests
             new("cross-origin", credential, challenge, Authenticate(challenge, clientData: ClientData(challenge).Replace("\"crossOrigin\":false", "\"crossOrigin\":true", StringComparison.Ordinal)), Refusal.UvOrigin),
             new("top-origin", credential, challenge, Authenticate(challenge, clientData: ClientData(challenge, extra: ",\"topOrigin\":\"https://evil.example\"")), Refusal.UvOrigin),
             new("another-key", credential, challenge, Authenticate(challenge, key: PwaSign), Refusal.UvSignature),
+            new("high-s-signature", credential, challenge, good with { Signature = P256.Flip(good.Signature) }, Refusal.HighS),
             new("signature-over-other-data", credential, challenge, good with { Signature = Authenticate(challenge, clientData: ClientData(challenge, extra: ",\"x\":1")).Signature }, Refusal.UvSignature),
         };
         return cases;

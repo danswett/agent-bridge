@@ -4,7 +4,7 @@
 import { RosterFormatError, REFUSAL } from './refusal.js';
 import { base64Url, equal } from './codec.js';
 import { sha256, utf8 } from './framing.js';
-import { verify } from './p256.js';
+import { verify, checkRosterSignature } from './p256.js';
 import { parseStrict } from './strict-json.js';
 
 const USER_PRESENT = 0x01;
@@ -55,6 +55,7 @@ export async function checkAssertion(assertion, credential, challenge) {
     throw new RosterFormatError(REFUSAL.uvOrigin, 'origin');
   }
 
+  checkRosterSignature(assertion.signature, 'signature');
   const signed = new Uint8Array(data.length + 32);
   signed.set(data, 0);
   signed.set(await sha256(assertion.clientDataJSON), data.length);

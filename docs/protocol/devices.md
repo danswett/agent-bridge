@@ -55,8 +55,9 @@ bytes.
 * **Roster signatures** (`sig`, `cosig`) are strict minimal DER `SEQUENCE { INTEGER r, INTEGER s }`
   with short-form lengths, no needless leading zero, nothing after, r and s in `[1, n)` (`der`),
   and `s ≤ n/2` (`high-s`). A signer converts WebCrypto's or CryptoKit's raw `r ‖ s` and
-  normalizes to low-S. **An assertion's signature** must be minimal DER but may be high-S, since
-  authenticators make it.
+  normalizes to low-S. **An assertion's signature** (`uv`) follows the same rule, so nobody without
+  the key can flip (r, s) to (r, n − s) and push an entry at its size limit over it; a client
+  normalizes the signature an authenticator returns before it sends the assertion.
 * **Entry hash**: `SHA-256(bodyBytes)`, written in base64url. **Head order** is ascending by the
   raw 32 bytes, compared byte by byte. The **genesis fingerprint** is the first 8 bytes of the
   genesis hash as lowercase hex in four groups of four (`7d0f 3a2e 1c4b 4d5e`).

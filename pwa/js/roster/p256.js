@@ -67,10 +67,6 @@ export function checkRosterSignature(der, what) {
   if (!isLowS(rs.s)) throw new RosterFormatError(REFUSAL.highS, what);
 }
 
-export function checkAssertionSignature(der, what) {
-  if (!readDer(der)) throw new RosterFormatError(REFUSAL.der, what);
-}
-
 function integer(v) {
   let hex = v.toString(16);
   if (hex.length % 2) hex = `0${hex}`;

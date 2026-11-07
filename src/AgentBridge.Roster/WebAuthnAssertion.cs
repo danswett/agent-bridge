@@ -63,6 +63,7 @@ public static class WebAuthnAssertion
             }
         }
 
+        P256.CheckRosterSignature(a.Signature, "signature");
         var signed = new byte[data.Length + 32];
         data.CopyTo(signed, 0);
         SHA256.HashData(a.ClientDataJson).CopyTo(signed, data.Length);
