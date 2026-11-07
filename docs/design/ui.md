@@ -862,12 +862,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 
   | # | Row | Value | Shown |
   |---|---|---|---|
-  | 1 | Status | The status words (§2.2), e.g. "Working", "Needs sign-in" | Always |
+  | 1 | Status | The status words (§2.2), e.g. "Working", "Needs sign-in", without a time: rows 2 and 4 carry it | Always |
   | 2 | In this state | "for 12m": how long in this status | Not when idle |
   | 3 | Message | The host's sentence for what is wrong (#800), plain text, never a link | When sent |
   | 4 | Not responding since | Clock time it went silent (§6.13) | When not responding |
   | 5 | Driven by | The driver's principal, else "an agent" | When agent-driven |
-  | 6 | Agent | The agent's name, e.g. "Copilot CLI" | Always |
+  | 6 | Agent | The agent's name, e.g. "Copilot", "Claude", "Codex" | Always |
   | 7 | Model | As the host reports it | When sent |
   | 8 | Machine | The machine's name | When known |
   | 9 | Repository | owner/name | When sent |
@@ -876,7 +876,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   | 12 | Started | Local clock time; another day adds the date; the full timestamp on hover | When sent |
   | 13 | Updated | "2m ago" | Always |
   | 14 | Background | "2 background agents · 1 background command" | When any |
-  | 15 | Turns | "12 turns" | When sent |
+  | 15 | Turns | "12 turns", "1 turn" | When sent |
   | 16 | Compactions | "3 compactions" | When more than 0 |
   | 17 | Process | "pid 4312", mono | When sent |
   | 18 | ID | The full session id, mono | Always |
@@ -884,7 +884,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   The groups run state (1-5), who (6-7), where (8-11), when (12-13), activity (14-16), then
   identifiers (17-18). Agent and Model sit together because the model is part of who is
   working. A value carries its unit ("12 turns", "pid 4312"), so it still reads right when it
-  is copied or read alone. Every value can be selected and copied. The ages and durations tick
+  is copied or read alone. A value wraps rather than being cut off; only Folder shortens, and
+  only by its middle. A label may wrap too. Every value can be selected and copied. The ages and durations tick
   with the row's own clock. The PWA draws it as a `dl`; the Windows app reads each row as
   "Row, value". Both clients take the list from one shared definition where they can, and a
   test in each checks its rows against this table.
