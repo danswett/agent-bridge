@@ -156,7 +156,7 @@ public sealed class HostUpdatesTests : IDisposable
         var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 4, 20, 0, 0, TimeSpan.Zero));
         var github = new FakeGitHub();
-        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, time, random: () => 0);
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, time, random: () => 0, cdn: false);
         var updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
         github.Answer = () => new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(2)) } };
 
@@ -199,7 +199,7 @@ public sealed class HostUpdatesTests : IDisposable
         {
             Content = new StringContent($"[{Release("0.1.602", true, "2026-11-04T20:00:00Z")},{Release("0.1.601", false, "2026-11-04T19:00:00Z")}]"),
         };
-        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, random: () => 0);
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, random: () => 0, cdn: false);
         var feeds = new FakeDownloads(new()
         {
             [Download("0.1.602", "releases.win.json")] = Feed("0.1.602"),
@@ -225,7 +225,7 @@ public sealed class HostUpdatesTests : IDisposable
         var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 4, 20, 0, 0, TimeSpan.Zero));
         var github = new FakeGitHub { Answer = () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(list) } };
-        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, time, random: () => 0);
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, time, random: () => 0, cdn: false);
         var updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy, discovery);
 
         var failed = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => updates.CheckAsync(CancellationToken.None));
@@ -347,6 +347,7 @@ public sealed class HostUpdatesTests : IDisposable
     }
 
     [Theory]
+    [InlineData(HttpStatusCode.BadGateway)]
     [InlineData(HttpStatusCode.ServiceUnavailable)]
     [InlineData(HttpStatusCode.Found)]
     [InlineData(HttpStatusCode.NotFound)]
@@ -361,6 +362,75 @@ public sealed class HostUpdatesTests : IDisposable
         Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
         Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
         Assert.Contains($"update check: the CDN's release list was not used, as the CDN answered {(int)status}; asking GitHub", said);
+    }
+
+    [Fact]
+    public async Task The_switch_is_on_by_default_so_a_discovery_made_without_saying_asks_the_cdn_first()
+    {
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.602")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0);
+
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+
+        Assert.Equal((1, 0), (web.CdnRequests, web.GitHubRequests));
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
+    }
+
+    // What the relay's Worker answers when it has no copy and GitHub fails: a 502 with a JSON error body.
+    [Fact]
+    public async Task A_502_from_the_cdn_with_the_relays_error_body_falls_back_to_github()
+    {
+        var web = new FakeWeb
+        {
+            Cdn = () => new HttpResponseMessage(HttpStatusCode.BadGateway) { Content = new StringContent("""{"error":"release list unavailable"}""") },
+            GitHub = () => Listing($"[{Listed("0.1.601")}]"),
+        };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0);
+
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+        Assert.Equal(ReleaseDiscovery.Sources.GitHub, discovery.Source);
+    }
+
+    [Theory]
+    [InlineData("<html><body>Bad gateway</body></html>")]
+    [InlineData("""{"error":"release list unavailable"}""")]
+    public async Task A_200_from_the_cdn_with_a_body_that_is_not_a_release_list_falls_back_to_github(string body)
+    {
+        var web = new FakeWeb { Cdn = () => Relayed(body), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var said = new List<string>();
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, log: said.Add);
+
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+        Assert.Contains("update check: the CDN's release list was not used, as its list could not be read; asking GitHub", said);
+    }
+
+    // The list the relay answered live on 2026-11-07, trimmed to three releases: read by the same
+    // checks and the same source the app uses, its asset URLs the canonical GitHub ones.
+    [Fact]
+    public async Task A_release_list_the_cdn_answered_live_is_used_and_offers_the_newest_release_for_the_win_channel()
+    {
+        var live = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "fixtures", "updates", "cdn-releases-live.json"));
+        var web = new FakeWeb { Cdn = () => Relayed(live, TimeSpan.FromSeconds(76)), GitHub = () => new HttpResponseMessage(HttpStatusCode.InternalServerError) };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0);
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.3000", packages, null, null, null, "win");
+        var feeds = new FakeDownloads(new()
+        {
+            [Downloaded("0.1.3570", "releases.win.json")] = ChannelFeed("0.1.3570"),
+            [Downloaded("0.1.3534", "releases.win.json")] = ChannelFeed("0.1.3534"),
+            [Downloaded("0.1.3522", "releases.win.json")] = ChannelFeed("0.1.3522"),
+        });
+        var source = new DiscoveredGithubSource(VelopackHostUpdates.Repository, true, discovery, feeds, () => "0.1.3000");
+
+        var offered = (await new UpdateManager(source, null, copy).CheckForUpdatesAsync())?.TargetFullRelease.Version.ToString();
+
+        Assert.Equal("0.1.3570", offered);
+        Assert.Equal((1, 0), (web.CdnRequests, web.GitHubRequests));
+        Assert.Equal(ReleaseDiscovery.Sources.Cdn, discovery.Source);
     }
 
     [Theory]
@@ -427,7 +497,7 @@ public sealed class HostUpdatesTests : IDisposable
     public async Task With_the_switch_off_the_cdn_is_never_asked()
     {
         var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.602")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
-        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0);
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: false);
 
         Assert.Equal("0.1.601", await OfferedAsync(discovery));
 

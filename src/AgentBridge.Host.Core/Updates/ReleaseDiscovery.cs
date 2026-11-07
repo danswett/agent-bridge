@@ -39,8 +39,8 @@ namespace AgentBridge.Host.Core.Updates;
 // now": FetchedAt says so, and GitHub's own backoff stays in force until GitHub itself answers.
 public sealed class ReleaseDiscovery : IDisposable
 {
-    // The switch, off until the relay is live (SRE, #927): flipped by a release, never by a setting.
-    public const bool ReadCdnFirst = false;
+    // The switch, on now the relay is live (SRE's Worker, #927): flipped by a release, never by a setting.
+    public const bool ReadCdnFirst = true;
     public const string Repository = "https://github.com/danswett/agent-bridge";
     // Pinned here, not configurable: feed.txt is the only override, and a test's alone.
     public const string GitHubList = "https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10&page=1";
