@@ -1701,8 +1701,8 @@ machine, online ones first, then the account's offline machines (#213):
   line 2 says "Bridge isn't running · since *time*" in place of "Last seen…".
 - **Diagnose (#802, v1-diagnostics.md):** in another connected machine's row, after its updates,
   a quiet small secondary **Diagnose** when its host offers it. A host that does not offer it
-  shows, in that place, the passive line "Can't be diagnosed from this device · update Agent
-  Bridge on <machine>", never a button that cannot act. This machine's own row has neither. The
+  shows, in that place, the passive line "Can't be diagnosed from this device · update Slipgates
+  on <machine>", never a button that cannot act. This machine's own row has neither. The
   states, the same on both clients except where said:
   - **Asking:** Diagnose does nothing more until the answer (the PWA's reads "Diagnosing…"; the
     app's is disabled).

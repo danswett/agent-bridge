@@ -160,7 +160,7 @@ only as a count, because the product's frames can be checked only against its as
 
 ## In the Windows app
 
-Another machine's row on the Sessions page has **Diagnose** when that machine is connected and
+Another machine's row on the Machines page has **Diagnose** when that machine is connected and
 offers it. This machine's row has none, because its host is reached over the local pipe, which
 never serves `diagnostics.get`.
 
