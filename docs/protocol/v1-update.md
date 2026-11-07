@@ -519,7 +519,8 @@ shown "Restarting to update…" for 90 s after its channel closes, then Offline 
   one. The attempt ledger (`answer-attempts.json`, written before any key) holds across the
   restart, so a prompt typed into before it is never typed into after it: no answer is typed
   twice (#1100). Since #1108 the ledger also keeps each request UUID's outcome for 15 minutes
-  across the restart, so a phone resending the same request gets its outcome, and one whose
+  across the restart, so a phone resending the same request gets its outcome (by UUID alone
+  today; slice 0 binds it to its sender), and one whose
   prompt was claimed with no outcome recorded is told `unconfirmed`, never typed again; the
   host's own stop is fenced too (new deliveries refused, up to 15 s for admitted typing and
   its confirmation, the host staying up on a timeout). What still crosses the restart less well
@@ -589,10 +590,21 @@ owns what the host keeps on disk; slice 0 lands only with all of Trust's conditi
    outcome for 15 minutes, by UUID only, with no sender, session or question; the record that
    answers the same answer under a new request with the first outcome, and checks its owner, is
    `AnswerService`'s, kept in the host's memory while the prompt's claim is (#1093, #1100).
-   Slice 0 adds what #1108 left in memory, closing the reconciliation it left open. Each
-   ledger entry gains that answer's first result: its
-   outcome and stage, the sender, session and question it was admitted for (so after a restart
-   a receipt is given only to its own sender, as before it), and a hash of the
+   Slice 0 adds what #1108 left in memory, closing the reconciliation it left open. **Today the
+   lookup after a restart is by UUID only:** `AttemptLedger.Outcome` checks no sender, so within
+   the 15 minutes anyone replaying a known UUID is given its outcome (an outcome, a stage and a
+   reason that can name a question's label or fields, never answer text), including the
+   `unconfirmed` reply for a prompt claimed with no outcome recorded. In memory, before a
+   restart, a known UUID from another sender is already treated as a request of its own. #1108
+   merged with this written down as open ([host-answers.md](../host-answers.md)); this design
+   doesn't take it as accepted, and Update now, which adds restarts, can't ship before slice 0
+   closes it. Each ledger entry, claim and receipt alike, gains that answer's first result: its
+   outcome and stage, and the sender, session and question it was admitted for. **The UUID
+   lookup then checks the stored sender, session and question**, for a receipt and for a claim
+   with no outcome yet alike. A replay of a known UUID by anyone else gets exactly what an
+   unknown UUID with the same answer would: it is a request of its own, which types nothing into
+   a claimed prompt and gets the plain refusal (the prompt was already answered once), or
+   `stale` if the question is gone. So a UUID can't be probed. Each entry also keeps a hash of the
    answer, which tells an identical retry from a different answer; and, while the
    result is `unconfirmed`, what `AnswerService`'s re-read needs to read the session again (its
    context today, `FirstAnswer.Read`): the agent, the transcript path, the call or tool-use id,
@@ -659,8 +671,9 @@ owns what the host keeps on disk; slice 0 lands only with all of Trust's conditi
    same sender after a restart gets the first outcome, and a different answer or sender still
    gets the plain refusal, as before the restart. The 3 s `LeaveAnyway` wait is unchanged.
    Tests, one for every exit (Trust condition 7): "an answer delivered before a restart is told
-   delivered when the same sender sends it again under a new request after it"; "a request's
-   outcome is not given to another sender replaying its UUID after a restart"; "an unconfirmed answer retried after a restart is read
+   delivered when the same sender sends it again under a new request after it";    "a known UUID replayed after a restart by another sender, for a receipt or for a claim with no
+      outcome yet, gets the plain refusal or `stale`, exactly as an unknown UUID with the same
+      answer does, never the outcome or `unconfirmed`"; "an unconfirmed answer retried after a restart is read
    again and never typed again"; "a different answer after a restart is still refused";
    "delivered: the words are deleted"; "a refused or stale answer's words are deleted";
    "expired: the words go when the claim expires"; "cancelled: the words go when the claim is
