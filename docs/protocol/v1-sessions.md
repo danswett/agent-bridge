@@ -687,6 +687,14 @@ half-typed prompt holds, and a second answer would land on top of the first. Onl
 attempt that typed nothing (the session's console could not be reached) leaves the prompt
 answerable. A host records the attempt before the first key, and refuses when it cannot.
 
+The same answer sent again for such a prompt under a different request UUID (a phone that
+was reloaded keeps its UUIDs in memory only, and a second device has none) is that request
+sent again, not a second attempt: while the host still has the first answer in memory, it
+gets the first outcome (`unconfirmed` read again as above, so `delivered` once the session
+has recorded it) and nothing is typed. Only a *different* answer is `refused` for a prompt
+already typed into. A host that restarted has forgotten the first answer, and refuses any
+second request for the prompt, as the record of attempts alone does.
+
 What a host answers, by agent. agent-ha-bridge is the baseline; answering Copilot
 permission prompts goes beyond it, at the user's request:
 

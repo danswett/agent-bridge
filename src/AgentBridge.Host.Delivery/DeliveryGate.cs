@@ -209,6 +209,16 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
         public Task<T>? Rechecked;
     }
 
+    // Whether the request is remembered now, pending or settled. Reads only: nothing is started.
+    public bool Knows(Guid key)
+    {
+        lock (gate)
+        {
+            Forget();
+            return requests.ContainsKey(key);
+        }
+    }
+
     // For a request with no stages to report (a stop, a launch).
     public Task<T> Once(Guid key, Func<Task<T>> deliver, Action<T> settled) => Run(key, null, null, _ => deliver(), settled);
 

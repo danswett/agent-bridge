@@ -95,7 +95,9 @@ public sealed class AnswerOptions
 //     DeliveryGate, and one request is typed at most once: its outcome is remembered and
 //     returned again for a resend.
 //   * One prompt is typed into at most once, whatever the request: the claim is written to
-//     the AttemptLedger before the first key, and kept unless nothing was typed.
+//     the AttemptLedger before the first key, and kept unless nothing was typed. The same
+//     answer sent again under another request UUID is that request resent: it gets the first
+//     outcome (read again if unconfirmed) and types nothing; a different answer is refused (#1093).
 //   * Immediately before typing, the agent's own record must still show that very prompt
 //     unanswered, by its id (stale otherwise, and nothing is typed); a record that cannot
 //     be read types nothing.
@@ -150,9 +152,91 @@ public sealed class AnswerService : ISessionAnswerer
         {
             return Task.FromResult(Refused("request must be a UUID"));
         }
-        return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "answer", key, log), t => DeliverAsync(request, key, t, confirmed), result =>
-            log($"answer {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}"),
-            Recheck(key));
+        // The same answer to the same prompt under another request UUID (the phone reloaded, a
+        // second device, the first one's record gone) is that first request sent again: it is
+        // given the first outcome and nothing is typed (#1093). Its own UUID stays unknown.
+        var prompt = (request.Id, request.Question);
+        var first = SameAnswerBefore(prompt, key, AnswerDigest.Of(request));
+        if (first is not null)
+        {
+            log($"answer {key.ToString()[..8]} to {Short(request.Id)}: the outcome of {first.Request.ToString()[..8]}, the same answer, is returned and nothing is typed");
+            if (!requests.Knows(first.Request)) { return Task.FromResult(first.Last ?? Refused(AttemptLedger.AlreadyTyped)); }
+        }
+        var flow = first?.Request ?? key;
+        var outcome = requests.Once(flow, watch, () => new DeliveryTimeline(options.Time, "answer", flow, log),
+            t => first is null ? DeliverAsync(request, key, t, confirmed) : Task.FromResult(first.Last ?? Refused(AttemptLedger.AlreadyTyped)),
+            result =>
+            {
+                log($"answer {flow.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
+                Settled(prompt, flow, result);
+            },
+            Recheck(flow));
+        if (first is null) { Started(prompt, key); }
+        return outcome;
+    }
+
+    // What each prompt's first answer was, by session and question: kept as long as the ledger
+    // keeps the prompt's claim, in memory only. A host that restarts forgets it and refuses a
+    // second request for a prompt it typed into, as the ledger alone does.
+    readonly Dictionary<(string Session, string Question), FirstAnswer> firstAnswers = [];
+    readonly Lock firstGate = new();
+
+    sealed class FirstAnswer(Guid request, string digest, DateTimeOffset at)
+    {
+        public Guid Request { get; } = request;
+        public string Digest { get; } = digest;
+        public DateTimeOffset At { get; } = at;
+        // Whether the request's own memory has been asked to run it: until then it is not known
+        // there, and not to be taken for one that never ran.
+        public bool Started;
+        // What it came to once typed: delivered or unconfirmed, and as read again since.
+        public AnswerResult? Last;
+    }
+
+    // The prompt's first answer when this request says the same, to be given its outcome (this
+    // request's own UUID included, once the request's memory has forgotten it); null when this
+    // is the prompt's first request, a resend the request's own memory answers, or a different
+    // answer, which goes the usual way and is refused by the ledger once anything was typed. A
+    // request seen first is recorded as the prompt's first.
+    FirstAnswer? SameAnswerBefore((string Session, string Question) prompt, Guid key, string digest)
+    {
+        lock (firstGate)
+        {
+            var now = options.Time.GetUtcNow();
+            foreach (var old in firstAnswers.Where(a => now - a.Value.At > AttemptLedger.Keep).Select(a => a.Key).ToList()) { firstAnswers.Remove(old); }
+            if (firstAnswers.TryGetValue(prompt, out var known))
+            {
+                if (known.Request == key) { return known.Last is not null && !requests.Knows(key) ? known : null; }
+                if (known.Digest != digest) { return null; }
+                // Still known, or settled and forgotten with its outcome kept.
+                if (requests.Knows(known.Request) || known.Last is not null) { return known; }
+                // Not yet asked to run, or never run (the host was departing): the first is
+                // left alone, and a request that is not it goes the usual way.
+                if (!known.Started) { return null; }
+                firstAnswers.Remove(prompt);
+            }
+            if (!requests.Knows(key)) { firstAnswers[prompt] = new FirstAnswer(key, digest, now); }
+            return null;
+        }
+    }
+
+    void Started((string Session, string Question) prompt, Guid key)
+    {
+        lock (firstGate)
+        {
+            if (firstAnswers.TryGetValue(prompt, out var known) && known.Request == key) { known.Started = true; }
+        }
+    }
+
+    // A first answer that was typed keeps its outcome, and as it is read again; one that was not
+    // (refused, stale, busy) leaves the prompt open to be answered afresh.
+    void Settled((string Session, string Question) prompt, Guid flow, AnswerResult result)
+    {
+        lock (firstGate)
+        {
+            if (!firstAnswers.TryGetValue(prompt, out var known) || known.Request != flow) { return; }
+            if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { known.Last = result; } else { firstAnswers.Remove(prompt); }
+        }
     }
 
     // A resend of a request already settled unconfirmed: what the session has recorded since,

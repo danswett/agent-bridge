@@ -508,7 +508,12 @@ In order, for every answer:
    ([host-replies.md](host-replies.md)) share (`busy` for a different request; a resend of
    the request being typed waits for its outcome instead). Every request UUID's outcome,
    whatever it was (`stale`, `refused` and `busy` included), is remembered for 15 minutes
-   and returned for a resend, which types nothing.
+   and returned for a resend, which types nothing. So is the outcome of a prompt's first
+   answer, for any request that says the same thing (the same fields and text) for the
+   same session and question: a phone that reloaded, or a second device, sends it under a
+   new UUID, and gets the first outcome instead of the refusal in step 6 (#1093). That
+   record is the host's memory only, and is kept while the prompt's claim is; it never
+   covers an answer that typed nothing, nor a different answer.
 4. The session's process is still the live agent process; it does not run elevated
    (integrity level High or above, or unreadable, is refused).
 5. One answer is typed at a time across sessions, and its turn is taken before these last
@@ -523,7 +528,8 @@ In order, for every answer:
    approval marker as above (`stale` otherwise). Identity, never time.
 6. The prompt is claimed in the host's attempt ledger, `answer-attempts.json` in its
    profile folder, written through to disk. A prompt already claimed (by any request,
-   before or after a restart) or a ledger that cannot be read or written is `refused`:
+   before or after a restart; the same answer sent again gets the first outcome before it
+   gets here, step 3) or a ledger that cannot be read or written is `refused`:
    agent-ha-bridge's rule that a prompt gets one attempt (`Start-CopilotDecisionAttempt`,
    `DeliveryAttempted`), since nobody can say what a half-typed prompt holds.
 7. The worker types the plan. Nothing written (it could not start, attach or open the

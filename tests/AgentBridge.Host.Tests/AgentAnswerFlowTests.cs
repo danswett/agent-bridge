@@ -56,7 +56,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    AnswerService Answerer(Func<string, string?>? codexUnsettled = null) => new(source, f.Processes, probe, guard, injector, new AnswerOptions
+    AnswerService Answerer(Func<string, string?>? codexUnsettled = null, TimeSpan? remembered = null) => new(source, f.Processes, probe, guard, injector, new AnswerOptions
     {
         CodexApprovalsUnsettled = codexUnsettled,
         CopilotHome = f.CopilotHome,
@@ -65,6 +65,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         PollInterval = TimeSpan.FromMilliseconds(25),
         ClaudeReviewAfter = TimeSpan.FromMilliseconds(300),
         AttemptLedgerPath = ledger,
+        RememberFor = remembered ?? TimeSpan.FromMinutes(15),
         Time = clock,
     }, logged.Enqueue);
 
@@ -211,6 +212,116 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Assert.Equal(AnswerOutcome.Unconfirmed, (await codex.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }))).Outcome);
         Assert.Equal(AnswerOutcome.Refused, (await Answerer().AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "deny" }))).Outcome);
         Assert.Equal(typed + 1, injector.Plans.Count);
+    }
+
+    // #1093: the phone reloaded (its request UUIDs are kept in memory only), or a second device
+    // answered, and the same answer went again under a new UUID while the prompt, typed into,
+    // still showed as asked. That is the first request sent again, not a second attempt.
+    [Fact]
+    public async Task The_same_answer_sent_again_under_a_new_request_gets_the_first_outcome_and_types_nothing()
+    {
+        var answerer = Answerer();
+        var first = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+        Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
+        var typed = injector.Plans.Count;
+
+        var again = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+
+        Assert.Equal(first, again);
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    [Fact]
+    public async Task The_same_answer_under_a_new_request_reads_the_record_again_so_one_recorded_since_comes_back_delivered()
+    {
+        var answerer = Answerer();
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
+        var typed = injector.Plans.Count;
+
+        Fixture.Append(claude, Recorded());
+        var again = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), again);
+        Assert.Equal(typed, injector.Plans.Count);
+        // Delivered from then on, for this one's own UUID resent as for the first's.
+        var third = Request(ClaudeId, "toolu_1", Chosen);
+        Assert.Equal(AnswerOutcome.Delivered, (await answerer.AnswerAsync(third)).Outcome);
+        Assert.Equal(AnswerOutcome.Delivered, (await answerer.AnswerAsync(third)).Outcome);
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    [Fact]
+    public async Task The_same_answer_under_a_new_request_while_the_first_is_being_typed_gets_its_outcome_not_busy()
+    {
+        var answerer = Answerer();
+        Task<AnswerResult>? resent = null;
+        injector.OnInject = _ =>
+        {
+            resent ??= answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+            Fixture.Append(claude, Recorded());
+        };
+
+        var first = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), first);
+        Assert.Equal(first, await resent!);
+        Assert.Single(injector.Plans);
+    }
+
+    // The request's own record is forgotten after RememberFor; the prompt's first answer is kept
+    // with its outcome for as long as the ledger keeps the claim, so a late resend of the same
+    // request or of the same answer still gets it rather than the refusal.
+    [Fact]
+    public async Task The_first_outcome_is_still_given_to_the_same_answer_once_the_request_s_own_record_is_forgotten()
+    {
+        var answerer = Answerer(remembered: TimeSpan.FromTicks(-1));
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        var first = await answerer.AnswerAsync(request);
+        Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
+        var typed = injector.Plans.Count;
+
+        Assert.Equal(first, await answerer.AnswerAsync(request));
+        Assert.Equal(first, await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen)));
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    [Fact]
+    public async Task A_different_answer_to_a_prompt_already_typed_into_is_still_refused_and_types_nothing()
+    {
+        var answerer = Answerer();
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
+        var typed = injector.Plans.Count;
+
+        var other = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", new Dictionary<string, object> { ["Which database?"] = "DuckDB", ["Which features?"] = new[] { "Auth", "Search" } }));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "an answer was already typed into this prompt once, and is never typed again"), other);
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    [Fact]
+    public async Task A_Codex_approval_answered_again_the_same_way_under_a_new_request_gets_the_first_outcome_and_the_other_decision_is_refused()
+    {
+        var answerer = Answerer();
+        var first = await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }));
+        Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
+
+        Assert.Equal(first, await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" })));
+        var denied = await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "deny" }));
+
+        Assert.Equal(AnswerOutcome.Refused, denied.Outcome);
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task An_answer_that_reached_nothing_does_not_hand_its_refusal_to_the_same_answer_sent_again()
+    {
+        var answerer = Answerer();
+        injector.Result = new InjectionResult(InjectionStatus.NothingTyped, "could not attach to the session's console");
+        Assert.Equal(AnswerOutcome.Refused, (await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
+
+        injector.Result = new InjectionResult(InjectionStatus.Typed, "ok");
+        injector.OnInject = _ => Fixture.Append(claude, Recorded());
+        Assert.Equal(AnswerOutcome.Delivered, (await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
     }
 
     [Fact]
