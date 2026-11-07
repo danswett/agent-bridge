@@ -230,6 +230,16 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     over the form is waited out; the question no longer asked ends it. What a resume checks is
     kept in memory for that delivery only, never the answer's words on disk: after a host
     restart, a resent answer finds the prompt in the attempt ledger and types nothing.
+  * Before the first key goes into a text or number field, on a first pass and a resume alike
+    (the first field included), the screen must show that field as it opens
+    (`CopilotFormScreen.Untouched`): its input's "❯ " alone, or, for a field that opens with
+    its default typed in, exactly that default. Keys typed into a box add to what is there,
+    so a "9" typed at the machine and an answer's "0" would be submitted as "90"; a field
+    showing anything else gets no keys (`refused` on a first pass with nothing typed; on a
+    resume nothing is typed, and the form is reset as below). An option list or a Yes/No
+    needs no such check: its keys walk from the top whatever row the pointer was left on,
+    and nothing typed stays in it. A checkbox list's ticks are not read (see "What no plan
+    can see").
   * Not resumed within `ResumeWait` (or after three resumes that each stopped again), the form
     is reset: one Esc (the form's own `esc cancel`), held to rows that show this very form at
     one of its fields; a screen showing anything else gets nothing, not even the Esc, and the
@@ -250,8 +260,10 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     request=<8> session=<8> cli=<version> fields=<n> shape=<kind[options]+...>
     reads=<n> rereads=<n> steady=yes|no retries=<n> check=<name@row|none> taken=<k>/<n>
     stages=slot:<ms>,typed:<ms>,confirmed:<ms> total=<ms> outcome=<outcome>
-    resume=<-|resumed|held|gone|redone|replaced|stale|uncancelled> resumes=<n>`, the last two
-    saying what became of a form left part answered and how many resumes typed into it. Its
+    resume=<-|resumed|held|gone|redone|redone-<outcome>|replaced|stale|uncancelled> resumes=<n>`, the last two
+    saying what became of a form left part answered and how many resumes typed into it (a
+    form answered afresh that stopped again keeps what became of that, `redone-held` say,
+    never plain `redone`). Its
     keys keep their order and names; new ones are only added at the end, so what reads it
     (#1132's feedback reports) keeps reading it.
   * It fails closed: such an answer is not typed at all into a screen the host cannot
@@ -387,7 +399,9 @@ through a code page.
 somebody left in it at the terminal without submitting (boxes ticked in a checkbox list,
 words half-typed into a text field) is in no transcript, so the keys add to it: ticking
 `b` after `a` was ticked locally submits both. The caret position is normalized (above);
-ticks and typed text cannot be, short of reading the screen. Such an answer is never
+ticks cannot be, short of reading the screen. Words in a text or number field can: such a
+field is read before its first key, and one not as it opens gets none (above, "as it
+opens"). Such an answer is never
 reported as delivered: the structured record differs, so the outcome is `unconfirmed`
 and the client says to check the conversation. agent-ha-bridge has the same exposure.
 

@@ -68,7 +68,12 @@ public sealed partial class CopilotAnswerTrace(TimeProvider time, string request
     // A part-answered form typed into again from the field it stopped at.
     public void Resumed() { lock (gate) { resumes++; } }
 
-    public void Resume(string outcome) { lock (gate) { resume = outcome; } }
+    // Once redone, what became of the redo itself is kept with it ("redone-held"), never in its
+    // place: a redo that ended held or resumed is not logged as one that went whole.
+    public void Resume(string outcome)
+    {
+        lock (gate) { resume = resume == ResumeRedone || resume.StartsWith(ResumeRedone + "-", StringComparison.Ordinal) ? $"{ResumeRedone}-{outcome}" : outcome; }
+    }
 
     public void Failed(FormCheck failed, int row)
     {

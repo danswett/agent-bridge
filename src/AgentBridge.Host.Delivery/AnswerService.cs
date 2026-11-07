@@ -744,8 +744,9 @@ public sealed class AnswerService : ISessionAnswerer
                     && Identical(reasked, original))
                 {
                     log($"the session {Short(session.Id)} asked the reset question again; the answer is typed into it afresh");
-                    var redone = await CopilotFormAsync(session, listed, request, timeline, trace, redo: true);
+                    // Said before the redo, so what became of the redo is kept with it.
                     trace.Resume(CopilotAnswerTrace.ResumeRedone);
+                    var redone = await CopilotFormAsync(session, listed, request, timeline, trace, redo: true);
                     return new(went, null, redone, true);
                 }
                 trace.Resume(CopilotAnswerTrace.ResumeReplaced);
@@ -1037,6 +1038,16 @@ public sealed class AnswerService : ISessionAnswerer
             return (null, why);
         }
         int Field() => Math.Min(at, Math.Max(0, form.Fields.Count - 1));
+        // Why the field the next keys go to is not as it opens (CopilotFormScreen.Untouched), on a
+        // first pass and a resume alike, before its first key: anything typed into it at the
+        // machine would be added to, and submitted with, the answer's keys (#1123 review). Null
+        // when it is untouched.
+        string? Touched(IReadOnlyList<string> rows)
+        {
+            if (CopilotFormScreen.Untouched(rows, form, Field())) { return null; }
+            log($"the field the next keys go to in {Short(sessionId)} (pid {pid}) is not as it opens: something is typed into it; nothing is typed into it");
+            return "the field the next keys go to already shows something typed into it at the machine, which they would be added to";
+        }
         // How often tail shows in the input of the field the next keys go to; none on rows that
         // do not show the form at that field, so words are never taken to have shown there.
         Func<IReadOnlyList<string>, int> Shows(string tail) => rows =>
@@ -1070,6 +1081,7 @@ public sealed class AnswerService : ISessionAnswerer
         {
             var (shown, _, why) = await NextFieldAsync("");
             if (shown is null) { return Stop(why!); }
+            if (!resuming && Touched(shown) is { } touched) { return Stop(touched); }
             var commit = keys[^1];
             var first = keys.GetRange(0, keys.Count - 1);
             if (commit.Text.Length > 0) { first.Add(commit with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0 }); }
@@ -1120,6 +1132,7 @@ public sealed class AnswerService : ISessionAnswerer
             var tail = WordsOnScreen.Tail(send.Text);
             var (field, before, missing) = await NextFieldAsync(tail);
             if (field is null) { return Stop(missing!); }
+            if (!resuming && Touched(field) is { } typedThere) { return Stop(typedThere); }
             IReadOnlyList<string>? showing = null;
             if (resuming)
             {
