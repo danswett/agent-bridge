@@ -135,8 +135,7 @@ bytes.
     "dh": "<base64url, 65 bytes>",
     "sign": "<base64url, 65 bytes; absent for a host>",
     "signAlg": "p256-sha256-der",
-    "presence": "webauthn",
-    "webauthn": { "rpId": "danswett.github.io", "credentialId": "<base64url>", "key": "<base64url, 65 bytes>", "attested": false, "backupEligible": true },
+    "presence": "key",
     "kind": "phone",
     "platform": "ios",
     "name": "Travel iPhone"
@@ -829,10 +828,13 @@ entries:
   device onto it, by having the person cosign a removal it built or by being picked as the
   person's cosigner, is kept by definition, which is why both signing clients show the whole
   removal and refuse unconfirmed keeps (§6.1).
-  * **Nothing on S's side survives M.** In every state that holds M, no add on S's side is active
-    and no grant signed through one applies. The adds on S's side that are ancestors of M are taken
-    by M, and revocation is unconditional. Suppose some other add on S's side is not void in a
-    state holding M, and let e be one with no such add among its ancestors. e is not an ancestor
+  * **No concurrent grant through S's side survives M.** In every state that holds M, no add on
+    S's side is active and no concurrent grant signed through one applies. A historical rename may
+    survive: if S renames a junior device outside its approval subtree and M's confirmations
+    descend from that rename, the device and rename survive M's removal of S (§3.5). The adds on
+    S's side that are ancestors of M are taken by M, and revocation is unconditional. Suppose some
+    other add on S's side is not void in a state holding M, and let e be one with no such add
+    among its ancestors. e is not an ancestor
     of M. If e descended from M, its signer would be active in a state holding M, but its signer
     is S, which M revokes, or an add on S's side among e's ancestors, which the choice of e
     excludes. So e is concurrent with M, its signer is revoked by M or void because of M, and e is
@@ -1552,9 +1554,11 @@ and an empty one otherwise. An active device gets the name and kind in the host'
 initiator addressed, so it reveals nothing the relay's routing did not. A person's device with
 roster support does the same toward a peer that is not active in its own copy. R3 changes
 `ReadIntro` so that a peer with roster support accepts an empty intro. In `off` and `observe` the
-intro is as today, so old peers are unaffected until a host enforces, and then they cannot open
-a channel to it at all (§8.4). Emptying message 2 in `observe` too would break every peer not yet updated, whose
-`ReadIntro` throws on an intro without `name`, while `observe` is meant to refuse nothing.
+intro is as today, so old peers are unaffected until a host enforces. An old client with an active
+key and the host's key in its IK cache can still open over IK and is served; it fails on XX and on
+IK when its key is not active (§8.4). Emptying message 2 in `observe` too would break every peer
+not yet updated, whose `ReadIntro` throws on an intro without `name`, while `observe` is meant to
+refuse nothing.
 
 **What message 2 stops saying, an active device's `hello` says.** Today's message 2 also carries
 `deflate` (the host inflates frames, so the opener may send them compressed) and, from a host that
@@ -1905,7 +1909,7 @@ fingerprint locally (in the app or the CLI) before it holds the roster.
 
 | Combination | Outcome |
 |---|---|
-| Old client, enforcing host | The old client's `ReadIntro` requires `name` and `kind`, so it fails before any gate runs, never reaching `not-approved`, on every XX handshake (message 2 is empty) and on IK when its key is not active (the reply is empty), and shows its usual failure to reach the machine. With an active key and the host's key still in its IK cache (`pwa/js/channels.js`, the app's `Machines`), it gets the full IK reply (§7.1) and keeps working over IK until its first XX fallback, which then fails. So a client must be updated before any host it talks to enforces. Every device §8.2 enrolls already has roster support, since joining needs it (§8.3 ships join first); this row is a copy left on an old version, such as a PWA tab not reloaded or an app not yet updated. Windows apps update within 30 minutes, and the PWA on reload |
+| Old client, enforcing host | The old client's `ReadIntro` requires `name` and `kind`, so it fails before any gate runs, never reaching `not-approved`, on every XX handshake (message 2 is empty) and on IK when its key is not active (the reply is empty), and shows its usual failure to reach the machine. With an active key and the host's key still in its IK cache (`pwa/js/channels.js`, the app's `Machines`), it gets the full IK reply (§7.1) and keeps working over IK until its first XX fallback, which then fails. So an old client is not blocked solely by its version: it must be updated before it needs an XX handshake with an enforcing host. Every device §8.2 enrolls already has roster support, since joining needs it (§8.3 ships join first); this row is a copy left on an old version, such as a PWA tab not reloaded or an app not yet updated. Windows apps update within 30 minutes, and the PWA on reload |
 | New client, old host | The client sees no heads in `hello`. In `observe` it warns; in `enforce` it refuses to send, saying "update this machine". Old hosts update with their app |
 | New client, old relay | No roster store, so enrollment is unavailable and says why. Devices that hold a roster keep enforcing it and gossip |
 | New host, old relay | The same: a host in `enforce` keeps its roster and syncs from peers. Freshness still works through peers and the pipe |
@@ -1993,10 +1997,10 @@ Each slice adds its own. Together they cover:
   write-only `roster.submit` on a host in `enforce`, and learns only that it is pending: `hello`
   says `approved: false` and nothing else, and `roster.submit` answers only `accepted` or
   `refused` (§7.1).
-* An old client (no roster support) opening to a host in `enforce` fails the handshake on the
-  empty intro over XX, whether or not its key is rostered, and over IK when its key is not active,
-  and shows its usual failure to reach the machine. With an active key and the host's key in its
-  IK cache it opens over IK and is served, until its first XX fallback, which fails.
+* An old client (no roster support) opening to a host in `enforce` fails on every XX handshake,
+  whether or not its key is rostered, and on IK only when its key is not active. With an active
+  key and the host's key in its IK cache it completes IK and is served until its first XX fallback,
+  which fails; an old client is not blocked solely by its version.
 * A device added with the mutual codes on the PWA (or an Apple client, or the Windows app after R4)
   is served by every host, including one that was offline during the approval.
 * A removed device is refused by every host, including one that was offline at the removal.
