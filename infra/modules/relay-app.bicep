@@ -337,7 +337,7 @@ resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
       }
     }
   }
-  dependsOn: [pull, readSecrets]
+  dependsOn: [pull, readSecrets, extraCertificates]
 }
 
 resource deployerApp 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployApp && !empty(deployerPrincipalId)) {
