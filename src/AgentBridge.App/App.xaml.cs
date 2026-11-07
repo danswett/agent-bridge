@@ -182,11 +182,7 @@ public partial class App : Application
             return;
         }
 
-        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), () =>
-        {
-            window.ShowInFront();
-            _ = window.ShowFeedbackAsync();
-        }, Quit);
+        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), window.FeedbackFromTray, Quit);
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {

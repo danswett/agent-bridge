@@ -167,6 +167,15 @@ public sealed partial class MainWindow : Window
     internal void ShowPage(string tag) =>
         Nav.SelectedItem = Nav.MenuItems.Concat(Nav.FooterMenuItems).OfType<NavigationViewItem>().First(i => (string)i.Tag == tag);
 
+    // The tray's Send feedback: the window may be hidden in the notification area.
+    internal void FeedbackFromTray()
+    {
+        ShowInFront();
+        _ = ShowFeedbackAsync();
+    }
+
+    internal bool FeedbackOpen => feedbackDialogOpen;
+
     internal async Task ShowFeedbackAsync()
     {
         if (feedbackDialogOpen) { return; }

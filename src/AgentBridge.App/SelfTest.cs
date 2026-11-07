@@ -712,30 +712,49 @@ static partial class SelfTest
         }
         else { check(false, "finds Needs you and a second session to scroll the list to"); }
     }
+
+    // Send feedback (#738), from Settings and from the tray's menu: both open the one dialog that
+    // says feedback isn't available yet, and nothing offers to send. The tray's menu is Win32's
+    // and can't be clicked here, so its choice goes through the same dispatch (TrayIcon.Run) and
+    // the same action the app gives the tray, from a window hidden in the notification area.
+    static async Task CheckFeedbackEntry(MainWindow window, Action<bool, string> check)
+    {
+        ContentDialog? Dialog() => VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot)
+            .Select(p => p.Child).OfType<UIElement>()
+            .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)[d] : Find<ContentDialog>(c))
+            .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) == "FeedbackUnavailable");
+        async Task Unavailable(string from)
+        {
+            var opened = await Until(() => Dialog() is not null, TimeSpan.FromSeconds(5));
+            var dialog = Dialog();
+            check(opened && dialog is { Title: "Send feedback", Content: "Feedback isn't available in the Windows app yet.", CloseButtonText: "Close", PrimaryButtonText: "", SecondaryButtonText: "" },
+                $"says feedback is unavailable without offering a send, from {from}");
+            dialog?.Hide();
+            check(await Until(() => Dialog() is null && !window.FeedbackOpen, TimeSpan.FromSeconds(5)), $"closes the feedback dialog opened from {from}");
+        }
+
+        window.ShowPage("settings");
+        var button = ById<Button>(window.SettingsPage, "SendFeedback");
+        check(button is { IsEnabled: true, Content: "Send feedback" }, "offers Send feedback in Settings");
+        if (button is not null)
+        {
+            ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
+            await Unavailable("Settings");
+        }
+        window.ShowPage("sessions");
+
+        window.AppWindow.Hide();
+        var wrong = false;
+        TrayIcon.Run(TrayIcon.CmdFeedback, () => wrong = true, window.FeedbackFromTray, () => wrong = true);
+        check(!wrong && window.AppWindow.IsVisible, "shows the window from the tray's Send feedback, and only that");
+        await Unavailable("the tray");
+        window.ShowInFront();
+    }
+
     // The Windows shell (ui.md §7, #180): the 48 px title bar with the mark, the name and the search
     // box; the compact rail with every page and its 3×16 selection pill in Bridge; the pages on a
     // layer with an 8 px top-left radius; WinUI's accent controls in Bridge in both themes; and the
     // window no smaller than 360×600.
-    static async Task CheckFeedbackEntry(MainWindow window, Action<bool, string> check)
-    {
-        window.ShowPage("settings");
-        var button = ById<Button>(window.SettingsPage, "SendFeedback");
-        check(button is { IsEnabled: true, Content: "Send feedback" }, "offers Send feedback in Settings");
-        if (button is null) { return; }
-        ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
-        ContentDialog? Dialog() => VisualTreeHelper.GetOpenPopupsForXamlRoot(window.RootElement.XamlRoot)
-            .Select(p => p.Child).Where(c => c is not null)
-            .SelectMany(c => c is ContentDialog d ? (IEnumerable<ContentDialog>)[d] : Find<ContentDialog>(c))
-            .FirstOrDefault(d => AutomationProperties.GetAutomationId(d) == "FeedbackUnavailable");
-        var opened = await Until(() => Dialog() is not null, TimeSpan.FromSeconds(5));
-        var dialog = Dialog();
-        check(opened && dialog is { Title: "Send feedback", Content: "Feedback isn't available in the Windows app yet.", CloseButtonText: "Close", PrimaryButtonText: "" },
-            "says feedback is unavailable without offering a send");
-        dialog?.Hide();
-        await Until(() => Dialog() is null, TimeSpan.FromSeconds(5));
-        window.ShowPage("sessions");
-    }
-
     static async Task CheckShell(MainWindow window, MainViewModel main, Action<bool, string> check)
     {
         static string Colour(object? b) => b is SolidColorBrush s ? s.Color.ToString() : b?.GetType().Name ?? "none";

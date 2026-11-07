@@ -15,7 +15,7 @@ sealed unsafe partial class TrayIcon : IDisposable
     const uint WmLButtonUp = 0x202, WmRButtonUp = 0x205, WmContextMenu = 0x7B;
     const uint MfString = 0, MfSeparator = 0x800;
     const uint TpmReturnCmd = 0x100, TpmRightButton = 2;
-    const int CmdOpen = 1, CmdQuit = 2, CmdFeedback = 3;
+    internal const int CmdOpen = 1, CmdQuit = 2, CmdFeedback = 3;
 
     static TrayIcon? current;
     readonly nint hwnd;
@@ -95,6 +95,13 @@ sealed unsafe partial class TrayIcon : IDisposable
         SetForegroundWindow(hwnd);
         var cmd = TrackPopupMenu(menu, TpmReturnCmd | TpmRightButton, at.X, at.Y, 0, hwnd, 0);
         DestroyMenu(menu);
+        Run(cmd, open, feedback, quit);
+    }
+
+    // The menu's choice to its action, apart from the Win32 menu so the self-test can run the
+    // same path (a notification-area menu can't be clicked on a CI runner).
+    internal static void Run(int cmd, Action open, Action feedback, Action quit)
+    {
         if (cmd == CmdOpen) { open(); }
         else if (cmd == CmdFeedback) { feedback(); }
         else if (cmd == CmdQuit) { quit(); }
