@@ -176,6 +176,25 @@ public sealed class LaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task The_launch_options_sensor_lists_every_agent_whichever_is_selected_and_follows_the_hosts_lists()
+    {
+        await using var c = await Ready();
+        JsonObject Sensor() => JsonNode.Parse(ha.Retained[HaContract.LaunchOptionsTopic(Slug)])!.AsObject();
+        var before = Sensor();
+        Assert.Equal(["gpt-5.5", "claude-sonnet-5"], before["agents"]!["copilot"]!["models"]!.AsArray().Select(m => m!.GetValue<string>()));
+        Assert.Equal(4, before["agents"]!.AsObject().Count);
+
+        c.Observe(ha.Choose(Entity("select", "new_agent"), "Claude"));
+        await Pass(c);
+        Assert.Equal(before["version"]!.GetValue<string>(), Sensor()["version"]!.GetValue<string>());
+
+        offered = offered with { Agents = [offered.Agents[0], offered.Agents[1] with { Models = ["gpt-5.5", "claude-sonnet-5", "claude-opus-5"] }, .. offered.Agents.Skip(2)] };
+        await Pass(c, 31);
+        Assert.NotEqual(before["version"]!.GetValue<string>(), Sensor()["version"]!.GetValue<string>());
+        Assert.Contains("claude-opus-5", Sensor()["agents"]!["copilot"]!["models"]!.AsArray().Select(m => m!.GetValue<string>()));
+    }
+
+    [Fact]
     public async Task A_persons_press_launches_what_the_card_shows_and_the_note_goes_once_it_has_started()
     {
         await using var c = await Ready();

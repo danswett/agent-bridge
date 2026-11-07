@@ -572,6 +572,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         {
             served.UnionWith(HaContract.LaunchConfigs(Slug, options.MachineName, new HaContract.LaunchCard()).Select(c => c.Topic));
             served.UnionWith([HaContract.LaunchResultTopic(Slug), HaContract.LaunchOutcomeTopic(Slug), HaContract.PromptPayloadTopic(Slug)]);
+            // launch_options is ours alone, so it is not in MachineTopics and is never cleared as unserved.
         }
         // The agents' own usage sensors are the usage pass's, and so are the numbered ones of the
         // further Copilot logins it reports; the other numbered ones go rather than keep a reading
