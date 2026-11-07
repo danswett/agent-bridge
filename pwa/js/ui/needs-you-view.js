@@ -9,6 +9,7 @@ import { tapState, prepareAnswer } from '../answers.js';
 import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer } from './question-view.js';
 import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import { duration, localTime } from './time.js';
+import { holdOf, UPDATING } from './hold.js';
 import { whileVisible } from './ticker.js';
 import { renderMarkdown } from '../markdown.js';
 
@@ -126,12 +127,13 @@ export class NeedsYouLane {
       els.approve = h('button', { type: 'button', class: 'button needs-approve', dataset: { value: e.decisions.approve.value }, 'aria-pressed': 'false', onclick: () => this.#decide(view, 'approve') }, 'Approve once');
       els.deny = h('button', { type: 'button', class: 'button secondary needs-deny', dataset: { value: e.decisions.deny.value }, 'aria-pressed': 'false', onclick: () => this.#decide(view, 'deny') }, 'Deny');
       // The machine failed the op (an error, not an outcome): the card's Try again, the same request.
-      els.resend = h('button', { type: 'button', class: 'button secondary needs-resend', hidden: true, onclick: () => { const x = view.entry; view.service?.resend(x.hostId, x.sessionId, x.questionId); } }, 'Try again');
+      els.resend = h('button', { type: 'button', class: 'button secondary needs-resend', hidden: true, onclick: () => { if (view.hold) { this.#updating(view); return; } const x = view.entry; view.service?.resend(x.hostId, x.sessionId, x.questionId); } }, 'Try again');
       // The receipt's words, and apart from them the line a screen reader hears (receipt.js): its
       // announcements are the request's, so an answer the card shows too is said once, not twice.
       els.status = h('p', { class: 'needs-status', hidden: true });
+      els.updating = h('p', { class: 'note needs-updating', hidden: true });
       els.live = receiptLive();
-      parts.push(h('div', { class: 'needs-actions' }, els.approve, els.deny, els.resend), els.status, els.live);
+      parts.push(h('div', { class: 'needs-actions' }, els.approve, els.deny, els.resend), els.updating, els.status, els.live);
     } else if (e.mode === 'atMachine') {
       parts.push(h('p', { class: 'needs-at-machine' }, 'Answer at the machine'));
     }
@@ -186,6 +188,27 @@ export class NeedsYouLane {
     els.deny?.setAttribute('aria-label', `Deny: ${subject}`);
     els.resend?.setAttribute('aria-label', `Try again: ${subject}`);
     this.#age(view);
+    this.#hold(view);
+  }
+
+  // A held question during the grace on a return (#950): as the card holds it, its buttons are
+  // aria-disabled at once and drawn disabled after 600 ms, and a press says "Updating…".
+  #hold(view) {
+    const { els } = view;
+    if (!els.updating) { return; }
+    const stale = this.answering(view.entry.hostId)?.stale;
+    const hold = stale?.grace === true ? holdOf({ updating: true, drawn: stale.drawn === true }) : holdOf(null);
+    const was = view.hold;
+    view.hold = hold.updating ? hold : null;
+    view.el.dataset.hold = hold.updating ? (hold.drawn ? 'drawn' : 'quiet') : 'none';
+    if (!hold.updating) { els.updating.hidden = true; els.updating.textContent = ''; }
+    if (was?.updating !== hold.updating || was?.drawn !== hold.drawn) { this.#ariaHold(view); }
+  }
+
+  #ariaHold(view) {
+    for (const b of [view.els.approve, view.els.deny]) {
+      if (view.hold && !b.disabled) { b.setAttribute('aria-disabled', 'true'); } else { b.removeAttribute('aria-disabled'); }
+    }
   }
 
   #age(view, now = Date.now()) {
@@ -194,12 +217,19 @@ export class NeedsYouLane {
     view.els.age.hidden = !d;
   }
 
+  // A press while the app catches up: said under the buttons, in text2; never a toast.
+  #updating(view) {
+    view.els.updating.textContent = UPDATING;
+    view.els.updating.hidden = false;
+  }
+
   // As a tap on the card's button: the same state, the same check, the same service entry, so the
   // card shows the answer going too, and a second press while one is on its way sends nothing.
   #decide(view, which) {
     const e = view.entry;
     const service = view.service;
     if (!service) { return; }
+    if (view.hold) { this.#updating(view); return; }
     const current = service.get(e.hostId, e.sessionId, e.questionId);
     if (current && (current.state === 'sending' || current.state === 'waiting')) { return; }
     const { answer, problem } = prepareAnswer(e.question, tapState(e.question, e.decisions[which].value), e.sessionId);
@@ -280,6 +310,7 @@ export class NeedsYouLane {
     if (pause && !view.lingering) { view.pause = setTimeout(() => { els.approve.disabled = els.deny.disabled = !!view.lingering; }, BUSY_PAUSE_MS); }
     const sent = !again ? entry.answer?.fields?.[view.entry.question.fields[0].name] : undefined;
     for (const b of [els.approve, els.deny]) { b.setAttribute('aria-pressed', typeof sent === 'string' && b.dataset.value === sent ? 'true' : 'false'); }
+    this.#ariaHold(view);
   }
 
   #drop(view) {

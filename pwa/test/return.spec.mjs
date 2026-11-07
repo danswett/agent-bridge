@@ -149,6 +149,33 @@ test('focus on the sort control when the strip takes the title row goes to the s
   await expect(page.locator('#connection-strip')).toBeFocused();
 });
 
+test('a lane entry held for a return is aria-disabled at once, a press says Updating… and sends nothing, and answers again once the list is whole', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => {
+    const m = window.agentBridgeDemo.machines['demo-laptop'];
+    const t = new Date().toISOString();
+    m.upsert({ ...m.get('laptop-ask-1'), status: 'waiting', statusSince: t, updatedAt: t, question: { kind: 'approval', askedAt: t, id: 'r1#0123456789abcdef', message: 'Allow **shell**?', fields: [{ name: 'decision', type: 'choice', required: true, options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }] }] } });
+  });
+  const entry = page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`).filter({ has: page.locator('.needs-approve') }).first();
+  await expect(entry).toBeVisible();
+  const approve = entry.locator('.needs-approve');
+  await comeBack(page);
+  await setOnline(page, false);
+  await page.clock.runFor(10);
+  await expect(approve).toHaveAttribute('aria-disabled', 'true');
+  expect(await approve.evaluate((b) => b.disabled)).toBe(false);
+  await approve.evaluate((b) => b.click());
+  await expect(entry.locator('.needs-updating')).toHaveText('Updating…');
+  await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveCount(0);
+  expect(await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].answerLog.length)).toBe(0);
+  await page.clock.runFor(600);
+  await expect(entry).toHaveAttribute('data-hold', 'drawn');
+  await setOnline(page, true);
+  await page.clock.runFor(4000);
+  await expect(approve).not.toHaveAttribute('aria-disabled', 'true');
+  await expect(entry.locator('.needs-updating')).toBeHidden();
+});
+
 test('an offline machine\'s line takes the place of the reply box\'s actions and focus on one goes to it', async ({ page }) => {
   await openDemo(page);
   await open(page, IDLE, LAPTOP);

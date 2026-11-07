@@ -1403,7 +1403,7 @@ summary {
    until the hold has lasted 600 ms (data-hold="drawn"). The words a press brings sit under it, in text2. */
 [data-hold="quiet"] :is(.button, .end-button, .choice)[aria-disabled="true"] { opacity: 1; cursor: inherit; }
 [data-hold="drawn"] .choice[aria-disabled="true"] { opacity: .6; cursor: default; }
-.answer-updating, .reply-updating, .stop-updating { color: var(--ab-text2); }
+.answer-updating, .reply-updating, .stop-updating, .needs-updating { color: var(--ab-text2); }
 /* The title row's slot (#950): a fixed track beside the title that nothing around it moves for, and
    the connection strip, which takes the title row's place at its height. Neither is announced as the
    slot fills; the strip is, once, as the polite status it is. */
