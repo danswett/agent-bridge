@@ -6,6 +6,7 @@ CDN: the page's Content-Security-Policy allows scripts and styles from this site
 and network access to the relay only.
 
 Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`.
+The move, for people who installed the old address, and its rollback: [docs/app-domain.md](../docs/app-domain.md).
 Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
 
 It shows sessions, their activity and their pending questions, answers those questions
