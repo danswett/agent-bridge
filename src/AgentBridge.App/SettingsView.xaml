@@ -33,6 +33,7 @@
         <Grid>
             <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="8">
                 <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Settings" />
+                <Button Content="Send feedback" AutomationProperties.AutomationId="SendFeedback" Click="OnSendFeedback" />
                 <InfoBar Severity="Error" Title="That didn't work" IsClosable="False" IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}" Message="{x:Bind ViewModel.Error, Mode=OneWay}" />
                 <ProgressBar IsIndeterminate="True" Visibility="{x:Bind local:Ui.Show(ViewModel.Busy), Mode=OneWay}" />
 
