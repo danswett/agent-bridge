@@ -59,6 +59,41 @@ function Get-AppAssetName([string]$Channel, [string]$Type, [string]$Version) {
     }
 }
 
+# A channel's releases.<channel>.json against the packages in $Dir: one entry for each of $Types
+# (Full, and Delta when there is one) of $Version, named as vpk names it, of this pack id, that
+# version and that type, with each package's SHA256 and size, and nothing else. This, not
+# Authenticode, is what an installed copy checks a full or delta package by; the pack id, version
+# and type are what it picks one by. $Version is the [semver] publish-prerelease.ps1 was given,
+# which vpk writes as given.
+function Get-AppFeedProblem([string]$FeedPath, [string]$Channel, [string]$Version, [string]$Dir, [string[]]$Types) {
+    $feed = Get-Content -LiteralPath $FeedPath -Raw | ConvertFrom-Json
+    $feedName = Split-Path $FeedPath -Leaf
+    $expected = @{}
+    foreach ($type in $Types) { $expected[(Get-AppAssetName $Channel $type $Version)] = $type }
+    $listed = @{}
+    foreach ($entry in @($feed.Assets)) {
+        # A field the feed leaves out reads as empty, so it is named as wrong rather than tripping strict mode.
+        $asset = @{}
+        foreach ($field in 'PackageId', 'FileName', 'Version', 'Type', 'SHA256', 'Size') {
+            $property = $entry.PSObject.Properties[$field]
+            $asset[$field] = if ($property) { [string]$property.Value } else { '' }
+        }
+        $name = $asset.FileName
+        if (-not $expected.ContainsKey($name)) { "$feedName lists $name, which is not this release's"; continue }
+        if ($listed.ContainsKey($name)) { "$feedName lists $name more than once"; continue }
+        $listed[$name] = $true
+        if ($asset.PackageId -cne $AppPackId) { "${feedName}: ${name}'s package id is '$($asset.PackageId)', not $AppPackId" }
+        if ($asset.Version -cne $Version) { "${feedName}: ${name}'s version is '$($asset.Version)', not $Version" }
+        if ($asset.Type -cne $expected[$name]) { "${feedName}: ${name}'s type is '$($asset.Type)', not $($expected[$name])" }
+        $path = Join-Path $Dir $name
+        if (-not (Test-Path -LiteralPath $path)) { "${feedName}: no $name beside it"; continue }
+        $file = Get-Item -LiteralPath $path
+        if ($asset.SHA256 -ne (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash) { "${feedName}: ${name}'s SHA256 is not the file's" }
+        if ($asset.Size -cne [string]$file.Length) { "${feedName}: ${name}'s size is not the file's" }
+    }
+    foreach ($name in $expected.Keys) { if (-not $listed.ContainsKey($name)) { "$feedName does not list $name" } }
+}
+
 # The version of one of this channel's full packages, from its file name, or nothing: another
 # channel's package is not this one's (x64's pattern would otherwise read
 # AgentBridgeApp-0.1.600-win-arm64-full.nupkg as the pre-release version 0.1.600-win-arm64).

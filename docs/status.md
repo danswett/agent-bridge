@@ -286,7 +286,7 @@ closed. The steps below are the machine and migration steps within it.
    migration prerequisite. Cleanup remains gated under #389. None of it gates host, app, PWA,
    relay or native MCP work.
 6. **UI design track** (§5).
-7. **Later:** code signing, macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
+7. **Later:** turning on code signing (Azure Artifact Signing, #734: built and off; the owner provisions the account, identity validation and the `signing` environment, app-windows.md "Signing"; until then releases are unsigned legacy builds, not dogfood-ready), macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
 
 ## 5. UI design track
 

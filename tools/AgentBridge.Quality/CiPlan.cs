@@ -18,12 +18,13 @@ static partial class CiPlan
     // The output the plan job sets, outside the selector, when the whole ring must run: it gates
     // nothing by its own name.
     const string WholeRing = "whole-ring";
-    // Jobs that deliver rather than check, so quality-gate doesn't wait on them, each with the one
-    // job it follows.
+    // Jobs that deliver rather than check, so quality-gate doesn't wait on them, each with the jobs
+    // it follows.
     static readonly Dictionary<string, string[]> DeliveryNeeds = new(StringComparer.Ordinal)
     {
         [PublishGate] = [Gate],
-        ["publish"] = [PublishGate],
+        ["sign"] = [PublishGate],
+        ["publish"] = [PublishGate, "sign"],
         ["attest"] = ["publish"],
         ["relay-image-sarif"] = ["product"],
     };
@@ -58,6 +59,7 @@ static partial class CiPlan
     // is meant to replace the one waiting (quality/README.md §4.7).
     const string PublishGroup = "publish-prerelease";
     const string PublishIf = "!cancelled() && needs.publish-gate.result == 'success'";
+    const string PublishAfterSignIf = PublishIf + " && needs.sign.result == 'success'";
     // The only shape a suite-gated step's if: may take: guards that hold in the whole ring too
     // (the runner's OS, not cancelled), then a disjunction of exactly the whole-ring bypass and the
     // suite tests. A substring check passed `... || contains(...)) && contains(...)`, which the
@@ -225,13 +227,16 @@ static partial class CiPlan
             else if (!TopLevelConjuncts(publishIf).Any(t => AppBuilt().IsMatch(t)))
                 Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.outputs.app == 'success' (as one of its top-level && conditions), so a run that skipped the app would publish");
         }
+        // sign, which holds the signing identity, and publish, which writes the release: exactly
+        // these, not the implicit success(): that also needs every job further up to have
+        // succeeded, and a skip there (a check the plan didn't select) carries down past
+        // publish-gate's !cancelled(), so a checked app build would never publish (#938's review).
+        // publish also needs sign's success, so a failed signing never publishes unsigned packages.
+        foreach (var (id, expected) in new[] { ("sign", PublishIf), ("publish", PublishAfterSignIf) })
+            if (jobs.TryGetValue(id, out var delivering) && Expression(Scalar(delivering, "if") ?? "") != expected)
+                Add($"ci.yml {id}'s if: isn't exactly {expected}, so it could run without {PublishGate} succeeding{(id == "publish" ? " and sign succeeding" : "")} or never run after a skipped check");
         if (jobs.TryGetValue("publish", out var publish))
         {
-            // Exactly this: the implicit success() also needs every job further up to have succeeded,
-            // and a skip there (a check the plan didn't select) carries down past publish-gate's
-            // !cancelled(), so a checked app build would never publish (#938's review).
-            if (Expression(Scalar(publish, "if") ?? "") != PublishIf)
-                Add($"ci.yml publish's if: isn't exactly {PublishIf}, so it could run without {PublishGate} succeeding or never run after a skipped check");
             // Exactly these three keys: cancel-in-progress false is also the only value queue: max
             // may be combined with.
             if (Child(publish, "concurrency") is not YamlMappingNode publishConcurrency || publishConcurrency.Children.Count != 3

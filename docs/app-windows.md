@@ -683,7 +683,9 @@ connector's Install button on a machine the dashboard drives.
   waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
   one already waiting), where by default the next to arrive would replace the one waiting, so a
   re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
-  start in is not promised, which is why the checks above keep the order.
+  start in is not promised, which is why the checks above keep the order. With signing on, the
+  `sign` job (Signing, above) runs between `publish-gate` and `publish`, and `publish` runs only
+  once `sign` has succeeded, so it never falls back to the unsigned packages.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
@@ -741,7 +743,7 @@ connector's Install button on a machine the dashboard drives.
 * **Pull requests** prove it without publishing: each app job runs the same script with
   `-DryRun` on its own folder, which checks the folder and its delta against the latest release
   as above, has vpk read it into a scratch feed (`vpk upload local`) that must list that
-  channel's packages and nothing else,
+    channel's packages once each, with this pack id, version, type, size and hash, and nothing else,
   and prints what it would upload, publish and prune against the real releases (in the job
   summary too), writing nothing.
 * **Release builds only.** The app job packs with `pack-app.ps1 -Release` exactly when the run
@@ -763,7 +765,7 @@ connector's Install button on a machine the dashboard drives.
     longer gives the G6 refusal.
 
   Nothing else reads it: not updates, delivery, migration or the relay.
-* A pre-release is unsigned (below), but attested: once `publish` has uploaded it (not on a
+* A pre-release is unsigned until the owner turns signing on (Signing, below), but attested: once `publish` has uploaded it (not on a
   re-run that finds it already out, whose rebuilt SBOMs would not be of it), CI's `attest` job downloads
   the release's packages back (the full and delta packages, `Setup.exe` and `Portable.zip` of
   each architecture) and records, in GitHub's attestation store, SLSA build provenance for each
@@ -774,8 +776,8 @@ connector's Install button on a machine the dashboard drives.
   danswett/agent-bridge`, and add `--predicate-type https://cyclonedx.org/bom` for the SBOM.
 
 To install the latest, download the installer for the machine from the newest pre-release at
-<https://github.com/danswett/agent-bridge/releases> and run it (SmartScreen: More info, then Run
-anyway):
+<https://github.com/danswett/agent-bridge/releases> and run it (unsigned, or signed by a publisher
+SmartScreen does not know yet: More info, then Run anyway):
 
 | Machine | Installer |
 |---|---|
@@ -801,15 +803,87 @@ offers **Restart to update**, or Settings, **Check for updates**, then **Restart
 takes it there at once; turning off "Include
 pre-releases" in Settings stops it finding them until there are full releases.
 
-### Signing (later)
+### Signing
 
-Releases are unsigned for now. The hook is in place: `build/pack-app.ps1` passes
-`-SignParams` (signtool arguments) or `-AzureTrustedSignFile` (an Azure Trusted Signing
-`metadata.json`) to `vpk pack`, which signs every executable in the package and `Setup.exe`
-before the delta and installer are built. To turn it on, hold the certificate or Trusted Signing
-account as a repository secret and add the argument to the app job's pack step for pushes to
-main only (a pull request from a fork gets no secrets). Until then a downloaded `Setup.exe` meets
-SmartScreen and, where it is on, Smart App Control.
+The owner chose **Azure Artifact Signing** (formerly Trusted Signing), reached from CI over
+OIDC (#734). The code is in place but **off**: until the owner turns it on, every release is
+unsigned, as before, and an unsigned release is a legacy build, not a dogfood-ready one. A
+downloaded `Setup.exe` then meets SmartScreen and, where it is on, Smart App Control.
+
+**How it signs.** In a job of its own, `sign`, which runs only for the commit `main` is at, after
+every check has passed (`publish-gate`), and with signing on. Signing is kept out of the jobs
+that build and run the source: the `app` jobs publish, pack and self-test unsigned, with no
+OIDC token and no Azure session, and with signing on each uploads its publish folder as it
+published it, before anything runs the app from it. The `sign` job builds and runs nothing from
+the source: it downloads both folders and packs each with `build/pack-app.ps1 -PackOnly`, which
+reads the folder it is given, checks its files, host build and architecture, and packs it,
+publishing nothing. There, `azure/login` signs in to Azure with the run's OIDC token: no secret,
+password or certificate is stored anywhere, and the signing key never leaves Artifact Signing's
+HSM. `build/app-signing.ps1` writes the `metadata.json` (endpoint, account and certificate
+profile, and only the Azure CLI credential allowed), and `pack-app.ps1 -AzureTrustedSignFile`
+hands it to `vpk pack`, which signs through signtool and the Artifact Signing plug-in (on .NET
+8), with an RFC 3161 timestamp from `timestamp.acs.microsoft.com`, every executable it packs and
+`Setup.exe`, before it builds the delta and the installer. Both architectures are signed in that
+one job (on x64, since signing only reads the Arm64 files), so a release is signed whole or not
+at all; a signing failure fails the job, and `publish`, which needs it, does not run. The job
+signs out of Azure after it, and `publish` takes the signed packages. With signing off, `sign`
+only notes that on Linux and `publish` takes the `app` jobs' unsigned packages, as before.
+
+**What is checked, and where.** With signing on, nothing unsigned is published:
+
+* `pack-app.ps1 -RequireSignature -SignerEku <eku>` refuses before it builds anything if signing
+  could not happen (`-NoPack`, no signing argument, no metadata file). After `vpk pack` it checks,
+  of the version it just packed: `Setup.exe`; in the full package, every `.exe`, `.dll` and
+  `.node`, which must include `AgentBridge.exe`, `agent-bridge-host.exe`,
+    `agent-bridge-hostw.exe`, the NativeAOT `agent-bridge-host-hook.exe` and
+    `agent-bridge-injector.exe`,     the updater (`Squirrel.exe`) and the one launcher stub vpk names after
+        the pack title, `lib\app\Agent Bridge_ExecutionStub.exe`; and in `Portable.zip`, the same
+        executables under `current\` and, at its root, exactly `Update.exe` and the launcher
+        `Agent Bridge.exe`. Each must have a valid Authenticode signature. Ours (`AgentBridge*`,
+  `agent-bridge*`, the updater, the stub, the launcher and `Setup.exe`) must be signed by the
+  pinned publisher: a certificate with the code-signing EKU, Artifact Signing's Public Trust EKU
+  and the owner's own identity EKU (`1.3.6.1.4.1.311.97.x.y.z.w`, which the owner's validated
+  identity alone has), and a timestamp, so the signature outlives the short-lived certificate.
+  Anything else in the package (the .NET runtime, the Windows App SDK) must carry its vendor's
+  valid signature.
+* `publish-prerelease.ps1 -RequireSignature -SignerEku <eku>` checks each architecture's folder
+  again, and that both have the same signer, before anything is created. Then, with the draft's
+  assets uploaded and before it is published, it downloads each architecture's full and delta
+  packages, `Setup.exe`, `Portable.zip` and feed back from the draft, compares their SHA-256 with
+  what it checked, checks the feed lists only those packages, once each, with this pack id,
+  version and type (full or delta), their sizes and hashes, and
+  checks the signatures once more. Any difference leaves the release a draft.
+* Authenticode covers the executables and `Setup.exe`. The `.nupkg` packages (full and delta) are
+  zip files and carry no Authenticode signature: their integrity is the feed's SHA-256 and size,
+  which the updater checks, the delta's rebuild check, and the release's attestations (above).
+
+**Turning it on** is the owner's, outside this repository, in this order:
+
+1. An Azure subscription with an Artifact Signing account, identity validation of the publisher
+   and a **Public Trust** certificate profile.
+2. An Entra app registration with one federated credential, subject
+   `repo:danswett/agent-bridge:environment:signing`, given the *Artifact Signing Certificate
+   Profile Signer* role on that profile only.
+3. A GitHub environment `signing`, deployable from `main` only, with the variables
+   `APP_SIGNING_CLIENT_ID`, `APP_SIGNING_TENANT_ID`, `APP_SIGNING_ENDPOINT` (for example
+   `https://wus2.codesigning.azure.net/`), `APP_SIGNING_ACCOUNT` and `APP_SIGNING_PROFILE` (or the
+   same as repository variables). None of them is a secret.
+4. Repository variables `APP_SIGNING_IDENTITY_EKU` (the identity's EKU from the certificate
+   profile) and, last, `APP_SIGNING` = `true`. These two are repository variables because the
+   `publish` job, which checks the signatures, has no environment.
+
+From the next push to main, both architectures are signed and checked. If any step fails (a
+missing variable, a refused sign-in, a file the publisher did not sign), that push publishes
+nothing; it never falls back to unsigned. Unsetting `APP_SIGNING` returns to unsigned releases.
+Pull requests and forks never sign, and their OIDC tokens are trusted by no Azure identity.
+
+**Not yet proven.** The tests (`build/test-publish-prerelease.ps1`) use fixture certificates and
+stand-ins for `vpk` and `gh`; they show the checks refuse what they should, not that Azure signs.
+The first signed release must be checked by hand (`Get-AuthenticodeSignature` on an installed
+copy's files) on both architectures; its signed `Setup.exe` is not install-tested in CI, whose
+self-tests run the unsigned package built from the same publish folder. And signing is not reputation: SmartScreen can still warn on
+the first downloads of a new publisher until its reputation builds, so a clean PC installing
+without a SmartScreen prompt (#747) has to be checked on a clean PC, not assumed.
 
 ### Starting with Windows
 
@@ -973,7 +1047,8 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   (`agent-bridge-host migrate` / `rollback`, [migration.md](migration.md)); the page needs
   to show the dry run's report, confirm, and show the result, and it cannot be reached through
   the relay.
-* Code signing.
+* Turning code signing on: the owner's Azure Artifact Signing account, identity validation
+  and the `signing` environment (Signing, above).
 * The first-run wizard's agent detection and winget installs.
 
 ## Testing
