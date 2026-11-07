@@ -8,6 +8,7 @@ and network access to the relay only.
 Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`. It moves to
 <https://app.slipgates.com/> (#393) when the repository variable `PAGES_APP_AT_ROOT` is `true`: the app is then the
 site's root, and `/app/` redirects to it. The tests serve the app at `/`, as it will be there.
+The move, for people who installed the old address, and its rollback: [docs/app-domain.md](../docs/app-domain.md).
 Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
 
 It shows sessions, their activity and their pending questions, answers those questions
@@ -507,9 +508,10 @@ destinations) at two sizes, and fail one whose time grows faster than its length
 Code blocks wrap rather than scroll sideways (`pre-wrap`, breaking even a long base64
 token), keeping indentation, and each has a Copy button in its top-right corner that copies
 exactly what the block draws, whatever the wrapping. The button is made by `toDom`, never by
-the parser, so no reply text can produce a `<button>`. It uses the Clipboard API and falls
-back to a hidden text area and `execCommand('copy')` where that API is missing or refuses
-(older WebViews, some iOS Home Screen apps). Inline code has no button.
+the parser, so no reply text can produce a `<button>`. It copies through a hidden text area and
+`execCommand('copy')` first, inside the tap, and uses the Clipboard API where that is refused:
+WebKit's Clipboard API resolved with nothing on the clipboard, so its answer was no proof the text
+got there (#1090). It says Copy failed when neither wrote. Inline code has no button.
 
 What is drawn is what runs (#415, ui.md §6.4, the app's #296): every code block and code span
 reads strictly left to right (`dir="ltr"`, `unicode-bidi: isolate`), with bidi controls,
