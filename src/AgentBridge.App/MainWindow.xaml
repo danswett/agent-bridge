@@ -114,8 +114,13 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Tag="settings" AutomationProperties.AutomationId="NavSettings" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings">
+                <NavigationViewItem x:Name="SettingsItem" Tag="settings" AutomationProperties.AutomationId="NavSettings" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings">
                     <ContentControl Style="{StaticResource AbIconSettings}" Width="20" Height="20" Margin="-8,0,0,0" AutomationProperties.AutomationId="NavIcon" />
+                    <!-- An agent installed after the bridge (#231; ui.md §6.7, §6.9): a grey dot, never a count. It
+                         is in the item's name too ("Settings, new agent found"), and goes with its card. -->
+                    <NavigationViewItem.InfoBadge>
+                        <InfoBadge x:Name="SettingsDot" Background="{ThemeResource AbNeutral}" Visibility="Collapsed" AutomationProperties.AutomationId="NavSettingsDot" />
+                    </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>
 

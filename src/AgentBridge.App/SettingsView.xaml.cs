@@ -20,11 +20,16 @@ public sealed partial class SettingsView : UserControl
         get => viewModel!;
         set
         {
-            if (viewModel is not null) { viewModel.UpdateStatusAnnounced -= AnnounceUpdate; }
+            if (viewModel is not null) { viewModel.UpdateStatusAnnounced -= AnnounceUpdate; viewModel.PropertyChanged -= OnViewModelChanged; }
             viewModel = value;
-            if (viewModel is not null) { viewModel.UpdateStatusAnnounced += AnnounceUpdate; }
+            if (viewModel is not null) { viewModel.UpdateStatusAnnounced += AnnounceUpdate; viewModel.PropertyChanged += OnViewModelChanged; }
             Bindings.Update();
         }
+    }
+
+    void OnViewModelChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is "" or nameof(SettingsViewModel.AgentOffers)) { AnnounceOffers(); }
     }
 
     // After the binding has put the new words in.
@@ -32,7 +37,57 @@ public sealed partial class SettingsView : UserControl
         DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(UpdateStatusText)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
 
     // The page came into view: the log is read then, not on every host event.
-    public void Opened() => viewModel?.RefreshLog();
+    public void Opened()
+    {
+        viewModel?.RefreshLog();
+        AnnounceOffers();
+    }
+
+    // A card for an agent installed later is said once, politely, and only while Settings is open
+    // (ui.md §9): one found meanwhile is said when the page next opens. Its group is drawn afresh
+    // from each status, so the change is raised on it once it is drawn, as a row's status is.
+    readonly HashSet<string> offersSaid = new(StringComparer.Ordinal);
+    // What was raised, as Narrator names it, for the self-test to see.
+    internal List<string> OffersAnnounced { get; } = [];
+
+    void AnnounceOffers()
+    {
+        if (viewModel is null) { return; }
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            OfferList.UpdateLayout();
+            var cards = Descendants(OfferList).OfType<AgentOfferGroup>().Select(g => (Group: g, Name: AutomationProperties.GetName(g))).ToList();
+            // A card that is gone is forgotten, so one that returns at the same version (after a failed
+            // setup, say) is said again.
+            offersSaid.IntersectWith(cards.Select(c => c.Name));
+            if (Visibility != Visibility.Visible) { return; }
+            foreach (var (group, name) in cards)
+            {
+                if (name.Length == 0 || !offersSaid.Add(name)) { continue; }
+                if ((FrameworkElementAutomationPeer.FromElement(group) ?? FrameworkElementAutomationPeer.CreatePeerForElement(group)) is { } peer)
+                {
+                    peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+                    OffersAnnounced.Add(peer.GetName());
+                }
+            }
+        });
+    }
+
+    internal ItemsControl Offers => OfferList;
+
+    // Not now. The card is gone once the page is drawn again, so focus goes to the next card's Set
+    // up, or else the first control of the agents below (ui.md §9, A4).
+    void OnNotNowAgent(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { } v || sender is not Button { Tag: string id }) { return; }
+        v.DismissAgentOffer(id);
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            OfferList.UpdateLayout();
+            var next = Descendants(OfferList).OfType<Button>().FirstOrDefault(b => AutomationProperties.GetAutomationId(b).StartsWith("AgentOfferSetUp_", StringComparison.Ordinal));
+            (next ?? CheckAgentsButton).Focus(FocusState.Programmatic);
+        });
+    }
 
     public static string HaNote(string? why) => $"{why}. {Product.Name} only watches while it runs: answering, replying and ending sessions stay with agent-ha-bridge until you move over.";
     // The section is already about the host, so it needs no product name (brand.md N1).

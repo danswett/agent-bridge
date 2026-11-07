@@ -92,7 +92,12 @@ public sealed partial class MainWindow : Window
         };
         UsagePane.ViewModel = viewModel.Usage;
         LaunchPane.ViewModel = launch;
-        if (viewModel.Settings is { } s) { SettingsPane.ViewModel = s; }
+        if (viewModel.Settings is { } s)
+        {
+            SettingsPane.ViewModel = s;
+            s.PropertyChanged += (_, _) => DrawSettingsDot(s);
+            DrawSettingsDot(s);
+        }
         SessionsView.ViewModel = viewModel;
         SessionsView.Launch = launch;
         SessionsView.NewRequested += () => ShowPage("launch");
@@ -100,6 +105,15 @@ public sealed partial class MainWindow : Window
         viewModel.OpenRequested += Reveal;
         FollowAppUpdate();
         viewModel.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.AppUpdate)) { FollowAppUpdate(); } };
+    }
+
+    // The grey dot on the Settings item follows the card for an agent installed later (#231): shown
+    // and named while one waits, and gone when Not now, Set up or a host that can't be set up
+    // takes the card away.
+    void DrawSettingsDot(SettingsViewModel settings)
+    {
+        SettingsDot.Visibility = Ui.Show(settings.HasAgentOffers);
+        AutomationProperties.SetName(SettingsItem, settings.AgentsNavName);
     }
 
     // The update bar is a polite live region (ui.md §9.1 A6): its words changing (ready,
