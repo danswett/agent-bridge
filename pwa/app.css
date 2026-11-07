@@ -363,7 +363,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .feedback-dialog {
   width: min(720px, calc(100vw - 24px)); max-height: 90vh; overflow: auto; margin: auto;
   color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);
-  padding: 16px;
+  padding: 16px 16px 0;
 }
 .feedback-dialog::backdrop { background: var(--ab-shell); opacity: .85; }
 .feedback-dialog h2 { margin: 0 0 8px; }
@@ -380,13 +380,25 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .feedback-included-list > li > details { grid-column: 1 / -1; }
 .feedback-included-list details ul { margin: 4px 0 0; padding-inline-start: 24px; overflow-wrap: anywhere; }
 .feedback-dialog details > summary { min-height: var(--tap); display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.feedback-dialog details > summary::after {
+  content: ""; flex: 0 0 10px; width: 10px; height: 10px; margin-inline-start: auto;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg);
+}
+.feedback-dialog details[open] > summary::after { transform: rotate(45deg); }
+@media (prefers-reduced-motion: no-preference) {
+  .feedback-dialog details > summary::after { transition: transform 120ms ease; }
+}
 .feedback-exact-data { margin-top: 8px; }
 .feedback-preview {
   max-height: 40vh; overflow: auto; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere;
   color: var(--ab-text); background: var(--ab-shell); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control);
   font: var(--type-code) / var(--type-code-line) var(--ab-font-mono);
 }
-.feedback-actions { justify-content: flex-end; }
+.feedback-actions {
+  position: sticky; bottom: 0; z-index: 1; justify-content: flex-end;
+  margin: 8px -16px 0; padding: 8px 16px 16px;
+  border-top: 1px solid var(--ab-stroke2); background: var(--ab-card);
+}
 @media (max-width: 420px) {
   .feedback-included-list > li { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
