@@ -23,7 +23,7 @@
 //   demo.js          ?demo=1: simulated machines (?machines=2 or 3), no relay; loaded only then
 //   brand.js         the product's name, for every place the app shows it
 //   release-watch.js new releases of the app that keep failing to install
-import { RELAY } from '../config.js';
+import { APP_VERSION, FEEDBACK_KEY_ID, FEEDBACK_PUBLIC_KEY, RELAY } from '../config.js';
 import { BRAND, NOTIFICATIONS_BLOCKED } from './brand.js';
 import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
 import { accountStore, startDeviceFlow } from './signin.js';
@@ -34,7 +34,7 @@ import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
 import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
 import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
-import { Capabilities } from './protocol.js';
+import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
 import { offlineMachines } from './ui/views.js';
 import { Shell } from './ui/shell.js';
 import { SessionsPage } from './ui/sessions-page.js';
@@ -52,6 +52,7 @@ import { RelayBlobs } from './blobs.js';
 import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
+import { FeedbackDiagnostics, isSensitiveFeedbackText, sendFeedbackBundle, serializeFeedbackBundle } from './feedback.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
 if (installedOnApple(markPlatform())) { edgeSwipeBack(document, () => history.back()); }
@@ -625,6 +626,101 @@ function begin(account) {
 
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
   const hosts = new HostSession({ connection, me: identity.deviceId, grace });
+  const feedbackDiagnostics = new FeedbackDiagnostics();
+  const feedbackDialog = $('feedback-dialog');
+  const feedbackNote = $('feedback-note');
+  const feedbackPreview = $('feedback-preview');
+  const feedbackError = $('feedback-error');
+  const feedbackWarning = $('feedback-warning');
+  const feedbackSend = $('feedback-send');
+  let feedbackBundle = null;
+  let feedbackSending = false;
+  $('feedback').hidden = false;
+  const feedbackBlockReason = () => {
+    if (!FEEDBACK_KEY_ID || !FEEDBACK_PUBLIC_KEY) { return 'Feedback uploads are not configured in this build.'; }
+    if (!connection.ready || !connection.relay) { return 'Connect to the relay to send feedback.'; }
+    if (!(connection.relay.feedbackMaxBytes > 0)) { return 'This relay does not accept feedback uploads yet.'; }
+    return '';
+  };
+  const drawFeedbackAvailability = () => {
+    const reason = feedbackBlockReason();
+    $('feedback-status').textContent = reason || 'Diagnostics are ready to review.';
+    if (!feedbackDialog.open) { return; }
+    if (reason) {
+      feedbackError.textContent = reason;
+      feedbackError.hidden = false;
+      feedbackError.dataset.kind = 'availability';
+    } else if (feedbackError.dataset.kind === 'availability') {
+      feedbackError.hidden = true;
+      feedbackError.dataset.kind = '';
+    }
+    feedbackSend.disabled = !!reason || feedbackSending || isSensitiveFeedbackText(feedbackNote.value);
+  };
+  const renderFeedbackPreview = () => {
+    if (!feedbackBundle) { return null; }
+    if (feedbackNote.value.trim()) { feedbackBundle.note = feedbackNote.value; } else { delete feedbackBundle.note; }
+    feedbackPreview.textContent = serializeFeedbackBundle(feedbackBundle);
+    const sensitive = isSensitiveFeedbackText(feedbackNote.value);
+    feedbackWarning.hidden = !sensitive;
+    feedbackWarning.textContent = sensitive ? 'This note matches a common credential pattern. Remove it; this note cannot be sent.' : '';
+    drawFeedbackAvailability();
+    return feedbackBundle;
+  };
+  $('feedback-open').onclick = () => {
+    feedbackNote.value = '';
+    feedbackBundle = feedbackDiagnostics.snapshot({
+      appVersion: APP_VERSION,
+      protocolVersion: PROTOCOL_VERSION,
+      hostVersions: hosts.links().map((link) => link.machine?.hostVersion),
+    });
+    renderFeedbackPreview();
+    feedbackDialog.showModal();
+    drawFeedbackAvailability();
+    feedbackNote.focus();
+  };
+  feedbackNote.addEventListener('input', renderFeedbackPreview);
+  $('feedback-cancel').onclick = () => { if (!feedbackSending) { feedbackDialog.close(); } };
+  feedbackDialog.addEventListener('close', () => { feedbackBundle = null; });
+  feedbackDialog.addEventListener('cancel', (event) => { if (feedbackSending) { event.preventDefault(); } });
+  feedbackSend.onclick = async () => {
+    const bundle = renderFeedbackPreview();
+    if (!bundle || isSensitiveFeedbackText(bundle.note)) { return; }
+    const reason = feedbackBlockReason();
+    if (reason) {
+      feedbackError.textContent = reason;
+      feedbackError.hidden = false;
+      feedbackError.dataset.kind = 'availability';
+      return;
+    }
+    const relay = connection.relay;
+    feedbackSending = true;
+    feedbackNote.disabled = true;
+    $('feedback-cancel').disabled = true;
+    feedbackSend.textContent = 'Sending…';
+    feedbackError.hidden = true;
+    try {
+      const { storedSize } = await sendFeedbackBundle({
+        relay,
+        bundle,
+        keyId: FEEDBACK_KEY_ID,
+        publicKey: FEEDBACK_PUBLIC_KEY,
+        upload: (url, bytes) => new RelayBlobs(relay).upload(url, bytes),
+      });
+      $('feedback-status').textContent = `Feedback sent (${storedSize} encrypted bytes).`;
+      feedbackDialog.close();
+    } catch (e) {
+      feedbackError.textContent = `Couldn't send feedback: ${e.message}`;
+      feedbackError.hidden = false;
+      feedbackError.dataset.kind = 'send';
+    } finally {
+      feedbackSending = false;
+      feedbackNote.disabled = false;
+      $('feedback-cancel').disabled = false;
+      feedbackSend.textContent = 'Send feedback';
+      drawFeedbackAvailability();
+    }
+  };
+  drawFeedbackAvailability();
   const link = takeLink();
   // A session's link wins over a sign-in's: a push carries one or the other.
   const wanted = (l) => (l?.host && l.session ? { host: l.host, session: l.session, question: l.question } : l?.host && l.signin ? { host: l.host, signin: l.signin } : l?.host && l.needsyou ? { host: l.host, needsyou: true } : null);
@@ -772,6 +868,7 @@ function begin(account) {
   });
   let staleTimer = null;
   hosts.sessions.onChange((c) => {
+    feedbackDiagnostics.recordEvent(`host.sessions.${c?.type}`);
     if (c.type !== 'synced' && !hosts.link(c.hostId)?.client?.synced) { return; }
     clearTimeout(staleTimer);
     staleTimer = setTimeout(() => {
@@ -809,8 +906,14 @@ function begin(account) {
     forgets.reconcile(now ?? []);
   });
   connection.on('presence', () => page.drawMachines());
-  connection.on('log', (line) => console.log(line));
+  connection.on('log', (line) => {
+    const code = line.startsWith('relay message: ') ? 'relay-message-error' : line.startsWith('undeliverable to ') ? 'relay-undeliverable' : 'transport-error';
+    feedbackDiagnostics.recordLog(code);
+    console.log(line);
+  });
   connection.on('state', ({ state }) => {
+    feedbackDiagnostics.recordEvent(`connection.${state}`);
+    drawFeedbackAvailability();
     replacedBanner.set(state === 'replaced');
     switch (state) {
       // News, as reconnecting is: the strip shows on a phone, in plain words.
@@ -836,6 +939,8 @@ function begin(account) {
     updates.clear();
     lastKnown = null;
     page.clear();
+    $('feedback').hidden = true;
+    if (feedbackDialog.open) { feedbackDialog.close(); }
     // A session's address names this account's machine: the next sign-in, perhaps another
     // account, would otherwise start on it. A link that arrives after this is kept.
     if (shell.route === 'sessions' && shell.rest.length) { shell.go('sessions', { replace: true }); }
@@ -858,6 +963,8 @@ function begin(account) {
     hosts.forget();
     fleet.clear();
     page.clear();
+    $('feedback').hidden = true;
+    if (feedbackDialog.open) { feedbackDialog.close(); }
     accountStore.clear();
     connection.stop();
     // Not for long: signing out must not wait on a service worker that isn't running.

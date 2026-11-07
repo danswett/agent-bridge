@@ -189,6 +189,14 @@
             <button type="button" id="notify-toggle" class="button" aria-pressed="false">Turn on notifications</button>
           </div>
         </section>
+        <section id="feedback" class="panel" aria-labelledby="feedback-h" hidden>
+          <h3 id="feedback-h">Send feedback</h3>
+          <p class="note">Review the exact bundle before sending. It includes recent diagnostic event types, safe log codes and versions, but no session text or raw log messages.</p>
+          <div class="row">
+            <button type="button" id="feedback-open" class="button">Send feedback</button>
+          </div>
+          <p id="feedback-status" class="note" role="status" aria-live="polite"></p>
+        </section>
         <section id="text-size" class="panel text-size" aria-labelledby="text-size-h">
           <h3 id="text-size-h">Text size</h3>
           <p class="note">On this device only.</p>
@@ -211,6 +219,24 @@
       </div>
     </main>
   </div>
+  <dialog id="feedback-dialog" class="feedback-dialog" aria-labelledby="feedback-dialog-h">
+    <h2 id="feedback-dialog-h">Review feedback</h2>
+    <p class="note">Your note and selected diagnostics are encrypted on this device before they are sent to <span data-brand>Slipgates</span> feedback service, where they are processed automatically.</p>
+    <p class="note">Session turns and raw log messages are not included. Review the exact diagnostic content below.</p>
+    <label class="feedback-label" for="feedback-note">What happened? (optional)</label>
+    <p class="note">Do not include passwords, tokens, keys, or other secrets. The automatic scan only recognizes common credential patterns.</p>
+    <textarea id="feedback-note" maxlength="1000" rows="4"></textarea>
+    <p id="feedback-warning" class="note warn" role="alert" hidden></p>
+    <details>
+      <summary>What’s included</summary>
+      <pre id="feedback-preview" class="feedback-preview"></pre>
+    </details>
+    <p id="feedback-error" class="note warn" role="alert" hidden></p>
+    <div class="row feedback-actions">
+      <button type="button" id="feedback-cancel" class="button secondary">Cancel</button>
+      <button type="button" id="feedback-send" class="button">Send feedback</button>
+    </div>
+  </dialog>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>

@@ -147,6 +147,30 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   expect(violations).toEqual([]);
 });
 
+test('feedback preview shows the bounded diagnostic bundle before sending', async ({ page }) => {
+  await signIn(page);
+  await page.click('#nav [data-nav="settings"]');
+  await page.click('#feedback-open');
+  await expect(page.locator('#feedback-dialog')).toBeVisible();
+  await expect(page.locator('#feedback-dialog summary')).toHaveText('What’s included');
+  await page.click('#feedback-dialog summary');
+  await expect(page.locator('#feedback-preview')).toBeVisible();
+  const note = 'The app stopped after I refreshed the page.';
+  await page.locator('#feedback-note').fill(note);
+  const preview = await page.locator('#feedback-preview').textContent();
+  const bundle = JSON.parse(preview);
+  expect(bundle.schema).toBe('slipgates-feedback.v1');
+  expect(bundle.versions.app).toBe('dev');
+  expect(bundle.versions.protocol).toBe(1);
+  expect(bundle.note).toBe(note);
+  expect(bundle.events.length).toBeLessThanOrEqual(100);
+  expect(bundle.logs.every((entry) => ['relay-message-error', 'relay-undeliverable', 'transport-error'].includes(entry.code))).toBe(true);
+  expect(preview).not.toContain(CLAUDE);
+  expect(preview).not.toContain(fixture.sessions[0].title);
+  await expect(page.locator('#feedback-send')).toBeDisabled();
+  await expect(page.locator('#feedback-error')).toContainText('not configured');
+});
+
 test('a machine from before the sessions protocol is reported, ?host= opens a machine directly, and a refused sign-in leaves nothing behind', async ({ page, context }) => {
   const sockets = [];
   await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
