@@ -1,6 +1,6 @@
 // West US 2, in the "Visual Studio Enterprise Subscription" (0e38f344-908e-4ff3-88ac-4d499a1f51f8),
 // resource group rg-agent-bridge-relay. infra/deploy.ps1 deploys here by default. Production
-// is served at relay.bad-duck.com (DNS at Cloudflare; see docs/relay-deploy.md).
+// is served at relay.bad-duck.com and relay.slipgates.com, both directly (DNS at Cloudflare; see docs/relay-deploy.md).
 using '../main.bicep'
 
 param location = 'westus2'
@@ -26,6 +26,7 @@ param production = {
   cpu: '0.25'
   memory: '0.5Gi'
   customDomain: 'relay.bad-duck.com'
+  extraCustomDomains: ['relay.slipgates.com']
   blobStorageName: 'abblobprodwus2'
   rosterStorageName: 'abrosterprodwus2'
 }
@@ -46,6 +47,8 @@ param staging = {
 
 param productionDomainState = readEnvironmentVariable('RELAY_PRODUCTION_DOMAIN_STATE', 'none')
 param stagingDomainState = readEnvironmentVariable('RELAY_STAGING_DOMAIN_STATE', 'none')
+param productionExtraDomainStates = split(readEnvironmentVariable('RELAY_PRODUCTION_EXTRA_DOMAIN_STATES', ''), ',')
+param stagingExtraDomainStates = split(readEnvironmentVariable('RELAY_STAGING_EXTRA_DOMAIN_STATES', ''), ',')
 param stagingDeployerPrincipalId = readEnvironmentVariable('RELAY_STAGING_DEPLOYER', '')
 param productionDeployerPrincipalId = readEnvironmentVariable('RELAY_PRODUCTION_DEPLOYER', '')
 param deployApps = bool(readEnvironmentVariable('RELAY_DEPLOY_APPS', 'true'))
