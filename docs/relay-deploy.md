@@ -43,7 +43,7 @@ and naming changes, and this branch adds operational behaviour. Compared side by
 | Devices | Id = SHA-256 of the device key; nothing stored | Same | None: nothing to migrate |
 | Presence | In memory, rebuilt as devices reconnect | Same | Devices reconnect once (1012), as on any restart |
 | Web Push | `PushGateway`, VAPID key `Relay:VapidPrivateKey`, push-host allowlist, 30/min/account | Same code | **Subscriptions survive only if the VAPID key is carried over** (a browser subscription is bound to the public key). `deploy.ps1` copies it |
-| CORS and origins | `Relay:AllowedOrigins` = `https://danswett.github.io`, and `https://app.slipgates.com` from #393 | Same option and checks | Set the same origins (they are in `regions/westus2.bicepparam`) |
+| CORS and origins | `Relay:AllowedOrigins` = `https://danswett.github.io`, and `https://app.slipgates.com` from #393 (both stamps). Staging alone also allows `https://preview.slipgates.com` (`stagingExtraAllowedOrigins`) | Same origins as staging, without the preview one | Set the same origins (they are in `regions/westus2.bicepparam`) |
 | GitHub sign-in | Device flow through the GitHub App client id | Same | Same client id; nothing for users to do |
 | Limits | 200 frames/s per socket, 32 devices per account, 60 sign-in calls/min per IP | Same, plus 120 new sockets/min per IP, 16 KiB request bodies, 10,000 sockets per replica | None for real clients: hosts and the PWA back off 1 s → 30 s |
 | Logs | GitHub login, account id, device id prefix and device name per connection | None of those: a random per-socket tag, kind and counts; JSON lines | Operational only |
