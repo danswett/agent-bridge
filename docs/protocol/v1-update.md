@@ -553,7 +553,8 @@ remedy is the one #801 has: `permissions.remoteManage` off, and #55's roster.
 Each slice is its own PR. Slices 0, 1 and 2 are sensitive (answer delivery, protocol, updater and install path) and
 need an independent review and a second model family; 3 and 4 touch how a confirmation renders,
 so they need one too. **Trust reviews slice 0** as well: answers can contain secrets, and Trust
-owns what the host keeps on disk.
+owns what the host keeps on disk; slice 0 lands only with all of Trust's conditions met
+(below).
 
 0. **Answer results across the restart** (settled Q4; must land before Update now ships). The
    durable record of typed answers, `AttemptLedger` (`answer-attempts.json`, written through
@@ -564,44 +565,78 @@ owns what the host keeps on disk.
    answer, which tells an identical retry from a different answer; and, while the
    result is `unconfirmed`, what `AnswerService`'s re-read needs to read the session again (its
    context today, `FirstAnswer.Read`): the agent, the transcript path, the call or tool-use id,
-   the read offset, and the typed plan the re-read compares with. The plan is the answer's
-   words. **This departs from #1100's hash-only plan on purpose:** the re-read compares the
+   the read offset; and the answer's words, from which the re-read rebuilds the plan it compares,
+   kept apart from the ledger (below). **This departs from #1100's hash-only plan on purpose:** the re-read compares the
    words the session recorded with the words typed, which a hash can't do once the host that
    typed them is gone. The agent's own transcript already holds the same words on the same disk,
-   so the only new copy is the host's. The rules for that copy, which `AnswerService`'s memory
-   follows too, so a retry is told the same before a restart as after it:
-   * **Exits.** The words are dropped at the first of: the result turning `delivered`; the
-     result turning anything but `unconfirmed`; the claim ending (the session or its question
-     gone, or the ledger's own `Keep`); and **24 hours** after they were typed, for an
-     `unconfirmed` entry nobody retries. Without the words, the entry keeps its outcome, stage
-     and hash, so an identical retry is still told nothing was typed again (#1100's reply),
-     never typed again.
-   * **Startup sweep.** A host that starts drops, before serving, the words of every entry past
-     an exit above, and any partial file a crash left (the ledger is written to a temporary file
-     and renamed, so a half-written ledger is never read).
-   * **Bounds.** At most 256 entries hold words, at most 64 KiB of words each and 4 MiB in all;
-     past that the oldest words are dropped first, with the same fallback as above.
-   * **Where it lives.** `answer-attempts.json` in the host's profile folder, with a protected
-     ACL granting this Windows user alone, nothing inherited (as the app's `PrivateFolder`). The
-     temporary file each write goes through is created with that same ACL, never inheriting the
-     folder's, so the rename carries it onto the ledger.
-     The words never go into a log, diagnostics, a support bundle, `host-state` or anything sent
-     to the relay or a device; only their outcome does, as today.
+   so the only new copy is the host's. **Trust** accepted it on conditions (#1161, comment
+   6712503332): "Acceptable, with conditions; none of it may go ahead without all of them." The
+   rules for that copy, which `AnswerService`'s memory follows too, so a retry is told the same
+   before a restart as after it:
+   * **Where it lives: not in the ledger** (Trust condition 1). `answer-attempts.json` (#1108)
+     is today readable by the `CodexSandboxUsers` group through its folder's ACL, so the words
+     never go into it, and its ACL is left as it is. They go in a separate file,
+     `answer-words.json`, in a new subfolder `private\` of the host's profile folder whose ACL is
+     protected (nothing inherited) and grants this Windows user and SYSTEM alone, set when the
+     folder is created. Before writing any words the host checks that ACL; if anything else can
+     read the folder or the file, it keeps no words and refuses the answer as below, before any
+     key. The ledger entry keeps only a key to its words.
+   * **Text only** (condition 6). The file holds the answer's text as sent (each field's, for a
+     form) under that key, and nothing else: not the question, its options, the keys typed or
+     the transcript. The re-read context (agent, transcript path, call or tool-use id, read
+     offset) stays in the ledger entry, and the plan the re-read compares with is rebuilt from
+     the text. It is written atomically to a temporary file in `private\` (so it carries the
+     folder's ACL) and renamed over the old one with no backup file; it is never memory-mapped,
+     a failed write deletes its temporary file, and no other copy is kept.
+   * **Held only while unconfirmed** (condition 3). The words are deleted at the first of: the
+     result turning anything but `unconfirmed` (`delivered` included); the claim expiring or
+     being cancelled (the session or its question gone, the claim released, or the ledger's own
+     `Keep`); and, for an `unconfirmed` entry nobody retries, the end of the claim's life, and
+     never later than 24 hours after they were typed. Without the words, the entry keeps its
+     outcome, stage and hash, so an identical retry is still told nothing was typed again
+     (#1100's reply), never typed again.
+   * **Startup sweep** (condition 4). A host that starts deletes, before serving, every leftover
+     temporary file in `private\`, the words of every entry past an exit above (expired or
+     cancelled claims included), and words with no ledger entry. **A failed delete fails
+     closed:** that entry is treated as having no words, so a retry gets #1100's reply
+     (`unconfirmed`, nothing typed again) and is never re-read from stale words; that is how
+     Trust's "refused, not retried" is met, since nothing is typed or read from them. The delete
+     is tried again at the next write and start.
+   * **Bounds** (condition 5). At most 32 entries hold words, at most 16 KiB of words each and
+     256 KiB in all. The protocol's own request limit (`Limits.AnswerRequest`, 16 KiB) already
+     refuses a longer answer with its own reason; an answer that would pass the entry or total
+     cap is refused before any key, as a `refused` answer whose reason says to answer at the
+     machine (the words added to v1-sessions.md's answer reasons in this slice). Nothing is
+     evicted to make room and no words are truncated.
+   * **Never anywhere else** (condition 2). The words never go into a log, diagnostics, a
+     support bundle, `host-state`, a local-API response, a trace, an error message, or anything
+     sent to the relay or a device; only their outcome does, as today. Trust: "Compliance review
+     is not needed if condition 2 is tested; if any path can reach a bundle or diagnostics, bring
+     Compliance in." So slice 0 needs no Compliance review while its canary test passes, and gets
+     one if any path is found to reach a support bundle or diagnostics.
 
-   It is updated when
+   The ledger is updated when
    the outcome settles and when an `unconfirmed` one is read again as `delivered`. A host that
    starts reads it back, so an identical retry from the
    same sender after a restart gets the first outcome, and a different answer or sender still
    gets the plain refusal, as before the restart. The 3 s `LeaveAnyway` wait is unchanged.
-   Tests: "an answer delivered before a restart is told delivered when retried after it"; "an
-   unconfirmed answer retried after a restart is read again and never typed again"; "a
-   different answer after a restart is still refused"; "a delivered answer's words are dropped
-   from the ledger"; "a refused or stale answer's words are dropped"; "the words go when the
-   session or question goes"; "an unconfirmed answer nobody retries loses its words after 24
-   hours and a later retry types nothing, before a restart and after it alike"; "a host starting after a crash drops expired words and
-   a partial ledger file"; "past 256 entries or 4 MiB the oldest words go first"; "the ledger
-   file grants this user alone, after every rewrite too"; "no log, diagnostics, support bundle, host-state, relay or device message carries an
-   answer's words".
+   Tests, one for every exit (Trust condition 7): "an answer delivered before a restart is told
+   delivered when retried after it"; "an unconfirmed answer retried after a restart is read
+   again and never typed again"; "a different answer after a restart is still refused";
+   "delivered: the words are deleted"; "a refused or stale answer's words are deleted";
+   "expired: the words go when the claim expires"; "cancelled: the words go when the claim is
+   released or the session or question goes"; "an unconfirmed answer nobody retries loses its
+   words when its claim's life ends, and by 24 hours at most, and a later retry types nothing,
+   before a restart and after it alike"; "crash sweep: a host starting after a crash deletes
+   leftover temporary files, expired or cancelled claims' words and words with no entry"; "a
+   failed delete gets #1100's reply on retry, never a re-read from the words"; "cap reached: the
+   33rd entry or the 256 KiB total is refused before any key, saying to answer at the machine,
+   and nothing held is evicted or cut"; "ACL: `private\` and `answer-words.json` grant this user and SYSTEM
+   alone, after every rewrite too, and a wider ACL keeps no words"; "`answer-attempts.json`
+   never holds an answer's words"; "canary: an answer carrying a known canary string, driven
+   through delivered, unconfirmed, refused, a failed delete and a restart, never appears in the
+   logs, diagnostics, a support bundle, host-state, local-API responses, traces, error messages
+   or relay and device messages".
 
 1. **Host and protocol.** `Update.cs`: `now` on the command, `canUpdateNow`, `busy`,
    `requestNow`, `waitingCode`, outcome `confirm`, `code`. `UpdateService` verifies `now` through the same
