@@ -53,6 +53,67 @@ public sealed class WorkerInjector : IConsoleInjector
         finally { One.Release(); }
     }
 
+    // agent-bridge-injector <pid> --widen <columns>: one attach that types nothing and makes the
+    // console's screen buffer at least that wide, "width <n>" as read back, then "ok".
+    public async Task<ConsoleWidth> WidenAsync(int processId, int columns, CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(path)) { return new ConsoleWidth(null, $"the injector is missing beside the host ({FileName})", false); }
+        await One.WaitAsync(cancellationToken);
+        try
+        {
+            var start = new ProcessStartInfo(path)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+            };
+            start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
+            start.ArgumentList.Add("--widen");
+            start.ArgumentList.Add(columns.ToString(CultureInfo.InvariantCulture));
+            Process? process;
+            try { process = ProcessLaunch.Start(start); }
+            catch (Exception e) { return new ConsoleWidth(null, CouldNotStart(processId, e), false); }
+            if (process is null) { return new ConsoleWidth(null, NotStarted, false); }
+            using (process)
+            {
+                process.StandardInput.Close();
+                var errors = process.StandardError.ReadToEndAsync();
+                int? width = null;
+                string? final = null;
+                using var patience = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try
+                {
+                    while (await process.StandardOutput.ReadLineAsync(patience.Token) is { } line)
+                    {
+                        if (line.StartsWith("width ", StringComparison.Ordinal) && int.TryParse(line[6..], NumberStyles.None, CultureInfo.InvariantCulture, out var w)) { width = w; }
+                        else if (line == "ok" || line.StartsWith("fail ", StringComparison.Ordinal)) { final = line; }
+                    }
+                    await process.WaitForExitAsync(patience.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    try { process.Kill(); } catch (InvalidOperationException) { }
+                    return new ConsoleWidth(null, "the injector stopped responding while widening the console", false);
+                }
+                await errors;
+                if (final == "ok" && width is not null) { return new ConsoleWidth(width, null, false); }
+                if (final is not null)
+                {
+                    var parts = final.Split(' ');
+                    var stage = parts.Length > 1 ? parts[1] : "?";
+                    var code = parts.Length > 2 && int.TryParse(parts[2], CultureInfo.InvariantCulture, out var c) ? c : 0;
+                    // A console not yet allocated to a process just started: not attached yet.
+                    return new ConsoleWidth(null, $"the console could not be widened ({stage} error {code})", stage == "attach" && code is 6 or 31 or 87);
+                }
+                return new ConsoleWidth(null, $"the injector stopped before widening the console (exit 0x{process.ExitCode:X8})", false);
+            }
+        }
+        finally { One.Release(); }
+    }
+
     async Task<ConsoleScreen> ScreenAsync(int processId)
     {
         var start = new ProcessStartInfo(path)

@@ -4,7 +4,7 @@ using System.Text;
 
 namespace AgentBridge.Injector;
 
-// agent-bridge-injector <pid> [--screen]
+// agent-bridge-injector <pid> [--screen | --widen <columns>]
 //
 // Reads a key plan on stdin (KeyPlan.ToWorkerScript in AgentBridge.Host.Delivery) and
 // types it into the console of <pid>, one attach-write-detach per send, the shape
@@ -25,7 +25,10 @@ namespace AgentBridge.Injector;
 // trimmed), "+<row>" contains one of the given texts, "-<row>" contains none of them, "_<row>"
 // is blank (ASCII spaces at most) and so is every row below it, "^<row>" starts, leading
 // spaces aside, with none of them. With --screen nothing is typed at all: it says "row <base64>" for each row
-// of the visible window, top to bottom, then "ok".
+// of the visible window, top to bottom, then "ok". With --widen nothing is typed either: the
+// console's screen buffer is made at least <columns> wide (SetConsoleScreenBufferSize, its
+// height kept), the width an agent in it draws to, and it says "width <columns>" as read back,
+// then "ok". A buffer already as wide is left as it is.
 //
 // The host treats a worker that ends any other way after a "writing" line as "some of the
 // answer may have gone", and never retries it. It is a separate process because Windows
@@ -40,13 +43,16 @@ internal static unsafe partial class Program
     {
         // Taken before any attach: these are the pipes the host gave us, and stay so.
         output = Console.OpenStandardOutput();
-        if (args.Length is not (1 or 2) || (args.Length == 2 && args[1] != "--screen")
+        var columns = 0;
+        if (args.Length is not (1 or 2 or 3) || (args.Length == 2 && args[1] != "--screen")
+            || (args.Length == 3 && (args[1] != "--widen" || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out columns) || columns is < 1 or > short.MaxValue))
             || !uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid == 0)
         {
             Say("fail usage 0");
             return 2;
         }
         if (args.Length == 2) { return Screen(pid); }
+        if (args.Length == 3) { return Widen(pid, (short)columns); }
         var sends = Read(Console.OpenStandardInput());
         if (sends is null)
         {
@@ -176,6 +182,54 @@ internal static unsafe partial class Program
             return 3;
         }
         foreach (var row in rows) { Say("row " + Convert.ToBase64String(Encoding.UTF8.GetBytes(row))); }
+        Say("ok");
+        return 0;
+    }
+
+    // The attached console's active screen buffer made at least `columns` wide. The console host
+    // takes no width from STARTUPINFO (its buffer follows its window, which the screen clamps,
+    // while "wrap text output on resize" is on, as it is by default); a buffer set wider than its
+    // window afterwards is kept, the window scrolling across it, until the window is restored
+    // from minimized or resized, when the buffer follows the window again (#1123).
+    static int Widen(uint pid, short columns)
+    {
+        FreeConsole();
+        if (!AttachConsole(pid))
+        {
+            Say($"fail attach {Marshal.GetLastPInvokeError()}");
+            return 3;
+        }
+        Ignore();
+        try
+        {
+            var screen = CreateFile("CONOUT$", GenericRead | GenericWrite, FileShareRead | FileShareWrite, 0, OpenExisting, 0, 0);
+            if (screen == -1)
+            {
+                Say($"fail output {Marshal.GetLastPInvokeError()}");
+                return 3;
+            }
+            try
+            {
+                if (!GetConsoleScreenBufferInfo(screen, out var info))
+                {
+                    Say($"fail output {Marshal.GetLastPInvokeError()}");
+                    return 3;
+                }
+                if (info.SizeX < columns && !SetConsoleScreenBufferSize(screen, new Coord { X = columns, Y = info.SizeY }))
+                {
+                    Say($"fail widen {Marshal.GetLastPInvokeError()}");
+                    return 3;
+                }
+                if (!GetConsoleScreenBufferInfo(screen, out info))
+                {
+                    Say($"fail output {Marshal.GetLastPInvokeError()}");
+                    return 3;
+                }
+                Say(string.Create(CultureInfo.InvariantCulture, $"width {info.SizeX}"));
+            }
+            finally { CloseHandle(screen); }
+        }
+        finally { FreeConsole(); }
         Say("ok");
         return 0;
     }
@@ -323,6 +377,10 @@ internal static unsafe partial class Program
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetConsoleScreenBufferInfo(nint output, out ScreenBufferInfo info);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetConsoleScreenBufferSize(nint output, Coord size);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

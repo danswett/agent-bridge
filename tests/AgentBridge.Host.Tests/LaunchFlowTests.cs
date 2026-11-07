@@ -214,6 +214,35 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(LaunchService.ConsoleColumns, Assert.Single(starter.Specs).Columns);
     }
 
+    [Fact]
+    public async Task A_launched_sessions_console_is_widened_to_the_launch_width_and_the_width_it_got_is_logged()
+    {
+        starter.Registers = false;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Prompt = "go" }, "fixture");
+
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains($"console is {LaunchService.ConsoleColumns} columns wide", StringComparison.Ordinal))));
+        var widen = Assert.Single(screens.Widens);
+        Assert.Equal(LaunchService.ConsoleColumns, widen.Columns);
+        Assert.True(widen.Pid > 0);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_console_that_cannot_be_widened_is_logged_once_and_left_as_it_is()
+    {
+        starter.Registers = false;
+        screens.Widened = _ => new ConsoleWidth(null, "the console could not be widened (widen error 87)", false);
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Prompt = "go" }, "fixture");
+
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("console was not widened: the console could not be widened (widen error 87)", StringComparison.Ordinal))));
+        Assert.Single(screens.Widens);
+        Assert.Empty(screens.Typed);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -1231,6 +1260,16 @@ public abstract partial class LaunchFlowFixture
 
         // Awaited while a read is on its way: where a test holds one.
         public Func<Task>? Reading;
+
+        // Every console widened, and how wide; Widened says what a widen leaves (as asked, by default).
+        public readonly System.Collections.Concurrent.ConcurrentQueue<(int Pid, int Columns)> Widens = new();
+        public Func<int, ConsoleWidth>? Widened;
+
+        public Task<ConsoleWidth> WidenAsync(int processId, int columns, CancellationToken cancellationToken = default)
+        {
+            Widens.Enqueue((processId, columns));
+            return Task.FromResult(Widened?.Invoke(columns) ?? new ConsoleWidth(columns, null, false));
+        }
     }
 
     private protected sealed class FakeLocator : IAgentLocator

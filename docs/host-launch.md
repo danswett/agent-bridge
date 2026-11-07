@@ -25,19 +25,26 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   daemon runs unelevated in the user's logon session (a logon task, hidden through a `.vbs`),
   so the agent's console is a normal window on the person's desktop. No window title is set
   on Windows.
-* **Width.** The host's launches (Windows) ask for a console 250 columns wide, so Copilot's
-  form tab bar (the console's width less four) shows every field's title and the host can
-  tell an answer's form is the question's before it types (#1123; a six-field form with long
-  titles needed about 230). Only the classic console host takes a width from the start
-  (STARTUPINFO's count of characters, `STARTF_USECOUNTCHARS`: its buffer, and with text
-  wrapping on its window, as wide). Windows Terminal, as the default terminal, takes a new
-  console over and keeps only its title, icon and show state, never its size (its
-  `ConptyConnection::InitializeFromHandoff`); the console host does not hand over a console
-  started hidden or minimized (`_shouldAttemptHandoff`). So a launch starts minimized without
-  taking the focus (`SW_SHOWMINNOACTIVE`): on the taskbar, in the console host, whatever the
-  default terminal. A screen too small for the whole window narrows the window, not the
-  buffer; the agent draws to the buffer's width (libuv's columns), and the injector reads whole
-  buffer rows. Where a form is still too wide (a session a person started, or titles longer
+* **Width.** The host's launches (Windows) make the agent's console 250 columns wide, so
+  Copilot's form tab bar (the console's width less four) shows every field's title and the
+  host can tell an answer's form is the question's before it types (#1123; a six-field form
+  with long titles needed about 230). No console host takes a width from the start: with
+  "wrap text output on resize" on (the default) the console host's buffer follows its window,
+  and the screen clamps the window, so STARTUPINFO's count of characters
+  (`STARTF_USECOUNTCHARS`) of 250 gave 75 columns on a 640-pixel screen, and `STARTF_USESIZE`
+  no more (found by #1160's CI). A buffer set wider once the console exists is kept, the window
+  scrolling across it. So the host widens it then: `agent-bridge-injector <pid> --widen 250`
+  attaches, types nothing, and calls `SetConsoleScreenBufferSize` (its height kept; never
+  narrower), asked again every 100 ms for up to 5 s while the new process has no console yet.
+  The log says the width it got, or why not. Windows Terminal, as the default terminal, takes
+  a new console over and sizes it itself (its `ConptyConnection::InitializeFromHandoff`); the
+  console host does not hand over a console started hidden or minimized
+  (`_shouldAttemptHandoff`). So a launch starts minimized without taking the focus
+  (`SW_SHOWMINNOACTIVE`): on the taskbar, in the console host, whatever the default terminal.
+  The agent draws to the buffer's width (libuv's columns, which follow a resize), and the
+  injector reads whole buffer rows. Restoring or resizing the window takes the buffer back to
+  the window's width, as wide as the screen allows (about 200 columns or more at 1920
+  pixels). Where a form is then too wide (that, a session a person started, or titles longer
   than 250 columns hold), the answer is refused before any key: the window is too narrow for
   phone answers, widen it or answer at the machine (host-answers.md).
   Considered and not first: tabs of one Windows Terminal window (`wt -w <name> new-tab`):
@@ -45,8 +52,8 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   agent's console (`AttachConsole` on its process); unproven. Wrapping the agent in
   `conhost.exe --width`: conhost re-splits and re-quotes the command line, undoing the quoting
   that keeps an npm `.cmd` shim's arguments safe, and the process started would be conhost.
-  Unverified live: that the inbox console host on Windows 11 honours the width with the
-  minimized start, and how a 250-column window looks once restored on a small screen.
+  Unverified live: a Copilot session redrawing at the new width on Windows 11 with Windows
+  Terminal as the default terminal, and how a 250-column window looks once restored.
 * **The command line**, per agent: Copilot `--session-id <id> --banner [--model]
   [--reasoning-effort] [--context] [--allow-all] [extras] [-i <prompt>]`; Agency `copilot
   [--profile-only <profile>]` then Copilot's; Claude `--session-id <id>` (`--resume <id>`)
@@ -114,8 +121,8 @@ differences, each deliberate:
    workspace gets its worktree (below), a resume in one of this host's worktrees reuses it;
    either is locked until the session registers. Attachments are staged. The command line is
    built and checked for length (`refused`). The agent is started (`failed` if Windows will
-   not): a new console, 250 columns wide and minimized, in the console host (Width, above),
-   the workspace as working directory, the host's environment.
+   not): a new console, minimized, in the console host, then widened to 250 columns (Width,
+   above), the workspace as working directory, the host's environment.
 7. The launch is followed: every 500 ms, a discovery pass (during the first 60 s) and a look
    for its session; its window read every second for a startup question; its process checked.
    Registered: `started`, except for Copilot, which registers (its `inuse.<pid>.lock`) before

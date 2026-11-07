@@ -202,6 +202,31 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     }
 
     [WindowsFact]
+    public async Task A_sessions_console_is_widened_by_the_worker_never_narrowed_and_its_screen_is_still_read()
+    {
+        var echo = StartEcho(show: PermissionPrompt);
+        var injector = new WorkerInjector(Worker);
+
+        var wide = await injector.WidenAsync(echo.Pid, 250);
+        Assert.Null(wide.Problem);
+        Assert.Equal(250, wide.Columns);
+
+        Assert.Equal(250, (await injector.WidenAsync(echo.Pid, 120)).Columns);
+        var screen = await injector.ReadScreenAsync(echo.Pid);
+        Assert.Null(screen.Problem);
+        Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
+        Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
+    }
+
+    [WindowsFact]
+    public async Task A_widen_of_a_process_with_no_console_says_why_and_changes_nothing()
+    {
+        var width = await new WorkerInjector(Worker).WidenAsync(int.MaxValue - 1, 250);
+        Assert.Null(width.Columns);
+        Assert.NotNull(width.Problem);
+    }
+
+    [WindowsFact]
     public async Task A_permission_prompt_is_read_off_a_real_screen_and_approved_by_its_digit_only_while_the_row_still_reads_so()
     {
         var echo = StartEcho(show: PermissionPrompt);

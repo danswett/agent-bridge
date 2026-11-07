@@ -323,44 +323,17 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
-    public void A_wide_console_starts_minimized_without_the_focus_so_the_console_host_keeps_it_and_its_width()
+    public void A_wide_console_starts_minimized_without_the_focus_so_the_console_host_keeps_it_to_be_widened()
     {
-        var wide = ConsoleStartup.For(250, hidden: false);
-
-        Assert.Equal(ConsoleStartup.UseShowWindow | ConsoleStartup.UseCountChars, wide.Flags);
-        Assert.Equal(ConsoleStartup.ShowMinimizedNoActivate, wide.Show);
-        Assert.Equal(250, wide.XCountChars);
-        Assert.Equal(ConsoleStartup.Rows, wide.YCountChars);
+        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowMinimizedNoActivate), ConsoleStartup.For(250, hidden: false));
     }
 
     [Fact]
     public void A_console_without_a_width_opens_as_before_and_a_hidden_one_stays_hidden()
     {
-        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowNormal, 0, 0), ConsoleStartup.For(null, hidden: false));
+        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowNormal), ConsoleStartup.For(null, hidden: false));
         Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(250, hidden: true).Show);
         Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(null, hidden: true).Show);
-    }
-
-    [WindowsFact]
-    [Trait("Category", "Process")]
-    public void A_console_started_with_a_width_is_that_wide_to_the_agent_in_it()
-    {
-        if (!OperatingSystem.IsWindows()) { return; }
-        // mode reports the console's buffer width, the columns a CLI in it draws to.
-        var shim = Path.Combine(root, "mode.cmd");
-        File.WriteAllText(shim, $"@mode con > \"{Out("mode.txt")}\"\r\n");
-        var started = new WindowsAgentStarter(hidden: true).Start(new StartSpec(shim, [], root, Columns: 250));
-
-        Assert.True(started.ProcessId > 0);
-        var deadline = DateTime.UtcNow.AddSeconds(20);
-        string? said = null;
-        while (said is null && DateTime.UtcNow < deadline)
-        {
-            try { said = File.ReadAllText(Out("mode.txt")); if (!said.Contains("Columns", StringComparison.OrdinalIgnoreCase)) { said = null; Thread.Sleep(50); } }
-            catch (IOException) { Thread.Sleep(50); }
-        }
-        Assert.NotNull(said);
-        Assert.Matches(@"Columns:\s+250\b", said);
     }
 
     [WindowsFact]
