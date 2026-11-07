@@ -185,7 +185,28 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     keeping it; any other answer to the field, or none, is `refused` whole before a key goes:
     `answer at the machine (this field has a pre-filled default)`. A text field's `null` or
     empty default fills nothing in, and is typed as before; a number field's `null` default
-    opens reading `null`, so it is refused like any other. Numbers are compared exactly, and
+    opens reading `null`, so it is refused like any other. A field whose default no answer can
+    keep (a text field's that is not a string, such as `5` or `true`, is blank once typed or
+    shows as nothing (`Invisible.Blank`: `"\u200B"`, `"\u2800"`, `"\u0301"`), which the PWA
+    leaves out of an answer, as the app does white space, holds half a surrogate pair, which they
+    send as U+FFFD, or is longer than one answer's text, 4 KiB; a number field's that is
+    `null`, not plainly a number, or not held exactly) makes its question answered at the
+    machine, rather than offered with every answer refused (#882, #921). So does a form whose
+    smallest answer is over 16 KiB in the largest envelope a host takes (a 256-character
+    session id): each pre-filled text or number default (a number as the number it holds,
+    written the longer of the ways JavaScript and .NET write it, as the PWA and the app send
+    it), every other default and every required field at its smallest
+    (the shortest option, the fewest ticks, `true`, `0` or the number nearest 0 that its bounds,
+    `multipleOf` and whole-number type allow, past an exclusive bound, or text
+    of its minimum length; past 4 KiB, which no answer's text can be, the form is answered at
+    the machine). Accepted as it is: required text that must match a `pattern` or
+    `format` is counted at its minimum length, since a pattern is not solved for its shortest
+    match. Such a form can be offered and its answer refused as too large; it fails closed,
+    refused whole before any key, saying so. A form holding half a surrogate pair anywhere in
+    its schema, which the host cannot read, is answered at the machine; such a pair in the
+    question's message, in any tool call's arguments, or in any other text a transcript line
+    carries, is shown as U+FFFD.
+    Numbers are compared exactly, and
     one that cannot be (an exponent too large to hold, or no finite value) is refused. Copilot
     is JavaScript and holds every number as the nearest double, so a default, an answer or a
     number option it would hold as another number (`9007199254740993` becomes

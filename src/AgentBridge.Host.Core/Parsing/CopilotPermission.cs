@@ -206,6 +206,11 @@ public static partial class CopilotPermission
             atMachine = "a request to run outside Copilot's sandbox";
         }
 
+        // Rewritten text (half a surrogate pair, or a U+FFFD) would give prompts that differ only there
+        // one id and hide what an escape check needed to see: held at the machine, its id over the prompt as written.
+        var lossy = Json.IsLossy(data) ? p.GetRawText() : null;
+        if (lossy is not null) { atMachine = "text this host cannot show exactly"; }
+
         message ??= Fallback(p, kind);
         // What a person reads must be what runs. A bidi control or a zero-width character is drawn
         // somewhere other than where it runs (or not at all), and right-to-left letters reorder
@@ -215,12 +220,13 @@ public static partial class CopilotPermission
         // escape is six characters or more, so escaping all of it first could make it six times that
         // before the question cut it (QuestionMapper.Approval, which says when it was cut).
         var (shown, marks) = ShownText.RevealWithinMarked(message, Limits.QuestionMessage, rightToLeft: true);
-        return new CopilotPermissionPrompt(request, toolCallId, kind, shown, Digest(kind, message, p, atMachine is not null), atMachine)
+        return new CopilotPermissionPrompt(request, toolCallId, kind, shown, Digest(kind, message, p, atMachine is not null, lossy), atMachine)
         {
             Probes = Probes(kind, p),
             Marks = marks,
-            Dialog = prompt is { } drawn ? Dialog(kind, drawn) : null,
-            Drawn = [.. Strings(prompt, kind), .. Strings(permission, kind)],
+            Dialog = lossy is null && prompt is { } drawn ? Dialog(kind, drawn) : null,
+            // A request with rewritten text is held at the machine and cannot be read back as strings.
+            Drawn = lossy is not null ? [] : [.. Strings(prompt, kind), .. Strings(permission, kind)],
         };
     }
 
@@ -316,7 +322,7 @@ public static partial class CopilotPermission
             "commands" => [Start(Json.Str(p, "fullCommandText"))],
             "write" => [Last(Json.Str(p, "fileName"))],
             "read" => [Last(Json.Str(p, "path"))],
-            "path" => Json.Arr(p, "paths") is { } paths ? paths.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => Last(e.GetString())) : [],
+            "path" => Json.Arr(p, "paths") is { } paths ? paths.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => Last(Json.Text(e))) : [],
             "url" => [Uri.TryCreate(Json.Str(p, "url"), UriKind.Absolute, out var u) ? u.Host : Start(Json.Str(p, "url"))],
             "mcp" => [Json.Str(p, "toolTitle"), Json.Str(p, "toolName")],
             "custom-tool" => [Json.Str(p, "toolName")],
@@ -345,7 +351,7 @@ public static partial class CopilotPermission
                 return Join("Allow **read**?", intention, Fence(path));
             case "path" when Json.Arr(p, "paths") is { } list:
                 {
-                    var paths = list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList();
+                    var paths = list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => Json.Text(e)).ToList();
                     if (paths.Count == 0) { return null; }
                     var access = Json.Str(p, "accessKind") is { Length: > 0 } a ? a : "path";
                     return Join($"Allow **{Plain(access)}** access?", Fence(string.Join('\n', paths)));
@@ -524,7 +530,7 @@ public static partial class CopilotPermission
     // a NUL first, which the ordinary form never has, then each part with its length. Appended as
     // text after the message, "\n\0at-machine" could be written by the message itself: a custom
     // tool described as "run\n\0at-machine" had the id of "run" run outside the sandbox.
-    static string Digest(string kind, string message, JsonElement p, bool atMachine)
+    static string Digest(string kind, string message, JsonElement p, bool atMachine, string? lossy = null)
     {
         var named = Named.Select(name => (name, raw: Json.Str(p, name))).Where(x => x.raw is { } raw && ShownText.Misleads(raw)).ToList();
         string identity;
@@ -537,6 +543,7 @@ public static partial class CopilotPermission
             Part(message);
             Part(atMachine ? "at-machine" : "");
             foreach (var (name, raw) in named) { Part(name); Part(raw!); }
+            if (lossy is not null) { Part("lossy"); Part(lossy); }
             identity = b.ToString();
         }
         return IdentityHash(identity);
