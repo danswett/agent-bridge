@@ -954,9 +954,12 @@ public sealed class AutoUpdater
     // A check that succeeded since the hold began (Settings', through the shared updater): the feed
     // answers again, so the hold, its cached failure and its backoff end, and the schedule runs on
     // from that check, rather than a press or the next check waiting out the old deadline (#934).
+    // Only an answer as fresh as that: a copy older than the refusal (the machine's shared one, or
+    // the CDN's, #927) says nothing about whether the feed answers now (Platform, 6711518771).
     void HoldOverIfCheckedSince()
     {
-        if (checksHeldUntil is null || heldAt is not { } failed || updater.CheckedAt is not { } ok || ok <= failed) { return; }
+        if (checksHeldUntil is null || heldAt is not { } failed || updater.CheckedAt is not { } ok || ok <= failed
+            || updater.FoundAsOf is not { } fresh || fresh <= failed) { return; }
         (checksHeldUntil, checksHeld, heldAt, rateLimited, lastCheckFailed) = (null, null, null, 0, null);
         (lastCheckAt, checkedAt) = (ok, ok);
     }
