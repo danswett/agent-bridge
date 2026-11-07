@@ -42,6 +42,7 @@ import { readQuestion } from './protocol.js';
 import { USAGE } from './usage.js';
 import { UPDATE } from './update.js';
 import { SIGN_IN_DEVICES } from './signin-devices.js';
+import { DIAGNOSTICS } from './diagnostics.js';
 import { LAUNCH, TRUST, checkLaunch, flattenPrompt, trustAction } from './launch.js';
 import { TRANSFER, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
 import { ESCAPED_CAPABILITY } from './escaped.js';
@@ -201,6 +202,11 @@ export class DemoHost {
   nextCode = null;
   signInFlow = null;
   #flows = 0;
+  // diagnostics.get (#802): the snapshot it gives, every request as received, and a refusal
+  // to give instead, as a host gives a device it does not hold pinned as a person's.
+  diagnostics = null;
+  diagnosticsLog = [];
+  diagnosticsRefusal = null;
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files; large:
@@ -215,12 +221,14 @@ export class DemoHost {
   // progress: false plays a host from before sessions.progress, which says nothing of an answer
   // or a reply until its outcome.
   // confirming: false, one that does not take an escaped approval's confirmation from this device (#803).
-  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, confirming = approving, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, signingIn = false, progress = true } = {}) {
+  // diagnosing: true, one that offers its diagnostics to this device (#802).
+  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, confirming = approving, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, signingIn = false, progress = true, diagnosing = false } = {}) {
     this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(answering && confirming ? [ESCAPED_CAPABILITY] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...((answering || replying) && progress ? ['sessions.progress'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : []), ...(signingIn && answering ? [SIGN_IN.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(answering && confirming ? [ESCAPED_CAPABILITY] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...((answering || replying) && progress ? ['sessions.progress'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : []), ...(signingIn && answering ? [SIGN_IN.capability] : []), ...(diagnosing ? [DIAGNOSTICS.capability] : [])];
+    if (diagnosing) { this.diagnostics = demoDiagnostics(); }
     if (updating) {
       this.update = { current: '0.1.0', installer: true, available: '0.2.0', notes: 'Updates from your phone', checkedAt: now(), phase: 'idle', automatic: false };
     }
@@ -326,6 +334,11 @@ export class DemoHost {
       case SIGN_IN.cancel:
         if (!this.capabilities.includes(SIGN_IN.capability)) { break; }
         return this.#signIn(t, op, data, reply, (error) => t.deliver({ re: id, ok: false, error }));
+      case DIAGNOSTICS.get:
+        if (!this.capabilities.includes(DIAGNOSTICS.capability)) { break; }
+        this.diagnosticsLog.push(clone(data ?? {}));
+        if (this.diagnosticsRefusal) { return t.deliver({ re: id, ok: false, error: this.diagnosticsRefusal }); }
+        return reply(clone(this.diagnostics));
       default:
         return t.deliver({ re: id, ok: false, error: `unknown op ${op}` });
     }
@@ -1244,7 +1257,8 @@ export function demoSignIn(host, base = Date.now()) {
 
 // The demo's other machines, after the first (?machines=): Laptop, with a session to reply to
 // and one asking a question, and DEV-VM1 (shadow), which takes nothing from the phone.
-export function demoMachines(count, { answerDelayMs = 700, stopWindowMs = 10000 } = {}) {
+// diagnosing: the laptop offers its diagnostics (#802); the shadow never does.
+export function demoMachines(count, { answerDelayMs = 700, stopWindowMs = 10000, diagnosing = false } = {}) {
   const at = (ms) => new Date(Date.now() - ms).toISOString();
   const machines = [];
   if (count >= 2) {
@@ -1266,7 +1280,7 @@ export function demoMachines(count, { answerDelayMs = 700, stopWindowMs = 10000 
           },
         },
       ],
-    }, { machineId: 'demo-laptop', machineName: 'Laptop', answerDelayMs, stopWindowMs }));
+    }, { machineId: 'demo-laptop', machineName: 'Laptop', answerDelayMs, stopWindowMs, diagnosing }));
   }
   if (count >= 3) {
     machines.push(new DemoHost({
@@ -1362,6 +1376,27 @@ const DEMO_QUESTIONS = [
     fields: [],
   },
 ];
+
+// A diagnostics.get snapshot as a host writes one (docs/protocol/v1-diagnostics.md): what a demo
+// host does not know is said as missing, as a real one says it.
+export function demoDiagnostics() {
+  return {
+    schema: 1, at: '2026-11-03T12:00:00+00:00',
+    host: { version: '0.1.0', dev: true, startedAt: '2026-11-03T10:30:00+00:00', uptimeSeconds: 5400 },
+    lastRestart: { at: '2026-11-03T10:30:00+00:00', causeMissing: 'notRecorded' },
+    relay: { state: 'connected', since: '2026-11-03T10:30:05+00:00' },
+    holds: { readOnly: 'none', discoveryHeld: [] },
+    readiness: {
+      checkedAt: '2026-11-03T11:59:00+00:00', omitted: 0,
+      agents: [{ id: 'copilot', version: '1.0.3', lastHookHandledAt: null, installation: 'working', versionCheck: 'working', hooks: 'working', authentication: 'working', activation: 'working' }],
+    },
+    journal: {
+      entries: [{ seq: 1, at: '2026-11-03T10:30:05+00:00', family: 'RelayConnect', kind: 'RelayConnected', outcome: 'Ok', ms: 412 }],
+      omittedByLimit: 0, omittedBySize: 0, invalid: 0, evictedByCount: 0, evictedByAge: 0, evictedByBytes: 0,
+      rejectedOversized: 0, rejectedMalformed: 0, droppedOnLoad: 0, loadFailed: false, persistFailures: 0,
+    },
+  };
+}
 
 // Usage as a host reports it, around the time the demo is opened, so pace and resets read
 // sensibly on any day: a month of Copilot credits, Claude's session and week, and Codex's

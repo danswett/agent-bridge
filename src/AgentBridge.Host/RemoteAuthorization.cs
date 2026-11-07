@@ -23,6 +23,7 @@ public sealed class RemoteAuthorization : IDisposable
         AgentSignIn.Start, AgentSignIn.Cancel, AgentSignIn.Devices,
         ManageProtocol.Get, ManageProtocol.Subscribe, ManageProtocol.Restart, ManageProtocol.HooksRepair,
         ManageProtocol.Stop, ManageProtocol.ConfigGet, ManageProtocol.ConfigSet, ManageProtocol.HaTokenSet,
+        DiagnosticsProtocol.Get,
     ];
     static readonly HashSet<string> HostCapabilities =
         [UsageProtocol.Capability, UsageProtocol.SharedCapability, TransferProtocol.ServeCapability];
@@ -72,6 +73,11 @@ public sealed class RemoteAuthorization : IDisposable
 
     public bool HasRole(SecureChannel channel, string role) =>
         !Enabled || (Allows(channel) && leases.TryGetValue(channel, out var lease) && lease.Role == role);
+
+    // A device pinned at this machine with the person role, its lease current now. Unlike
+    // HasRole, never true while pins are off: then only the relay's word says what a device is.
+    public bool IsPinnedPerson(SecureChannel channel) =>
+        Enabled && Allows(channel) && leases.TryGetValue(channel, out var lease) && lease.Role == TrustedPeerStore.Person;
 
     public bool PersonKey(string? publicKey) => !Enabled ||
         (publicKey is not null && Store.FindEncoded(publicKey, StoreAccount())?.Role == TrustedPeerStore.Person);

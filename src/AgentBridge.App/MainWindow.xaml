@@ -274,7 +274,41 @@
                                                             Text="{x:Bind Update.Note, Mode=OneWay}"
                                                             Visibility="{x:Bind local:Ui.Some(Update.Note), Mode=OneWay, FallbackValue=Collapsed}" />
                                                     </StackPanel>
-                                                    <local:WrapRow Spacing="8" Margin="0,8,0,0" AutomationProperties.AutomationId="MachineButtons">
+                                                    <!-- Diagnose (#802): read here, copied only once the person says they reviewed it. -->
+                                                    <StackPanel Spacing="8" Margin="0,8,0,0" Tag="{x:Bind}" AutomationProperties.AutomationId="MachineDiagnosis" Visibility="{x:Bind local:Ui.Show(HasDiagnosis), Mode=OneWay}" KeyDown="OnMachineDiagnosisKeyDown">
+                                                        <TextBlock
+                                                            Style="{StaticResource AbTypeMeta}"
+                                                            Foreground="{ThemeResource AbText2}"
+                                                            TextWrapping="Wrap"
+                                                            AutomationProperties.AutomationId="MachineDiagnoseHint"
+                                                            Text="{x:Bind Diagnosis.UpdateHint, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.NotOffered), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                        <TextBlock
+                                                            Style="{StaticResource AbTypeMeta}"
+                                                            Foreground="{ThemeResource AbText2}"
+                                                            TextWrapping="Wrap"
+                                                            AutomationProperties.AutomationId="MachineDiagnosisNote"
+                                                            Text="{x:Bind Diagnosis.Note, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Some(Diagnosis.Note), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                        <TextBox
+                                                            IsReadOnly="True"
+                                                            AcceptsReturn="True"
+                                                            TextWrapping="NoWrap"
+                                                            FontFamily="{StaticResource MonoFontFamily}"
+                                                            MaxHeight="360"
+                                                            ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                            AutomationProperties.AutomationId="MachineDiagnosisText"
+                                                            AutomationProperties.Name="{x:Bind Diagnosis.DiagnoseName, Mode=OneWay}"
+                                                            Text="{x:Bind Diagnosis.Text, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.HasText), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                        <CheckBox
+                                                            Content="I have read this and it is fine to share"
+                                                            AutomationProperties.AutomationId="MachineDiagnosisReviewed"
+                                                            IsChecked="{x:Bind Diagnosis.Reviewed, Mode=TwoWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.HasText), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                    </StackPanel>
+                                                    <local:WrapRow Spacing="8" Margin="0,8,0,0" Tag="{x:Bind}" AutomationProperties.AutomationId="MachineButtons" KeyDown="OnMachineDiagnosisKeyDown">
                                                         <Button
                                                             Content="Show sessions"
                                                             Tag="{x:Bind}"
@@ -305,6 +339,28 @@
                                                             IsEnabled="{x:Bind Update.CanInstall, Mode=OneWay}"
                                                             Visibility="{x:Bind local:Ui.Show(HasUpdate), Mode=OneWay}"
                                                             Click="OnInstallMachine" />
+                                                        <Button
+                                                            Content="Diagnose"
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="DiagnoseMachine"
+                                                            AutomationProperties.Name="{x:Bind Diagnosis.DiagnoseName, Mode=OneWay}"
+                                                            IsEnabled="{x:Bind Diagnosis.CanDiagnose, Mode=OneWay, FallbackValue=False}"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.Offered), Mode=OneWay, FallbackValue=Collapsed}"
+                                                            Click="OnDiagnoseMachine" />
+                                                        <Button
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="CopyMachineDiagnosis"
+                                                            AutomationProperties.Name="{x:Bind Diagnosis.CopyName, Mode=OneWay}"
+                                                            Content="{x:Bind Diagnosis.CopyText, Mode=OneWay}"
+                                                            IsEnabled="{x:Bind Diagnosis.CanCopy, Mode=OneWay, FallbackValue=False}"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.HasText), Mode=OneWay, FallbackValue=Collapsed}"
+                                                            Click="OnCopyMachineDiagnosis" />
+                                                        <Button
+                                                            Content="Close"
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="CloseMachineDiagnosis"
+                                                            Visibility="{x:Bind local:Ui.Show(Diagnosis.HasText), Mode=OneWay, FallbackValue=Collapsed}"
+                                                            Click="OnCloseMachineDiagnosis" />
                                                         <Button
                                                             Tag="{x:Bind}"
                                                             AutomationProperties.AutomationId="ForgetMachine"
