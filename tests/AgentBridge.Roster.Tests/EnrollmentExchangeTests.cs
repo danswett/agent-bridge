@@ -167,4 +167,40 @@ public sealed class EnrollmentExchangeTests
 
         Assert.False(n.Accepts(add, add.Body.Device!, w.Id("G")));
     }
+
+    [Fact]
+    public void A_matched_exchange_left_open_past_five_minutes_signs_and_is_accepted_by_nobody()
+    {
+        var (a, n) = Exchange(H, H);
+        a.EnterCode1(n.Code1Shown!);
+        n.EnterCode2(a.Code2Shown!);
+        var w = new World();
+        w.Genesis();
+        w.Add("+B", "G", "B", "G", transcript: a.TranscriptToSign);
+        var add = w.Entry("+B");
+
+        _now += TimeSpan.FromMinutes(6);
+
+        Assert.Null(a.TranscriptToSign);
+        Assert.Null(a.Code2Shown);
+        Assert.False(n.Accepts(add, add.Body.Device!, w.Id("G")));
+    }
+
+    [Fact]
+    public void A_joiner_that_never_committed_or_is_locked_does_not_answer_an_offer()
+    {
+        var uncommitted = new EnrollmentJoiner(Account, H, JoinerLimits(), Now, NN);
+        Assert.Null(uncommitted.OnOffer(NA));
+
+        var limits = JoinerLimits();
+        for (var i = 0; i < 3; i++)
+        {
+            var (_, n) = Exchange(H, H, joinerLimits: limits);
+            n.EnterCode2("000 000");
+            n.EnterCode2("000 000");
+            n.EnterCode2("000 000");
+        }
+        var locked = new EnrollmentJoiner(Account, H, limits, Now, NN);
+        Assert.Null(locked.OnOffer(NA));
+    }
 }
