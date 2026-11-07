@@ -8,6 +8,9 @@
 :root {
   color-scheme: light dark;
   --radius: 14px;
+  /* Touch-only sizing is gated on "(pointer: coarse) and (not (any-pointer: fine))", never on
+     (pointer: coarse) alone: an iPad's primary pointer stays coarse with a trackpad or mouse
+     attached, which only any-pointer reports, so it kept phone-sized controls at a desk. */
   --tap: 44px;
   /* The type ramp (docs/design/ui.md §4.3; design/tokens.json type.roles.pwa): on a desktop the
      Windows ramp, below the two-pane width the phone's. Size / line height, in px. */
@@ -409,8 +412,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3));
 }
 .machine-more:empty { display: none; }
-.machine-update { font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
-.machine-update p { margin: 0; }
+.machine-update, .machine-signin { font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.machine-update p, .machine-signin p { margin: 0; }
 .machine-actions { display: flex; flex-wrap: wrap; gap: var(--ab-space-2); margin-top: var(--ab-space-2); }
 .machine-update > .machine-actions:first-child, .machine-more > .machine-actions:first-child { margin-top: 0; }
 .machine-error { margin: 0; color: var(--ab-danger-text); font-size: var(--type-meta); line-height: var(--type-meta-line); }
@@ -418,7 +421,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 /* Check for updates, for every machine at once: the same button, in the same column. */
 .machine-updates { list-style: none; padding: var(--ab-space-1) 0 0 calc(1px + var(--ab-space-3) + 20px + var(--ab-space-3)); }
 .button.small { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-meta); }
-@media (pointer: coarse) { .button.small { min-height: var(--tap); padding: 0 var(--ab-space-4); } }
+@media (pointer: coarse) and (not (any-pointer: fine)) { .button.small { min-height: var(--tap); padding: 0 var(--ab-space-4); } }
 
 /* ---- agent usage: agent-ha-bridge's usage card ---- */
 /* Under the sessions: each agent's fullest window, in its own colour, and the way to Usage. */
@@ -479,7 +482,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   font: inherit; font-size: var(--type-meta); color: var(--ab-text); background: var(--ab-card);
   border: 1px solid var(--ab-field-edge); border-radius: var(--ab-radius-control); padding: 2px 6px;
 }
-@media (pointer: coarse) { .sort { min-height: var(--tap); } }
+@media (pointer: coarse) and (not (any-pointer: fine)) { .sort { min-height: var(--tap); } }
 /* A phone with no room for the title, Sort and the icons on one line takes the list pane's two lines below,
    keeping Tab's order the order drawn (§9.1 A3). */
 @media (max-width: 369px) {
@@ -531,7 +534,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 @media (forced-colors: active) { .machine-tab[aria-selected="true"]::after { forced-color-adjust: none; background: Highlight; } }
 @media (min-width: 760px) { .machine-tab { min-height: 36px; min-width: 32px; } }
 /* A desktop's width on a touch screen (a tablet): the compact controls grow back to 44 (§9). */
-@media (min-width: 760px) and (pointer: coarse) {
+@media (min-width: 760px) and (pointer: coarse) and (not (any-pointer: fine)) {
   .nav-item { width: var(--tap); height: var(--tap); min-height: var(--tap); }
   .machine-tab { min-height: var(--tap); min-width: var(--tap); }
   .search-input { min-height: var(--tap); }
@@ -562,12 +565,12 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .needs-entry { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: start; align-content: start; }
 .needs-entry > :not(.needs-mark) { grid-column: 2; }
 .needs-mark { grid-row: 1; display: flex; margin-top: 8px; }
-@media (pointer: coarse) { .needs-mark { margin-top: 14px; } }
+@media (pointer: coarse) and (not (any-pointer: fine)) { .needs-mark { margin-top: 14px; } }
 .needs-title {
   min-height: 32px; padding: 0; text-align: left; overflow-wrap: anywhere;
   font: inherit; font-weight: 600; color: var(--ab-text); background: none; border: 0; cursor: pointer;
 }
-@media (pointer: coarse) { .needs-title { min-height: var(--tap); } }
+@media (pointer: coarse) and (not (any-pointer: fine)) { .needs-title { min-height: var(--tap); } }
 .needs-title:hover { text-decoration: underline; }
 .needs-line { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
 /* An approval answered here, its prompt whole: code literal, as on the card. */
@@ -621,7 +624,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
    leading. */
 .sign-in-line.sign-in-links { line-height: 32px; }
 .sign-in-links .sign-in-session { min-height: 32px; vertical-align: top; }
-@media (pointer: coarse) {
+@media (pointer: coarse) and (not (any-pointer: fine)) {
   .sign-in-line.sign-in-links { line-height: var(--tap); }
   .sign-in-links .sign-in-session { min-height: var(--tap); }
 }
@@ -681,10 +684,12 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 @media (min-width: 760px) { .row-menu { scroll-margin-bottom: var(--ab-space-2); } }
 /* Above its row, where below would be under the bottom navigation. */
 .row-menu.up { top: auto; bottom: calc(100% - var(--ab-space-1)); }
+/* 32px with a pointer, as a desktop menu's rows; 44px only on touch alone. */
 .row-menu-item {
-  min-height: var(--tap); padding: 0 12px; text-align: left; font: inherit; color: var(--ab-text);
+  min-height: 32px; padding: 0 12px; text-align: left; font: inherit; color: var(--ab-text);
   background: none; border: 0; border-radius: 4px; cursor: pointer;
 }
+@media (pointer: coarse) and (not (any-pointer: fine)) { .row-menu-item { min-height: var(--tap); } }
 .row-menu-item:hover:not(:disabled), .row-menu-item:focus-visible:not([data-focus-quiet]) { background: var(--ab-subtle); }
 .row-menu-item:disabled { color: var(--ab-text2); cursor: default; }
 
@@ -821,7 +826,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 @media (forced-colors: active) { .view-tab[aria-selected="true"]::after { forced-color-adjust: none; background: Highlight; } }
 @media (min-width: 760px) { .view-tab { min-height: 36px; min-width: 32px; } }
 /* A desktop's width on a touch screen: the header's buttons and the tabs back to 44 (§9). */
-@media (min-width: 760px) and (pointer: coarse) {
+@media (min-width: 760px) and (pointer: coarse) and (not (any-pointer: fine)) {
   .session-header .icon-button { width: var(--tap); height: var(--tap); }
   .view-tab { min-height: var(--tap); min-width: var(--tap); }
 }
@@ -859,7 +864,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .strip-facts { color: var(--ab-text2); font-variant-numeric: tabular-nums; }
 .strip-facts:empty { display: none; }
 .strip-more { color: var(--ab-text2); align-self: center; white-space: nowrap; font-size: .8rem; }
-@media (pointer: coarse), (max-width: 759px) { .strip-item { min-height: var(--tap); } }
+@media (pointer: coarse) and (not (any-pointer: fine)), (max-width: 759px) { .strip-item { min-height: var(--tap); } }
 @media (forced-colors: active) { .strip-item[aria-pressed="true"] { border: 2px solid Highlight; } }
 
 /* ---- a delegate opened (§6.3): in the inspector, or pushed in the Delegates tab ---- */
@@ -898,7 +903,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
    middle, and the icon's cell is a target high. Open, its lines are indented under a rule from
    the icon's centre. */
 .delegate-fold-line { --fold-target: 32px; }
-@media (pointer: coarse) { .delegate-fold-line { --fold-target: var(--tap); } }
+@media (pointer: coarse) and (not (any-pointer: fine)) { .delegate-fold-line { --fold-target: var(--tap); } }
 .delegate-fold-line > .delegate-event-mark { height: var(--fold-target); }
 .delegate-fold-text { min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: var(--ab-space-3); }
 .delegate-fold-toggle {
@@ -937,7 +942,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
    other name. The lines sit 8 apart, more than a line's own rows, so a line that wraps still reads
    as one (§9.1 A11). The glyph keeps to the first row, as above. With a pointer, the meta line's
    own leading. */
-@media (pointer: coarse) {
+@media (pointer: coarse) and (not (any-pointer: fine)) {
   .delegate-events { gap: var(--ab-space-2); }
   .delegate-event { align-items: first baseline; }
   .delegate-event > .delegate-event-mark::before { content: '\200b'; content: '\200b' / ''; }
@@ -977,7 +982,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   display: inline-flex; align-items: center; gap: var(--ab-space-1); min-height: 32px; margin-top: var(--ab-space-1); padding: var(--ab-space-1) 0;
   border: 0; background: none; color: var(--ab-text); font: inherit; font-size: var(--type-meta); line-height: var(--type-meta-line); cursor: pointer;
 }
-@media (pointer: coarse) { .prompt-toggle { min-height: var(--tap); } }
+@media (pointer: coarse) and (not (any-pointer: fine)) { .prompt-toggle { min-height: var(--tap); } }
 /* Disclosure (ui.md §5.3): the chevron turns, and what opens settles in a nudge down while its space
    opens at once; closing is at once. The tokens are 0 under reduced motion, so it is instant. */
 .prompt-chevron { color: var(--ab-text2); transition: transform var(--ab-motion-disclosure-exit-duration) var(--ab-motion-disclosure-exit-ease); }
@@ -1060,7 +1065,7 @@ summary {
   color: var(--ab-text); background: none; border: 0; border-radius: var(--ab-radius-control); cursor: pointer;
 }
 .delegate-summary:hover { background: var(--ab-selected); }
-@media (pointer: coarse), (max-width: 759px) { .delegate-summary { min-height: var(--tap); } }
+@media (pointer: coarse) and (not (any-pointer: fine)), (max-width: 759px) { .delegate-summary { min-height: var(--tap); } }
 /* The name, "under" its parent and the time flow as text beside the glyph, so in the inspector's
    336 px they wrap at spaces and a separator stays with the fact after it, never starting a
    line (#214); the glyph and the chevron keep to the first line. */
@@ -1245,7 +1250,7 @@ summary {
 .reply-box .attach { margin-right: auto; color: var(--ab-text2); }
 .reply-box .attach .attach-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .button.send { width: 32px; min-height: 32px; padding: 0; border-radius: var(--ab-radius-control); }
-@media (pointer: coarse) { .button.send { width: var(--tap); min-height: var(--tap); } }
+@media (pointer: coarse) and (not (any-pointer: fine)) { .button.send { width: var(--tap); min-height: var(--tap); } }
 .bytes { display: block; color: var(--ab-text2); font-size: .8rem; text-align: right; min-height: 0; }
 .bytes:empty { display: none; }
 .bytes.over { color: var(--ab-danger-text); font-weight: 600; }
@@ -1399,6 +1404,32 @@ summary {
 }
 .end-button .icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
 .end-button:disabled, .end-button[aria-disabled="true"] { opacity: .55; cursor: default; }
+/* Coming back to the app (#950): a control held for it is aria-disabled at once and drawn as it was
+   until the hold has lasted 600 ms (data-hold="drawn"). The words a press brings sit under it, in text2. */
+[data-hold="quiet"] :is(.button, .end-button, .choice)[aria-disabled="true"] { opacity: 1; cursor: inherit; }
+[data-hold="drawn"] .choice[aria-disabled="true"] { opacity: .6; cursor: default; }
+.answer-updating, .reply-updating, .stop-updating, .needs-updating { color: var(--ab-text2); }
+/* The title row's slot (#950): a fixed track beside the title that nothing around it moves for, and
+   the connection strip, which takes the title row's place at its height. Neither is announced as the
+   slot fills; the strip is, once, as the polite status it is. */
+.count-row { grid-area: count; display: flex; gap: var(--ab-space-2); min-width: 0; min-height: var(--type-meta-line); }
+/* In the list pane the cue is too wide beside the count: it takes a second line, which is kept (the
+   row sits beside New, as tall) so that it appearing moves nothing. */
+@media (min-width: 760px) {
+  .count-row { flex-wrap: wrap; align-content: flex-start; row-gap: 0; min-height: calc(2 * var(--type-meta-line)); }
+  .count-row .return-slot { flex: 1 1 100%; }
+}
+.count-row .count { flex: none; }
+.return-slot {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line);
+}
+.sessions-head .connection-strip {
+  grid-column: 1 / -1; grid-row: 1 / -1; align-self: stretch; display: flex; align-items: center;
+  margin: 0; padding: 0; color: var(--ab-text2); font-size: var(--type-meta);
+}
+.sessions-head .connection-strip[hidden] { display: none; }
+.sessions-head[data-strip="true"] > :not(.connection-strip) { visibility: hidden; }
 .end-session[data-stop="confirm"] .end-button { color: var(--ab-danger-text); font-weight: 600; }
 .end-session .stop-status { margin: 0 0 6px; }
 .end-session .resend { margin-bottom: 6px; }

@@ -18,8 +18,16 @@ public sealed class ConnectorReadVectorTests
     {
         using var fixture = new Fixture();
         var transcript = fixture.CopilotSession(Id, 100, name: "Connector fixture");
-        Fixture.Append(transcript, Copilot.User("List the fixture files", 1), Copilot.TurnStart(2),
-            Copilot.ToolStart("fixture-tool", "powershell", new { command = "Get-ChildItem" }, 3));
+        // Fixed record ids: activity.turn is made from the prompt's record (#292), and a random id
+        // would make the recording differ on every run.
+        static string Fixed(string line, int n)
+        {
+            var record = JsonNode.Parse(line)!.AsObject();
+            record["id"] = $"00000000-0000-4000-8000-{n:D12}";
+            return record.ToJsonString();
+        }
+        Fixture.Append(transcript, Fixed(Copilot.User("List the fixture files", 1), 1), Fixed(Copilot.TurnStart(2), 2),
+            Fixed(Copilot.ToolStart("fixture-tool", "powershell", new { command = "Get-ChildItem" }, 3), 3));
         // No machine-dependent path is part of this portable recording.
         File.WriteAllText(Path.Combine(fixture.CopilotHome, "session-state", Id, "workspace.yaml"),
             $"id: {Id}\nname: Connector fixture\ncreated_at: 2026-10-28T03:00:00.000Z\n");

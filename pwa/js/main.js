@@ -29,6 +29,7 @@ import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js'
 import { accountStore, startDeviceFlow } from './signin.js';
 import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
+import { ReturnGrace } from './return-grace.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
 import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
@@ -230,7 +231,17 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
 });
 navigator.serviceWorker?.startMessages?.();
 
+// Coming back to the app (#950): watched from the start, so a return begins before the connection's
+// own wake-ups report anything.
+const grace = new ReturnGrace();
+grace.watch();
+// The pill's last word, held back while the grace is on: it says it once the grace is over.
+let pillAfterGrace = null;
+grace.onChange(() => { if (!grace.active && pillAfterGrace) { const [text, cls] = pillAfterGrace; pillAfterGrace = null; shell.setConnection(text, cls); } });
+
 function setPill(text, cls = '') {
+  if (grace.active && cls === 'warn') { pillAfterGrace = [text, cls]; return; }
+  pillAfterGrace = null;
   shell.setConnection(text, cls);
 }
 
@@ -372,7 +383,12 @@ async function startDemo() {
   const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
   // With ?signin=1, each other machine that takes answers needs a sign-in too (#800).
   if (params.get('signin') === '1') {
-    for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) { m.capabilities.push('sessions.signin'); demoSignIn(m); }
+    for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) {
+      m.capabilities.push('sessions.signin', 'signin.devices');
+      // Who can sign Copilot in there (#972): this device and three more, folded on its row.
+      m.signInDevices = { state: 'ready', devices: [{ name: 'This browser', kind: 'pwa', platform: 'Windows', thisDevice: true }, ...['iPhone', 'Work laptop', 'Kitchen tablet'].map((name) => ({ name, kind: 'phone', platform: 'iOS' }))] };
+      demoSignIn(m);
+    }
   }
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   for (const m of machines) { m.attachmentDelayMs = Number(params.get('attachDelay')) || 0; }
@@ -391,7 +407,7 @@ async function startDemo() {
   // ?timeout= shortens how long a request waits for its response, for the tests of resends.
   const timeoutMs = Number(params.get('timeout')) || 0;
   const timeouts = timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs, replyTimeoutMs: timeoutMs, stopTimeoutMs: timeoutMs, launchTimeoutMs: timeoutMs, transferTimeoutMs: timeoutMs } : {};
-  const hosts = new HostSession({ connection, storage: demoStorage, makeClient: (ch, store) => new HostClient(ch, { store, ...timeouts }) });
+  const hosts = new HostSession({ connection, storage: demoStorage, grace, makeClient: (ch, store) => new HostClient(ch, { store, ...timeouts }) });
   const forgetOutcomes = [];
   const demoForget = new ForgetControl({
     connection: {
@@ -437,6 +453,7 @@ async function startDemo() {
     facts: (id) => fleet.facts(id),
     forget: demoForget,
     updates: demoUpdates,
+    signInDevices: (id) => fleet.signIns(id),
     storage: demoStorage,
     onRendered: () => focusLinked(),
   });
@@ -457,7 +474,7 @@ async function startDemo() {
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   const { answers, replies, stops, launches, launchPanel, view } = page;
   window.agentBridgeDemo = {
-    host, hosts, connection, store: hosts.sessions, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore, page,
+    host, hosts, grace, connection, store: hosts.sessions, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore, page,
     // This device's timing marks for its last answers and replies (timing.js).
     timings: recentTimings,
     // Each demo machine, by its id: 'demo', 'demo-laptop', 'demo-shadow'.
@@ -578,7 +595,7 @@ function begin(account) {
   $('machines').hidden = false;
 
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
-  const hosts = new HostSession({ connection, me: identity.deviceId });
+  const hosts = new HostSession({ connection, me: identity.deviceId, grace });
   const link = takeLink();
   // A session's link wins over a sign-in's: a push carries one or the other.
   const wanted = (l) => (l?.host && l.session ? { host: l.host, session: l.session, question: l.question } : l?.host && l.signin ? { host: l.host, signin: l.signin } : null);
@@ -643,6 +660,7 @@ function begin(account) {
     facts: (id) => fleet.facts(id),
     forget: forgets,
     updates,
+    signInDevices: (id) => fleet.signIns(id),
     onRendered: () => focusLinked(),
   });
   const { answers, replies, stops, launches } = page;
@@ -820,7 +838,7 @@ function begin(account) {
 
   // For the E2E tests and debugging from the console. Holds no secrets beyond what the
   // page already has.
-  window.agentBridge = { connection, hosts, store: hosts.sessions, answers, replies, stops, launches, notices, fleet, book, page, timings: recentTimings };
+  window.agentBridge = { connection, hosts, grace, store: hosts.sessions, answers, replies, stops, launches, notices, fleet, book, page, timings: recentTimings };
   drawNotify();
   connection.start();
 }

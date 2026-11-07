@@ -213,6 +213,30 @@ public class ClaudeTests
             await s.After(Claude.ToolResult(id, 3));
         }
     }
+
+    // Half a surrogate pair escaped in a Claude line, the prompt or an AskUserQuestion's text,
+    // threw where it was read, and the line failed on every pass, freezing the session (Trust's
+    // sec-769 review). It reads as U+FFFD, as a client shows it.
+    [Fact]
+    public async Task A_line_holding_half_a_surrogate_pair_keeps_its_session()
+    {
+        await using var s = new Session_();
+        var ask = new JsonObject
+        {
+            ["questions"] = new JsonArray(new JsonObject { ["question"] = "Which MARK?", ["multiSelect"] = false, ["options"] = new JsonArray("MARK", "b") }),
+        };
+
+        var session = await s.After(
+            Claude.User("MARK", 1).Replace("MARK", "a\\uD800"),
+            Claude.Assistant(2, "tool_use", Claude.ToolUse("ask1", "AskUserQuestion", ask)).Replace("MARK", "a\\uD800"));
+
+        Assert.Equal("a\uFFFD", session.Activity.UserMessage);
+        var field = Assert.Single(session.Question!.Fields);
+        Assert.Equal("Which a\uFFFD?", field.Name);
+        Assert.Equal([new Option("a\uFFFD"), new Option("b")], field.Options!);
+        // Shown, not answered from: a name that is not what was written has no answer to be matched to.
+        Assert.True(session.Question.AnswerAtMachine);
+    }
 }
 
 public class CodexTests

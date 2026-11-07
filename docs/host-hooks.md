@@ -549,8 +549,9 @@ connector's own guards. Discovery needs no notice: it watches the registration f
 ## Not yet
 
 * **macOS ancestry, and intake off Windows**: #48 and the Mac's migration.
-* **Hook registration for a fresh install** with no agent-ha-bridge (#54). The program and the
-  contract are ready for it.
+* **Live proof of hook registration for a fresh install** with no agent-ha-bridge (#54). The
+  registration is built (`hooks install`, the Settings agent rows); a clean signed install on real CLIs, with an
+  explicit restart and an owned-only uninstall, is still to be shown in the #736 lab.
 * **A Claude `AskUserQuestion` waiting at the terminal.** Claude writes its `tool_use` to the
   transcript only once it is answered (#59), so the host cannot show the question from the
   transcript. The `claude/ask` notice carries it the moment it is asked, for the Claude/Codex

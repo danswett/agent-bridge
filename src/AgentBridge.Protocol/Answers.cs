@@ -39,6 +39,9 @@ public static class Answers
                 if (field.Required == true) { return $"\"{Label(field)}\" needs an answer"; }
                 continue;
             }
+            // Other the agent offers and this machine cannot send: the same sentence every client
+            // shows beside the disabled Other, so a refusal reads as the field already said (#908).
+            if (field.AllowOther != true && AnswerReasons.Known(field.OtherUnavailable) && HasOther(value)) { return AnswerReasons.Text(field.OtherUnavailable!); }
             // Empty text is typed as nothing, which a form records as no answer at all, and text of
             // only spaces, or of control characters typed as spaces, might be recorded trimmed to
             // that (review of #844).
@@ -86,6 +89,10 @@ public static class Answers
         }
         return others > 1 ? "at most one other answer" : null;
     }
+
+    static bool HasOther(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty("other", out _)
+        || value.ValueKind == JsonValueKind.Array && value.EnumerateArray().Any(HasOther);
 
     static string? TextProblem(string? text, string what) =>
         text is not null && Encoding.UTF8.GetByteCount(text) > Limits.AnswerText ? $"{what} is longer than {Limits.AnswerText / 1024} KiB" : null;

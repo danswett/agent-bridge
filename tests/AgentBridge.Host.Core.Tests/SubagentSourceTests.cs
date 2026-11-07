@@ -465,6 +465,42 @@ public class ClaudeSubagentTests
         Assert.Null(nested.Task);
     }
 
+    // Found in review of #292: half a surrogate pair ("\uD800") in a nested agent's record or its
+    // first prompt threw out of the session's update, so the session was never listed.
+    [Fact]
+    public async Task A_nested_agents_record_and_first_prompt_holding_half_a_surrogate_pair_are_read_and_the_session_listed_and_updated()
+    {
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        f.ClaudeRegistration(Id, 900, transcript);
+        f.Processes.Run(AgentKind.Claude, 900);
+        // The session's own delegate, Nester: only then does the session read nested records.
+        var launched = JsonNode.Parse(Claude.ToolResult("agent1", 3))!.AsObject();
+        launched["toolUseResult"] = new JsonObject { ["status"] = "async_launched", ["agentId"] = Nester, ["description"] = "Lead", ["prompt"] = "lead" };
+        Fixture.Append(transcript,
+            Claude.User("go", 1),
+            Claude.Assistant(2, "tool_use", Claude.ToolUse("agent1", "Agent", new JsonObject { ["description"] = "Lead", ["prompt"] = "lead" })),
+            launched.ToJsonString());
+        var beside = Path.Combine(Path.GetDirectoryName(transcript)!, Id, "subagents");
+        Directory.CreateDirectory(beside);
+        File.WriteAllText(Path.Combine(beside, $"agent-{Nested}.meta.json"), $"{{\"parentAgentId\":\"{Nester}\",\"spawnDepth\":2,\"description\":\"cut \\uD800\"}}");
+        var first = JsonNode.Parse(File.ReadLines(FixturePath(Id, "subagents", $"agent-{Nested}.jsonl")).First())!;
+        first["message"]!["content"] = "look HALF";
+        File.WriteAllText(Path.Combine(beside, $"agent-{Nested}.jsonl"), first.ToJsonString().Replace("HALF", "\\uD800", StringComparison.Ordinal) + "\n");
+
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        var listed = source.Get(Id)!;
+        Assert.Equal("go", listed.Activity.UserMessage);
+        Assert.Contains(listed.Subagents!, a => a.Id == Nested);
+        Fixture.Append(transcript, Claude.User("next", 4));
+        await source.RefreshAsync();
+        Assert.Equal("next", source.Get(Id)!.Activity.UserMessage);
+
+        var read = Assert.Single(new AgentBridge.Host.Core.Parsing.ClaudeSubagents().Read(transcript));
+        Assert.Equal(("cut \uFFFD", "look \uFFFD"), (read.Description, read.Prompt));
+    }
+
     [Fact]
     public void A_record_that_could_not_be_read_is_read_again_though_it_has_not_changed()
     {

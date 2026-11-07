@@ -100,6 +100,13 @@ internal sealed class SessionTracker
             RefreshWorkspace(Path.Combine(dir, "workspace.yaml"));
             changed |= !ReferenceEquals(workspace, _workspace);
         }
+        if (_state.Background.Version != _delegatesVersion || _state.Background.CallsVersion != _callsVersion)
+        {
+            var (names, calls) = _state.Background.MainAgents();
+            MainDelegates = new Conversation.HistorySeed(names, calls) { CallOwners = _state.Background.CallOwners(), SyncAgents = _state.Background.SyncAgents(), Parents = _state.Background.Parents() };
+            _delegatesVersion = _state.Background.Version;
+            _callsVersion = _state.Background.CallsVersion;
+        }
         // Not responding (#800) comes from the clock and from the delegates' own transcripts, which
         // nothing above looks at: a hung session is exactly one whose transcript stops changing, so
         // skipping its build left it working with no attention for ever (#634 review, H1). Asked
@@ -141,6 +148,12 @@ internal sealed class SessionTracker
 
     // Tests: how many times the session was built.
     internal int Builds { get; private set; }
+
+    // The main agent's own delegates as of the last update, for a history read on another thread:
+    // replaced whole, never changed in place.
+    public Conversation.HistorySeed MainDelegates { get; private set; } = new(new Dictionary<string, string?>(), new Dictionary<string, string>());
+    int _delegatesVersion = -1;
+    int _callsVersion = -1;
 
     // updatedAt moves only when something a client shows changed. An event can be of a
     // kind that usually matters (a turn starting) and still change nothing (the session
@@ -189,6 +202,28 @@ internal sealed class SessionTracker
         // Status precedence (docs/design/subagents.md §4): the session's own question wins over
         // a sub-agent's (rule 1, "question wins"), and a sub-agent's makes it waiting too (rule 2).
         var question = pending.LastOrDefault(q => q.Agent is null) ?? (pending.Count > 0 ? pending[^1] : null);
+        // Copilot asks a permission for each of a batch of parallel tool calls at once, and its
+        // one dialog shows them one at a time; seen answered at the machine in the order asked
+        // (#690). Listing the newest offered Approve once for a request the screen was not
+        // showing, so the earliest is listed, saying how many wait; each is its own question,
+        // so an answer meant for one never reaches the next. Delivery still types only when
+        // the screen shows that request and none of the others.
+        if (d.Agent == AgentKind.Copilot && question is { Kind: QuestionKind.Approval })
+        {
+            var approvals = pending.Where(q => q.Kind == QuestionKind.Approval).ToList();
+            if (approvals.Count > 1)
+            {
+                // One the host cannot tell from the others on screen (a dialog it does not know,
+                // text that could draw part of Copilot's frame, or another that would be drawn
+                // the same) is never typed for while they wait (CopilotPermissionScreen), so it is
+                // shown as answered at the machine, under the same id, until it can be.
+                question = approvals[0] with { Waiting = approvals.Count };
+                var told = _state.Permissions.TryGetValue(question.Id, out var mine)
+                    && approvals.Skip(1).All(a => _state.Permissions.ContainsKey(a.Id))
+                    && CopilotDialogs.Identifiable(mine, approvals.Skip(1).Select(a => _state.Permissions[a.Id]));
+                if (!told) { question = question with { AnswerAtMachine = true }; }
+            }
+        }
         // Delivery types only into the main agent's ask_user (AnswerService refuses a stamped
         // call), so nothing proves where keys for a sub-agent's would land: it is answered at
         // the machine. Nor for a Copilot form while a permission prompt or a sub-agent's
@@ -227,7 +262,7 @@ internal sealed class SessionTracker
             // already typed into is never typed into again, so it is answered at the machine.
             if (reg.Approval is { } marker && (question is null || question.Kind == QuestionKind.Approval))
             {
-                question = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted, approve: _options.EscapedApproval);
+                question = QuestionMapper.CodexApproval(marker.DecisionId, marker.Tool, marker.Command, marker.CommandCut, marker.Question, marker.Created ?? reg.Updated ?? now, atMachine: marker.Attempted,                 approve: _options.EscapedApproval, lossy: marker.Lossy);
                 hintAt = question.AskedAt;
             }
             // Codex's hooks report status directly, at UserPromptSubmit and Stop.
@@ -319,6 +354,8 @@ internal sealed class SessionTracker
                 UserMessage = Limits.KeepStart(_state.UserMessage, Limits.UserMessage),
                 UserMessageFrom = _state.UserMessage is null ? null : _state.UserMessageFrom,
                 UserMessageLabel = _state.UserMessage is null ? null : Limits.KeepStart(_state.UserMessageLabel, Limits.UserMessageLabel),
+                Turn = _state.TurnId,
+            ResponseTurn = (ownResponse ?? (source?.Response is null ? response : null)) is null ? null : _state.ResponseTurn,
                 TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle || _state.UncountedTurn ? 0 : 1)) : null,
                 Compactions = _state.Seen ? _state.Compactions : null,
                 Background = Protocol.Background.Of(agents, shells),

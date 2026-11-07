@@ -135,6 +135,14 @@ public sealed class SettingsViewModel : Observable
             if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability) || Status?.Agents is not { } report) { return []; }
             AgentReadinessRow[] rows = [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents, CanInstallAgents, agentNotes.GetValueOrDefault(a.Id),
                 shared: hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(a.Id)), install: InstallOf(a.Id), installOffered: InstallOffered))];
+            // Never on a host that is read-only or beside agent-ha-bridge: the row's own words say why
+            // there (Review migration, Read-only), and the card would offer what can't be done.
+            var mayOffer = Status?.ReadOnly is null && Status?.AgentHaBridge is null;
+            var dismissed = prefs().AgentOffersDismissed;
+            foreach (var row in rows)
+            {
+                row.Offered = mayOffer && row.CanBeOffered && dismissed?.GetValueOrDefault(row.Id) != row.Version;
+            }
             // What the rows say in other words is logged once each, so the raw text is still there
             // to diagnose, never on a row.
             foreach (var row in rows)
@@ -168,6 +176,28 @@ public sealed class SettingsViewModel : Observable
     public bool CanManageAgents => HostRunning && host.Can(HostOps.AgentSetupCapability) && !Busy && !AgentInstallInProgress
         && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
     public bool CanInstallAgents => InstallOffered && !Busy && !AgentInstallInProgress;
+
+    // Agents installed after the bridge, each with a card at the top of Settings and a grey dot on the
+    // way in (#231). The offer is never a toast, a push or a count, and is nothing Needs you shows.
+    public IReadOnlyList<AgentOffer> AgentOffers => [.. Agents.Where(a => a.Offered).Select(a => new AgentOffer(a, CanManageAgents))];
+    public bool HasAgentOffers => Agents.Any(a => a.Offered);
+    // The Settings item's name while a card waits, so the dot is in it too (ui.md §9).
+    public string AgentsNavName => HasAgentOffers ? "Settings, new agent found" : "Settings";
+
+    // Not now: this agent's card and the dot are hidden at the version it has now, across restarts.
+    // The row keeps its own Set up, and a new version is a new offer.
+    public void DismissAgentOffer(string agent)
+    {
+        if (Agents.FirstOrDefault(a => a.Id == agent)?.Version is { } version) { Dismiss(agent, version); }
+    }
+
+    void Dismiss(string agent, string version)
+    {
+        var next = new Dictionary<string, string>(prefs().AgentOffersDismissed ?? new Dictionary<string, string>(), StringComparer.Ordinal) { [agent] = version };
+        // Not Save: PreferencesChanged is for what the update ticks and the cards' capabilities follow.
+        savePrefs(prefs() with { AgentOffersDismissed = next });
+        RaiseAll();
+    }
     public string AgentInstallStatus { get => agentInstallStatus; private set => Set(ref agentInstallStatus, value); }
     public bool AgentInstallInProgress => agentInstallInProgress || Status?.AgentInstallation?.InProgress == true;
     public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
@@ -214,6 +244,19 @@ public sealed class SettingsViewModel : Observable
         set { if (Status is { } s && s.Settings.PhoneSignIn != value) { _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(PhoneSignIn: value))); } }
     }
 
+    // Who can sign Copilot in here (#972 slice 2): under the switch, the devices the machine's roster
+    // pins, read-only, only while the running host has sign-in from devices on (the host says them
+    // only then): the switch's own value changes at once, the host's at its next start, and until then
+    // the devices listed can still sign in. No Add, no Remove and no disabled button for either yet
+    // (Creative on #972, 6700914747; ui.md §6.9). Nobody while the roster can't be read.
+    public bool ShowSignInDevices => HostRunning && Status?.SignInDevices is not null;
+    public IReadOnlyList<SignInDeviceRow> SignInDevices => Status?.SignInDevices is { State: SignInDeviceStates.Ready } listed
+        ? [.. listed.Devices.Select(SignInDeviceRow.Of)] : [];
+    public string SignInDevicesEmpty => Status?.SignInDevices?.State == SignInDeviceStates.Unreadable ? "Can't read the device list on this machine."
+        : SignInDevices.Count == 0 ? "No devices can sign Copilot in here yet." : "";
+    public string SignInDevicesNote => Status?.SignInDevices?.State == SignInDeviceStates.Unreadable ? ""
+        : SignInDevices.Count == 0 ? "Adding a device comes in a later update."
+        : "Removing a single device comes later. To stop them all, turn this off.";
     // launch.remoteFolderTrust: a person may answer a launched agent's folder-trust question from
     // their devices, each approved here (launch.remoteFolderTrustDevices). Both apply at once.
     // Turned on with none approved yet, this app is approved with it: the way most people
@@ -519,8 +562,10 @@ public sealed class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); Raise(nameof(UpdateStatus)); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); } }
     }
+    // The card's Set up follows what the row's would (CanManageAgents), so it is drawn again wherever the rows are.
+    void RaiseOffers() { Raise(nameof(AgentOffers)); Raise(nameof(HasAgentOffers)); Raise(nameof(AgentsNavName)); }
     public string UpdateStatus
     {
         // A release the app downloaded in the background is said here whenever Settings itself is
@@ -753,6 +798,9 @@ public sealed class SettingsViewModel : Observable
             throw new InvalidOperationException($"Agent setup is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
         }
         var verb = Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb;
+        // Agency's removal takes Copilot CLI's hooks, whose card it is that must not come back.
+        var offered = AgentReadinessRow.HooksOf(agent);
+        var version = Agents.FirstOrDefault(a => a.Id == offered)?.Version;
         var gone = hostsGone;
         Note(agent, new(remove ? "Removing…" : verb == "Repair" ? "Repairing…" : "Setting up…", Tone.Progress));
         AgentSetupResult result;
@@ -772,6 +820,8 @@ public sealed class SettingsViewModel : Observable
         }
         if (result.Detail.Length > 0) { LogTo($"agents: {agent}: {(remove ? "removal" : "setup")}: {result.Detail}"); }
         if (gone == hostsGone) { Note(agent, new(AgentWords.SetupResult(remove, verb, result), result.Completed ? Tone.Ok : Tone.Bad, Removed: remove && result.Completed)); }
+        // Removing the connection is the person's choice: the agent is not offered back at this version.
+        if (remove && result.Completed && version is not null) { Dismiss(offered, version); }
         await host.RefreshStatusAsync();
         // A setup or removal that failed can have changed some hooks too (a removal that stopped
         // part-way leaves a setup that didn't finish), so the evidence is checked afresh either way;
@@ -844,6 +894,7 @@ public sealed class SettingsViewModel : Observable
         agentNotes[agent] = note;
         if (note.Tone != Tone.Progress) { hookResults[AgentReadinessRow.HooksOf(agent)] = note; }
         Raise(nameof(Agents));
+        RaiseOffers();
     }
 
     public Task CheckForUpdatesAsync() => RunUpdateAsync(async () =>
@@ -995,6 +1046,16 @@ public sealed class SettingsViewModel : Observable
     }
 
     static string Host(string? url) => Uri.TryCreate(url, UriKind.Absolute, out var u) ? u.Host : url ?? "the relay";
+}
+
+// One device that can sign Copilot in on this machine (#972): its name, "(this device)" for this
+// app's own entry, then its kind and platform ("Phone · iOS"). Never its id, key or presence.
+public sealed record SignInDeviceRow(string Name, string Detail)
+{
+    public static SignInDeviceRow Of(SignInDevice d) => new(d.ThisDevice == true ? $"{d.Name} (this device)" : d.Name,
+        string.Join(" · ", new[] { Kind(d.Kind), d.Platform }.Where(s => s.Length > 0)));
+
+    static string Kind(string kind) => kind switch { "phone" => "Phone", "pwa" => "Browser", "app" => "App", _ => "" };
 }
 
 // One device on the Settings page that may be approved to answer folder-trust questions.

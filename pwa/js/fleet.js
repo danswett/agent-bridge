@@ -21,6 +21,7 @@ import { HostClient } from './host-client.js';
 import { Capabilities, Ops } from './protocol.js';
 import { USAGE, machineFacts, machineStatus } from './usage.js';
 import { UPDATE, underWay } from './update.js';
+import { SIGN_IN_DEVICES, readSignInDevices } from './signin-devices.js';
 
 export const PROBE_EVERY_MS = 5 * 60 * 1000;
 export const REFRESH_EVERY_MS = 60 * 1000;
@@ -52,6 +53,10 @@ export class FleetStatus {
   #watchUntil = new Map();
   // Ops from call() on their way (busy).
   #calls = 0;
+  // Who can sign Copilot in on each machine that has it on (#972), and the client it was last read
+  // on for a machine shown.
+  #signIns = new Map();
+  #signInsRead = new Map();
 
   // hosts: a HostSession (host-session.js): links() for the machines shown, link(id), shows(id)
   // and refresh(id).
@@ -120,6 +125,29 @@ export class FleetStatus {
   // What a machine's updater is doing, or null when it offers no updates (or none is known yet).
   update(id) { return this.#updates.get(id) ?? null; }
 
+  // Who can sign Copilot in on a machine ({ state, devices }), or null where it is off or unknown.
+  signIns(id) { return this.#signIns.get(id) ?? null; }
+
+  // A machine shown: read again on its channel when that is new and at each later look, and
+  // dropped once its hello stops offering it (the switch turned off and the host restarted).
+  #readSignIns(link, again = false) {
+    const { id, client } = link;
+    if (!link.capabilities?.includes(SIGN_IN_DEVICES.capability)) {
+      this.#signInsRead.delete(id);
+      if (this.#signIns.delete(id)) { this.#emit(); }
+      return;
+    }
+    if (!again && this.#signInsRead.get(id) === client) { return; }
+    this.#signInsRead.set(id, client);
+    const mine = () => this.#signInsRead.get(id) === client;
+    client.request(SIGN_IN_DEVICES.op).then((r) => {
+      if (!mine()) { return; }
+      const read = readSignInDevices(r);
+      if (read) { this.#signIns.set(id, read); } else { this.#signIns.delete(id); }
+      this.#emit();
+    }, () => {});
+  }
+
   // A machine's update state as a press's answer said it.
   noteUpdate(id, state) { this.#setUpdate(id, state); }
 
@@ -187,6 +215,8 @@ export class FleetStatus {
     this.#machines.delete(id);
     this.#updates.delete(id);
     this.#updateFollowed.delete(id);
+    this.#signIns.delete(id);
+    this.#signInsRead.delete(id);
     this.#watchUntil.delete(id);
     this.book.delete(id, { forget: true });
     this.#retime();
@@ -204,6 +234,8 @@ export class FleetStatus {
     this.#viewedAt.clear();
     this.#updates.clear();
     this.#updateFollowed.clear();
+    this.#signIns.clear();
+    this.#signInsRead.clear();
     this.#watchUntil.clear();
     this.book.clear();
     this.#emit();
@@ -218,6 +250,7 @@ export class FleetStatus {
       // What the machine says now, refreshed hellos included (read-only, say).
       this.#note(id, link.machine);
       this.#followUpdates(link);
+      this.#readSignIns(link);
       if (this.#viewed.get(id) === client) { continue; }
       this.#viewed.set(id, client);
       this.#viewedAt.set(id, this.now());
@@ -232,7 +265,7 @@ export class FleetStatus {
     }
     // A machine no longer shown is looked at as the others are; its last report stays until then.
     for (const id of [...this.#viewed.keys()]) {
-      if (!shown.has(id)) { this.#viewed.delete(id); this.#viewedAt.delete(id); this.#updateFollowed.delete(id); }
+      if (!shown.has(id)) { this.#viewed.delete(id); this.#viewedAt.delete(id); this.#updateFollowed.delete(id); this.#signInsRead.delete(id); }
     }
     this.#retime();
     this.#emit();
@@ -279,6 +312,7 @@ export class FleetStatus {
       this.#viewedAt.set(link.id, this.now());
       this.hosts.refresh?.(link.id)?.catch(() => {});
       this.#followUpdates(link);
+      this.#readSignIns(link, true);
     }
     for (const d of this.connection.presence) {
       if (d.kind !== 'host' || d.id === this.me || this.#followed(d.id) || this.#queued.has(d.id)) { continue; }
@@ -323,6 +357,10 @@ export class FleetStatus {
         const state = await client.updateState();
         if (!viewed() && !forgotten()) { this.#updates.set(id, state); }
       } else if (!viewed() && !forgotten()) { this.#updates.delete(id); }
+      if (hello.capabilities.includes(SIGN_IN_DEVICES.capability)) {
+        const read = readSignInDevices(await client.request(SIGN_IN_DEVICES.op));
+        if (!viewed() && !forgotten()) { if (read) { this.#signIns.set(id, read); } else { this.#signIns.delete(id); } }
+      } else if (!viewed() && !forgotten()) { this.#signIns.delete(id); }
       this.#retime();
     } catch {
       if (forgotten()) { return; }

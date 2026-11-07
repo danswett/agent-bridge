@@ -18,6 +18,7 @@ import { checkAnswer } from '../../js/answers.js';
 import { checkReply } from '../../js/replies.js';
 import { checkLaunch, readLaunchOptions, readLaunchResult, readTrustQuestion, readTrustResult } from '../../js/launch.js';
 import { readUpdateCommandResult, readUpdateState } from '../../js/update.js';
+import { readSignInDevices } from '../../js/signin-devices.js';
 import { readUsage } from '../../js/usage.js';
 import { HostClient } from '../../js/host-client.js';
 import { PatchError, applyPatch, readPatch } from '../../js/session-patch.js';
@@ -235,6 +236,8 @@ const READS = {
   UpdateState: { read: readUpdateState },
   UpdateResult: { read: (j) => readUpdateState({ last: j }).last },
   UpdateCommandResult: { read: readUpdateCommandResult },
+  SignInDevices: { read: readSignInDevices },
+  SignInDevice: { read: (j) => readSignInDevices({ state: 'ready', devices: [j] })?.devices[0] ?? null },
   UsageReport: { read: readUsage },
   AgentUsage: { read: (j) => readUsage({ agents: [j] }).agents[0] ?? null },
   UsageWindow: { read: (j) => readUsage({ agents: [{ agent: 'copilot', label: 'Copilot', windows: [j] }] }).agents[0].windows[0] ?? null },
@@ -411,6 +414,16 @@ const NOT_REPLAYED = {
   RestoreNotice: 'the PWA does not read machine.restore yet (#780)',
   RestoreSession: 'the PWA does not read machine.restore yet (#780)',
   SessionRestored: 'no host sends a session\'s restored yet, and the PWA does not read it (#780)',
+
+  // Its client slice is #292's next step; the protocol and host land first (v1-history.md).
+  HistoryRequest: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryResult: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryStart: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryTurn: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryPrompt: 'the PWA does not page a session\'s history yet (#292)',
+  HistoryPart: 'the PWA does not page a session\'s history yet (#292)',
+  DelegateEvent: 'the PWA does not page a session\'s history yet (#292)',
+
 };
 
 // ---- the replay ----

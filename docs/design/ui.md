@@ -412,9 +412,10 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
   bottom navigation gives way to it, and Back (the header's, or the platform's own) returns
   to the list.
 
-**Resizing (the Windows app, #297).** A divider between the list and the session, and between
-the session and the inspector, wherever both show. The widths above are the defaults; at two
-panes the app's list is 320 too, as long as the session keeps its narrowest.
+**Resizing (the Windows app, #297; the PWA, #1030).** A divider between the list and the
+session, and between the session and the inspector, wherever both show. The widths above are
+the defaults; at two panes the list is 320 too, as long as the session keeps its narrowest.
+Everything below holds in both clients; the PWA's differences are at the end.
 - **Limits** (`tokens.json` `layout.windows`): the list 264–480, so a row's two lines keep a
   title and its facts (§6.1); the inspector 280–560, so Details keeps its label column and a
   value beside it; and the session never under 440, about 50 characters of the Reading role
@@ -432,7 +433,24 @@ panes the app's list is 320 too, as long as the session keeps its narrowest.
   or focused from the keyboard; each is a system colour in high contrast. Left and Right move a
   focused divider 16 px, a screen reader sees a splitter whose value is its pane's width, and a
   double-click puts its pane back to its default.
-- **The PWA** keeps its fixed widths for now.
+- **The PWA** (`tokens.json` `layout.pwa`, the same defaults and limits) from 760 up; a phone
+  under 760 keeps its one column and has no divider.
+  - **Kept** in the browser's local storage, beside Your order, across reloads. Never sent to
+    a host, like the app's.
+  - **The divider** is an element with `role="separator"`, `aria-orientation="vertical"`,
+    `aria-valuenow` its pane's width in px and `aria-valuemin`/`aria-valuemax` its limits,
+    labelled "Resize the session list" or "Resize the delegate inspector". It is in the tab
+    order; Left and Right move it 16 px, as the app's do. It drags with pointer events, so a
+    mouse, a pen and a finger move it alike.
+  - **Touch:** the line stays a hairline, but its hit area is 44 wide (`dividerTouch`) under
+    a coarse pointer, centred on the line and over the panes' edges, and 8 (`divider`)
+    otherwise. Nothing is drawn wider for touch.
+  - **Reset:** a double-click or a double-tap puts its pane back to its default. Not a long
+    press: that is the browser's own (selection, the context menu) and nothing tells a person
+    it's there.
+  - **Colours** as the app's: clear at rest, `stroke2` while pointed at, Bridge while dragged
+    or focused (a visible focus ring, §9), and system colours under `forced-colors`.
+  - **Motion:** none. The pane follows the pointer; a reset jumps, under reduced motion or not.
 ### 5.3 Motion
 
 *Signed off by the owner on 2026-11-02 (#232). That includes three calls: platform
@@ -1206,13 +1224,32 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
         Deny, each its own press.
   - **One card per question id:** an update to the same question changes its card in place,
     and never adds a second.
+  - **Permissions asked together come one at a time** (#690): Copilot asks one for each of a
+    batch of parallel tool calls. The card shows the earliest, with "1 of *N* permissions
+    waiting" under its header (`question.waiting`), on every surface: the PWA, the Windows app
+    and Home Assistant's card. While others wait it is answered at the machine
+    (`answerAtMachine`: no controls, Deny included) whenever the host cannot tell it from them
+    on the session's screen: Copilot draws another ahead of it (a path request asked before a
+    shell one); its kind is not shell or path, whose dialogs the host knows; its own text has a
+    run of spaces that can wrap onto a blank row; any waiting request's text, its own included
+    (an argument's name too),
+    holds a hidden character, a right-to-left letter, a reference to one, a line-drawing
+    character or a tab; another waiting request has nothing drawn to check the screen against;
+    or another would be drawn the same. So an escaped approval among others is answered at the
+    machine until it waits alone, unless its only escapes are in a path request's access kind,
+    which its dialog never draws as written (v1-sessions.md, "Escaped approvals"). That can clear under the
+    same id as the others are answered. The next is a new question with its own id once this one
+    is answered, so a second tap or a stale button never answers it. A change only to the waiting
+    count refreshes the queue label, not the question's meaning: an answer already on its way
+    keeps its delivery state, and a failed answer keeps Try again for that original request.
   - **An approval is drawn as it runs,** since Approve once allows all of it: exactly as
     written, in the code face, never read as Markdown, with its hidden characters,
     right-to-left letters and bare carriage returns escaped and the code notes beside it, and
     no Copy ("An approval's card", below, #220). It wraps and is never cut, so a long command or a
     diff keeps Approve once. One the host escaped anything in is approved only through the
     confirmation sheet ("Escaped approvals", below, #803), which replaced the one-tap Approve
-    once of the owner's "escape and allow" (#253).
+    once of the owner's "escape and allow" (#253); while other Copilot permissions wait it is
+    almost always answered at the machine instead (#690, above).
   - **A host sends an approval's hidden characters and right-to-left letters as escapes**
     (`\u202E`, `\u05D0`, #220). The card's notes, and Needs you, which never offers such a
     prompt inline (§6.1), count a host's escape as the character it stands for.
@@ -1248,8 +1285,6 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       waiting", since the protocol doesn't say what was answered elsewhere.
   - **History:** a resolved question stays as a read-only item where it was asked, across later
     turns: the latest 20 per session, for as long as the client runs, none across a restart.
-  - **Several at once** (if a host ever sends them): one card each, in the order asked, with
-    "1 of N" in the heading.
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
   tool's name and arguments in mono). Not while the session waits on a question: the card says
   what is happening.
@@ -1402,6 +1437,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     the devices `config.json` lists by short id, or only at the machine.
   - **Home Assistant:** Deny only, under the line "Approve from the *app* or at the machine.", or
     "Approve at the machine." when `approve` is `machine` or `tooMany`. It has no device key, and its users include agents.
+  - **Among other Copilot permissions waiting** (#690): the approval is `answerAtMachine` until
+    it waits alone (unless its only escapes are in a path request's access kind), and that wins
+    over everything above on every surface: no "Approve once…", no sheet, and no Deny, Home
+    Assistant's included.
   - **Needs you, toasts, pushes:** no special case. Never an inline Approve (#202); a tap opens
     the card.
   - The Mac, iPhone and iPad app does not have the sheet yet: its Approve on one is refused by the
@@ -1594,6 +1633,20 @@ machine, online ones first, then the account's offline machines (#213):
     waiting for a question to be answered", and "Needs you" in its log, at most daily).
   - Set in the Windows app's Settings for now. On the phone it is a row in that machine's Settings,
     the current choice in text2; tapping it opens the same two choices with their notes (#801).
+- **Who can sign Copilot in (#972 slice 2; Creative, 6700914747):** inside the row, under its two
+  lines, in its text column like its updates, and only when the machine has "Let my devices sign
+  Copilot in on this machine" on (it offers `signin.devices`). Lines 1 and 2 stay as they are.
+  Read-only: no Add, no Remove and no disabled button, since the setting is the Windows app's.
+  - One line: "Can sign Copilot in: iPhone, Work laptop", with "(this device)" after this device's
+    name. Over three devices it reads "iPhone, Work laptop and 2 more"; every name is in the line's
+    tooltip and its accessible text.
+  - Under it, one line: "Removing a single device comes later."
+  - Empty: "No devices can sign Copilot in here yet.", then "Adding a device comes in a later
+    update."
+  - Unreadable: "Can't read the device list on this machine." alone. Sign-in is refused while the
+    list can't be read; nothing implies a device is allowed when it isn't known.
+  - If Trust rules that names don't go over the relay, the line reads "2 devices can sign Copilot
+    in" instead, in the same place. Trust accepted the lists with names (6700902097).
 - **A machine away (§6.1):** listed once, as offline ("Offline", and "Last seen 2m ago" on line
   2), with Forget, both while its rows are kept and after they have gone. A client whose relay
   keeps no roster lists it so only while its rows are kept.
@@ -1826,8 +1879,12 @@ Checking and the glyphs are **Not built yet (#384 slice 1)**, and Finish (§6.10
 machine's name, Relay and sign-in, "Agents on this machine" (each agent's row, below), "Your
 devices" with the two answer toggles of Workspaces and trust, this app's toggles, and the
 Host log. The host section's "Restore sessions after a reboot or crash" switch (§6.12) is
-**Not built yet (#780)**. The sectioned pane below, its table and the card for an agent
-installed later are **Not built yet (#384 slice 5)**. The PWA's Settings also has Text size
+**Not built yet (#780)**. The sectioned pane below and its table are **Not built yet (#384
+slice 5)**. The card for an agent installed later (#231, slice 1) ships on that page, at its top,
+with its grey dot on the rail's Settings item, "Settings, new agent found", until the Agents item
+exists. It is offered only for Copilot CLI, Claude Code and Codex whose version was read: an
+agent whose version couldn't be read has no card, and its row keeps its Set up. Removing an
+agent's connection also holds its card at that version. The PWA's Settings also has Text size
 (§4.4), on this device only.
 
 **An agent's row today** (the creative director's #784 words; #705's per-row names and
@@ -1884,6 +1941,20 @@ Collaboration (§6.7) keeps its own section, after Accounts, whose Devices it fo
   the person, and the Agents nav item carries the same.
 - **Remove bridge integration** is a subtle button, and removes only Slipgates' own
   registrations and blocks. Uninstalling a CLI or its credentials is never on this page.
+- **Devices that can sign Copilot in** (#972 slice 2; Creative, 6700914747): under "Let my devices
+  sign Copilot in on this machine", and only while that is on in the running host: the switch applies
+  at the host's next start, and until then the list shows who still can. Read-only, from the
+  machine's device roster (#55); the Settings device-list pattern, no new visual language.
+  - Heading: "Devices that can sign Copilot in".
+  - One row per device. Line 1 is the name, with "(this device)" after this app's own entry. Line 2
+    is the kind and platform: "Phone · iOS", "Browser · Windows", "App · Windows". No device id,
+    key, generation or presence code.
+  - Under the list, one line: "Removing a single device comes later. To stop them all, turn this
+    off." No Remove, no Add and no disabled button.
+  - Empty: "No devices can sign Copilot in here yet.", then "Adding a device comes in a later
+    update." Until #55's roster ships, every machine reads this.
+  - Unreadable: "Can't read the device list on this machine." alone. Sign-in is refused while the
+    list can't be read.
 - **Dev Box keep-awake** is shown only on a Dev Box, Off by default, with its consequence on
   its row ("Signs in with az login · an awake Dev Box keeps billing").
 - **Workspaces and trust** is **Parked (#699)**, except its two answer toggles, which ship
@@ -2922,7 +2993,7 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
 | A8 | **Contrast:** text 4.5:1, and glyphs and the non-text parts that show state or focus 3:1, against what they sit on, in light, dark and high contrast (§3's Contrast). Words that would be Bridge on light's `selected` tint take `text` instead, and every foreground and background pair a client draws is listed in `tokens.json` `color.contrast`, so `a11y-contrast` checks it. | Tokens: `a11y-contrast` (`tokens.json` `color.contrast`). PWA: axe `color-contrast` in light, dark and forced colours in `a11y-pwa`, and on a selected machine's words in light. Not every drawn pair is listed yet: `danger.text` on light's selected tint over the shell is 4.18:1, drawn by a selected machine's refused update (`.machine-error`), and isn't listed, tracked in #858. Non-text 3:1 is manual. Windows: manual | #366 |
 | A9 | **High contrast uses system colours.** In Windows high contrast and the browser's forced colours, every role and surface takes a system colour (§3's Theme, `tokens.json` `hc`), and shape and words still carry each state (§2.1). | PWA: `pwa-ui`'s theme.spec, "in forced colours every role is a system colour", and `a11y-pwa`'s forced-colours axe run (Chromium); that shape and words still tell states apart is manual. Windows: manual | |
 | A10 | **Reduced motion** follows each platform's setting, as §5.3's reduced-motion column and §9.2 say. | PWA: `a11y-pwa`'s reduced-motion.spec. Windows: manual | #659 |
-| A11 | **Targets:** at least 44×44 on touch platforms and 32×32 with a pointer on desktop; never under WCAG 2.5.8's minimum anywhere (24×24, or its spacing exception). | PWA: axe `target-size` in `a11y-pwa` (WCAG 2.5.8 only); 44 and 32 are manual | |
+| A11 | **Targets:** at least 44×44 on touch platforms and 32×32 with a pointer on desktop; never under WCAG 2.5.8's minimum anywhere (24×24, or its spacing exception). "On touch" means touch is the only pointer: a tablet with a trackpad or mouse attached takes pointer sizes, as a desktop does (PWA: `(pointer: coarse) and (not (any-pointer: fine))`, never `(pointer: coarse)` alone, which an iPad keeps with a trackpad). | PWA: axe `target-size` in `a11y-pwa` (WCAG 2.5.8 only); 44 and 32 are manual | |
 | A12 | **Keyboard focus is always shown** (WCAG 2.4.7). In the PWA the ring is drawn through `:focus-visible` (§3: Bridge is focus), never `:focus` alone, and outlines are never hidden for the whole page; on Windows it is the system's focus visuals. A ring is drawn only for focus moved by a key: a press, a touch, or the app coming back from a notification draws none. Focus still moves for a screen reader; in the PWA the one element focused without a key draws no ring until a key is pressed, and a text field keeps the browser's ring wherever focus came from, since it shows where typing goes, as does focus the browser brings in from its address bar or another window while the page stayed on screen (its Tab, whose key the page never sees). Nothing else that looks like focus marks the session a notification opened: it is shown selected. | PWA: `a11y-pwa`'s keyboard.spec ("with focus shown"; "a session opened with a touch … no ring drawn"; "the session a notification tapped … opens … no ring"; "as the app starts … no ring"; "a notification for the session already open … takes the title's ring away"; "focus the browser brings in from its address bar … keeps the browser's ring"), and `pwa-e2e`'s "a notification's link opens its machine and session" (cold and warm, through the real link and the worker's message). A real iPhone's notification is the owner's check. Windows: manual | #373 |
 | A13 | **Content stays selectable.** Conversation, code, prompts, questions and every field stay selectable and copyable; never a blanket `user-select: none`. A control's own words (a button, a tab, a menu item), a row's title, a session's header, the app bar's title (on a phone, the page's title row, which stands in for it) and a banner's words are not selected by a press, a long press or a double tap; anything a person may want to copy stays selectable. | PWA: `pwa-ui`'s ui.spec, "chrome's words are not selectable, and the conversation, code, a question and every field are". Windows: manual | #373 |
 | A14 | **Risky settings carry warning weight.** A setting that weakens a safeguard (bypassing the agent's permission prompts) is drawn with warning weight: Needs you's text colour for its explanation, or an InfoBar while it is on. Its confirmation names exactly what changes and has Cancel as its default button. | Not yet enforced, tracked in #699 | #699 |

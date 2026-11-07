@@ -140,6 +140,29 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Other_the_machine_cannot_send_yet_is_shown_unavailable_with_why_and_a_refusal_for_it_says_so_in_the_same_words()
+    {
+        // #908: the CLI offers Other, and the machine can't send it yet. The field says so in the
+        // fixed sentence, and a refusal carrying the code is shown as "Not sent · " and the same.
+        const string Why = "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.";
+        var choice = Make.Choice();
+        var q = Question(choice with { Fields = [choice.Fields[0] with { OtherUnavailable = AnswerReasons.OtherNotSendable }] });
+        Assert.Equal((false, Why), (q.Fields[0].AllowOther, q.Fields[0].OtherUnavailable));
+        // Not for a code this app does not know, nor beside an Other that is offered.
+        Assert.Null(Question(choice with { Fields = [choice.Fields[0] with { OtherUnavailable = "somethingNewer" }] }).Fields[0].OtherUnavailable);
+        Assert.Null(Question(Make.Choice(other: true) with { Fields = [Make.Choice(other: true).Fields[0] with { OtherUnavailable = AnswerReasons.OtherNotSendable }] }).Fields[0].OtherUnavailable);
+
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Refused, Why) { Code = AnswerReasons.OtherNotSendable });
+        var other = Question(Make.Choice(other: true));
+        other.ToggleOther();
+        other.Fields[0].OtherText = "DuckDB";
+        other.Send();
+
+        await Wait.UntilAsync(() => other.StatusText == "Not sent · " + Why, "refused, in the reason's own words");
+        Assert.True(other.CanAnswer);
+    }
+
+    [Fact]
     public void A_form_is_checked_before_it_goes_and_the_field_at_fault_is_marked()
     {
         var q = Question(Make.Form(
@@ -194,6 +217,70 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal("Permission requested", q.Heading);
         Assert.Equal([("approve", "allow"), ("deny", "deny")], q.Fields[0].Options.Select(o => (o.Value, o.Tone)));
         Assert.Equal("Send", q.SendLabel);
+    }
+
+    // Copilot asks a permission for each of a batch of parallel tool calls and shows them one at a
+    // time (#690): the card says how many wait, keeps that count current, and the next comes as
+    // its own question.
+    [Fact]
+    public void Permissions_asked_together_are_shown_one_at_a_time_saying_how_many_wait()
+    {
+        var card = new SessionCardViewModel(Make.Session(question: Make.Approval("r1#d") with { Waiting = 3 }), Context());
+        Assert.Equal("1 of 3 permissions waiting", card.Question!.Queue);
+
+        card.Update(Make.Session(question: Make.Approval("r1#d") with { Waiting = 4 }));
+        Assert.Equal("1 of 4 permissions waiting", card.Question!.Queue);
+
+        card.Update(Make.Session(question: Make.Approval("r2#e")));
+        Assert.Equal("r2#e", card.Question!.Id);
+        Assert.Null(card.Question.Queue);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_permission_count_change_keeps_the_original_answer_retryable_whether_it_fails_before_or_after_the_update(bool failedBefore)
+    {
+        var gate = new TaskCompletionSource();
+        host.OnAsync(Ops.SessionAnswer, async _ =>
+        {
+            await FakeHost.Until(gate.Task);
+            throw new InvalidOperationException("the host failed after reading it");
+        });
+        var asked = Make.Approval("r1#d") with { Waiting = 3 };
+        var card = new SessionCardViewModel(Make.Session(question: asked),
+            Context(caps: () => [.. connection.Capabilities, Capabilities.SessionsApprove]));
+        var q = card.Question!;
+        q.Choose(q.Fields[0].Options.Single(o => o.Value == "approve"));
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count == 1, "the approval sent");
+        if (failedBefore)
+        {
+            gate.SetResult();
+            await Wait.UntilAsync(() => q.ShowResend, "the failure before the count changes");
+        }
+        var queueChanged = false;
+        q.PropertyChanged += (_, e) => queueChanged |= e.PropertyName == nameof(QuestionViewModel.Queue);
+
+        card.Update(Make.Session(question: asked with { Waiting = 4 }));
+
+        Assert.Same(q, card.Question);
+        Assert.True(queueChanged);
+        Assert.Equal("1 of 4 permissions waiting", q.Queue);
+        Assert.False(q.CanAnswer);
+        if (!failedBefore) { gate.SetResult(); }
+        await Wait.UntilAsync(() => q.ShowResend, "Try again for the original approval");
+        card.Update(Make.Session(question: asked with { Waiting = null }));
+        Assert.Null(q.Queue);
+        Assert.True(q.ShowResend);
+        Assert.DoesNotContain("The question changed", q.StatusText, StringComparison.Ordinal);
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        q.Resend();
+
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count == 2, "the retry");
+        var sent = host.Sent(Ops.SessionAnswer);
+        Assert.Equal(sent[0].GetProperty("request").GetString(), sent[1].GetProperty("request").GetString());
+        await Wait.UntilAsync(() => deliveries.Get(q.Key)?.State == DeliveryState.Done, "the original approval delivered");
+        card.Detach();
     }
 
     [Theory]

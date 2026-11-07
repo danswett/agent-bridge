@@ -35,10 +35,10 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
 | Status | Rows |
 |---|---|
-| `Verified` | 49 |
+| `Verified` | 48 |
 | `Implemented, untested live` | 53 |
 | `Partial` | 1 |
-| `Missing` | 9 |
+| `Missing` | 10 |
 | `Intentionally different` | 20 |
 | `N/A` | 12 |
 | `In flight (…)` | 6: Claude/Codex live 6 |
@@ -77,7 +77,7 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 | Single choice: Up×(N−1) to the top, Down to the row, Enter | Cp | `hooks/decision-inject.ps1` | `Verified` | `CopilotPlannerTests.A_choice_walks_up_to_the_top_wherever_the_caret_was_left_then_down_to_the_chosen_row_and_commits_with_Enter`. Live: Progress › Answers (single choice), Windows app (card and toast) | |
 | Forms of any number of fields (choice, boolean, text, number), each committed with its own Enter | Cp | `Get-BridgeFormPayloads`, `Send-CopilotSessionForm`; `tests/test-decision-args.ps1` | `Verified` | `CopilotPlannerTests.Each_field_of_a_form_is_answered_in_order_with_its_own_Enter_and_a_pause_after_it`, `pwa/test/answer.spec.mjs` (forms). Live: Progress › Answers (five-field form, é and 🚀 exact) | |
 | Multi-select checkboxes, toggling only rows that must change | Cp | `tests/test-choices-form.ps1` | `Implemented, untested live` | `CopilotPlannerTests.A_multi_select_list_is_walked_once_from_its_top_row_wherever_the_caret_was_left_toggling_only_rows_that_must_change` | `docs/host-answers.md`: "Up stops at the first row of a checkbox list" is assumed, not seen. #39 |
-| Other (type your answer): Up×(N−1), Down×N, the words, a single Enter (#240) | Cp | `hooks/decision-inject.ps1`; `tests/test-answer-match.ps1` | `Verified` | `CopilotPlannerTests.Words_through_Other_walk_up_to_the_top_then_down_past_the_last_option_and_submit_separately`, `TranscriptAndVerifierTests.Words_through_Other_match_only_when_the_words_were_recorded_and_not_an_option`. Live: Progress › Answers (Other with smart quotes) | |
+| Other (type your answer): Up×(N−1), Down×N, the words, a single Enter (#240) | Cp | `hooks/decision-inject.ps1`; `tests/test-answer-match.ps1` | `Missing` | Planned as before (`CopilotPlannerTests.Words_through_Other_walk_up_to_the_top_then_down_past_the_last_option_and_submit_separately`), but refused before any key and shown disabled with why (`AnswerFlowTests.An_Other_answer_to_a_lone_list_is_refused_before_any_key_saying_why_as_the_list_already_does`): a live 1.0.105 session takes the words in a box drawn apart from the form, which #510 holds no key to | [#908](https://github.com/danswett/agent-bridge/issues/908): type into that box. A temporary exception to #876 until then; agent-ha-bridge typed blind and reached it |
 | Other inside a multi-field form or a checkbox list | Cp | No walk in agent-ha-bridge either | `Intentionally different` | Refused (`CopilotPlannerTests.Other_in_a_tabbed_form_or_a_checkbox_list_is_refused_because_no_walk_reaches_it`) | `docs/host-answers.md` › What can be answered |
 | The older `question` / `choices` format | Cp | Not driven by agent-ha-bridge | `Intentionally different` | Shown, refused for typing (`CopilotPlannerTests.The_older_choices_format_and_a_default_that_names_no_option_are_refused_before_planning`) | `docs/host-answers.md` |
 | Non-Latin-1 text typed exactly (dashes, smart quotes, CJK, emoji) | All | Broken before agent-ha-bridge #252 | `Verified` | `CopilotPlannerTests.Emoji_and_CJK_are_typed_as_they_are_and_long_words_go_in_one_burst`. Live: Progress › Answers (é 🚀), Other (smart quotes) | |
@@ -212,7 +212,7 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 | Copilot `ask_user` hook returns at once; the native prompt stays live | Cp | `route-ask-user-v3.ps1` | `Implemented, untested live` | Questions come from the transcript, and the terminal stays answerable (first answer wins). The host's hook allows `ask_user` at once on every path: `HookRunnerTests.Copilot_ask_user_gets_its_allow_at_once_even_with_more_input_than_any_event` | #39 |
 | Claude and Codex registrations and the Codex approval marker | Cl, Cx | `Write-ClaudeSessionRegistration`, `Write-CodexApprovalMarker` | `Implemented, untested live` | Written by the intake on a migrated machine, in agent-ha-bridge's shapes, with no Home Assistant; the marker for every approval: `IntakeTests` (Claude, Codex, pruning) | #39: answer a Codex approval from the phone after migrating |
 | Hook health in `status` (heartbeat, path taken, timings, log rotation) | All | `tests/test-hook-status.ps1`, `test-hook-stats.ps1` | `Implemented, untested live` | `agent-bridge-host hooks status`: `IntakeTests.Hook_health_counts_each_path_and_folds_the_numbers_out_of_the_reasons`, `HookRunnerTests.The_log_keeps_one_previous_megabyte` | Not on the app's Settings page yet |
-| Register hooks and owned instruction blocks for each agent; uninstall removes only those | All | `install.ps1`, `claude/install-claude.ps1`, `codex/install-codex.ps1`; `Set-BridgeManagedInstructionBlock` | `Missing` | The app writes none (`docs/app-windows.md`, G4) | #54 |
+| Register hooks and owned instruction blocks for each agent; uninstall removes only those | All | `install.ps1`, `claude/install-claude.ps1`, `codex/install-codex.ps1`; `Set-BridgeManagedInstructionBlock` | `Implemented, untested live` | `StandaloneHooks`/`ManagedInstructions` register the chosen agent and its owned guidance and remove only what the record attributes to the app; `hooks install`/`remove` and the Settings agent rows call them: `StandaloneHooksTests` (fresh Copilot, Claude and Codex, idempotence, byte-preserving guidance, foreign/incomplete refusal, partial failure, explicit restart). Not beside agent-ha-bridge (read-only) | #54: clean install, real CLIs, restart, a real Codex approval and owned-only uninstall in the #736 lab |
 
 ## 13. Discovery and transcript reading
 

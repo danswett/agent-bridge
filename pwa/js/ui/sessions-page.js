@@ -29,6 +29,8 @@ import { AppBadge } from '../needs-you.js';
 import { enter, scrollBehavior, watchLane } from './motion.js';
 import { QUESTION_ARRIVAL_GUARD_MS, watchMoves } from './session-card.js';
 import { stopReceipts } from './receipt.js';
+import { CUE_MS } from '../return-grace.js';
+import { UPDATING } from './hold.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -115,25 +117,6 @@ export function largeLimit(capabilities, relayMax) {
   return Math.min(AttachmentLimits.blobBytes, maxPlain(relayMax));
 }
 
-// What the sessions list says about a machine shown that isn't open, or '' when it is.
-// named: with other machines shown, so every line says which machine it is about.
-export function hostNote(link, name, { online, named = false }) {
-  const about = (text) => (named ? `${name}: ${text}` : text);
-  switch (link.phase) {
-    case 'waiting':
-      if (link.error) { return about(link.error); }
-      if (online) { return `Connecting to ${name}…`; }
-      // Its last list is still shown (#269): it reads as it was, and takes nothing until it is back.
-      return link.store?.size
-        ? `${name} is offline. Its sessions are as it last sent them, and can't be answered or ended from here until it is back.`
-        : `${name} is offline. Its sessions will show when it is back.`;
-    case 'opening': return `Opening an end-to-end encrypted channel to ${name}…`;
-    case 'unsupported': return about(link.error);
-    case 'failed': return `Couldn't reach ${name}: ${link.error}. Trying again.`;
-    default: return '';
-  }
-}
-
 const OVER_LIST = Object.freeze({ overList: true });
 
 // A delegate opened in a session pushed over the list (a phone's, ui.md §5.2): one more entry, so
@@ -152,6 +135,9 @@ const POPUP = '[role="menu"], [role="dialog"], [role="alertdialog"], dialog[open
 
 export class SessionsPage {
   #shownCaps = new Map();
+  #notWholeSince = null;
+  #slotTimer = null;
+  #wasReady = false;
   // The session the address names (#/sessions/<machine>/<session>), until it has arrived.
   #want = null;
   // Whether the address names a session: on a phone, its view is pushed over the list.
@@ -188,8 +174,8 @@ export class SessionsPage {
   // updates: an UpdateControl for the machines that offer updates (#51), or null.
   // shell: the pages and app bar (./shell.js), or null: where a session shown goes, and where
   // machines online and a waiting folder-trust question are said.
-  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
-    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, storage, onRendered });
+  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
+    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, storage, onRendered });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     // One gate for every send (#269): nothing new is given for a machine with no route now (its
@@ -816,19 +802,48 @@ export class SessionsPage {
     return `Sessions on ${hosts.nameOf(ids[0]) ?? 'your machine'}`;
   }
 
+  // The title row's slot and the connection strip (#950). Nothing here is above the list, so nothing
+  // pushes a row. The slot is not announced; the strip is, once, as it comes.
   #drawNotes(links) {
     const { hosts, connection } = this;
-    let lines;
-    if (hosts.all && links.length > 1 && !connection.ready) {
-      // One line for the relay, not one per machine.
-      lines = [[null, 'The relay connection dropped; reconnecting.']];
-    } else {
-      const named = this.#several();
-      lines = links.map((l) => [l.id, hostNote(l, hosts.nameOf(l.id) ?? 'your machine', { online: hosts.isOnline(l.id), named })]).filter(([, text]) => text);
+    const grace = hosts.grace;
+    const away = !grace?.active;
+    const name = (l) => hosts.nameOf(l.id) ?? 'your machine';
+    if (connection.ready) { this.#wasReady = true; }
+    const online = links.filter((l) => hosts.isOnline(l.id));
+    const whole = (l) => (l.phase === 'open' && l.client?.synced !== false) || l.phase === 'unsupported' || l.phase === 'failed';
+    const notWhole = online.filter((l) => !whole(l) || (l.phase === 'open' && hosts.staleOf(l.id)?.reason === 'confirming'));
+    if (!notWhole.length) { this.#notWholeSince = null; } else if (this.#notWholeSince === null) { this.#notWholeSince = grace?.active ? grace.since : Date.now(); }
+    let text = '';
+    const errors = away ? online.filter((l) => l.phase === 'failed' || l.phase === 'unsupported') : [];
+    if (errors.length) {
+      const first = errors[0];
+      const line = first.phase === 'failed' ? `Couldn't reach ${name(first)}` : `${this.#several() ? `${name(first)}: ` : ''}${first.error}`;
+      text = errors.length > 1 ? `${line} and ${errors.length - 1} more` : line;
+    } else if (notWhole.length) {
+      const wait = CUE_MS - (Date.now() - this.#notWholeSince);
+      if (wait <= 0) {
+        const bare = notWhole.filter((l) => !l.store?.size);
+        text = bare.length ? `Connecting to ${plural(bare.length, 'machine', 'machines')}…` : UPDATING;
+      } else {
+        clearTimeout(this.#slotTimer);
+        this.#slotTimer = setTimeout(() => this.#drawNotes(this.hosts.links()), wait);
+      }
     }
-    const s = this.$('host-state');
-    s.replaceChildren(...lines.map(([id, text]) => h('span', { class: 'host-note', dataset: id ? { hostId: id } : null }, text)));
-    s.hidden = lines.length === 0;
+    const slot = this.$('return-slot');
+    if (slot.textContent !== text) { slot.textContent = text; }
+    const strip = away && !connection.ready && this.#wasReady && !!hosts.selection;
+    const stripEl = this.$('connection-strip');
+    if (stripEl.hidden === strip) {
+      const head = stripEl.closest('.sessions-head');
+      const active = head.ownerDocument.activeElement;
+      // The head's controls are hidden under the strip: focus on one goes to the strip, not the page.
+      const moveFocus = strip && !!active && head.contains(active);
+      stripEl.hidden = !strip;
+      stripEl.textContent = strip ? 'Reconnecting to the relay…' : '';
+      stripEl.closest('.sessions-head').dataset.strip = strip ? 'true' : 'false';
+      if (moveFocus) { stripEl.tabIndex = -1; stripEl.focus(); }
+    }
     this.#drawCount(hosts.sessions.size);
   }
 
@@ -947,6 +962,7 @@ export class SessionsPage {
       known: connection.known ?? null,
       forget: this.forget,
       updates: this.updates,
+      signInDevices: this.signInDevices,
       allStatus: hosts.all ? plural(hosts.sessions.size, 'session', 'sessions') : '',
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;
@@ -957,6 +973,8 @@ export class SessionsPage {
       nameOf: (id) => hosts.nameOf(id),
       // With every machine shown, one that left keeps its tab, offline, while its rows stay (#269).
       away: hosts.away(),
+      // The tabs look as last seen through the grace, and change with the rows (#950).
+      quiet: hosts.grace?.active === true,
       onSelect: (id) => this.#pickMachine(id),
     });
     this.shell?.setOnline(n);
