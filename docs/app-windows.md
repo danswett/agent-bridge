@@ -385,6 +385,34 @@ into one folder with one version. An app update is a host update, so they never 
   when GitHub last answered, not when the shared copy was read.
   No static feed is published (no Pages copy of `releases.<channel>.json`, and every release is a
   pre-release, so `releases/latest/download` finds nothing), so the API list stays the source.
+* **The release list from the CDN first** (#927, off until the relay is live). Only the list is
+  rate limited, so SRE's relay at `releases.slipgates.com` caches just that response for every
+  machine. With `ReleaseDiscovery.ReadCdnFirst` on (a constant a release flips, never a setting),
+  discovery asks
+  `https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10&page=1` (the same
+  page and size as GitHub's request, pinned in code) before GitHub, whenever its shared copy is
+  due again, and GitHub only when the relay's answer isn't used. Off, nothing changes, and
+  `feed.txt` always wins over both. The relay is untrusted transport, so its list is used only
+  if it answers 200 itself (no redirect is followed), within 10 seconds, and the list:
+  * is one GitHub could have given (the same checks as GitHub's), with no draft and every
+    release tagged `v<version>`;
+  * names every asset's download under
+    `https://github.com/danswett/agent-bridge/releases/download/<that release's tag>/<asset name>`
+    (and its API `url`, if any, under this repository's release assets), with nothing else in the
+    URL: a checksum only proves a package matches the feed that names it, so a list naming
+    another host's feed could name a hostile package;
+  * has something to install (a release carrying a `releases.<channel>.json`): an empty list,
+    one cut short or one with nothing to install is a failed read, never "nothing newer";
+  * is no older than the newest release in the list kept here, nor than the version installed;
+  * comes from a copy at most an hour old (its `Age` header).
+
+  Feeds and packages still download from those GitHub URLs and are still checked against their
+  checksums as before (#719). A list from the relay counts as old as the relay says (`FetchedAt`
+  is when its copy was made, so `UpdateState.CheckedAt` and Settings say that), and it doesn't
+  end GitHub's backoff: only GitHub answering does, and if the relay then fails, the check is
+  held until GitHub's time as before. Which answered is kept with the list (`Source`, `cdn` or
+  `github`) and, while the switch is on, said in the app's and the host's logs at each ask,
+  with the relay copy's age or the plain reason it wasn't used, never an exception's text.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and
@@ -574,7 +602,8 @@ into one folder with one version. An app update is a host update, so they never 
     is a failure like any other); it holds for an hour, then two hours each time, until one
     succeeds, as Velopack's error carries no headers. The next check is made at the hold's end,
     however recently a press was answered. A check from Settings that succeeds meanwhile ends the
-    hold (#934), and a change of source (Include pre-releases, `feed.txt`) drops it. A press from a
+    hold (#934), unless its answer is a copy older than the refusal (the machine's shared one, or
+    the CDN's, #927), and a change of source (Include pre-releases, `feed.txt`) drops it. A press from a
     device in the meantime is answered with
     the reason without asking the feed. The reason goes to the devices as the last update's
     outcome (`failed`), once each time, though never over an update made, or a press answered,
