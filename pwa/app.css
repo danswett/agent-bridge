@@ -1408,6 +1408,12 @@ summary {
    the connection strip, which takes the title row's place at its height. Neither is announced as the
    slot fills; the strip is, once, as the polite status it is. */
 .count-row { grid-area: count; display: flex; gap: var(--ab-space-2); min-width: 0; min-height: var(--type-meta-line); }
+/* In the list pane the cue is too wide beside the count: it takes a second line, which is kept (the
+   row sits beside New, as tall) so that it appearing moves nothing. */
+@media (min-width: 760px) {
+  .count-row { flex-wrap: wrap; align-content: flex-start; row-gap: 0; min-height: calc(2 * var(--type-meta-line)); }
+  .count-row .return-slot { flex: 1 1 100%; }
+}
 .count-row .count { flex: none; }
 .return-slot {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

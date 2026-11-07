@@ -972,6 +972,8 @@ export class SessionsPage {
       nameOf: (id) => hosts.nameOf(id),
       // With every machine shown, one that left keeps its tab, offline, while its rows stay (#269).
       away: hosts.away(),
+      // The tabs look as last seen through the grace, and change with the rows (#950).
+      quiet: hosts.grace?.active === true,
       onSelect: (id) => this.#pickMachine(id),
     });
     this.shell?.setOnline(n);

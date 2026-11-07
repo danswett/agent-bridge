@@ -40,7 +40,12 @@ test('a machine that goes away just after a return reads as last seen for 3 s, t
   await expect(card(page, IDLE).locator('.row-status')).not.toHaveText('Offline');
   await expect(card(page, IDLE)).not.toHaveAttribute('data-stale', /./);
   await expect(page.locator('#host-state')).toBeHidden();
+  const tab = page.locator('#machine-tabs .machine-tab[data-device-id="demo-laptop"]');
+  await expect(tab).not.toHaveClass(/away/);
+  await expect(tab).not.toHaveAttribute('aria-label', /offline/);
   await page.clock.runFor(1600);
+  await expect(tab).toHaveClass(/away/);
+  await expect(tab).toHaveAttribute('aria-label', /offline/);
   await expect(card(page, IDLE)).toHaveAttribute('data-stale', 'offline');
   await expect(card(page, IDLE).locator('.row-status')).toHaveText('Offline');
 });
@@ -83,7 +88,11 @@ test('a list not whole 1 s after a return says Updating… in the title row\'s s
   await expect(slot(page)).toHaveText('Updating…');
   await expect(slot(page)).not.toHaveAttribute('aria-live', /./);
   await expect(slot(page)).not.toHaveAttribute('role', /./);
+  const [countTop, slotTop] = await page.evaluate(() => ['session-count', 'return-slot'].map((i) => document.getElementById(i).getBoundingClientRect().top));
+  expect(slotTop).toBeGreaterThan(countTop);
   expect(await top()).toBe(before);
+  await expect(slot(page)).toBeVisible();
+  expect(await slot(page).evaluate((s) => s.scrollWidth <= s.clientWidth)).toBe(true);
   expect(await page.locator('#session-list').evaluate((l) => l.previousElementSibling?.matches('#sign-in-banners, #needs-you, #machine-tabs') ?? true)).toBe(true);
 });
 
