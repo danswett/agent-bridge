@@ -15,7 +15,9 @@ public sealed class AttemptLedger
 {
     // Long past any prompt: Copilot and Claude question ids and Codex generations are
     // never reused, so an entry this old can only ever match nothing.
-    static readonly TimeSpan Keep = TimeSpan.FromDays(30);
+    internal static readonly TimeSpan Keep = TimeSpan.FromDays(30);
+
+    internal const string AlreadyTyped = "an answer was already typed into this prompt once, and is never typed again";
 
     readonly string? path;
     readonly TimeProvider time;
@@ -42,7 +44,7 @@ public sealed class AttemptLedger
         lock (gate)
         {
             if (Load() is { } problem) { return problem; }
-            if (attempts!.ContainsKey(key)) { return "an answer was already typed into this prompt once, and is never typed again"; }
+            if (attempts!.ContainsKey(key)) { return AlreadyTyped; }
             attempts[key] = time.GetUtcNow();
             if (Save() is { } failed)
             {

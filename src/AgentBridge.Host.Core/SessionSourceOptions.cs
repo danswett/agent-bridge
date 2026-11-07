@@ -69,6 +69,11 @@ public sealed class SessionSourceOptions
     // attention says signIn phone. None by default, when nothing claims a phone sign-in.
     public IReadOnlyCollection<AgentBridge.Protocol.AgentKind> PhoneSignIn { get; init; } = [];
 
+    // And whether any device can do it now (#972 slice 2): one the machine's person-device roster
+    // pins. With nobody pinned no attention says phone either, so no client offers a Sign in that
+    // every device would be refused. Nobody by default.
+    public Func<bool> PhoneSignInPinned { get; init; } = () => false;
+
     // On first sight only this much of the end of a transcript is parsed. The rest is
     // skimmed for counts and the first user message, never parsed as JSON wholesale:
     // a Copilot events.jsonl of 18 MB is ordinary and some reach hundreds.

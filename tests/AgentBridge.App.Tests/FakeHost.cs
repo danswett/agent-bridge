@@ -535,7 +535,7 @@ static class Wait
 
     internal static TimeoutException TimedOut(string what, TimeSpan longest, string? details, string? bound = null) =>
         new($"timed out waiting for {what} ({(bound is null ? "" : bound + "; ")}longest gap between looks {longest.TotalMilliseconds:F0} ms; "
-            + $"pool threads {ThreadPool.ThreadCount}, queued {ThreadPool.PendingWorkItemCount}){(details is null ? "" : $": {details}")}");
+            + $"{TestTimeoutDiagnostics.Describe()}){(details is null ? "" : $": {details}")}");
 }
 
 // Only counts and phase times cross the pipe/UI boundary; never file contents.

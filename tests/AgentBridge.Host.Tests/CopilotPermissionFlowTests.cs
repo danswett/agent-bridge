@@ -181,6 +181,38 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
     // ---- an approval the host escaped anything in (#803) ----
 
+    [Theory]
+    [InlineData("\\uD800")]
+    [InlineData("\\uD801")]
+    [InlineData("\\uFFFD")]
+    public async Task Approve_on_a_prompt_holding_half_a_surrogate_pair_or_U_FFFD_is_refused_unsigned_and_nothing_is_typed(string spelling)
+    {
+        const string lossyId = "c0b11070-0000-4000-8000-0000000000cc";
+        var lossyEvents = f.CopilotSession(lossyId, 502);
+        var prompt = Copilot.Prompts["commands"].DeepClone().AsObject();
+        prompt["fullCommandText"] = "echo MARK";
+        Fixture.Append(lossyEvents, Copilot.User("ship it", 1), Copilot.TurnStart(2), Copilot.ToolStart("c1", "powershell", new { command = "git push" }, 3),
+            Copilot.Permission("r1", "c1", prompt, 4).Replace("echo MARK", "echo " + spelling));
+        f.Processes.Run(AgentKind.Copilot, 502);
+        await source.RefreshAsync();
+        var q = source.Get(lossyId)!.Question!;
+        Assert.True(q.AnswerAtMachine);
+
+        var result = await Answerer().AnswerAsync(new AnswerRequest
+        {
+            Id = lossyId,
+            Question = q.Id,
+            Request = Guid.NewGuid().ToString(),
+            Fields = new Dictionary<string, JsonElement> { ["decision"] = JsonSerializer.SerializeToElement("approve") },
+        });
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Equal(0, injector.ScreenReads);
+        Assert.Empty(injector.Plans);
+    }
+
+    // ---- an approval the host escaped anything in (#803), continued ----
+
     const string EscapedId = "c0b11070-0000-4000-8000-0000000000bb";
 
     // A second session whose prompt's intention holds a right-to-left override: the host shows it

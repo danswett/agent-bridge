@@ -244,6 +244,66 @@ public class CopilotTests
         Assert.Equal(Fixture.T0.AddSeconds(9), answered.StatusSince);
     }
 
+    // Half a surrogate pair in what an agent wrote into a tool call threw where its line was read
+    // (ToolSummary, the task call's label, the question), and the line failed on every pass: the
+    // session was dropped and discovery held (#921 review). Each now reads as U+FFFD.
+    [Theory]
+    [InlineData("ask_user", """{ "message": "a\uD800", "requestedSchema": { "properties": { "f": { "type": "string" } } } }""")]
+    [InlineData("ask_user", """{ "question": "a\uD800", "choices": ["x", "y"] }""")]
+    [InlineData("powershell", """{ "command": "echo a\uD800" }""")]
+    [InlineData("powershell", """{ "description": "a\uD800", "command": "echo" }""")]
+    [InlineData("powershell", """{ "other": "a\uD800" }""")]
+    [InlineData("shell", """{ "command": ["bash", "-lc", "echo a\uD800"] }""")]
+    [InlineData("task", """{ "description": "a\uD800", "prompt": "b\uD800", "agent_type": "explore" }""")]
+    public async Task A_tool_call_holding_half_a_surrogate_pair_keeps_its_session(string tool, string arguments)
+    {
+        await using var s = new Session_();
+
+        var line = Copilot.ToolStart("c1", tool, new { }, 3).Replace("\"arguments\":{}", "\"arguments\":" + arguments);
+        var session = await s.After(Copilot.User("go", 1), Copilot.TurnStart(2), line);
+
+        Assert.NotNull(session);
+        if (tool == "ask_user") { Assert.Equal("a\uFFFD", session.Question!.Message); }
+    }
+
+    // The same in any text a line carries, read through Json.Str: what the person or an agent
+    // wrote, a tool's result (an MCP result can escape half a pair, and text cut mid-character
+    // leaves one), a permission prompt (Trust's sec-769 review, #921). Each line type keeps its session.
+    [Theory]
+    [InlineData("user")]
+    [InlineData("assistant")]
+    [InlineData("reasoning")]
+    [InlineData("tool-result")]
+    [InlineData("delegate-tool-result")]
+    [InlineData("delegate-text")]
+    [InlineData("permission-command")]
+    [InlineData("permission-path")]
+    public async Task A_line_holding_half_a_surrogate_pair_keeps_its_session(string kind)
+    {
+        await using var s = new Session_();
+        var command = Copilot.Prompts["commands"].DeepClone().AsObject();
+        command["fullCommandText"] = "MARK";
+        command["intention"] = "MARK";
+        var path = Copilot.Prompts["path"].DeepClone().AsObject();
+        path["paths"] = new System.Text.Json.Nodes.JsonArray("C:\\MARK");
+        string[] lines = kind switch
+        {
+            "user" => [Copilot.User("MARK", 1)],
+            "assistant" => [Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("MARK", 3)],
+            "reasoning" => [Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("x", 3, reasoning: "MARK")],
+            "tool-result" => [Copilot.User("go", 1), Copilot.ToolStart("c1", "powershell", new { command = "ls" }, 3), Copilot.ToolResult("c1", "MARK", 4)],
+            "delegate-tool-result" => [Copilot.User("go", 1), Copilot.SubagentStarted("t1", "d1", 3), Copilot.ToolStart("c2", "powershell", new { command = "ls" }, 4, "d1"), Copilot.ToolResult("c2", "MARK", 5, "d1")],
+            "delegate-text" => [Copilot.User("go", 1), Copilot.SubagentStarted("t1", "d1", 3), Copilot.Assistant("MARK", 4, agentId: "d1")],
+            "permission-command" => [Copilot.User("go", 1), Copilot.Permission("r1", "c1", command, 2)],
+            _ => [Copilot.User("go", 1), Copilot.Permission("r1", "c1", path, 2)],
+        };
+
+        var session = await s.After([.. lines.Select(l => l.Replace("MARK", "a\\uD800"))]);
+
+        Assert.NotNull(session);
+        if (kind == "user") { Assert.Equal("a\uFFFD", session.Activity!.UserMessage); }
+    }
+
     [Fact]
     public async Task A_pending_ask_user_is_also_cleared_by_its_tool_completing()
     {

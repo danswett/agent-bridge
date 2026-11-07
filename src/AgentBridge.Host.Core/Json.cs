@@ -15,7 +15,40 @@ internal static class Json
 
     public static JsonElement? Arr(JsonElement e, string name) => Get(e, name) is { ValueKind: JsonValueKind.Array } v ? v : null;
 
-    public static string? Str(JsonElement e, string name) => Get(e, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
+    public static string? Str(JsonElement e, string name) => Get(e, name) is { ValueKind: JsonValueKind.String } v ? Text(v) : null;
+
+    // A JSON string's text, as a client shows it. Half a surrogate pair escaped ("\uD800", from an
+    // MCP result or text cut mid-character) is no text .NET reads: GetString throws, and on a
+    // transcript line that dropped the session and held discovery on every pass (Trust's sec-769
+    // review, #921). It reads as U+FFFD; everything else as written.
+    public static string Text(JsonElement v)
+    {
+        try { return v.GetString()!; }
+        catch (InvalidOperationException) { }
+        var raw = v.GetRawText();
+        var b = new System.Text.StringBuilder(raw.Length);
+        for (var i = 1; i < raw.Length - 1; i++)
+        {
+            if (raw[i] != '\\') { b.Append(raw[i]); continue; }
+            var c = raw[++i];
+            switch (c)
+            {
+                case 'b': b.Append('\b'); break;
+                case 'f': b.Append('\f'); break;
+                case 'n': b.Append('\n'); break;
+                case 'r': b.Append('\r'); break;
+                case 't': b.Append('\t'); break;
+                case 'u': b.Append((char)int.Parse(raw.AsSpan(i + 1, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture)); i += 4; break;
+                default: b.Append(c); break;
+            }
+        }
+        for (var i = 0; i < b.Length; i++)
+        {
+            if (char.IsHighSurrogate(b[i]) && i + 1 < b.Length && char.IsLowSurrogate(b[i + 1])) { i++; continue; }
+            if (char.IsSurrogate(b[i])) { b[i] = '\uFFFD'; }
+        }
+        return b.ToString();
+    }
 
     // A record's bytes with every escaped half of a surrogate pair ("\uD800" with no "\uDC00" after
     // it, or a "\uDC00" alone) written as "\uFFFD", the replacement character, as a text decoder
@@ -78,10 +111,40 @@ internal static class Json
         }
         return unit;
     }
+
+    // True when anything in e, a name or a value at any depth, is text Text would have to rewrite
+    // (half a surrogate pair) or already holds U+FFFD, which a rewritten character reads as. That
+    // tolerant read is for display only: an approval's identity, its escape detection and the command
+    // it shows are all worked out from the text, so two commands that differ only in which lone
+    // surrogate they hold, or in holding U+FFFD, would share an id and lose their escaped flag
+    // (Engineering's review of #921). Whatever asks about such text is answered at the machine.
+    public static bool IsLossy(JsonElement e)
+    {
+        switch (e.ValueKind)
+        {
+            case JsonValueKind.String:
+                try { return e.GetString()!.Contains('\uFFFD'); }
+                catch (InvalidOperationException) { return true; }
+            case JsonValueKind.Array:
+                foreach (var item in e.EnumerateArray()) { if (IsLossy(item)) { return true; } }
+                return false;
+            case JsonValueKind.Object:
+                foreach (var property in e.EnumerateObject())
+                {
+                    try { if (property.Name.Contains('\uFFFD')) { return true; } }
+                    catch (InvalidOperationException) { return true; }
+                    if (IsLossy(property.Value)) { return true; }
+                }
+                return false;
+            default:
+                return false;
+        }
+    }
+
     public static int? Int(JsonElement e, string name) => Get(e, name) switch
     {
         { ValueKind: JsonValueKind.Number } v when v.TryGetInt32(out var i) => i,
-        { ValueKind: JsonValueKind.String } v when int.TryParse(v.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) => i,
+        { ValueKind: JsonValueKind.String } v when int.TryParse(Text(v), NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) => i,
         _ => null,
     };
 
@@ -92,7 +155,7 @@ internal static class Json
         _ => null,
     };
 
-    public static DateTimeOffset? Time(JsonElement e, string name) => Get(e, name) is { ValueKind: JsonValueKind.String } v ? ParseTime(v.GetString()) : null;
+    public static DateTimeOffset? Time(JsonElement e, string name) => Get(e, name) is { ValueKind: JsonValueKind.String } v ? ParseTime(Text(v)) : null;
 
     public static DateTimeOffset? ParseTime(string? text) =>
         DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var t) ? t.ToUniversalTime() : null;

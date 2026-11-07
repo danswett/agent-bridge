@@ -27,6 +27,10 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // Whether this profile's setup finished, from the host's `hookSetup` (Unknown from an older host).
     public HookSetup Setup { get; } = setup ?? HookSetups.Of(agent);
     bool Installed => agent.Installation.State == ReadinessState.Working;
+    public bool IsInstalled => Installed;
+    // A hook from a session started since the bridge began, which is the host's only evidence that
+    // the agent's hooks work (not a finished setup).
+    public bool HooksWorking => agent.Hooks.State == ReadinessState.Working || agent.LastHookHandledAt is not null;
     bool Blocked => agent.Hooks.State == ReadinessState.Blocked;
 
     // A row the app can't act on has its own words and no verb, in the neutral tone, never Ready,
@@ -84,10 +88,22 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // Set up, with nothing to do until a new session shows the hooks work. Never "Ready": a finished
     // setup isn't evidence that hooks work (#783 D2).
     public bool NotTested => Installed && agent.Hooks.State == ReadinessState.Unknown && Setup == HookSetup.Completed;
+
+    // An agent installed after the bridge (#231), from the host's typed evidence alone (never its
+    // Detail text): installed, and its profile's hook setup says it was never set up. A removal
+    // that left a record is Incomplete, and one that left none is the person's own doing, which
+    // SettingsViewModel records so it is never offered back. The card says the version, so an agent
+    // whose version could not be read is not offered one (the row keeps its Set up). Agency shares
+    // Copilot CLI's hooks and is not one of the three the card announces.
+    public string? Version => string.IsNullOrWhiteSpace(agent.Version) ? null : agent.Version;
+    public bool CanBeOffered => Id is "copilot" or "claude" or "codex" && Installed && !Blocked && Setup == HookSetup.NotSetUp && Version is not null;
+    // While the card for this agent shows it holds the agent's only Set up, so the row draws none
+    // (ui.md §6.9: nothing is drawn twice); once Not now hides the card, the row's Set up returns.
+    public bool Offered { get; internal set; }
     // What of this row's last setup a fresh check keeps (SettingsViewModel.CheckAgentsAsync): a
     // removal the host reads as a setup that didn't finish.
     internal bool Keeps(AgentSetupNote note) => note.Removed && Setup == HookSetup.Incomplete;
-    public bool ShowSetUp => SetUpVerb is not null;
+    public bool ShowSetUp => SetUpVerb is not null && !Offered;
     public bool CanSetUp => canManage && ShowSetUp;
     public string SetUpName => $"{SetUpVerb ?? "Set up"} {Label}";
     public string SetUpId => $"SetUpAgent_{Id}";

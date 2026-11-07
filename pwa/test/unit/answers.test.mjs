@@ -5,6 +5,7 @@ import {
   optionTone, orderOptions, problemField, tapToAnswer, utf8Bytes,
 } from '../../js/answers.js';
 import { readAnswerResult, readQuestion } from '../../js/protocol.js';
+import { describeAnswer } from '../../js/ui/question-view.js';
 
 // The same questions as tests/AgentBridge.Protocol.Tests/AnswerTests.cs, read as the app
 // reads them, so each case below is a case there.
@@ -29,6 +30,14 @@ test('other text is accepted only where the field allows it and must say somethi
   assert.match(checkAnswer(q, fields({ answer: { other: 'x'.repeat(Limits.text + 1) } })), /longer than 4 KiB/);
   assert.match(checkAnswer(q, fields({ answer: { other: 'c', also: 1 } })), /unexpected properties beside other/);
   assert.match(checkAnswer(q, fields({ answer: 3 })), /expected a choice/);
+});
+
+// #908 before #766, as Answers.Check has it: Other the machine cannot send yet is refused in the
+// words the field already shows, whatever limits it also has.
+test('other the machine cannot send yet is refused in its own words before the field\'s limits', () => {
+  const q = form({ ...choice('answer'), otherUnavailable: 'otherNotSendable', constraints: { maxLength: 2, pattern: '^[a-z]+$' } });
+  assert.equal(checkAnswer(q, fields({ answer: { other: 'DuckDB, embedded' } })), "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.");
+  assert.equal(checkAnswer(q, fields({ answer: 'b' })), null);
 });
 
 test('a multi choice takes a list with at most one other', () => {
@@ -88,11 +97,34 @@ test('a prompt the host marks for the machine is never answered remotely, whatev
   assert.equal(readQuestion({ id: 'p1', kind: 'approval', message: 'Allow?', answerAtMachine: 'yes' }).answerAtMachine, false);
 });
 
+test('an optional at-machine reason is display-only, including unknown and malformed values', () => {
+  for (const reason of ['shape', 'future', null, [], true]) {
+    const q = readQuestion({ ...form(choice('answer')), answerAtMachine: true, answerAtMachineReason: reason });
+    assert.equal(q.answerAtMachineReason, typeof reason === 'string' ? reason : null);
+    assert.deepEqual(answerability(q, ['sessions.read', 'sessions.answer']), { ok: false, why: 'atMachine' });
+  }
+});
+
 test('an outcome from a newer host reads as unconfirmed, never as delivered', () => {
-  assert.deepEqual(readAnswerResult({ outcome: 'queued', reason: 'later' }), { outcome: 'unconfirmed', reason: 'later' });
-  assert.deepEqual(readAnswerResult({ outcome: 'delivered' }), { outcome: 'delivered', reason: null });
-  assert.deepEqual(readAnswerResult(null), { outcome: 'unconfirmed', reason: null });
+  assert.deepEqual(readAnswerResult({ outcome: 'queued', reason: 'later' }), { outcome: 'unconfirmed', reason: 'later', stage: null });
+  assert.deepEqual(readAnswerResult({ outcome: 'delivered' }), { outcome: 'delivered', reason: null, stage: null });
+  assert.deepEqual(readAnswerResult(null), { outcome: 'unconfirmed', reason: null, stage: null });
   for (const o of ['delivered', 'unconfirmed', 'stale', 'busy', 'refused']) { assert.equal(readAnswerResult({ outcome: o }).outcome, o); }
+});
+
+test('an unconfirmed answer says how far it got: typed into the prompt, or recorded differently (#467)', () => {
+  assert.equal(readAnswerResult({ outcome: 'unconfirmed', stage: 'typed' }).stage, 'typed');
+  assert.equal(readAnswerResult({ outcome: 'unconfirmed', stage: 'recorded' }).stage, 'recorded');
+  // A stage from a newer host claims the least; one on any other outcome means nothing.
+  assert.equal(readAnswerResult({ outcome: 'unconfirmed', stage: 'acknowledged' }).stage, 'typed');
+  assert.equal(readAnswerResult({ outcome: 'delivered', stage: 'typed' }).stage, null);
+  const done = (stage) => ({ state: 'done', outcome: 'unconfirmed', reason: 'why', detail: { outcome: 'unconfirmed', stage } });
+  assert.match(describeAnswer(done('typed'), 'DEV-VM1').text, /^Typed into the prompt, but not confirmed as submitted\. Check the conversation\. \(why\)$/);
+  // A retry of an answer already typed (#1093): the bridge's reason only adds that this send typed nothing.
+  const retried = { state: 'done', outcome: 'unconfirmed', reason: 'nothing was typed again: this repeats an answer already typed once', detail: { outcome: 'unconfirmed', stage: 'typed' } };
+  assert.equal(describeAnswer(retried, 'DEV-VM1').text, 'Typed into the prompt, but not confirmed as submitted. Check the conversation. (nothing was typed again: this repeats an answer already typed once)');
+  assert.match(describeAnswer(done('recorded'), 'DEV-VM1').text, /^The session recorded something for this question, but not confirmed as this answer\./);
+  assert.match(describeAnswer(done(null), 'DEV-VM1').text, /^Sent, but not confirmed\./);
 });
 
 test('the 4 KiB limit counts UTF-8 bytes, not characters', () => {

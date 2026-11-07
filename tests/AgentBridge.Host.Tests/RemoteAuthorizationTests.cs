@@ -66,36 +66,180 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.Equal("the peer role does not allow this operation", response.GetProperty("error").GetString());
     }
 
+    // #972 slice 2: the pin is the roster's, by the channel's full key and account. The kind the
+    // channel claims is never asked; the roster's kind and presence are. A #402 person pin (every
+    // channel here has one) is not enough, and no roster, or one unreadable, pins nobody.
     [Theory]
-    [InlineData("person", "app", true, true, false, true)]
-    [InlineData("person", "pwa", true, true, false, true)]
-    [InlineData("person", "app", false, true, false, false)]
-    [InlineData("person", "app", true, false, false, false)]
-    [InlineData("person", "app", true, true, true, false)]
-    [InlineData("service", "app", true, true, false, false)]
-    [InlineData("host", "app", true, true, false, false)]
-    [InlineData("person", "host", true, true, false, false)]
-    public async Task Phone_sign_in_requires_a_current_person_pin_read_and_write_not_the_claimed_kind(
-        string role, string kind, bool read, bool write, bool g5, bool allowed)
+    [InlineData("app", "phone", "key", RosterState.Ready, true)]
+    [InlineData("pwa", "pwa", "webauthn", RosterState.Ready, true)]
+    [InlineData("host", "phone", "key", RosterState.Ready, true)]
+    [InlineData("app", "host", "key", RosterState.Ready, false)]
+    [InlineData("app", "phone", "none", RosterState.Ready, false)]
+    [InlineData("app", "watch", "key", RosterState.Ready, false)]
+    [InlineData("app", "phone", "key", RosterState.Unreadable, false)]
+    [InlineData("app", "phone", "key", RosterState.None, false)]
+    [InlineData("app", null, null, RosterState.Ready, false)]
+    public async Task Sign_in_is_for_a_device_the_roster_pins_as_a_person_whatever_kind_it_claims(
+        string claimed, string? kind, string? presence, RosterState state, bool allowed)
     {
-        var peer = await PeerAsync(kind);
-        Pin(peer, role);
-        var accepted = new TaskCompletionSource<SecureChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
-        host.Hub.Accepted += ch => accepted.TrySetResult(ch);
-        await peer.Hub.OpenAsync(host.Id, Patience);
-        var channel = await accepted.Task.WaitAsync(Patience);
-        var authority = new PersonSignInAuthority(store, () => g5, _ => read, _ => write);
-        var grant = authority.Current(channel);
-        Assert.Equal(allowed, grant is not null);
-        if (allowed)
+        var (_, channel) = await OpenAsync(claimed);
+        var roster = new Roster { State = state };
+        if (kind is not null) { roster.Pin(channel.PeerStatic!, host.Relay.AccountId, kind, presence!); }
+        var authority = new RosterSignInAuthority(roster, () => false, _ => true);
+
+        Assert.Equal(allowed, authority.Current(channel) is not null);
+        Assert.Null(new RosterSignInAuthority(new NoPersonRoster(), () => false, _ => true).Current(channel));
+        // Pinned or not: never on a read-only machine (G5), nor where trusted-peer enforcement gives
+        // the channel no person role.
+        Assert.Null(new RosterSignInAuthority(roster, () => true, _ => true).Current(channel));
+        Assert.Null(new RosterSignInAuthority(roster, () => false, _ => false).Current(channel));
+    }
+
+    // Trust's condition 4: a removal, heard from anywhere, says it changed and ends the grant; the
+    // same key added again is another grant, which the old one's flow never becomes.
+    [Fact]
+    public async Task A_removal_ends_the_grant_and_says_so_and_a_re_add_is_a_new_grant()
+    {
+        var (_, channel) = await OpenAsync();
+        var roster = new Roster();
+        roster.Pin(channel.PeerStatic!, host.Relay.AccountId);
+        var authority = new RosterSignInAuthority(roster, () => false, _ => true);
+        var changes = 0;
+        authority.Changed += () => changes++;
+        var grant = Assert.IsType<SignInGrant>(authority.Current(channel));
+        Assert.True(authority.StillCurrent(grant));
+
+        roster.Remove(channel.PeerStatic!);
+        Assert.Equal(1, changes);
+        Assert.False(authority.StillCurrent(grant));
+        Assert.Null(authority.Current(channel));
+
+        roster.Pin(channel.PeerStatic!, host.Relay.AccountId, generation: "2");
+        Assert.False(authority.StillCurrent(grant));
+        Assert.NotEqual(grant, authority.Current(channel));
+        roster.State = RosterState.Unreadable;
+        Assert.Null(authority.Current(channel));
+        roster.Throws = true;
+        roster.State = RosterState.Ready;
+        Assert.Null(authority.Current(channel));
+    }
+
+    // The same service, built the same way, with only the roster swapped: none offers nothing and
+    // refuses signin.start; one that pins this phone offers sign-in and lists it as this device.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Swapping_in_a_roster_that_pins_the_phone_is_all_it_takes_to_offer_sign_in(bool pinned)
+    {
+        var (_, channel) = await OpenAsync("phone");
+        var fake = new Roster();
+        if (pinned) { fake.Pin(channel.PeerStatic!, host.Relay.AccountId); }
+        IPersonDeviceRoster roster = pinned ? fake : new NoPersonRoster();
+        await using var signIn = SignInFor(roster, out var sessions);
+
+        var hello = (HelloResult)(await sessions.HandleAsync(channel, Ops.Hello, Json(new { })))!;
+        var devices = Assert.IsType<SignInDevices>(await sessions.HandleAsync(channel, AgentSignIn.Devices, Json(new { })));
+
+        Assert.Equal(pinned, hello.Capabilities.Contains(AgentSignIn.Capability));
+        Assert.Contains(AgentSignIn.DevicesCapability, hello.Capabilities);
+        Assert.Equal(pinned ? new[] { new SignInDevice("iPhone", "phone", "iOS", true) } : [], devices.Devices);
+        Assert.Equal(pinned ? SignInDeviceStates.Ready : SignInDeviceStates.None, devices.State);
+        if (!pinned)
         {
-            store.Revoke(peer.Key.Public);
-            Assert.Null(authority.Current(channel));
-            store.Put(peer.Key.Public, role, time.GetUtcNow().AddHours(1));
-            Assert.NotEqual(grant, authority.Current(channel));
+            var start = await sessions.HandleAsync(channel, AgentSignIn.Start, Json(new { request = Guid.NewGuid(), agent = "copilot" }));
+            Assert.Equal("refused", JsonSerializer.SerializeToElement(start, ProtocolJson.Options).GetProperty("outcome").GetString());
         }
     }
 
+    // The switch off (no sign-in service), a roster that pins this phone offers nothing either.
+    [Fact]
+    public async Task Who_can_sign_in_is_not_offered_where_the_machine_has_sign_in_off()
+    {
+        var (_, channel) = await OpenAsync("phone");
+        var roster = new Roster();
+        roster.Pin(channel.PeerStatic!, host.Relay.AccountId);
+        var sessions = new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"))
+        {
+            SignInDevices = self => PersonDevices.View(roster, host.Relay.AccountId, self),
+        };
+
+        var hello = (HelloResult)(await sessions.HandleAsync(channel, Ops.Hello, Json(new { })))!;
+
+        Assert.DoesNotContain(AgentSignIn.DevicesCapability, hello.Capabilities);
+        Assert.DoesNotContain(AgentSignIn.Capability, hello.Capabilities);
+        Assert.Null(await sessions.HandleAsync(channel, AgentSignIn.Devices, Json(new { })));
+    }
+    [Theory]
+    [InlineData(TrustedPeerStore.Person, true)]
+    [InlineData(TrustedPeerStore.Service, false)]
+    [InlineData(TrustedPeerStore.Host, false)]
+    public async Task Who_can_sign_in_is_a_person_role_read_and_carries_no_keys(string role, bool allowed)
+    {
+        var peer = await PeerAsync("phone");
+        Pin(peer, role);
+        var roster = new Roster();
+        roster.Pin(peer.Key.Public, host.Relay.AccountId);
+        await using var signIn = SignInFor(roster, out var sessions);
+        host.Hub.Handler = authorization.Handler(sessions);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+
+        if (!allowed) { await DeniedAsync(channel, AgentSignIn.Devices); return; }
+        var result = Result(await channel.RequestAsync(AgentSignIn.Devices, new { }, Patience));
+        Assert.Equal("""{"state":"ready","devices":[{"name":"iPhone","kind":"phone","platform":"iOS","thisDevice":true}]}""", result.GetRawText());
+        var hello = Result(await channel.RequestAsync(Ops.Hello, new { }, Patience)).Deserialize<HelloResult>(ProtocolJson.Options)!;
+        Assert.Contains(AgentSignIn.DevicesCapability, hello.Capabilities);
+    }
+
+    async Task<(Device Peer, SecureChannel Channel)> OpenAsync(string kind = "app")
+    {
+        var peer = await PeerAsync(kind);
+        Pin(peer, TrustedPeerStore.Person);
+        var accepted = new TaskCompletionSource<SecureChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.Hub.Accepted += ch => accepted.TrySetResult(ch);
+        await peer.Hub.OpenAsync(host.Id, Patience);
+        return (peer, await accepted.Task.WaitAsync(Patience));
+    }
+
+    // Sign-in turned on, with Copilot's adapter, as serve builds it; only the roster differs.
+    AgentSignInService SignInFor(IPersonDeviceRoster roster, out SessionService sessions)
+    {
+        var on = HostSettings.Parse("{\"permissions\":{\"phoneSignIn\":true}}", HostSettings.FileName).Settings;
+        var signIn = PhoneSignInSetup.Create(on, copilotAdapter: true, source, new RosterSignInAuthority(roster, () => false, _ => true),
+            new HostSignInContextResolver(source, fixture.CopilotHome), new NoLogin(), () => false, time)!;
+        sessions = new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"))
+        {
+            SignIn = signIn, SignInEntrypointApproved = true,
+            SignInDevices = self => PersonDevices.View(roster, host.Relay.AccountId, self),
+        };
+        return signIn;
+    }
+
+    static JsonElement Json(object value) => JsonSerializer.SerializeToElement(value, ProtocolJson.Options);
+
+    sealed class NoLogin : IPrivateSignInProcessFactory
+    {
+        public Task<IPrivateSignInProcess> StartAsync(SignInTarget target, Func<bool> authorize, CancellationToken ct) =>
+            throw new InvalidOperationException("no sign-in runs in these tests");
+    }
+
+    sealed class Roster : IPersonDeviceRoster
+    {
+        readonly List<(byte[] Key, string Account, PinnedDevice Device)> entries = [];
+        public RosterState State { get; set; } = RosterState.Ready;
+        public bool Throws;
+        public void Pin(byte[] key, string account, string kind = "phone", string presence = "key", string generation = "1") =>
+            entries.Add((key, account, new(Wire.DeviceId(key), kind, "iOS", "iPhone", presence, generation, $"add-{generation}")));
+        public void Remove(byte[] key)
+        {
+            entries.RemoveAll(e => e.Key.AsSpan().SequenceEqual(key));
+            Changed?.Invoke();
+        }
+        public PinnedDevice? Find(byte[] key, string account) => Throws ? throw new IOException("unreadable")
+            : entries.Where(e => e.Key.AsSpan().SequenceEqual(key) && e.Account == account).Select(e => e.Device).FirstOrDefault();
+        public IReadOnlyList<PinnedDevice> Pinned(string account) => [.. entries.Where(e => e.Account == account).Select(e => e.Device)];
+        public bool StillPinned(PinnedDevice device) => !Throws && entries.Any(e => e.Device == device);
+        public event Action? Changed;
+    }
     [Theory]
     [InlineData("app")]
     [InlineData("pwa")]
@@ -143,7 +287,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Result(await channel.RequestAsync(Ops.SessionsList, new { }, Patience));
         Assert.Equal(SessionId, Result(await channel.RequestAsync(Ops.SessionGet, new { id = SessionId }, Patience)).GetProperty("id").GetString());
         Result(await channel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
-        await Wait.UntilAsync(() => service.Subscribers == 1, "the read-only feed", Patience);
+        await HostWait.UntilAsync(() => service.Subscribers == 1, "the read-only feed", Patience);
         foreach (var op in new[]
         {
             Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop, Ops.AttachmentStart, Ops.PushSubscribe,
@@ -263,7 +407,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var channel = await peer.Hub.OpenAsync(host.Id, Patience);
         var otherChannel = await other.Hub.OpenAsync(host.Id, Patience);
         Result(await channel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
-        await Wait.UntilAsync(() => service.Subscribers == 1, "the active feed", Patience);
+        await HostWait.UntilAsync(() => service.Subscribers == 1, "the active feed", Patience);
         var held = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         peer.Hub.Handler = (_, _, _) => { started.TrySetResult(); return held.Task; };
@@ -275,7 +419,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
             else { store.Revoke(peer.Key.Public); authorization.Revalidate(); }
             await Assert.ThrowsAsync<IOException>(async () => await pending);
             await channel.Closed.WaitAsync(Patience);
-            await Wait.UntilAsync(() => service.Subscribers == 0, "the revoked feed to end", Patience);
+            await HostWait.UntilAsync(() => service.Subscribers == 0, "the revoked feed to end", Patience);
             Result(await otherChannel.RequestAsync(Ops.Hello, new { }, Patience));
         }
         finally { held.TrySetResult(new { finished = true }); }

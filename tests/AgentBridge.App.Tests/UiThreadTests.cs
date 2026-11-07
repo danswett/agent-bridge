@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Xunit;
 using Xunit.Abstractions;
 using Xunit.Sdk;
@@ -61,6 +62,20 @@ public sealed class UiThreadTests
         Assert.False(other.OnIt);
     }
 
+    [Fact]
+    public async Task A_timed_out_UI_wait_reports_workers_running_collections_and_total_process_threads()
+    {
+        var error = await Assert.ThrowsAsync<TimeoutException>(() =>
+            Wait.UntilAsync(() => false, "diagnostic condition", TimeSpan.Zero, () => "still false"));
+
+        var snapshot = Regex.Match(error.Message,
+            @"^timed out waiting for diagnostic condition \([^)]*longest gap between looks \d+ ms; pool threads \d+, queued \d+; "
+            + @"pool workers available (\d+), busy (\d+), max (\d+); active test collections [1-9]\d*; total process threads [1-9]\d*\): still false$");
+        Assert.True(snapshot.Success, error.Message);
+        Assert.Equal(int.Parse(snapshot.Groups[3].Value),
+            int.Parse(snapshot.Groups[1].Value) + int.Parse(snapshot.Groups[2].Value));
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
@@ -83,15 +98,58 @@ public sealed class UiThreadTests
         {
             await attempted.Task.WaitAsync(FakeHost.Patience);
             var limit = threads == 0 ? Environment.ProcessorCount : threads;
-            Assert.Equal(limit < 0 ? cases.Length : Math.Min(limit, cases.Length), sink.Count);
+            var expected = limit < 0 ? cases.Length : Math.Min(limit, cases.Length);
+            Assert.Equal(expected, sink.Count);
+            Assert.Equal(expected, runner.ActiveCollectionCount);
         }
         finally
         {
             released.TrySetResult();
             var summary = await run.WaitAsync(FakeHost.Patience);
+            Assert.Equal(0, runner.ActiveCollectionCount);
             Assert.Equal(cases.Length, summary.Total);
             Assert.Equal(0, summary.Failed);
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Failed_or_cancelled_collections_unwind_without_counting_cancelled_waiters(bool cancelActive)
+    {
+        var assembly = new TestAssembly(Reflector.Wrap(typeof(UiThreadTests).Assembly));
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sink = new CollectionStarts();
+        var cases = Enumerable.Range(0, 2).Select(n => new WaitingCase(
+            new TestCollection(assembly, null, $"collection {n}"), released.Task)).ToArray();
+        var options = new ExecutionOptions();
+        options.SetValue("xunit.execution.MaxParallelThreads", 1);
+        using var runner = new CountingRunner(assembly, cases, sink, options, new TaskCompletionSource());
+        using var bus = new SynchronousMessageBus(sink, false);
+        using var activeCancel = new CancellationTokenSource();
+        using var queuedCancel = new CancellationTokenSource();
+        var active = runner.RunCollectionAsync(cases[0], bus, activeCancel);
+        try
+        {
+            var queued = runner.RunCollectionAsync(cases[1], bus, queuedCancel);
+            Assert.False(queued.IsCompleted);
+            Assert.Equal(1, runner.ActiveCollectionCount);
+            queuedCancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued.WaitAsync(FakeHost.Patience));
+            Assert.Equal(1, runner.ActiveCollectionCount);
+        }
+        finally
+        {
+            if (cancelActive) { released.TrySetCanceled(); }
+            else { released.TrySetException(new InvalidOperationException("synthetic collection failure")); }
+        }
+
+        if (cancelActive) { await Assert.ThrowsAnyAsync<OperationCanceledException>(() => active.WaitAsync(FakeHost.Patience)); }
+        else { await Assert.ThrowsAsync<InvalidOperationException>(() => active.WaitAsync(FakeHost.Patience)); }
+        Assert.Equal(0, runner.ActiveCollectionCount);
+        var after = new WaitingCase(new TestCollection(assembly, null, "after unwind"), Task.CompletedTask);
+        Assert.Equal(1, (await runner.RunCollectionAsync(after, bus, activeCancel).WaitAsync(FakeHost.Patience)).Total);
+        Assert.Equal(0, runner.ActiveCollectionCount);
     }
 
     sealed class ExecutionOptions : ITestFrameworkExecutionOptions
@@ -119,6 +177,10 @@ public sealed class UiThreadTests
     {
         int count;
         readonly int total = cases.Length;
+
+        public Task<RunSummary> RunCollectionAsync(WaitingCase testCase, IMessageBus bus, CancellationTokenSource cancel) =>
+            base.RunTestCollectionAsync(bus, testCase.TestMethod.TestClass.TestCollection, [testCase], cancel);
+
         protected override Task<RunSummary> RunTestCollectionAsync(IMessageBus messageBus, ITestCollection testCollection,
             IEnumerable<IXunitTestCase> testCases, CancellationTokenSource cancellationTokenSource)
         {

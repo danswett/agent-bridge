@@ -8,6 +8,7 @@ import { ago } from './time.js';
 import { whileVisible } from './ticker.js';
 import { enter, leave, seen, select as showSelection, slide } from './motion.js';
 import { updateLine, lastLine, canCheck, canInstall } from '../update.js';
+import { signInDevicesLines } from '../signin-devices.js';
 
 const LONG_PRESS_MS = 500;
 // A finger that moves further than this is scrolling, not pressing.
@@ -507,12 +508,13 @@ export class SessionListView {
 // keys, Home and End move between them, choosing as they go, as a SelectorBar does.
 const tabsDrawnAs = new WeakMap();
 
-export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null, away = [] }) {
+export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null, away = [], quiet = false }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
   const awayIds = away.filter((id) => id !== me && !hosts.some((d) => d.id === id));
   const kept = all ? awayIds : [];
-  const awayTab = (id) => ({ id, name: nameOf(id) ?? 'This machine', label: nameOf(id) ?? 'This machine', away: true });
+  // Quiet (the return grace): an away machine's tab keeps the look it had, not yet marked offline.
+  const awayTab = (id) => ({ id, name: nameOf(id) ?? 'This machine', label: nameOf(id) ?? 'This machine', away: !quiet });
   const tabs = [
     // A machine chosen while it is away counts too, so All stays offered to go back to (#269).
     ...(hosts.length + awayIds.length > 1 ? [{ id: ALL, name: 'All', label: 'All machines' }] : []),
@@ -616,6 +618,20 @@ function updateRow(updates, id, name, now) {
   };
 }
 
+// Who can sign Copilot in there (#972, ui.md §6.6), inside the row like its updates, only where the
+// machine has it on: read-only, with no Add, Remove or disabled button.
+function signInRow(info) {
+  const said = signInDevicesLines(info);
+  if (!said) { return { key: null, el: null }; }
+  return {
+    key: [said.line, said.note, said.all],
+    el: h('div', { class: 'machine-signin' },
+      h('p', { class: 'machine-signin-line', title: said.all },
+        said.line, said.all ? h('span', { class: 'sr-only' }, `: ${said.all}`) : null),
+      said.note ? h('p', { class: 'machine-signin-note' }, said.note) : null),
+  };
+}
+
 // A machine's second line (ui.md §6.1, #213): at most two facts, never a sentence or an id. Its
 // sessions, then its version, or in its place "View only" or "Discovery held", whose reasons the
 // machine gives in full are in the line's tooltip and said to a screen reader.
@@ -649,11 +665,12 @@ function machineRow({ id, name, select = null, selected = false, facts, state, o
     head, extra.length ? h('div', { class: 'machine-more' }, extra) : null);
 }
 
-export function renderMachines(list, { presence, me, current, onSelect, status = () => '', facts = null, known = null, forget = null, updates = null, now = Date.now(), allStatus = '' }) {
+export function renderMachines(list, { presence, me, current, onSelect, status = () => '', facts = null, known = null, forget = null, updates = null, signInDevices = null, now = Date.now(), allStatus = '' }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
   const rows = new Map(hosts.map((d) => [d.id, updateRow(updates, d.id, d.name, now)]));
+  const signInRows = new Map(hosts.map((d) => [d.id, signInRow(signInDevices?.(d.id))]));
   const updating = hosts.filter((d) => rows.get(d.id).el);
   // A machine's facts, from facts(id) where given, else its status line as one fact.
   const lineOf = (id) => {
@@ -665,7 +682,7 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
-  const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key]),
+  const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget]);
   if (drawnAs.get(list) === key) { return hosts.length; }
@@ -683,7 +700,7 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
     const selected = d.id === current || (all && hosts.length === 1);
     return machineRow({
       id: d.id, name: d.name, select: () => onSelect(d.id), selected,
-      facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online', more: [rows.get(d.id).el],
+      facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online', more: [rows.get(d.id).el, signInRows.get(d.id).el],
     });
   }), ...offline.map((k) => {
     const name = typeof k.name === 'string' && k.name ? k.name : 'unnamed';

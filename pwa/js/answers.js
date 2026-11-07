@@ -32,6 +32,17 @@ const blank = (s) => s === null || s === undefined || !visible(s);
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
+// Reasons said in fixed words, the same in every client (src/AgentBridge.Protocol/AnswerReasons.cs):
+// a field's otherUnavailable, and an answer refused for it (its result's code). otherNotSendable:
+// a Copilot list's Other, which the CLI offers and the machine cannot send yet (#908); temporary,
+// an exception to #876 until #908 lands.
+export const AnswerReasons = Object.freeze({ otherNotSendable: "Your own answer can't be sent from here yet. Pick an option, or answer at the machine." });
+export const NOT_SENT = 'Not sent · ';
+export const knownAnswerReason = (code) => (typeof code === 'string' && has(AnswerReasons, code) ? code : null);
+// The code a refusal's reason says, if it is one of those sentences (AnswerReasons.Code).
+export const answerReasonCode = (reason) => Object.keys(AnswerReasons).find((k) => AnswerReasons[k] === reason) ?? null;
+const hasOther = (v) => (isObject(v) && has(v, 'other')) || (Array.isArray(v) && v.some(hasOther));
+
 const textProblem = (text, what) =>
   (typeof text === 'string' && utf8Bytes(text) > Limits.text ? `${what} is longer than ${Limits.text / 1024} KiB` : null);
 
@@ -97,6 +108,8 @@ export function checkAnswer(question, answer) {
       if (field.required === true) { return `"${label(field)}" needs an answer`; }
       continue;
     }
+    // Other the agent offers and the machine cannot send: the sentence the field already shows.
+    if (field.allowOther !== true && knownAnswerReason(field.otherUnavailable) && hasOther(value)) { return AnswerReasons[field.otherUnavailable]; }
     // Empty text is typed as nothing, which a form records as no answer at all, and text of only
     // spaces, or of control characters a host types as spaces, might be recorded trimmed to that
     // (Answers.Check, FieldConstraints.BlankOnceTyped).

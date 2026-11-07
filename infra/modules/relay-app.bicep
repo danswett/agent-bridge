@@ -39,6 +39,9 @@ param workloadProfileName string = ''
 @allowed(['none', 'added', 'bound'])
 param domainState string = 'none'
 
+@description('The same steps for app.extraCustomDomains, by position. Each hostname moves on its own, so a name still waiting for DNS never touches one that is already bound.')
+param extraDomainStates string[] = []
+
 @description('Create this app\'s blob store (app.blobStorageName) and point the relay at it. Production\'s waits for the cutover flag, like the app itself, so a staging deploy never touches it.')
 param deployBlobStore bool = false
 
@@ -66,6 +69,16 @@ var rosterOn = deployRosterStore && !empty(rosterStorageName)
 var domainOn = !empty(customDomain) && domainState != 'none'
 var environmentName = last(split(environmentId, '/'))
 var certificateName = 'mc-${replace(customDomain, '.', '-')}'
+var extraDomains = app.?extraCustomDomains ?? []
+var extraStates = [for (d, i) in extraDomains: i < length(extraDomainStates) ? extraDomainStates[i] : 'none']
+
+var extraCandidates = [for (d, i) in extraDomains: {
+  name: d
+  on: extraStates[i] == 'added' || extraStates[i] == 'bound'
+  bindingType: extraStates[i] == 'bound' ? 'SniEnabled' : 'Disabled'
+  certificateId: extraStates[i] == 'bound' ? '${environmentId}/managedCertificates/mc-${replace(d, '.', '-')}' : null
+}]
+var extraBindings = map(filter(extraCandidates, b => b.on), b => { name: b.name, bindingType: b.bindingType, certificateId: b.certificateId })
 
 resource environment 'Microsoft.App/managedEnvironments@2025-01-01' existing = {
   name: environmentName
@@ -83,6 +96,17 @@ resource certificate 'Microsoft.App/managedEnvironments/managedCertificates@2025
     domainControlValidation: 'CNAME'
   }
 }
+
+resource extraCertificates 'Microsoft.App/managedEnvironments/managedCertificates@2025-01-01' = [for (d, i) in extraDomains: if (deployApp && extraStates[i] == 'bound') {
+  parent: environment
+  name: 'mc-${replace(d, '.', '-')}'
+  location: location
+  tags: tags
+  properties: {
+    subjectName: d
+    domainControlValidation: 'CNAME'
+  }
+}]
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: registryName
@@ -194,6 +218,10 @@ var blobEnv = blobsOn
       { name: 'Relay__Blobs__AccountUrl', value: blobStore!.outputs.accountUrl }
       { name: 'Relay__Blobs__Container', value: blobStore!.outputs.container }
       { name: 'Relay__Blobs__ManagedIdentityClientId', value: identity.properties.clientId }
+      { name: 'Relay__Feedback__Backend', value: 'azure' }
+      { name: 'Relay__Feedback__AccountUrl', value: blobStore!.outputs.accountUrl }
+      { name: 'Relay__Feedback__Container', value: blobStore!.outputs.feedbackContainer }
+      { name: 'Relay__Feedback__ManagedIdentityClientId', value: identity.properties.clientId }
     ]
   : []
 
@@ -243,15 +271,18 @@ resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
         transport: 'auto'
         allowInsecure: false
         traffic: [{ latestRevision: true, weight: 100 }]
-        customDomains: domainOn
-          ? [
-              {
-                name: customDomain
-                bindingType: domainState == 'bound' ? 'SniEnabled' : 'Disabled'
-                certificateId: domainState == 'bound' ? certificate.id : null
-              }
-            ]
-          : []
+        customDomains: concat(
+          domainOn
+            ? [
+                {
+                  name: customDomain
+                  bindingType: domainState == 'bound' ? 'SniEnabled' : 'Disabled'
+                  certificateId: domainState == 'bound' ? certificate.id : null
+                }
+              ]
+            : [],
+          extraBindings
+        )
       }
       registries: [{ server: registry.properties.loginServer, identity: identity.id }]
       secrets: secretRefs
@@ -310,7 +341,7 @@ resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
       }
     }
   }
-  dependsOn: [pull, readSecrets]
+  dependsOn: [pull, readSecrets, extraCertificates]
 }
 
 resource deployerApp 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployApp && !empty(deployerPrincipalId)) {
@@ -325,6 +356,7 @@ resource deployerApp 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (
 
 output fqdn string = deployApp ? relay!.properties.configuration.ingress.fqdn : ''
 output customDomain string = customDomain
+output extraCustomDomains array = extraDomains
 output identityPrincipalId string = identity.properties.principalId
 output vaultName string = vault.name
 output blobAccountUrl string = blobsOn ? blobStore!.outputs.accountUrl : ''

@@ -615,9 +615,7 @@ public sealed class SignInTests
         Assert.DoesNotContain(AgentSignIn.Capability, hello.Capabilities);
         var result = await service.HandleAsync(phone, AgentSignIn.Start, h.Request());
         Assert.Equal("refused", Json(result!).GetProperty("outcome").GetString());
-        using var key = P256KeyPair.Generate();
-        var store = new TrustedPeerStore(Path.Combine(h.Fixture.Root, "trust"), key.Public, () => "account", h.Time);
-        var authority = new PersonSignInAuthority(store, () => false, _ => true, _ => true);
+        var authority = new RosterSignInAuthority(new NoPersonRoster(), () => false, _ => true);
         Assert.Null(authority.Current(phone));
         Assert.Equal(0, h.Factory.Starts);
     }
@@ -648,6 +646,79 @@ public sealed class SignInTests
         Assert.Equal(offered ? 1 : 0, h.Factory.Starts);
     }
 
+    // #972 slice 2: a machine with the switch on and Copilot's adapter, but nobody the roster pins,
+    // says nothing a device could take for a Sign in; it says phone once someone is pinned.
+    [Fact]
+    public async Task With_nobody_pinned_no_attention_says_phone_and_once_someone_is_it_does()
+    {
+        await using var h = await Harness.CreateAsync(phoneSignIn: [AgentKind.Copilot]);
+        h.Pinned = false;
+        await h.Source.RefreshAsync();
+        Assert.Null(h.Source.Get(Id)!.Attention!.SignIn);
+
+        h.Pinned = true;
+        await h.Source.RefreshAsync();
+        Assert.Equal(SignInWhere.Phone, h.Source.Get(Id)!.Attention!.SignIn);
+    }
+
+    // Trust's condition 4: a pin that goes ends the flow when the authority says so, not at the next
+    // tick (here there is none: the sweep timer never fires).
+    [Fact]
+    public async Task A_pin_that_goes_ends_the_flow_as_soon_as_the_authority_says_it_changed()
+    {
+        await using var h = await Harness.CreateAsync(manualSweeps: true);
+        var phone = h.Phone();
+        await h.Start(phone).Then(phone);
+        await h.Factory.Started.Task.WaitAsync(Patience);
+        h.Factory.Process.OutputPipe.Put(Frame(h.Time));
+        await phone.Code.Task.WaitAsync(Patience);
+
+        h.Authority.Denial = "removed from the roster";
+        h.Authority.Change();
+
+        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+        Assert.Equal(0, h.Service.CodesHeld);
+    }
+
+    sealed class Roster : IPersonDeviceRoster
+    {
+        public RosterState State { get; set; } = RosterState.Ready;
+        public List<PinnedDevice> Devices { get; } = [];
+        public bool Throws;
+        public PinnedDevice? Find(byte[] key, string account) => null;
+        public IReadOnlyList<PinnedDevice> Pinned(string account) => Throws ? throw new IOException("unreadable") : Devices;
+        public bool StillPinned(PinnedDevice device) => Devices.Contains(device);
+        public event Action? Changed { add { } remove { } }
+    }
+
+    static PinnedDevice Device(string name, string kind = "phone", string presence = "key", string id = "0123456789abcdef0123456789abcdef") =>
+        new(id, kind, "iOS", name, presence, "7", "add-hash");
+
+    // What the app's Settings and a device's Machines page list: only devices the roster pins as a
+    // person's with a presence-proven key, by name, kind and platform; nobody unless it is read.
+    [Theory]
+    [InlineData(RosterState.None, false, "none")]
+    [InlineData(RosterState.Unreadable, false, "unreadable")]
+    [InlineData(RosterState.Ready, true, "unreadable")]
+    [InlineData(RosterState.Ready, false, "ready")]
+    public void Who_can_sign_in_lists_only_pinned_person_devices_and_nobody_on_doubt(RosterState state, bool throws, string said)
+    {
+        var roster = new Roster { State = state, Throws = throws };
+        roster.Devices.AddRange([Device("iPhone"), Device("Work laptop", "app", "webauthn", "fedcba9876543210fedcba9876543210"),
+            Device("Unproven", "pwa", "none"), Device("Another host", "host")]);
+
+        var view = PersonDevices.View(roster, "account", "fedcba9876543210fedcba9876543210");
+
+        Assert.Equal(said, view.State);
+        if (state == RosterState.Ready && !throws)
+        {
+            Assert.Equal([new SignInDevice("iPhone", "phone", "iOS"), new SignInDevice("Work laptop", "app", "iOS", true)], view.Devices);
+            var json = Json(view).GetRawText();
+            foreach (var secret in new[] { "0123456789abcdef", "fedcba9876543210", "add-hash", "webauthn", "\"7\"" }) { Assert.DoesNotContain(secret, json); }
+        }
+        else { Assert.Empty(view.Devices); }
+        Assert.Empty(PersonDevices.View(roster, null, null).Devices);
+    }
     const string SyntheticToken = "gho_SYNTHETICTOKEN000000000000000000000";
     const string SyntheticLogin = "synthetic-login";
 
@@ -784,13 +855,15 @@ public sealed class SignInTests
         public Recovery Recovery { get; } = new();
         public AgentSignInService Service = null!;
         public bool ReadOnly;
+        // Whether the roster pins anyone (SessionSourceOptions.PhoneSignInPinned).
+        public bool Pinned = true;
         public static async Task<Harness> CreateAsync(TimeSpan? limit = null, bool manualSweeps = false, IReadOnlyCollection<AgentKind>? phoneSignIn = null)
         {
             var h = new Harness();
             h.Events = h.Fixture.CopilotSession(Id, 100);
             h.Fixture.Processes.Run(AgentKind.Copilot, 100);
             Fixture.Append(h.Events, AuthError(2));
-            h.Source = h.Fixture.Source(log: h.Logs.Add, phoneSignIn: phoneSignIn);
+            h.Source = h.Fixture.Source(log: h.Logs.Add, phoneSignIn: phoneSignIn, phoneSignInPinned: () => h.Pinned);
             await h.Source.RefreshAsync();
             Assert.Equal(AttentionKind.SignInNeeded, h.Source.Get(Id)!.Attention!.Kind);
             h.Resolver = new(h.Source);
@@ -812,6 +885,8 @@ public sealed class SignInTests
         public string Binding = "epoch:1";
         public SignInGrant? Current(IProtocolChannel channel) => Denial is null && channel is Phone p ? new(p.PeerId, Binding) : null;
         public bool StillCurrent(SignInGrant grant) => Denial is null && grant.Binding == Binding;
+        public event Action? Changed;
+        public void Change() => Changed?.Invoke();
     }
     sealed class StateSource(ISessionSource inner) : ISessionSource
     {

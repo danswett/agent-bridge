@@ -110,6 +110,12 @@ public sealed record AppPreferences
     // The press from another device that update answers, if one asked for it (#51), and how the
     // last update asked for or installed ended, for the host to tell the account's devices.
     public string? UpdateRequest { get; init; }
+    // Installs that failed in a row, and when the next may be tried by itself (UpdateBackoff):
+    // kept because a failed update restarts the app.
+    public int? UpdateFailures { get; init; }
+    public DateTimeOffset? UpdateRetryAt { get; init; }
+    // The release those failures were of: a different release pending is not held by them.
+    public string? UpdateFailedRelease { get; init; }
     public UpdateResult? LastUpdate { get; init; }
     // The presses from other devices this app has taken on, the latest last: one the host still
     // lists after the app restarts (its report that it took them lost) is not carried out twice.
@@ -122,6 +128,15 @@ public sealed record AppPreferences
     // The installed app's first run turned on starting at sign-in (the host's logon task and
     // the app's Run entry); after that they are the person's to turn off and stay off.
     public bool SetUp { get; init; }
+    // Set only by a first install (no settings file yet), cleared when Settings has opened on Get
+    // started (#384). Never set for an upgrader, whose file already exists.
+    public bool GuidePending { get; init; }
+
+    // A missing file is a first run. An unreadable one is not: it belongs to someone who has used the app.
+    public static bool IsFirstRun(string path) => !File.Exists(path);
+    // Not now on the card for an agent installed after the bridge (#231): the version each agent
+    // was dismissed at, by agent id. A different version is a new offer; the row's own Set up stays.
+    public IReadOnlyDictionary<string, string>? AgentOffersDismissed { get; init; }
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {

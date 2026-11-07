@@ -140,6 +140,29 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Other_the_machine_cannot_send_yet_is_shown_unavailable_with_why_and_a_refusal_for_it_says_so_in_the_same_words()
+    {
+        // #908: the CLI offers Other, and the machine can't send it yet. The field says so in the
+        // fixed sentence, and a refusal carrying the code is shown as "Not sent · " and the same.
+        const string Why = "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.";
+        var choice = Make.Choice();
+        var q = Question(choice with { Fields = [choice.Fields[0] with { OtherUnavailable = AnswerReasons.OtherNotSendable }] });
+        Assert.Equal((false, Why), (q.Fields[0].AllowOther, q.Fields[0].OtherUnavailable));
+        // Not for a code this app does not know, nor beside an Other that is offered.
+        Assert.Null(Question(choice with { Fields = [choice.Fields[0] with { OtherUnavailable = "somethingNewer" }] }).Fields[0].OtherUnavailable);
+        Assert.Null(Question(Make.Choice(other: true) with { Fields = [Make.Choice(other: true).Fields[0] with { OtherUnavailable = AnswerReasons.OtherNotSendable }] }).Fields[0].OtherUnavailable);
+
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Refused, Why) { Code = AnswerReasons.OtherNotSendable });
+        var other = Question(Make.Choice(other: true));
+        other.ToggleOther();
+        other.Fields[0].OtherText = "DuckDB";
+        other.Send();
+
+        await Wait.UntilAsync(() => other.StatusText == "Not sent · " + Why, "refused, in the reason's own words");
+        Assert.True(other.CanAnswer);
+    }
+
+    [Fact]
     public void A_form_is_checked_before_it_goes_and_the_field_at_fault_is_marked()
     {
         var q = Question(Make.Form(
@@ -273,6 +296,38 @@ public sealed class CardTests : IAsyncLifetime
         Assert.False(q.Answerable);
         Assert.Equal(why, q.Why);
         Assert.False(q.ShowReadOnlyFields);
+    }
+
+    [Theory]
+    [InlineData("shape", true)]
+    [InlineData(null, false)]
+    [InlineData("future", false)]
+    public void Only_the_hosts_shape_reason_adds_an_explanation_to_an_at_machine_card(string? reason, bool explains)
+    {
+        var question = Make.Choice() with { AnswerAtMachine = true, AnswerAtMachineReason = reason };
+        var q = Question(question);
+
+        Assert.False(q.Answerable);
+        Assert.False(q.ShowReadOnlyFields);
+        Assert.Equal(explains ? "Answer at the machine · Test PC" : "This prompt can only be answered at the machine on Test PC.", q.ReadOnlyNote);
+        Assert.Equal(explains ? "This kind of question can only be answered at the machine." : null, q.AtMachineExplanation);
+        Assert.Null(Question(question with { AnswerAtMachine = null }).AtMachineExplanation);
+        q.Detach();
+    }
+
+    [Fact]
+    public void A_reason_added_or_removed_under_the_same_question_id_rebuilds_the_card()
+    {
+        var question = Make.Choice() with { AnswerAtMachine = true };
+        var card = new SessionCardViewModel(Make.Session(question: question), Context());
+        var first = card.Question;
+        card.Update(card.Session with { Question = question with { AnswerAtMachineReason = "shape" } });
+
+        Assert.NotSame(first, card.Question);
+        Assert.Equal("This kind of question can only be answered at the machine.", card.Question!.AtMachineExplanation);
+        card.Update(card.Session with { Question = question });
+        Assert.Null(card.Question!.AtMachineExplanation);
+        card.Detach();
     }
 
     // An older host's approval can still hold a live bidi control, a zero-width character or

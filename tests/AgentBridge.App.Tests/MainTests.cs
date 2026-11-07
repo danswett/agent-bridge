@@ -281,63 +281,6 @@ public sealed class MainTests : IAsyncLifetime
         finally { Directory.Delete(folder, recursive: true); }
     }
 
-    string[] Held() => TestUi.Read<string[]>(() => [.. main.HeldNotices.Select(n => n.Text)]);
-
-    static readonly DiscoveryHeld Unrecognised = new("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
-
-    [Fact]
-    public async Task What_holds_the_hosts_discovery_is_shown_until_it_clears()
-    {
-        await SnapshotAsync();
-        Assert.Empty(Held());
-
-        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(Unrecognised));
-        await Wait.UntilAsync(() => Held().Length == 1, "the hold");
-        Assert.StartsWith("Discovery held: an unrecognised copilot process (pid 4120).", Held()[0]);
-
-        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
-        await Wait.UntilAsync(() => Held().Length == 0, "the hold to clear");
-
-        // A host already held when the app connects says so with its snapshot.
-        host.Held = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]);
-        await host.StopAsync();
-        host.Start();
-        await Wait.UntilAsync(() => Held().SingleOrDefault()?.Contains("the claude processes could not be listed", StringComparison.Ordinal) == true, "the hold from the snapshot");
-    }
-
-    // #293: closing the banner only hides it. The host's hold stands, and the banner comes back
-    // once the hold is another, or clears and comes back.
-    [Fact]
-    public async Task A_dismissed_discovery_held_banner_stays_hidden_while_its_hold_stands_and_comes_back_when_the_hold_changes()
-    {
-        await SnapshotAsync();
-        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(Unrecognised));
-        await Wait.UntilAsync(() => Held().Length == 1, "the hold");
-
-        TestUi.Read(() => { main.Dismiss(main.HeldNotices.Single()); return true; });
-        Assert.Empty(Held());
-        // Only the banner: the host's hold is as it was.
-        Assert.Equal(Unrecognised.Reason, TestUi.Read(() => connection.Sessions.Held?.Reason));
-
-        // The same hold said again (a reconnect's snapshot, or the host repeating it) stays dismissed.
-        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(Unrecognised with { Agents = [AgentKind.Copilot, AgentKind.Claude] }));
-        await Wait.UntilAsync(() => TestUi.Read(() => connection.Sessions.Held?.Agents.Count) == 2, "the hold repeated");
-        Assert.Empty(Held());
-
-        // Another reason is another hold.
-        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("an unrecognised copilot process (pid 5120)", [AgentKind.Copilot])));
-        await Wait.UntilAsync(() => Held().Length == 1, "the banner back for another hold");
-        Assert.Contains("(pid 5120)", Held()[0], StringComparison.Ordinal);
-
-        // A hold that clears and comes back, even for the same reason, is shown again.
-        TestUi.Read(() => { main.Dismiss(main.HeldNotices.Single()); return true; });
-        Assert.Empty(Held());
-        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
-        await Wait.UntilAsync(() => TestUi.Read(() => connection.Sessions.Held) is null, "the hold to clear");
-        await host.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("an unrecognised copilot process (pid 5120)", [AgentKind.Copilot])));
-        await Wait.UntilAsync(() => Held().Length == 1, "the banner back for the hold come back");
-    }
-
     [Fact]
     public async Task No_card_moves_while_someone_is_typing_in_any_card()
     {

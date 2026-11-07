@@ -7,6 +7,13 @@ public static class DeliveryReasons
     // receipt already says where to look, and the exception's words are the host's internals.
     public const string CouldNotDeliver = "the machine couldn't deliver it";
 
+    // What an answer sent again says when the first, typed, could not be confirmed and the
+    // session has recorded nothing since (#1093). Nothing is typed again, so it is neither
+    // delivered nor refused. It is shown inside the clients' own unconfirmed line ("... Check
+    // the conversation. (reason)"), so it says only that this send typed nothing, and why.
+    // Wording settled by Creative; kept here alone.
+    public const string AnswerNotConfirmed = "nothing was typed again: this repeats an answer already typed once";
+
     // An injector's detail as a reply's or an answer's reason: a worker that did not start is
     // CouldNotDeliver, any other detail as it is.
     public static string Of(string detail) => detail == Windows.WorkerInjector.NotStarted ? CouldNotDeliver : detail;

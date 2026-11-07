@@ -83,6 +83,60 @@ public static partial class CopilotFieldSchema
         }
     }
 
+    // The field's heading as Copilot CLI 1.0.105 draws it (`Uxn`: `title ?? name`; a list's,
+    // Yes/No's or multi-select's component adds a colon, a text or number box's does not). A
+    // title that is not a string, or an empty one (drawn as nothing at all), is not a heading
+    // the host can look for. Nor is one of white space alone: a text or number box draws it as a
+    // blank row, which cannot be told from the blank rows around it, and a list's as a lone
+    // colon. Nor is one with a control character: a line break ("Pick\n", "Pick\r") splits the
+    // heading across rows, its colon on the next, while the tab bar's first row still reads as
+    // the labels, so the field was found missing only once the fields before it had been
+    // answered (#510 review, Trust on 412f1b2d). Without a label every field of the form is
+    // refused before the first key, rather than this one only once the fields before it have
+    // been answered (#510 review, Copilot 5780656913). Nor, last, is one whose spaces the host
+    // cannot be sure how the CLI draws: white space at its ends, a run of spaces, or a space of
+    // another kind ("Pick one ", "Pick  one", "Pick\u00A0one"). The screen's heading and tab bar
+    // are read exactly as drawn, so read for another drawing of such a title they would refuse
+    // the form, or pass one titled otherwise (#1137 review). A title of words between single
+    // spaces is read exactly, in the tab bar and the heading alike.
+    public static string? Label(string name, JsonElement p) =>
+        (!p.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null ? name
+        : title.ValueKind == JsonValueKind.String && title.GetString() is { Length: > 0 } text ? text
+        : null) is { } label && !string.IsNullOrWhiteSpace(label) && !label.Any(char.IsControl) && Plain(label) ? label : null;
+
+    static bool Plain(string label) =>
+        label == label.Trim() && !label.Any(c => char.IsWhiteSpace(c) && c != ' ') && !label.Contains("  ", StringComparison.Ordinal);
+
+    // The heading as drawn, for a label: a text or number box's (`box`) title alone, any other's
+    // with a colon (`Fxn`, `Lxn`; `Dxn`, `Oxn`, `Nxn`). Read as "<title>:" for every field, the
+    // text field after a list was never found: the list was picked and committed, and the form
+    // left half answered (#510 review, Copilot 5780329899). The colon is added to the title as
+    // written, as the CLI draws the two together (`t,":"`, never trimmed).
+    public static string Heading(string label, bool box) => Spaces().Replace(label + (box ? "" : ":"), " ").Trim();
+
+    // The first field whose heading cannot be told on screen from an earlier one's, or null;
+    // headings are null for a field with no label. The field being answered is known by its
+    // heading and, among several, by the tab hints, which say only whether it is first, last or
+    // between; the tab bar marks it by colour alone, which the screen read does not carry. So two
+    // fields with the same heading, both between the first and the last, look the same: a screen
+    // that changed without the form moving on (an Enter the CLI did not act on, while something
+    // else repainted) would pass for the next one, and its keys go into the field before (#510
+    // review, Copilot 5780128109).
+    public static int? Alike(IReadOnlyList<string?> headings)
+    {
+        var count = headings.Count;
+        string Place(int i) => i == 0 ? "first" : i == count - 1 ? "last" : "between";
+        var seen = new HashSet<(string, string)>();
+        for (var i = 0; i < count; i++)
+        {
+            if (headings[i] is { } heading && !seen.Add((heading, Place(i)))) { return i; }
+        }
+        return null;
+    }
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex Spaces();
+
     // A keyword's list: absent (or null, which the CLI reads as absent), the list, or something
     // else, which it would read some other way.
     static (JsonElement? List, bool Bad) List(JsonElement o, string name)
@@ -146,26 +200,158 @@ public static partial class CopilotFieldSchema
     {
         if (!p.TryGetProperty("default", out var def) || def.ValueKind == JsonValueKind.Null) { return null; }
         if (def.ValueKind != JsonValueKind.Array) { return "has a default that is not a list"; }
+        // Looked up by key, not matched against every option: each entry against every option was
+        // quadratic on the thread that refreshes every session (#852).
+        var at = Positions(choices.Select(c => c.Value));
         var named = new HashSet<int>();
         foreach (var entry in def.EnumerateArray())
         {
-            var at = -1;
-            for (var i = 0; i < choices.Count; i++)
-            {
-                if (!SameScalar(choices[i].Value, entry)) { continue; }
-                if (at >= 0) { return "has a default that does not name its options"; }
-                at = i;
-            }
-            if (at < 0 || !named.Add(at)) { return "has a default that does not name its options"; }
+            if (Position(at, entry) is not { } i || !named.Add(i)) { return "has a default that does not name its options"; }
         }
         return null;
     }
 
+    // Each option's place by its ScalarKey, or -1 for a key two options share: such a value names
+    // no one option, as SameScalar matching it twice did not. An option equal to nothing (a number
+    // read inexactly) is in it under no key.
+    public static Dictionary<string, int> Positions(IEnumerable<JsonElement> options)
+    {
+        var at = new Dictionary<string, int>(StringComparer.Ordinal);
+        var i = 0;
+        foreach (var o in options)
+        {
+            if (ScalarKey(o) is { } key) { at[key] = at.ContainsKey(key) ? -1 : i; }
+            i++;
+        }
+        return at;
+    }
+
+    // The one option a value is, by Positions: null for none, or for one it cannot tell from another.
+    public static int? Position(Dictionary<string, int> at, JsonElement value) =>
+        ScalarKey(value) is { } key && at.TryGetValue(key, out var i) && i >= 0 ? i : null;
+
+    // A scalar as SameScalar compares it: equal keys exactly when SameScalar holds. Null for one
+    // equal to nothing, as a number it cannot read exactly is, or a string .NET will not read
+    // (half a surrogate pair): SameScalar told that from a number without reading it, so a
+    // default of ["\uD800"] among number options was a problem, not a failed mapping (#921 review).
+    public static string? ScalarKey(JsonElement v)
+    {
+        _compared++;
+        return v.ValueKind switch
+        {
+            JsonValueKind.String => Text(v) is { } s ? "s" + s : null,
+            JsonValueKind.Number => ExactNumber(v.GetRawText()) is { } n ? "n" + n : null,
+            JsonValueKind.True => "t",
+            JsonValueKind.False => "f",
+            JsonValueKind.Null => "z",
+            _ => null,
+        };
+    }
+
+    // How many values this thread has compared (SameScalar) or keyed (ScalarKey): what reading a
+    // long option list costs, counted rather than timed, so a test can tell linear from quadratic
+    // on a loaded runner, where a timed ratio could not be trusted (#921 review).
+    [ThreadStatic] static long _compared;
+    internal static long Compared => _compared;
+
+    // Whether a field Copilot opens with its default typed in can be given any answer from another
+    // device. Only its default can (CopilotForm.Keeps, #662), and only when the host knows what it
+    // records: a text box records a string default as it is, and a number box the number
+    // RecordedNumber reads. A text box with any other default (5, true, []), or a number box whose
+    // default is null, not plainly a number or not held exactly, was offered and every answer
+    // refused (#882). A default absent or empty opens nothing; a text box's null opens it empty.
+    // A string default must also be one a client sends and Answers.Check takes (#921 review): not
+    // blank once typed (a required one is refused as blank, #844), nor blank as the PWA sees it,
+    // Invisible.Blank, which is wider ("\u200B", "\u2800", "\u0301"; the PWA leaves such a field
+    // out of the answer, as the app does a white one); text at all (half a surrogate pair
+    // escaped, "\uD800", is not: .NET will not read it, and both clients send it as U+FFFD, which
+    // is not the default); and within Limits.AnswerText.
+    public static bool PrefillAnswerable(Input input, JsonElement p)
+    {
+        if (!p.TryGetProperty("default", out var def) || (def.ValueKind == JsonValueKind.String && def.ValueEquals(""))) { return true; }
+        return input switch
+        {
+            Input.Text => def.ValueKind == JsonValueKind.Null || (Text(def) is { } text && Sendable(text)),
+            Input.Number => RecordedNumber(def) is not null,
+            _ => true,
+        };
+    }
+
+    // A property's string, as Shown, or null when it is absent or not a string: for what an agent
+    // wrote into a tool call, where GetString on half a surrogate pair threw on every pass over
+    // the transcript line, dropping the session and holding discovery (#921 review).
+    public static string? Shown(JsonElement e, string name) => Json.Get(e, name) is { ValueKind: JsonValueKind.String } v ? Shown(v) : null;
+
+    // A string as a client shows it: half a surrogate pair, which .NET will not read as text
+    // (Text), as U+FFFD, the rest as written (Json.Text).
+    public static string Shown(JsonElement v) => Json.Text(v);
+
+    // A finite number as JavaScript's Number#toString writes it (ECMAScript, Number::toString):
+    // the shortest digits that read back as it, which .NET's "R" also finds, laid out as
+    // JavaScript lays them out. 1e20 is 100000000000000000000, 1e21 is 1e+21, 1.5e-7 is 1.5e-7.
+    public static string JavaScriptNumber(double value)
+    {
+        if (value == 0) { return "0"; }
+        var s = Math.Abs(value).ToString("R", CultureInfo.InvariantCulture);
+        var exponent = 0;
+        var e = s.IndexOfAny(['E', 'e']);
+        if (e >= 0) { exponent = int.Parse(s.AsSpan(e + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture); s = s[..e]; }
+        var dot = s.IndexOf('.');
+        var digits = dot >= 0 ? s.Remove(dot, 1) : s;
+        var point = dot >= 0 ? dot : s.Length;
+        var lead = 0;
+        while (lead < digits.Length - 1 && digits[lead] == '0') { lead++; }
+        digits = digits[lead..].TrimEnd('0');
+        // The value is 0.digits × 10^n, digits k long.
+        var n = point - lead + exponent;
+        var k = digits.Length;
+        var sign = value < 0 ? "-" : "";
+        if (k <= n && n <= 21) { return sign + digits + new string('0', n - k); }
+        if (0 < n && n <= 21) { return sign + digits[..n] + "." + digits[n..]; }
+        if (-6 < n && n <= 0) { return sign + "0." + new string('0', -n) + digits; }
+        var power = n - 1;
+        var written = power < 0 ? $"e-{-power}" : $"e+{power}";
+        return sign + (k == 1 ? digits : digits[0] + "." + digits[1..]) + written;
+    }
+
+    // A string as text, or null for anything else, half a surrogate pair included.
+    public static string? Text(JsonElement v)
+    {
+        if (v.ValueKind != JsonValueKind.String) { return null; }
+        try { return v.GetString(); }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    static bool Sendable(string text) =>
+        !AgentBridge.Protocol.FieldConstraints.BlankOnceTyped(text) && !AgentBridge.Protocol.Invisible.Blank(text) && System.Text.Encoding.UTF8.GetByteCount(text) <= AgentBridge.Protocol.Limits.AnswerText;
+
+    // The number a number box records for this value, as a JSON number, or null when that is not
+    // certain. Copilot 1.0.105's form (`Uxn`, its accept step) turns a number field's string into
+    // Number(text) when that is finite and keeps it a string otherwise, so a default of "3" is
+    // recorded as 3. Only a string that is plainly a JSON number is read so (Number() also takes
+    // hex, padding and "Infinity"), and only one the CLI holds exactly as written (HeldExactly):
+    // "9007199254740993" would be recorded as 9007199254740992, and "1e-400" as 0, so neither is
+    // the answer it reads as.
+    public static JsonElement? RecordedNumber(JsonElement value)
+    {
+        var text = value.ValueKind switch
+        {
+            JsonValueKind.Number => value.GetRawText(),
+            // Text, not GetString: this runs while a question is mapped (PrefillAnswerable), where
+            // "a\uD800" threw instead of answering at the machine (#921 review).
+            JsonValueKind.String => Text(value),
+            _ => null,
+        };
+        if (text is null || HeldExactly(text) is null) { return null; }
+        using var doc = JsonDocument.Parse(text);
+        return doc.RootElement.Clone();
+    }
     // Two JSON scalars are the same value: equal strings, the same literal, or equal numbers,
     // compared exactly. Read through decimal, 1e-29 was 0 and 3.0000000000000000000000000000001
     // was 3, so an answer that is not the default could pass for it (#700).
     public static bool SameScalar(JsonElement a, JsonElement b)
     {
+        _compared++;
         if (a.ValueKind == JsonValueKind.Number && b.ValueKind == JsonValueKind.Number)
         {
             return ExactNumber(a.GetRawText()) is { } x && x == ExactNumber(b.GetRawText());

@@ -147,7 +147,7 @@ public sealed class PushFlowTests : IAsyncLifetime
         await SubscribeAsync(ch);
 
         await AskAsync("q1");
-        await Wait.UntilAsync(() => Pushes().Length == 1, "the question's push", Patience);
+        await HostWait.UntilAsync(() => Pushes().Length == 1, "the question's push", Patience);
         var push = Pushes()[0];
         var n = Open(push);
         Assert.Equal("Asking session", n.GetProperty("title").GetString());
@@ -163,7 +163,7 @@ public sealed class PushFlowTests : IAsyncLifetime
         Assert.DoesNotContain(relay.Logs, l => l.Contains("database") || l.Contains(Endpoint()) || l.Contains("Asking session"));
 
         await AnsweredAtTheMachineAsync("q1");
-        await Wait.UntilAsync(() => Pushes().Length == 2, "the resolved push", Patience);
+        await HostWait.UntilAsync(() => Pushes().Length == 2, "the resolved push", Patience);
         var resolved = Open(Pushes()[1]);
         Assert.Equal(("resolved", true, n.GetProperty("tag").GetString()), (resolved.GetProperty("data").GetProperty("kind").GetString(), resolved.GetProperty("silent").GetBoolean(), resolved.GetProperty("tag").GetString()));
         Assert.Equal(PushNotice.Topic(host.Id, Id), Pushes()[1].Headers["Topic"]);
@@ -175,11 +175,11 @@ public sealed class PushFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
         await SubscribeAsync(ch);
         await AskAsync("q1");
-        await Wait.UntilAsync(() => Pushes().Length == 1, "the question's push", Patience);
+        await HostWait.UntilAsync(() => Pushes().Length == 1, "the question's push", Patience);
 
         var answer = Result(await ch.RequestAsync(Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), fields = new { pick = "a" } }));
         Assert.Equal("delivered", answer.GetProperty("outcome").GetString());
-        await Wait.UntilAsync(() => source.Get(Id)?.Question is null, "the question to go", Patience);
+        await HostWait.UntilAsync(() => source.Get(Id)?.Question is null, "the question to go", Patience);
         await Task.Delay(500);
 
         Assert.Single(Pushes());
@@ -198,7 +198,7 @@ public sealed class PushFlowTests : IAsyncLifetime
 
         var again = await relay.ConnectAsync(token, "Test host", "host", hostKey);
         notifier.Attach(new RelayPushSender(again.Relay));
-        await Wait.UntilAsync(() => Pushes().Length == 1, "the push after reconnecting", Patience);
+        await HostWait.UntilAsync(() => Pushes().Length == 1, "the push after reconnecting", Patience);
         await Task.Delay(500);
         Assert.Single(Pushes());
         Assert.Equal("question", Open(Pushes()[0]).GetProperty("data").GetProperty("kind").GetString());
@@ -214,10 +214,10 @@ public sealed class PushFlowTests : IAsyncLifetime
         Assert.DoesNotContain("gone/iphone", listed.GetRawText());
 
         await AskAsync("q1");
-        await Wait.UntilAsync(() => store.Count == 0, "the gone subscription to be dropped", Patience);
+        await HostWait.UntilAsync(() => store.Count == 0, "the gone subscription to be dropped", Patience);
         Assert.Equal(0, Result(await ch.RequestAsync(Ops.PushList, new { })).GetProperty("devices").GetArrayLength());
         // Logged just after the store drops it, so waited for rather than raced.
-        await Wait.UntilAsync(() => { lock (hostLog) { return hostLog.Any(l => l.Contains("is gone (410)")); } }, "the drop to be logged", Patience);
+        await HostWait.UntilAsync(() => { lock (hostLog) { return hostLog.Any(l => l.Contains("is gone (410)")); } }, "the drop to be logged", Patience);
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public sealed class PushFlowTests : IAsyncLifetime
     {
         public bool Available => true;
 
-        public async Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null)
+        public async Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null)
         {
             await t.AnsweredAtTheMachineAsync(request.Question);
             return new AnswerResult(AnswerOutcome.Delivered);

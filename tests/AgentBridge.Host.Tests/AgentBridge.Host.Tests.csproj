@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\TestTimeoutDiagnostics.cs" Link="TestTimeoutDiagnostics.cs" />
     <!-- The host serves real fixture sessions to a real client through the in-process relay
          the transport tests run, so this reuses both rather than copying them. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

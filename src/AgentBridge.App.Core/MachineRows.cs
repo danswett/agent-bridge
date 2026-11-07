@@ -46,8 +46,8 @@ public sealed class MachineRowViewModel : Observable
         get => viewOnlyWhy;
         internal set { if (Set(ref viewOnlyWhy, value)) { Raise(nameof(ViewOnly)); Raise(nameof(FactsWhy)); } }
     }
-    // What holds the machine's discovery, while anything does: the host's words (#788). Shown as
-    // "Discovery held" whether or not its banner was dismissed, which changes only the banner.
+    // What holds the machine's discovery, once the hold has lasted two minutes: the host's words
+    // (#788, #1064). Its row is the only place the app says so.
     public string? HeldWhy
     {
         get => heldWhy;
@@ -97,8 +97,8 @@ public sealed partial class MainViewModel
             var count = byId.Values.Count(c => owner[c] == m);
             row.Name = m.Name;
             row.ViewOnlyWhy = ViewOnlyWhy(m);
-            // Read from the host, not the banner: a dismissed banner leaves the hold standing.
-            row.HeldWhy = connected ? m.Host.Sessions.Held?.Reason : null;
+            // Only once the hold has lasted HeldRowAfter (#1064); read from the host's store.
+            row.HeldWhy = HeldLong(m, connected);
             row.Facts = m.OfflineSince is { } since ? $"Last seen {Words.Ago(since, Time.GetUtcNow())}"
                 : string.Join(" · ", new[] { connected ? Words.Plural(count, "session", "sessions") : null, row.Held ? "Discovery held" : row.ViewOnly ? "View only" : null }.Where(s => s is not null));
             row.Status = m.Offline ? "Offline" : !connected ? "Connecting" : m.IsLocal ? "This machine" : "Online";
@@ -122,6 +122,24 @@ public sealed partial class MainViewModel
             if (at < 0) { MachineRows.Insert(i, want[i]); }
             else if (at != i) { MachineRows.Move(at, i); }
         }
+    }
+
+    // How long a discovery hold must last before its machine's row says so: a hold that starts and
+    // ends inside that is routine and changes nothing on screen (ui.md §6.6, #1064).
+    // (a settable, so the window's self-test need not wait the two minutes out).
+    public TimeSpan HeldRowAfter { get; set; } = TimeSpan.FromMinutes(2);
+
+    // When each machine's current hold was first seen here, by key: per hold, so one that clears
+    // and returns counts from its own start. Read on the Tick, which draws the row once it is due.
+    readonly Dictionary<string, DateTimeOffset> heldSince = new(StringComparer.Ordinal);
+
+    // The host's reason while the machine's hold has lasted HeldRowAfter, else null.
+    string? HeldLong(Machine m, bool connected)
+    {
+        if (!connected || m.Host.Sessions.Held is not { } held) { heldSince.Remove(m.Key); return null; }
+        var now = Time.GetUtcNow();
+        if (!heldSince.TryGetValue(m.Key, out var since)) { heldSince[m.Key] = since = now; }
+        return now - since >= HeldRowAfter ? held.Reason : null;
     }
 
     // Why a machine is view only, as its host says (and, for this one, agent-ha-bridge beside it);

@@ -104,7 +104,7 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
             guard token == permissionGeneration else { return }
             enabled = false
             defaults.set(false, forKey: "bridge.notifications.enabled")
-            status = "Could not enable notifications: \(error.localizedDescription)"
+            status = "Could not enable notifications: \(BridgeShownError.sentence(for: error))"
             updateBadge()
         }
     }
@@ -257,7 +257,7 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
             let isCurrent = deliveryIdentifiers[notice.id] == identifier
             removeDelivery(notice.id, identifier: identifier)
             if isCurrent {
-                status = "Could not show a notification: \(error.localizedDescription)"
+                status = "Could not show a notification: \(BridgeShownError.sentence(for: error))"
             }
         }
     }

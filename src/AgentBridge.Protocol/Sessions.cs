@@ -586,6 +586,9 @@ public sealed record Question
     // no controls and says it is waiting at the machine.
     [Strict(Strictness.Security)]
     public bool? AnswerAtMachine { get; init; }
+    // Display only: "shape" explains a Copilot ask_user with no form fields or with legacy
+    // choices. Unknown or absent reasons keep the client's existing at-machine wording.
+    public string? AnswerAtMachineReason { get; init; }
     // The sub-agent that asked, when it is not the session's own question (status
     // precedence rule 2). Absent for the main agent's.
     [Strict(Strictness.Security)]
@@ -635,6 +638,11 @@ public sealed record Field
     public IReadOnlyList<Option>? Options { get; init; }
     [Strict(Strictness.Security)]
     public bool? AllowOther { get; init; }
+    // Why the agent offers Other here but this machine cannot send it (AnswerReasons), for a
+    // field whose AllowOther is not true: a client shows Other disabled, with the reason's
+    // sentence. Display only, so not strict: read wrong, a client only leaves Other out, as one
+    // that predates it does. It never enables Other or changes what Answers.Check takes (#908).
+    public string? OtherUnavailable { get; init; }
     public JsonElement? Default { get; init; }
     public bool? Required { get; init; }
     // What the agent's schema allows (#766). Not strict: a client that cannot read them checks
@@ -724,8 +732,11 @@ public sealed record AnswerRequest
     public SignedCommand? Confirm { get; init; }
 }
 
-public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null)
+public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null, AnswerStage? Stage = null)
 {
+    // Why, as a code a client says in its own fixed words (AnswerReasons), beside Reason; absent
+    // for every other reason. A client that does not know the code shows Reason.
+    public string? Code { get; init; }
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
 }
@@ -752,6 +763,16 @@ public sealed record DeliveryProgress(string Stage, bool? Working = null)
     // working, so the agent takes it at its next step (queued).
     public const string Typed = "typed";
 }
+
+// How far an unconfirmed answer is known to have got (#467), named as DeliveryTimings names the
+// stages, so a client can say which: typed, every key went and nothing has been recorded for the
+// question since, which may mean it was never submitted (an Enter the CLI took as part of the
+// words); recorded, the session recorded an answer to that very question that is not, or not
+// yet, the one typed. Confirmed is delivered, never a stage. Unlike the progress frames and
+// timings, it is on every unconfirmed answer's result, whether or not the client asked for
+// progress. A stage a client does not know reads as typed, the one that claims least.
+[UnknownAs(Typed)]
+public enum AnswerStage { Typed, Recorded }
 
 // session.reply: a prompt for the session, typed into its own input as if at the machine.
 // Request is the client's UUID for this reply, as for an answer. Attachments name files the

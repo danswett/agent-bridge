@@ -8,6 +8,7 @@
 
 import { readAttention, readMachineSignIn } from './auth-state.js';
 import { marksExact } from './escaped.js';
+import { knownAnswerReason } from './answers.js';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -105,6 +106,9 @@ function readField(raw) {
     type: readFieldType(f.type),
     options: Array.isArray(f.options) ? f.options.map(readOption).filter(Boolean) : [],
     allowOther: f.allowOther === true,
+    // Other the agent offers and the machine cannot send yet, by a reason this app knows: shown
+    // disabled, with why (#908). An unknown reason, or one beside allowOther, reads as none.
+    otherUnavailable: f.allowOther === true ? null : knownAnswerReason(f.otherUnavailable),
     // Any JSON value. Views format it as text and never interpret it as markup.
     default: f.default === undefined ? null : f.default,
     required: f.required === true,
@@ -124,6 +128,7 @@ export function readQuestion(raw) {
     askedAt: str(q.askedAt),
     truncated: q.truncated === true,
     answerAtMachine: q.answerAtMachine === true,
+    answerAtMachineReason: str(q.answerAtMachineReason),
     // The sub-agent that asked, when it is not the session's own question.
     agent: str(q.agent),
     // What the host escaped in an approval (#803): null when it escaped nothing. Marks that do not
@@ -297,17 +302,28 @@ export function readHello(raw) {
   };
 }
 
-// session.answer's and session.reply's result: { outcome, reason }, and timings where the host
-// sent them (sessions.progress): each stage it reached, in ms since it received the request
-// ({ typed, recorded, confirmed }). Only for this device's own timing marks, so a stage that
-// isn't a whole number of ms is left out, as is one the protocol doesn't name: its name would
-// be the host's own text in the console line (timing.js). Anything unreadable is unconfirmed,
-// since the host may have typed it.
+// session.answer's and session.reply's result: { outcome, reason, stage, code }, and timings
+// where the host sent them (sessions.progress): each stage it reached, in ms since it received
+// the request ({ typed, recorded, confirmed }). Only for this device's own timing marks, so a
+// stage that isn't a whole number of ms is left out, as is one the protocol doesn't name: its
+// name would be the host's own text in the console line (timing.js). code, on a refusal, is a
+// reason this app says in fixed words of its own (answers.js AnswerReasons). Anything unreadable
+// is unconfirmed, since the host may have typed it. stage, on an unconfirmed answer, is how far
+// it is known to have got (#467), named as the progress timings name the stages: 'typed' (every
+// key went, nothing recorded) or 'recorded' (the session recorded another answer); one this app
+// does not know reads as 'typed'.
 export const TimingStages = Object.freeze(['typed', 'recorded', 'confirmed']);
+export const AnswerStages = Object.freeze(['typed', 'recorded']);
 export function readAnswerResult(raw) {
   const r = obj(raw) ?? {};
+  const outcome = readOutcome(r.outcome);
+  const stage = outcome === 'unconfirmed' && r.stage != null ? tolerant(AnswerStages, 'typed')(r.stage) : null;
+  const code = outcome === 'refused' ? knownAnswerReason(r.code) : null;
   const timings = Object.entries(obj(r.timings) ?? {}).filter(([what, ms]) => TimingStages.includes(what) && Number.isFinite(ms) && ms >= 0);
-  return { outcome: readOutcome(r.outcome), reason: str(r.reason), ...(timings.length ? { timings: Object.fromEntries(timings) } : {}) };
+  return {
+    outcome, reason: str(r.reason), stage, ...(code ? { code } : {}),
+    ...(timings.length ? { timings: Object.fromEntries(timings) } : {}),
+  };
 }
 
 // An interim frame's progress for a session.reply or session.answer that asked for it

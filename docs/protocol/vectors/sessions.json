@@ -897,6 +897,29 @@
         "askedAt": "2026-10-28T04:22:43.182Z"
       }
     },
+    "a-list-whose-other-cannot-be-sent": {
+      "question": {
+        "id": "call_q4",
+        "kind": "form",
+        "message": "Which store?",
+        "fields": [
+          {
+            "name": "pick",
+            "type": "choice",
+            "options": [
+              {
+                "value": "pg"
+              },
+              {
+                "value": "sqlite"
+              }
+            ],
+            "otherUnavailable": "otherNotSendable"
+          }
+        ],
+        "askedAt": "2026-10-28T04:22:43.182Z"
+      }
+    },
     "a-plain-question": {
       "question": {
         "id": "call_q2",
@@ -1393,6 +1416,22 @@
             "allowOther": true,
             "default": "s6",
             "required": true
+          }
+        },
+        {
+          "name": "a-choice-whose-other-the-machine-cannot-send-yet",
+          "json": {
+            "name": "pick",
+            "type": "choice",
+            "options": [
+              {
+                "value": "pg"
+              },
+              {
+                "value": "sqlite"
+              }
+            ],
+            "otherUnavailable": "otherNotSendable"
           }
         },
         {
@@ -3076,6 +3115,118 @@
             "message": "Copilot needs you to sign in again (401).",
             "signIn": "phone",
             "recovery": "checking"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "SignInDevice": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "this-device",
+          "json": {
+            "name": "iPhone",
+            "kind": "phone",
+            "platform": "iOS",
+            "thisDevice": true
+          }
+        },
+        {
+          "name": "another-device",
+          "json": {
+            "name": "Work laptop",
+            "kind": "app",
+            "platform": "Windows"
+          }
+        },
+        {
+          "name": "wrong-type-name",
+          "json": {
+            "name": 42,
+            "kind": "phone",
+            "platform": "iOS",
+            "thisDevice": true
+          },
+          "reads": {
+            "name": "",
+            "kind": "phone",
+            "platform": "iOS",
+            "thisDevice": true
+          }
+        }
+      ],
+      "refused": []
+    },
+    "SignInDevices": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "listed",
+          "json": {
+            "state": "ready",
+            "devices": [
+              {
+                "name": "iPhone",
+                "kind": "phone",
+                "platform": "iOS",
+                "thisDevice": true
+              },
+              {
+                "name": "Work laptop",
+                "kind": "app",
+                "platform": "Windows"
+              }
+            ]
+          }
+        },
+        {
+          "name": "no-roster-yet",
+          "json": {
+            "state": "none",
+            "devices": []
+          }
+        },
+        {
+          "name": "unreadable",
+          "json": {
+            "state": "unreadable",
+            "devices": []
+          }
+        },
+        {
+          "name": "wrong-type-state",
+          "json": {
+            "state": 42,
+            "devices": [
+              {
+                "name": "iPhone",
+                "kind": "phone",
+                "platform": "iOS",
+                "thisDevice": true
+              },
+              {
+                "name": "Work laptop",
+                "kind": "app",
+                "platform": "Windows"
+              }
+            ]
+          },
+          "reads": {
+            "state": "",
+            "devices": [
+              {
+                "name": "iPhone",
+                "kind": "phone",
+                "platform": "iOS",
+                "thisDevice": true
+              },
+              {
+                "name": "Work laptop",
+                "kind": "app",
+                "platform": "Windows"
+              }
+            ]
           }
         }
       ],
@@ -7051,6 +7202,18 @@
           "context": "a-plain-question"
         },
         {
+          "name": "an-option-of-a-list-whose-other-cannot-be-sent",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q4",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "fields": {
+              "pick": "pg"
+            }
+          },
+          "context": "a-list-whose-other-cannot-be-sent"
+        },
+        {
           "name": "inside-every-constraint",
           "json": {
             "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
@@ -7377,6 +7540,22 @@
           "context": "an-approval",
           "refusedBy": "Answers.Check",
           "reason": "\"decision\": this choice takes no other answer"
+        },
+        {
+          "name": "an-other-answer-the-machine-cannot-send-yet",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q4",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "fields": {
+              "pick": {
+                "other": "DuckDB"
+              }
+            }
+          },
+          "context": "a-list-whose-other-cannot-be-sent",
+          "refusedBy": "Answers.Check",
+          "reason": "Your own answer can't be sent from here yet. Pick an option, or answer at the machine."
         },
         {
           "name": "an-empty-other-answer",
@@ -8052,10 +8231,34 @@
           }
         },
         {
+          "name": "refused-for-other-the-machine-cannot-send-yet",
+          "json": {
+            "outcome": "refused",
+            "reason": "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.",
+            "code": "otherNotSendable"
+          }
+        },
+        {
           "name": "stale",
           "json": {
             "outcome": "stale",
             "reason": "the question is no longer pending"
+          }
+        },
+        {
+          "name": "typed-but-not-recorded",
+          "json": {
+            "outcome": "unconfirmed",
+            "reason": "the answer was typed into the prompt, but the session did not record an answer within 15 seconds, so it may not have been submitted; check at the machine",
+            "stage": "typed"
+          }
+        },
+        {
+          "name": "recorded-differently",
+          "json": {
+            "outcome": "unconfirmed",
+            "reason": "the session recorded a different answer for \"spike\"; check at the machine",
+            "stage": "recorded"
           }
         },
         {
@@ -8067,6 +8270,19 @@
           "reads": {
             "outcome": "unconfirmed",
             "reason": "later"
+          }
+        },
+        {
+          "name": "an-unknown-stage-reads-as-typed",
+          "json": {
+            "outcome": "unconfirmed",
+            "reason": "later",
+            "stage": "acknowledged"
+          },
+          "reads": {
+            "outcome": "unconfirmed",
+            "reason": "later",
+            "stage": "typed"
           }
         },
         {

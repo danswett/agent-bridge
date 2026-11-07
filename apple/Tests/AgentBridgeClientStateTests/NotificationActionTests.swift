@@ -5,7 +5,7 @@ import Testing
 import UserNotifications
 
 private let actionCaps: Set<String> = ["sessions.read", "sessions.answer", "sessions.approve", "sessions.reply"]
-private func actionSession(questionID: String? = "q", message: String = "Continue?", version: String = "v1", response: String = "Finished", kind: String = "approval", allowOther: Bool = false, extraField: Bool = false) -> JSONValue {
+private func actionSession(questionID: String? = "q", message: String = "Continue?", version: String = "v1", response: String = "Finished", kind: String = "question", allowOther: Bool = false, extraField: Bool = false) -> JSONValue {
     var data: [String: JSONValue] = ["id": .string("s"), "title": .string("Private session"), "agent": .string("copilot"),
                                      "status": .string(questionID == nil ? "idle" : "waiting"), "updatedAt": .string(version), "activity": .object(["response": .string(response)])]
     if let questionID {
@@ -31,13 +31,33 @@ private func actionRequest(_ notice: BridgeSessionNotice, text: String? = nil) t
 
 @Test func notificationChoicesRequirePreviewsAndRejectFullFormsOtherAndDisabledApprovals() throws {
     #expect(try actionNotice(previews: false).actions.isEmpty)
-    #expect(try actionNotice(capabilities: ["sessions.answer"]).actions.isEmpty)
+    #expect(try actionNotice(capabilities: ["sessions.read", "sessions.approve"]).actions.isEmpty)
     #expect(try actionNotice(actionSession(allowOther: true)).actions.isEmpty)
     #expect(try actionNotice(actionSession(extraField: true)).actions.isEmpty)
     #expect(try actionNotice(actionSession(message: String(repeating: "long ", count: 100))).actions.isEmpty)
-    #expect(try actionNotice().actions.map(\.title) == ["Approve Once", "Deny"])
+    #expect(try actionNotice().actions.map(\.title) == ["Approve", "Deny"])
     #expect(try actionNotice(actionSession(kind: "question")).actions.count == 2)
     #expect(try actionNotice(actionSession(questionID: nil), previews: false).actions.map(\.title) == ["Reply"])
+}
+
+@Test func approvalNotificationsOfferNoApproveOrDenyAndOnlyOpenTheCard() throws {
+    let notice = try actionNotice(actionSession(kind: "approval"))
+    #expect(notice.actions.isEmpty)
+    var registry = BridgeNoticeActionRegistry()
+    registry.register(notice, scope: "account-one")
+    #expect(registry.bindings.isEmpty)
+}
+
+@Test func aStaleApproveOrDenyActionFromAnOlderBuildNeverDecidesAnApproval() throws {
+    let base = try actionNotice()
+    let approval = try #require(BridgeSession(json: actionSession(kind: "approval")))
+    let stale = BridgeSessionNotice(id: base.id, machineID: base.machineID, sessionID: base.sessionID, questionID: base.questionID, version: base.version,
+                                    kind: base.kind, title: base.title, body: base.body, sessionVersion: base.sessionVersion,
+                                    questionSnapshot: approval.question, actions: base.actions)
+    for action in stale.actions {
+        let request = BridgeNoticeActionRequest(notice: stale, action: action, scope: "account-one", text: nil, requestID: UUID())
+        #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: approval, scope: "account-one", capabilities: actionCaps, isLive: true) }
+    }
 }
 
 @Test func notificationOperationBindsTheWholeQuestionAccountSessionVersionAndCapabilities() throws {
@@ -54,7 +74,7 @@ private func actionRequest(_ notice: BridgeSessionNotice, text: String? = nil) t
     }
     #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "other-account", capabilities: actionCaps, isLive: true) }
     #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "account-one", capabilities: actionCaps, isLive: false) }
-    #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "account-one", capabilities: ["sessions.answer"], isLive: true) }
+    #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "account-one", capabilities: ["sessions.read", "sessions.approve"], isLive: true) }
 }
 
 @Test func notificationRepliesRequireTheSameFinishedTurnAndNonemptyText() throws {

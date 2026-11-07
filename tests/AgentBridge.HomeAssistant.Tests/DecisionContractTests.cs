@@ -149,9 +149,11 @@ public sealed class DecisionContractTests
             // answer the prompt refuses comes back as not sent.
             Assert.Equal(name == "manyMulti" || e.AllowsEmpty, a.AllowsEmpty);
         }
-        // "Other" is offered only where the host can deliver words: a lone choice. The daemon
-        // offered it beside a lone Yes/No too, where nothing types the words in.
-        Assert.Equal(name == "single", plan.TakesTypedAnswer);
+        // "Other" is offered only where the host can deliver words. A lone choice's goes into a
+        // box a live Copilot session draws apart from the form, which the host cannot type into
+        // yet (#510; #908 restores it), so none is offered for now. The daemon offered it beside a
+        // lone Yes/No too, where nothing types the words in.
+        Assert.False(plan.TakesTypedAnswer);
         Assert.Equal(q["takesTypedAnswer"]!.GetValue<bool>(), name is "single" or "boolean");
     }
 

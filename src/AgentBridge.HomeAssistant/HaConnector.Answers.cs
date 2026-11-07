@@ -293,7 +293,7 @@ public sealed partial class HaConnector
     // label stands for. Two forms can show the same labels over swapped values.
     static bool SameSource(Field? a, Field? b) =>
         a is null || b is null ? a is null && b is null
-        : a.Name == b.Name && a.Type == b.Type && a.AllowOther == b.AllowOther && a.Required == b.Required
+        : a.Name == b.Name && a.Type == b.Type && a.AllowOther == b.AllowOther && a.OtherUnavailable == b.OtherUnavailable && a.Required == b.Required
             && a.Default?.GetRawText() == b.Default?.GetRawText() && (a.Options ?? []).SequenceEqual(b.Options ?? []);
 
     static bool Same(CardSeen a, CardSeen b) =>

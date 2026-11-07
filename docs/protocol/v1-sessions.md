@@ -628,9 +628,10 @@ and JavaScript's `trim()` is applied (so `"   "`, `"\u0085"` and `"\u001b "` ali
 nothing records no answer, and blank text might be recorded trimmed to nothing.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
-Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
-anything but `delivered`, and `timings` for a request that asked for progress
-([Progress](#progress)):
+Result: `{ "outcome": "<outcome>", "reason": "<text>", "stage": "<stage>", "code": "<code>" }`,
+with `reason` present for anything but `delivered`, `stage` only on `unconfirmed` (below),
+`code` only on a `refused` whose reason is one of the [answer reasons](#answer-reasons), and
+`timings` for a request that asked for progress ([Progress](#progress)):
 
 | `outcome` | Meaning | Typed? |
 |---|---|---|
@@ -643,6 +644,39 @@ anything but `delivered`, and `timings` for a request that asked for progress
 A client treats an outcome it doesn't know as `unconfirmed`, never as `delivered`. The
 session's next `session.upsert` shows the question gone whatever the outcome.
 
+An `unconfirmed` answer also carries `stage`, how far it is known to have got
+([#467](https://github.com/danswett/agent-bridge/issues/467)):
+
+| `stage` | Meaning |
+|---|---|
+| `typed` | The keys were typed into the prompt and the session has recorded nothing for that question since. It may not have been submitted: Copilot's form once took an answer's last Enter as a new line in its text field |
+| `recorded` | The session recorded an answer to that very question, but not the one typed (or the call ended in an error) |
+
+### Answer reasons
+
+Some reasons a client says in fixed words of its own, the same in every client: on a field, as
+`otherUnavailable`, and on a refusal, as its `code` beside a `reason` that is the same
+sentence (so a client that knows neither still says why). A client that doesn't know a code
+reads it as absent: no disabled Other, and the `reason` as usual.
+
+| Code | Sentence | A client shows |
+|---|---|---|
+| `otherNotSendable` | "Your own answer can't be sent from here yet. Pick an option, or answer at the machine." | On a field: Other, its label unchanged, disabled, and the sentence as one muted line under the choices and as their accessible description. On a refusal: "Not sent · " and the sentence |
+
+`otherNotSendable` is a **temporary exception to #876** ("offer Other exactly when the CLI
+does"), decided by Product for #510: Copilot CLI 1.0.105 offers Other on a lone option list,
+but the host cannot yet prove that its pinned input box is empty. The read-only preparation
+in [#908](https://github.com/danswett/agent-bridge/issues/908) does not remove this exception
+or enable typing ([host answers](../host-answers.md)).
+
+Accepted by the session is `delivered`, never a stage. A stage a client does not know reads as
+`typed`; an older host sends none. A repeat of a request whose outcome was `unconfirmed`
+reads the session's record of that same question again, typing nothing: an answer recorded
+since (submitted at the machine, or recorded late) comes back `delivered`, and from then on
+stays so, and one recorded differently comes back `recorded`. It never answers a newer
+question. A client may therefore send the same request again after a reconnect, within the
+10 minutes the host remembers it, to learn what came of a `typed` answer.
+
 Typing into a live session is a single writer's job, and the host serializes it: one
 answer or reply per session at a time (`busy` otherwise), checked against the transcript
 immediately before typing and confirmed by identity, never by clock, after.
@@ -653,12 +687,29 @@ half-typed prompt holds, and a second answer would land on top of the first. Onl
 attempt that typed nothing (the session's console could not be reached) leaves the prompt
 answerable. A host records the attempt before the first key, and refuses when it cannot.
 
+The same answer sent again for such a prompt under a different request UUID by the **same
+sender** (a phone that was reloaded keeps its UUIDs in memory only) is that request sent
+again, not a second attempt: while the host still has the first answer in memory, it gets the
+first outcome and nothing is typed. An `unconfirmed` one is read again from the session as
+above, however long after, so it becomes `delivered` once the session has recorded it; while
+nothing is recorded it stays `unconfirmed`, with a reason that says only that nothing was
+typed again because the request repeats an answer already typed once; that holds for every
+repeat of an unconfirmed answer, under its own UUID or another, and whatever its stage (which
+still says how far the first got). A request UUID belongs to the sender, session and question it
+was first admitted for: replayed by another sender, or under another question, it is a request
+of its own, and nothing of the first's outcome or progress is given. Only a *different* answer, or the same words from **another sender**,
+is `refused` for a prompt already typed into, and the two are refused alike, so that no
+sender can learn what a first answer said by guessing it. A sender is the channel's peer (a
+device); the host has no person-level identity, so a second device of the same person gets the
+plain refusal. A host that restarted has forgotten the first answer, and refuses any second
+request for the prompt, as the record of attempts alone does.
+
 What a host answers, by agent. agent-ha-bridge is the baseline; answering Copilot
 permission prompts goes beyond it, at the user's request:
 
 | Agent | Prompt | `kind` | Answered | `delivered` when |
 |---|---|---|---|---|
-| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
+| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes, for a form the host can read on screen; free text, and a form it cannot, is `answerAtMachine` ([host answers](../host-answers.md)). Not with Other words for now: a lone list has `otherUnavailable` (`otherNotSendable`, a temporary exception to #876), since the host cannot yet prove its pinned box empty | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
 | Copilot CLI | Permission request for a shell command, path access, a file edit or read, a URL, an MCP tool or a custom tool | `approval` | Yes, with `sessions.approve`: approve once or deny, nothing that grants more | Its `permission.completed` for that request records `approved` (approve), or `denied-interactively-by-user` with no message or `cancelled` followed by the session's abort of the turn (deny) |
 | Copilot CLI | Any other permission request (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read, or any on a host with `permissions.remoteApproval` off | `approval` | No: `answerAtMachine` | |
 | Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
@@ -1645,7 +1696,45 @@ that agent: today Copilot alone, on Windows alone, with Copilot's `.exe` found w
 started. Off, or for another agent, `signin.start` and
 `signin.cancel` return `refused` and no attention says `phone`. Devices cannot change the setting
 yet; that waits for #801's settings path. The capability is offered only to a channel the
-person authority below accepts: a device **pinned as a person** at this machine.
+person authority below accepts: a device the machine's **device roster pins as a person's**. And
+no attention says `phone` while the roster pins nobody (#972 slice 2), so no client offers a Sign
+in every device would be refused; a client still offers it only with the capability.
+
+**The person pin (#972 slice 2).** The pin is #55's signed roster entry
+([device-approval.md](../design/device-approval.md)), read from the machine's verified copy of
+the account's roster through one interface, `IPersonDeviceRoster`: `State` (`None`, `Ready`
+or `Unreadable`), `Find(key, account)`, `Pinned(account)`, `StillPinned(device)` and
+`Changed`. Trust's #55 slice A implements it on its verifier; until then the host's is
+`NoPersonRoster`, which pins nobody, so **no device is offered sign-in on any machine yet**. A
+device is pinned only when all of these hold (Trust's conditions on #972, 6700902097):
+
+* the roster is `Ready`. `None` and `Unreadable` both pin nobody, and `StillPinned` is false on
+  any doubt, a stale roster (device-approval.md §6.3) included;
+* `Find` matches the channel's full static key and relay account, and its device id is that
+  key's. The roster's own kind (`app`, `pwa` or `phone`, `RosterKinds.IsPerson`) and presence
+  (`key` or `webauthn`) decide; **the channel's self-declared kind is never an input**;
+* the device is past probation and confirmed (§3.4): one that isn't is not returned at all;
+* the machine is not read-only, and, where `trustedPeers` enforcement is on, the channel's
+  trusted-peer role is `person`. **A #402 trusted-peer `person` pin no longer opens sign-in**:
+  it is still needed there for the channel to act at all, and never enough.
+
+A grant is bound to the roster entry's `generation` and `add` hash, which change when the
+device is removed or added again. `Changed` fires on every change, a removal heard from another
+host included, and the host looks at every flow at once, as well as every 250 ms: a flow whose
+device is no longer pinned ends `cancelled` and its code is purged, and a re-added device is a
+new grant that never joins the old flow.
+
+* `signin.devices {}` (capability `signin.devices`, **new**) returns who can sign an agent in on
+  this machine, read-only: `{state: "none" | "ready" | "unreadable", devices: [{name, kind,
+  platform, thisDevice?}]}`, from the same roster and the same rules, `thisDevice: true` on the
+  asking device's own entry. Never a device id, key, generation or presence; the name and
+  platform are the roster's (the enrollee's words), with control characters removed. Offered
+  through the relay only, wherever `sessions.signin` itself is turned on (whether or not the
+  asking device is pinned), and only to a `person` role where `trustedPeers` enforcement is on:
+  `service` and `host` peers are refused it. A device shows it on its Machines page (ui.md §6.6);
+  the app beside the host has the same in its status (`signInDevices`,
+  [local-pipe.md](local-pipe.md)). Nothing adds or removes a device here: adding is #55's
+  enrollment, and removing a single device waits for #55's Remove.
 
 Copilot's adapter (`CopilotSignInAdapter`) runs the CLI's own `copilot login --device-code`,
 unpatched, under Engineering's conditional approval (#800 6648319937): **the machine opens a
@@ -1711,10 +1800,10 @@ fields fail closed. Recovery values come only from the host's typed lifecycle.
   Send deadlines cancel the underlying encrypted send as well as its wait, including
   terminal delivery and receipt replay. Lifetime expiry reports `expired` whether the
   worker or sweep observes it first; explicit cancellation before expiry stays `cancelled`.
-* Current pinned **person**, session-read **and** write authority are all required.
-  A self-claimed `app`/`pwa` kind is insufficient even when the transitional trust
-  enforcement switch is off. Service/host roles, revoked/regranted generations,
-  read-only G5 machines and unapproved/default configurations get no capability.
+* A current roster **person** pin (above) is required, and, where trusted-peer enforcement is
+  on, a `person` role too. A self-claimed kind is never an input. Service/host roles,
+  removed/re-added roster entries, a roster that is absent, unreadable or stale, read-only G5
+  machines and unapproved/default configurations get no capability.
 
 The private runner accepts **adapter frames, not guessed Copilot console fixtures**:
 one strict JSON line with exactly `kind: "code"`, `userCode`, `verificationUri`,
@@ -1970,6 +2059,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `askedAt` | time | |
 | `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
 | `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once, or a Copilot permission request listed while others wait that the host cannot tell from them on the session's screen ([Copilot permission prompts](#copilot-permission-prompts)). That last can clear under the same `id` once it can be told apart, so a client reads the flag afresh on every update rather than once per question. It still has its fields, so a client can say what it asks, but a client shows no controls for it, says to answer it at the machine ("Waiting on you · answer at the machine", ui.md §2.2), and a `session.answer` for it is `refused` |
+| `answerAtMachineReason` | string? | Optional, display-only reason, not an answering capability. `"shape"` accompanies `answerAtMachine: true` only for a Copilot `ask_user` with no fields after reading its schema, or with a present, non-null `choices` (the legacy format, including an empty list or blank string beside a valid schema). PWA and Windows cards then show "Answer at the machine · *machine*" followed by "This kind of question can only be answered at the machine.", both in Needs you's text colour and accessible reading order, without a live region. Absent, malformed or unknown reasons keep the client's existing single line; clients never infer a reason from fields. Read afresh on every update, even with the same question `id`. Row status, attention, HA wording, `otherUnavailable`, delivery refusals and answer guards are unchanged |
 | `escaped` | object? | An approval the host showed any character of as an escape: `shown`, `marks` and `approve` ([Escaped approvals](#escaped-approvals)). Approve on it takes the escaped-command confirmation; Deny does not. Neither goes when it is also `answerAtMachine`, as one listed while other Copilot permissions wait usually is ([Copilot permission prompts](#copilot-permission-prompts), #690). Absent when nothing was escaped |
 | `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land. And while a permission prompt or a sub-agent's question waits beside it, the session's own Copilot `ask_user` is `answerAtMachine` too, since the CLI may be showing the other one; a host also checks the transcript for a pending permission prompt just before typing an answer |
 | `waiting` | int? | How many permission prompts the session has waiting, this one included, when more than one is (#690). Copilot asks one for each of a batch of parallel tool calls and shows them one at a time; the host lists the earliest still waiting, so this is always the first of them. A client says so ("1 of 4 permissions waiting"). The next comes as a new question with its own `id` once this one is answered, so an answer to this one never reaches it. Absent with one |
@@ -1984,6 +2074,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `type` | `"choice"` \| `"multi"` \| `"boolean"` \| `"text"` \| `"number"` | `choice` takes one of `options`, `multi` any number of them |
 | `options` | Option[]? | For `choice` and `multi` |
 | `allowOther` | bool? | `choice` and `multi` also accept free text |
+| `otherUnavailable` | string? | A reason code: the agent offers Other here and this machine can't send it yet ([Answer reasons](#answer-reasons)). Only where `allowOther` is not `true`. Display only: a client shows Other disabled, with the reason's sentence; it never enables Other or changes what an answer may hold |
 | `default` | any? | |
 | `required` | bool? | |
 | `constraints` | FieldConstraints? | What the agent's schema allows of the value (#766). Absent when it says nothing a host checks |
@@ -2017,9 +2108,26 @@ and `"  ab"` is 4 characters typed and 2 trimmed. A host checks the text it woul
 breaks flattened. A field whose constraints a host cannot check exactly (a bound JavaScript would
 hold as another number, a length that is not a whole number, a pattern it cannot read as
 JavaScript does, or patterns past the 250 ms one question's patterns share), or whose pre-filled
-default breaks them (checked so too), makes its question `answerAtMachine`. So does a `required`
-`text` field whose pre-filled default is blank (non-empty, but blank as above): that default
-is the only answer it can be given from another device, and it is refused as blank. So does a
+default breaks them (checked so too), makes its question `answerAtMachine`. So does a `text`
+field, required or not, whose pre-filled default is blank (non-empty, but blank as above, or
+nothing but what shows as nothing, as free text is judged: `"\u200B"`, `"\u2800"`, `"\u0301"`):
+that default is the only answer it can be given from another device, a client leaves blank text
+out of an answer, and a required field's is refused as blank. A default with something visible
+in it, such as `"a\u200Bb"`, is answered as usual. So does a `text` or `number` field
+whose pre-filled default no answer can match: a `text` field's that is not a string, holds half
+a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (4 KiB), a
+`number` field's that is `null`, not plainly a number, or one JavaScript would hold as another
+number; a form whose smallest answer exceeds 16 KiB in the largest envelope a host takes (a
+256-character session id, a request id, `progress`), counting each pre-filled `text` or `number`
+default (a number as the number it holds, written the longer of the ways JavaScript and .NET
+write it), and every other default and every required field
+at its smallest (a required `number` at 0, or at the number nearest 0 that its bounds,
+`multipleOf` and `integer` allow, past an exclusive bound; a required `text`
+at its `minLength`, which past 4 KiB no answer can meet); and a form with
+half a surrogate pair anywhere in its schema, which a host cannot read. Required `text` that
+must match a `pattern` or `format` is counted at its `minLength` (or one character): a host
+does not solve a pattern for its shortest match, so such a form may be offered and its answer
+refused as larger than 16 KiB, before any key. So does a
 `choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a
 `pattern` reads it as JavaScript does, without flags: `\d` and `\w` are ASCII.
 
