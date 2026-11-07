@@ -59,6 +59,10 @@ namespace AgentBridge.Host;
 // device-code sign-in on this machine (sessions.signin, docs/protocol/v1-sessions.md). Off when
 // absent. A value that is not true or false turns everything off, as remoteApproval's does.
 //
+// security.roster: what is done with the account's signed device roster (SecuritySettings,
+// HostRoster). Only "off" so far: verify and log, enforce nothing; anything else is said and read
+// as off.
+//
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)
 {
@@ -88,9 +92,11 @@ public sealed record HostSettings(bool RemoteApproval)
     public DevBoxSettings DevBox { get; init; } = DevBoxSettings.Default;
 
     public IReadOnlyList<string> DevBoxProblems { get; init; } = [];
+    public SecuritySettings Security { get; init; } = SecuritySettings.Default;
+    public IReadOnlyList<string> SecurityProblems { get; init; } = [];
 
     // Every problem a section reported, for the log, config show, and config set's check.
-    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems).Concat(PermissionProblems);
+    public IEnumerable<string> SectionProblems => LaunchProblems.Concat(HomeAssistantProblems).Concat(UsageProblems).Concat(DevBoxProblems).Concat(PermissionProblems).Concat(SecurityProblems);
 
     public bool Push { get; init; } = true;
 
@@ -166,6 +172,7 @@ public sealed record HostSettings(bool RemoteApproval)
             var (homeAssistant, homeAssistantProblems) = HaSettings.Read(root.TryGetProperty("homeAssistant", out var h) ? h : null);
             var (usage, usageProblems) = UsageSettings.Read(root.TryGetProperty("usage", out var u) ? u : null);
             var (devBox, devBoxProblems) = DevBoxSettings.Read(root.TryGetProperty("devBox", out var d) ? d : null);
+            var (security, securityProblems) = SecuritySettings.Read(root.TryGetProperty("security", out var sec) ? sec : null);
             var settings = Default with
             {
                 Launch = launch,
@@ -176,6 +183,8 @@ public sealed record HostSettings(bool RemoteApproval)
                 UsageProblems = usageProblems.Count == 0 ? [] : usageProblems,
                 DevBox = devBox,
                 DevBoxProblems = devBoxProblems.Count == 0 ? [] : devBoxProblems,
+                Security = security,
+                SecurityProblems = securityProblems.Count == 0 ? [] : securityProblems,
             };
             if (root.TryGetProperty("delivery", out var delivery) && delivery.ValueKind != JsonValueKind.Null)
             {

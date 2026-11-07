@@ -202,6 +202,7 @@ switch (command)
             Action<string> note = m => Console.Error.WriteLine($"{DateTime.Now:HH:mm:ss} {m}");
             if (settingsProblem is not null) { note(settingsProblem); }
             foreach (var p in settings.UsageProblems) { note($"config.json: {p}"); }
+            foreach (var p in settings.SecurityProblems) { note($"config.json: {p}"); }
             if (!settings.Usage.Publish)
             {
                 note("usage is not read on this machine (usage.publish is off)");
@@ -439,6 +440,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // hello leaves usage out.
     using var usageHttp = new UsageHttp(TimeSpan.FromSeconds(15));
     foreach (var problem in settings.UsageProblems) { Log($"config.json: {problem}"); }
+    foreach (var problem in settings.SecurityProblems) { Log($"config.json: {problem}"); }
     await using var usageMonitor = settings.Usage.Publish
         ? NewUsageMonitor(source, usageHttp, Log, () => OperatingSystem.IsWindows() ? haProbe!.Active() : null, NewUsageProbes(identity.Folder))
         : null;
@@ -782,6 +784,12 @@ async Task<int> ServeAsync(HostHandover handover)
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
             control.SetRelay(RelayState.Connected, $"as {relay.Login}");
             backoff.Reset();
+            // Off mode: read and verify the roster in the background, log what it says, enforce nothing.
+            _ = Task.Run(async () =>
+            {
+                var check = await HostRoster.SyncAsync(relay, HostRoster.Now, current.Token);
+                Log($"device roster (security.roster {settings.Security.Roster}): {check.Summary}");
+            });
             since.Restart();
             await relay.Completion.WaitAsync(current.Token);
             (endedWith, endedWhy) = ((int?)relay.CloseStatus, relay.CloseReason);

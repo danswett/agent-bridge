@@ -382,7 +382,13 @@ Both messages are text frames from an admitted device of any kind, counted again
 
 ## Pinned person devices
 
-A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and Daily's lists. It returns each person device the verifier serves (active, §3.5, and not held, §3.4; hosts are left out), in id order, as `id`, `name`, `kind`, `platform`, `presence`, `confirmed` and `quarantined`. `presence` is the declared level; only `key` and `webauthn` prove a person verified (§4.6), and `none` is listed so a client can say why a device cannot be offered. A Windows device stays `none` until R4 proves its mechanism. The query changes nothing and enforces nothing; the host verifier (OFF mode) that feeds it is slice A3.
+A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and Daily's lists. It returns each person device the verifier serves (active, §3.5, and not held, §3.4; hosts are left out), in id order, as `id`, `name`, `kind`, `platform`, `presence`, `confirmed` and `quarantined`. `presence` is the declared level; only `key` and `webauthn` prove a person verified (§4.6), and `none` is listed so a client can say why a device cannot be offered. A Windows device stays `none` until R4 proves its mechanism. The query changes nothing and enforces nothing; the host verifier (OFF mode, next section) is what feeds it.
+
+## The host's verifier (OFF mode)
+
+A host reads the relay's copy with `roster-get` once after each connection and verifies it for itself, on its own clock: the generation is taken from the first genesis the relay holds for the account, every entry is offered to a `RosterVerifier`, and the host logs one line: entries read, how many were accepted, quarantined, refused or unreadable, and the head hashes (first 12 hex digits). It is `security.roster` = `off` (the only value this slice reads; anything else is reported in the log and read as `off`).
+
+Off mode enforces nothing. No connection, command or approval is refused or changed because of what the roster holds or fails to hold, and a relay that does not answer, or answers with no roster, costs one log line. The generation is not pinned, so against a hostile relay this check protects nothing yet; observe and enforce modes, pinning and the ChannelHub gate are later slices.
 
 ## Vectors
 
