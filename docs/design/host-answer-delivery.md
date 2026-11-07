@@ -2,7 +2,8 @@
 
 Status: design. The owner's decisions of 2026-11-07 are recorded in section 10.1, and the questions
 still open are in section 10.2. Part of #1132.
-Written 2026-11-07 (Pacific). Code is cited at `origin/main` a97060a3. Host fix PR #1137 (branch
+Written 2026-11-07 (Pacific). Code is cited at `origin/main` c66b2335 (line numbers checked at a97060a3; the cited files did
+not move between the two). Host fix PR #1137 (branch
 `fix/form-screen-1123`, in review; see the PR for its current head) is cited where this design
 builds on it. These descriptions were checked against head a2760e91.
 
@@ -209,7 +210,7 @@ Gaps:
 | Number of screen reads, and whether they were steady | Not logged. #1137 logs it for Copilot forms. |
 | What the screen looked like at a refusal | Nothing. The 04:21 refusal could be explained only by reproducing the CLI's drawing (#1137). #1137 adds an outline for form refusals. |
 | "Answer at the machine" offers (made when listing, not when answering) | Not logged (#1023) |
-| The phone's side: stages, reconnects, the exact text shown | Not kept (#1128) |
+| The phone's side: stages, reconnects, which message was shown (as a template id) | Not kept (#1128) |
 | One id joining phone, relay and machine | Request ids exist, but nothing carries one id end to end for a report |
 | Attachment to Send feedback | Not wired (#733, #738) |
 
@@ -245,8 +246,9 @@ Rules:
   * The **diagnostic id** (`diagnosticId`, section 3.11.3) is random, minted for one failed attempt,
     and is set here only once an automatic event for that attempt has actually been sent. It is
     `null` otherwise, as in the sample, and always while diagnostics are off.
-* Session ids are hashed per machine. The tester's own copy shows the session name, but the
-  uploaded copy does not.
+* Session ids are hashed per machine. **Session names and titles are never written to the record.**
+  The Diagnostics page shows a session's name by reading it live from the running session list when
+  the page is open; the record holds only the hashed id, so no saved, exported or sent copy has it.
 * No answer text, reply text, question text, option text, command text or file path is ever
   recorded. Only counts, kinds and lengths are.
 
@@ -331,7 +333,12 @@ The PWA and the Windows app keep their own ring of the last 200 sends. Each entr
   * a socket closed by the relay;
   * the network changed;
   * "the relay connection changed" (#1128);
-* **the exact text shown to the person** for the outcome, and which button they pressed next.
+* **what the person was shown** for the outcome, as a reason key and a message template id (for
+  example `outcome.refused.form-not-shown` with template `t-refused-2`), and which button they
+  pressed next. **Never the rendered text.** Rendered strings can carry question or field words, such
+  as "Answer to 'X': …". The exact wording is recovered from the template id and the app version.
+* Nothing else free-form: no question, option, answer or session text. The ring is built from the
+  same kind of allow-listed schema as the machine's record (section 3.11.1).
 
 This ring is kept in IndexedDB on the phone and in `%LOCALAPPDATA%` for the app. It is attached to
 the same feedback bundle, so one report from a phone carries both sides. This also fixes F6: answer
@@ -480,7 +487,11 @@ machine. The phone's send ring (section 3.6) stays on the phone.
   * over-long values, control characters and wide characters;
   * values that look like reason keys;
   * JSON injection;
-  * exception messages carrying paths.
+  * exception messages carrying paths;
+  * question, field and option text in rendered phone messages (such as "Answer to 'X': …").
+
+  The phone's and app's send ring (section 3.6) runs through the same corpus and the same test as
+  the machine's record.
 
 #### 3.11.2 "Report this" (not gated)
 
@@ -494,7 +505,8 @@ A manual report is independent of telemetry and never needs telemetry consent.
     bundle. It stays only where the tester ticked that attempt's box in the preview.
   * **A box only when an event was sent.** The box appears only if the automatic event for that
     attempt was actually sent (uploaded, not just queued). If it is queued or was never made, there
-    is no box and no id, the preview says so in plain words, and the report still goes.
+    is no box and no id, the preview says so in plain words, and the report still goes. Slice 2 ships before slice 3,
+    so until slice 3's events are actually sent there is never a box and never a diagnostic id.
   * **Defaults.** In "Report this", the box for the attempt being reported is ticked by default and
     can be unticked, because the tester chose that attempt. In Send feedback and Settings reports,
     the recent attempts with a sent event are listed with their boxes unticked by default.
@@ -506,7 +518,15 @@ A manual report is independent of telemetry and never needs telemetry consent.
 #### 3.11.3 The automatic event (buildable now; uploads enabled only after the gates)
 
 The slice is built now behind the off default: a kill switch in config, and no network call while
-off. **Uploads stay disabled until all of these have passed.** Each is a separate, recorded step.
+off. **A build and config flag, `Diagnostics:DeliveryEventsAvailable`, is false until gates (b)
+and (e) close.** While it is false:
+* the transport is not built in or not wired, so no upload is possible whatever the tester's choice;
+* the consent UI is hidden: no first-run prompt, no "Send optional diagnostics" setting and no
+  "Diagnostics sent" list. Testers are never asked to consent to something that cannot lawfully run;
+* a test asserts both, for a release build with the flag false.
+
+Turning the flag on is its own reviewed change, made after gates (b) and (e) close. Uploads then still
+need (a), (c) and (d). **Uploads stay disabled until all of these have passed.** Each is a separate, recorded step.
 Compliance's finding approves local-only design work and an off-by-default build. It does not
 approve enabling uploads.
 
@@ -727,7 +747,7 @@ received ─► checking ─► typing(field i of n) ─► submitted ─► del
      │                          │
      │                          └─► paused at field i ── host resumes when the screen shows field i,
      │                                                   or resets the form only when positively on it
-     └─► (identical retry, any device) ─► same state as the first; never a second typing
+     └─► (identical retry, same sender) ─► same state as the first; never a second typing
 ```
 
 Rules:
@@ -746,20 +766,42 @@ Rules:
    * **First, resume** at the next field not yet committed (rule 1). A typed-but-unsubmitted field
      gets only its verified Enter, never a second typing.
    * **If resuming fails, reset and redo.** The host presses Esc to cancel the form, so the agent
-     hears "cancelled" and asks again, and then answers the new question with the same answer. The
-     new question is a fresh request: the same answer digest goes through the full checks again,
-     from field 1.
+     hears "cancelled" and may ask again. The answer is typed into the re-asked question **only if
+     its schema matches the original card exactly**:
+     * the same message, the same number of fields in the same order, and for each field the same
+       kind, title, options (text and order), limits and defaults, compared field by field;
+     * bound to the same card id: the host records the original card's id and schema when it presses
+       Esc, and the re-asked question takes that card id only on an exact match;
+     * then it goes through every check again from field 1, as a fresh typing of that card.
+     If the re-asked question is reworded, has different fields or options, or cannot be read as
+     that schema, nothing is typed. The new question becomes a new card on the phone, and the old
+     card shows the ways out (rule 5).
+   * **If the agent never re-asks.** The host waits up to 60 s after the Esc for a re-asked
+     question. If none arrives, nothing is typed: the card is retired as out of date ("The question
+     was cancelled at the machine and not asked again") and offers the ways out (rule 5). The
+     answer is never typed into whatever the session shows next.
    * Both steps happen only when the frame reads positively as *this* form (heading, message, tab
      bar and field headings all matched). If the screen is anything else, there is no Esc and no
      key. The card stays "paused" and offers the phone's ways out (rule 5).
    * The redo is tried once only. If it fails, the card offers the ways out. It never loops.
    * #1137 leaves resume out of scope: its ledger refuses a second typing. Slice 8 adds both steps.
-3. **Idempotent by request.** A request id (bound to sender, session and question, PR #1100) and the
-   answer's digest identify a delivery. The record moves from all or nothing to a per-field record
-   (`fields: [done, done, typed-unsubmitted, —]`), persisted on disk with the first outcome. Any
-   device's identical retry joins the existing delivery. A *different* answer to a part-answered
-   form is refused with "part of an earlier answer is already in; finish or reset it", never typed
-   on top.
+3. **Idempotent by request.** A request id (bound to sender, session and question, PR #1100;
+   `DeliveryGate.cs` `OutcomeMemory`, line 210) and the answer's digest identify a delivery. The
+   record moves from all or nothing to a per-field record (`fields: [done, done, typed-unsubmitted,
+   —]`), persisted on disk with the first outcome.
+   * **No answer text on disk.** The persisted record holds the per-field states, the outcome and a
+     keyed digest, never the answer text. The digest is an HMAC under a per-machine secret key, kept
+     protected by the operating system (DPAPI) and never sent off the machine. It is not an unkeyed
+     hash, which a short choice answer could be guessed from. The answer itself lives only in memory
+     for the attempt; after a host restart (slice 10) a resume waits for the phone to send it again,
+     and that resend must match the keyed digest.
+   * **Repeats are per sender.** A repeat of the same request id from the same sender, for the same
+     session and question, joins the existing delivery, as `OutcomeMemory` decides today. The same
+     id from a different sender is not a repeat. An answer from another device is its own request:
+     it never types into a part-answered form, and it is told so ("part of an earlier answer is
+     already in") with the ways out.
+   * A *different* answer to a part-answered form is refused with "part of an earlier answer is
+     already in; finish or reset it", never typed on top.
 4. **Out of date retires the card.** The card is retired with a plain message ("This question was
    answered or closed at the machine"), never shown as a red "refused".
 5. **Every failure has a way out on the phone** (#1123's acceptance criterion; #773 means each is an
@@ -904,8 +946,12 @@ replies from Copilot's prompt hook) runs on this harness.
 3. The phone cannot send keys. It sends answers. No "press Enter", no "resubmit", no raw key
    channel, ever.
 4. A field of one question is never typed twice. A resume continues at the first field not yet
-   committed; a field already typed but not submitted gets only its Enter, after invariant 2's check. A reset uses Esc only when positively on this exact form. The redo after it answers
-   the agent's new question, through the full checks, and is tried once.
+   committed; a field already typed but not submitted gets only its Enter, after invariant 2's
+   check. A reset uses Esc only when positively on this exact form. The redo after it is typed only
+   into a re-asked question whose schema matches the original card exactly and takes its card id;
+   it goes through the full checks and is tried once. If the agent does not re-ask within 60 s,
+   nothing is typed and the card is retired with the ways out. No answer text is ever written to
+   disk; the persisted record holds a per-machine keyed digest (section 4, rule 3).
 5. A different answer is never typed over part of an earlier one.
 6. Answers are always sent with an explicit Send answer (#773). "Send as a message instead" is an
    explicit, separate button.
@@ -938,15 +984,15 @@ its re-read and retry, and slice 7 on its white-space-free matching.
 | --- | --- | --- | --- |
 | 0 | This design | no | part of #1132 |
 | **1** | **The local record**, starting from #1137's `answer-attempt v=1` line and `FormCheck` names: allow-listed per-attempt record, reason keys, redacted outlines, ring buffer, the phone's and app's send ring, send id, triage recipe and tool, offer keys and counts, local health view (sections 3.1–3.10, 3.11.1). It can split into: 1a host record and keys (extends #1137's line to approvals, replies, Claude and Codex; reason keys use #1137's check names); 1b outlines; 1c client ring and send id (protocol); 1d health view. | yes (1a, 1b, 1c) | closes #1023; gives #998–#1014 their counts; part of #1128 |
-| **2** | **"Report this" bundle**: "Report this" on failed cards attaches that attempt's record and outline after the preview (section 3.11.2) | yes (client and host) | part of #733, #738 |
-| **3** | **The opt-in automatic event**, `delivery-failure/v1` (section 3.11.3). Opt-in worldwide, default off. **Buildable now; uploads enabled only after gates (a)–(e).** Kill switch. Install id created only after opt-in. No collection, queue or network call while off; off deletes unsent events; re-enabling uploads nothing from the off period, all tested. Compliance's first-run and Settings wording. Finite error vocabulary. | **yes**: the #732 two-family review of schema, install id, retention and linking | part of #741. **Gates before enabling uploads:** (a) the #732 two-family security review (Engineering); (b) lawful basis and notice from counsel (#744); (c) the `docs/design.md` section 5.10 amendment, PR #1139; (d) SRE's proof of retention, exports and deletion, including the 31-day Log Analytics behaviour; (e) the owner's approval of #733's UX and the notice (#762). |
+| **2** | **"Report this" bundle**: "Report this" on failed cards attaches that attempt's record and outline after the preview (section 3.11.2). Until slice 3's events are actually sent, there is no diagnostic id box: slice 2 never shows or attaches a diagnostic id. | yes (client and host) | part of #733, #738 |
+| **3** | **The opt-in automatic event**, `delivery-failure/v1` (section 3.11.3). Opt-in worldwide, default off. **Buildable now; uploads enabled only after gates (a)–(e).** Kill switch. Install id created only after opt-in. No collection, queue or network call while off; off deletes unsent events; re-enabling uploads nothing from the off period, all tested. Compliance's first-run and Settings wording. Finite error vocabulary. **A build/config flag hides the consent UI and blocks the transport until gates (b) and (e) close.** | **yes**: the #732 two-family review of schema, install id, retention and linking | part of #741. **Gates before enabling uploads:** (a) the #732 two-family security review (Engineering); (b) lawful basis and notice from counsel (#744); (c) the `docs/design.md` section 5.10 amendment, PR #1139; (d) SRE's proof of retention, exports and deletion, including the 31-day Log Analytics behaviour; (e) the owner's approval of #733's UX and the notice (#762). |
 | 4 | Failing-first tests: the three-field choice, text, choice form (#1101's ask), output streaming during a form (#1123), narrow window (#910), mid-word wrap (#848), tall form, markdown message. #1137 already adds the hyphen and mid-word wraps (04:21), wrapped hints (#910), a mid-redraw read, a retry after a scroll, and a six-field form whose tab bar hides titles, refused as `bar-window` with nothing typed; slice 4 adds the rest. | no (tests) | groundwork for #1123, #910, #848 |
 | 5 | Real-screen corpus and replay test, seeded first from #1137's test screens, then #510 and slice 1's outlines (section 6) | no | part of #1132 |
 | 6 | Hold keys to the form's frame, and settle on the frame (sections 5.1–5.2), building on #1137's re-read and retry. **Approved by the owner (2026-11-07); ships only once Trust agrees** that the frame plus "nothing below it" is enough identity | **yes** (injector; Trust's agreement before merge) | with slice 8, closes #1123 and #1012 |
 | 7 | Normalised comparison (section 5.3) | **yes** | closes what #1137 leaves of #910 and #848 (item 1) |
-| 8 | Delivery state machine: per-field record; resume at the next field first (a typed-but-unsubmitted field gets only its verified Enter, never a retype), then Esc-cancel and redo once, only when the screen is positively this exact form (owner, 2026-11-07); persisted first outcome for any device (section 4) | **yes** (Trust review) | closes #1123, #1007, #1093; replaces #1101's proposal |
+| 8 | Delivery state machine: per-field record; resume at the next field first (a typed-but-unsubmitted field gets only its verified Enter, never a retype), then Esc-cancel and redo once, only when the screen is positively this exact form and the re-asked schema matches the original card exactly (same card id), with a 60 s wait and nothing typed if it is not re-asked (owner, 2026-11-07); a persisted first outcome with a per-machine keyed digest and no answer text on disk; repeats joined per sender (section 4) | **yes** (Trust review) | closes #1123, #1007, #1093; replaces #1101's proposal |
 | 9 | Phone ways out: Look again, Send as a message instead, retire out-of-date cards (section 4, rules 4–5) | **yes** (protocol) | #1123's acceptance criterion; closes #1014 and #1010 (fetch the full question); part of #1012 |
-| 10 | Questions survive a host restart: re-list, re-verify and keep the record | **yes** | closes #954 |
+| 10 | Questions survive a host restart: re-list, re-verify and keep the record (no answer text on disk; a resume waits for the phone to resend, matched by keyed digest) | **yes** | closes #954 |
 | 11 | Canary per CLI release, and pinning launched sessions to the last version that passed it (owner, 2026-11-07; section 6) | no (CI and VM); the launch change is host code | part of #1132 |
 | 12 | Soak and chaos harness, and targets (section 7), with #604's experiment | no | closes #604; measures #467 |
 | 13 | Coverage on the screen path: Other through the pinned input box; a no-schema `ask_user`; field limits | **yes** | closes #908, #887 (if supported), #1000; follows the #876 decision; #146 (say why Other is missing) |
@@ -1021,7 +1067,8 @@ Design, trust, feedback and privacy issues:
    #741 comment 6707151446) settles the rest: opt-in worldwide, default off, with no region
    shortcut. This supersedes the earlier default-on path, so no default-on change is planned.
 2. **Part-answered forms: resume first, then reset.** The host resumes at the next field not yet
-   committed (a field already typed gets only its verified Enter, never a retype). If that fails, it presses Esc to cancel the form and redoes the answer once. Both steps
+   committed (a field already typed gets only its verified Enter, never a retype). The redo after Esc
+   goes only into a re-asked question whose schema matches the original card exactly. If that fails, it presses Esc to cancel the form and redoes the answer once. Both steps
    happen only when the screen is positively that exact form (section 4, rule 2; slice 8).
 3. **Narrow the key check to the form's own box: yes.** Trust must agree that the frame plus
    "nothing below it" is enough identity before it ships (section 5.1; slice 6).
