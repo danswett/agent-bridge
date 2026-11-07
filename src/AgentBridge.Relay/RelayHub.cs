@@ -157,8 +157,9 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         await conn.SendJsonAsync(new { t = "ready", device = conn.DeviceId, account = conn.Account.Id, login = conn.Account.Login, blobs = blobs.Advertised });
 
         string end = "closed";
+        Exception? endedBy = null;
         try { end = await ForwardAsync(conn, devices, aborted); }
-        catch (Exception e) when (e is WebSocketException or OperationCanceledException) { end = "dropped"; }
+        catch (Exception e) when (e is WebSocketException or OperationCanceledException) { end = "dropped"; endedBy = e; }
         finally
         {
             // Update roster bookkeeping before removing the slot, under the broadcast lock.
@@ -168,10 +169,12 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 roster.Disconnected(conn.Account.Id, conn.DeviceId, conn.Kind);
                 ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn));
             }
+            // Read before our own close below: this is what the device sent, not our answer.
+            var cause = DisconnectCause.Describe(endedBy, ws.CloseStatus);
             await conn.CloseAsync((int)WebSocketCloseStatus.NormalClosure, "");
             metrics.Disconnected(end);
-            log.LogInformation("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}",
-                conn.Tag, end, (DateTimeOffset.UtcNow - conn.Since).TotalSeconds, conn.FramesIn, conn.FramesOut, conn.BytesIn, conn.BytesOut);
+            log.LogInformation("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}; cause {Cause}",
+                conn.Tag, end, (DateTimeOffset.UtcNow - conn.Since).TotalSeconds, conn.FramesIn, conn.FramesOut, conn.BytesIn, conn.BytesOut, cause);
             await BroadcastPresenceAsync(conn.Account.Id);
         }
     }

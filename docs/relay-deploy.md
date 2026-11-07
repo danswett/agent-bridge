@@ -294,6 +294,20 @@ Cost: about $6.50 a month for the availability test ($0.0005 a run, 3 locations 
 alert rules and the action group's emails cost cents. Availability results go into the
 workspace, a few MB a day against its 0.1 GB daily cap.
 
+## Reading a disconnect
+
+### The disconnect log line and `host-probe` (#970)
+
+Every socket's end is logged as `disconnect <conn> (<end>) after <n>s; frames in .. out .., bytes in .. out ..; cause exception=<type> wserror=<WebSocketError> close=<status|none> keepalive=<timeout|no>`.
+`close=none` means no close frame came (a reset or a dead peer); `keepalive=timeout` means the
+runtime's ping/pong timeout ended it. The runtime words that only in its exception message, so
+`keepalive` is matched on that text. The cause carries no identity, account id, token or message text.
+
+To produce each kind of end against staging, with the token key in `RELAY_SMOKE_TOKEN_KEY` (never echoed):
+`relay-smoke host-probe --relay <url> --mode kill|blackhole|hold --hold <s> [--count N]` prints its
+throwaway account id and device ids with UTC times; `--mode observe --account <id> --hold <s>`
+prints the roster and presence changes an app of that account sees.
+
 ## History
 
 1. **2026-10-27**, dev relay (spike S4/S5) hand-made in the free-trial subscription
