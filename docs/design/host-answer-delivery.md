@@ -4,7 +4,7 @@ Status: design. The owner's decisions of 2026-11-07 are recorded in section 10.1
 still open are in section 10.2. Part of #1132.
 Written 2026-11-07 (Pacific). Code is cited at `origin/main` a97060a3. Host fix PR #1137 (branch
 `fix/form-screen-1123`, in review; see the PR for its current head) is cited where this design
-builds on it. These descriptions were checked against head c7aedade.
+builds on it. These descriptions were checked against head a2760e91.
 
 ## Why
 
@@ -100,6 +100,7 @@ document are Pacific.
 | F6 | **The phone says "refused" for what was delivered.** The first-answer memory is kept in memory only, a second device gets a plain refusal, and the PWA keeps answer ids in memory only (`pwa/js/answer-service.js` line 55). | `OutcomeMemory`, PWA | #1093 (PR #1100 fixed same-device retries) |
 | F7 | **Shapes the host does not drive.** Each is sent to the machine: subagents, some field limits, some permission kinds, Claude permissions, Codex approvals without a hook record, resumed sessions, questions too large to show. | Many | #998–#1014 |
 | F8 | **Nothing to look at afterwards.** `host.log` has free-text lines and one timings line. It keeps no screen, no reason key, no CLI version and no question shape. | Logging | All of the above |
+| F9 | **A form too wide for the window cannot be answered from the phone.** When a form's tab titles do not all fit across the console, the CLI shows only the titles around the selected field. Since #1137 (head a2760e91) the host refuses this with nothing typed (`form.not-shown.bar-window`) and tells the person to answer at the machine or widen the window. A six-field form with long titles at 102 columns is refused this way. This is a known limitation, chosen for safety: a hidden title cannot be verified. | Console width | #1123, #1137; candidate slice 16 |
 
 PR #510 (35 commits, 81 reviews, 11-03 to 11-07) is the history of this matcher. Most of its review
 findings were matcher patches, and most failed closed (safe, but the answer was refused):
@@ -185,12 +186,12 @@ Timestamps on these lines are in UTC (#611).
   confirmed), the total and the outcome. It has no screen or answer words. Its keys keep their order
   and new keys are only ever appended.
 * a named failed check (`CopilotFormScreen.Diagnose` returns a `FormCheck`: heading, bottom-rule,
-  under, message, bar, field, field-heading, hints or prompted, with its row);
-* a tab bar check that also accepts the partial bar Copilot CLI 1.0.105 draws when the labels do not
-  all fit across the console: only the labels around the selected field, between arrows. A live
-  six-field form at 102 columns was refused at its first read (`check=bar`) before this change.
-  It is accepted only while every field heading fits on a row of the frame, and each later field's
-  own heading is still read before its keys;
+  under, message, bar, bar-window, field, field-heading, hints or prompted, with its row);
+* a named refusal, `bar-window`, for a tab bar that hides some titles. When the titles do not all
+  fit across the console, Copilot CLI 1.0.105 draws only the labels around the selected field,
+  between arrows. A hidden title cannot be checked, and a form differing only in a hidden title
+  reads the same at field 1. So the host refuses it with nothing typed, rather than typing into
+  earlier fields. A live six-field form at 102 columns hit this (section 1.3, F9);
 * a word-free screen outline at each refusal (row count, widest row, blank rows, rule and heading
   positions).
 
@@ -259,7 +260,7 @@ strings:
   `form.not-shown` (NotForm), `form.drawn-under` (Under), `form.wrong-field`,
   `form.permission-over`, `form.unheaded-field`, `form.ambiguous`. `form.not-shown` takes a
   sub-key from #1137's `FormCheck`: `form.not-shown.heading`, `.bottom-rule`, `.under`, `.message`,
-  `.bar`, `.field`, `.field-heading`, `.hints` and `.prompted`. These use #1137's names
+  `.bar`, `.bar-window`, `.field`, `.field-heading`, `.hints` and `.prompted`. These use #1137's names
   (`CopilotFormScreen.Name`), so a `v=1` line and a new record agree.
 * **Screen:**
   `screen.changed-before` (WorkerInjector 187), `screen.changed-partway` (190),
@@ -310,11 +311,10 @@ automatically.
   replies went: times and reasons, never what you wrote".
   * **Diagnostic ids are stripped from this export.** A buffer export never carries a
     `diagnosticId`, so it cannot link a report to automatic events without a per-attempt choice.
-    The only way a diagnostic id enters a report is the per-attempt preview and tick of section
-    3.11.2, which Send feedback also offers: it lists the recent attempts whose automatic event was
-    sent, each unticked by default, with its id shown.
+    The only way a diagnostic id enters a report is a per-attempt tick box in the preview (section
+    3.11.2), which every report path uses, Send feedback included.
 * **"Report this".** A "Report this" link on any failed or unconfirmed delivery pre-selects that
-  delivery's record (section 3.11.2).
+  delivery's record (section 3.11.2). Its diagnostic id follows the same tick box rule.
 * **Support bundles.** Support bundles (the app's Help, Save diagnostics) include the same file,
   with diagnostic ids stripped in the same way.
 
@@ -488,13 +488,18 @@ A manual report is independent of telemetry and never needs telemetry consent.
 
 * **What it attaches.** "Report this" on a failed card (#733's UX, #738's bundle) attaches that
   attempt's local record and outline, after the tester has seen them in the exact preview.
-* **The diagnostic id.** The report includes the attempt's diagnostic id (section 3.11.3) **only
-  if the automatic event for that attempt was actually sent** (uploaded, not just queued). The id
-  is visible in the preview, and the tester can untick it. If the event is still queued, or none was
-  made, the id is left out, the preview says so in plain words, and the report still goes.
-* **Reports from Settings, and Send feedback.** These list the recent attempts whose automatic event
-  was sent, each unticked by default. The tester sees each id and ticks the ones to include. No other
-  path adds a diagnostic id to a report (section 3.5).
+* **The diagnostic id: one tick box rule for every report path.**
+  * **Stripped unless ticked.** `diagnosticId` is removed from *any* record attached to a report:
+    a "Report this" record, a Send feedback or Settings report, a buffer export or a support
+    bundle. It stays only where the tester ticked that attempt's box in the preview.
+  * **A box only when an event was sent.** The box appears only if the automatic event for that
+    attempt was actually sent (uploaded, not just queued). If it is queued or was never made, there
+    is no box and no id, the preview says so in plain words, and the report still goes.
+  * **Defaults.** In "Report this", the box for the attempt being reported is ticked by default and
+    can be unticked, because the tester chose that attempt. In Send feedback and Settings reports,
+    the recent attempts with a sent event are listed with their boxes unticked by default.
+  * **What the preview shows.** The id is shown next to its box. No other path adds a diagnostic id
+    to a report (section 3.5).
 * **Inside the bundle.** The send id of section 3.7 lives only inside the sealed bundle. It joins
   the phone's, relay's and machine's sides for triage.
 
@@ -679,7 +684,8 @@ approval of #733's UX.
    queues the event, carrying a fresh random diagnostic id. Once the event is sent, the local record
    stores that id.
 2. The tester presses "Report this". The bundle carries the local record and outline. If the event
-   was actually sent, it also carries that diagnostic id, shown in the preview and untickable.
+   was actually sent, the preview shows that diagnostic id with its box ticked. The tester can untick it;
+   if they do, the id is stripped from the attached record.
 3. Triage joins the private report and the pseudonymous event by diagnostic id. This join is
    exactly why the ids are linkable personal data, and the notice and preview say so. Inside the
    report, the send id joins the phone's, relay's and machine's sides. Neither the id nor any
@@ -819,7 +825,8 @@ Rules:
   * #1137's test screens, first: the hyphen and mid-word wraps of the 04:21 question (CLI 1.0.105,
     width 100), the three hint shapes of a narrow window (#910), a form read mid-redraw, output
     scrolled above the form during typing, a field drawn differently when its Enter was refused,
-    and a six-field form at 102 columns whose tab bar shows only the labels around each field.
+    and a six-field form at 102 columns whose tab bar shows only the labels around each field
+    (expected: `form.not-shown.bar-window`, nothing typed).
     Each is filed under the CLI version it was drawn from, and its expected reason key is #1137's
     named check (section 3.3);
   * #910 (narrow window), #848 (mid-word wraps, Chinese, Japanese and Korean text), #908 (pinned
@@ -921,8 +928,8 @@ but stays off. **A beta does not wait for slice 3**: slices 1 and 2 ship on thei
 
 **Already in review: PR #1137** (host fix for #1123, sensitive, two-family review). It names the
 failed form check, logs a word-free outline, re-reads for up to 2 s before a refusal, compares the
-question, tab bar and hints without white space, reads a tab bar drawn only in part (its labels
-around the selected field), retries a `ScreenChanged` write held to a fresh
+question, tab bar and hints without white space, refuses a tab bar that hides titles (`bar-window`,
+nothing typed), retries a `ScreenChanged` write held to a fresh
 read, and writes one `answer-attempt v=1` line per form answer. The slices below build on it and
 do not redo it: slice 1a extends its line, slices 4 and 5 start from its tests, slice 6 builds on
 its re-read and retry, and slice 7 on its white-space-free matching.
@@ -933,7 +940,7 @@ its re-read and retry, and slice 7 on its white-space-free matching.
 | **1** | **The local record**, starting from #1137's `answer-attempt v=1` line and `FormCheck` names: allow-listed per-attempt record, reason keys, redacted outlines, ring buffer, the phone's and app's send ring, send id, triage recipe and tool, offer keys and counts, local health view (sections 3.1–3.10, 3.11.1). It can split into: 1a host record and keys (extends #1137's line to approvals, replies, Claude and Codex; reason keys use #1137's check names); 1b outlines; 1c client ring and send id (protocol); 1d health view. | yes (1a, 1b, 1c) | closes #1023; gives #998–#1014 their counts; part of #1128 |
 | **2** | **"Report this" bundle**: "Report this" on failed cards attaches that attempt's record and outline after the preview (section 3.11.2) | yes (client and host) | part of #733, #738 |
 | **3** | **The opt-in automatic event**, `delivery-failure/v1` (section 3.11.3). Opt-in worldwide, default off. **Buildable now; uploads enabled only after gates (a)–(e).** Kill switch. Install id created only after opt-in. No collection, queue or network call while off; off deletes unsent events; re-enabling uploads nothing from the off period, all tested. Compliance's first-run and Settings wording. Finite error vocabulary. | **yes**: the #732 two-family review of schema, install id, retention and linking | part of #741. **Gates before enabling uploads:** (a) the #732 two-family security review (Engineering); (b) lawful basis and notice from counsel (#744); (c) the `docs/design.md` section 5.10 amendment, PR #1139; (d) SRE's proof of retention, exports and deletion, including the 31-day Log Analytics behaviour; (e) the owner's approval of #733's UX and the notice (#762). |
-| 4 | Failing-first tests: the three-field choice, text, choice form (#1101's ask), output streaming during a form (#1123), narrow window (#910), mid-word wrap (#848), tall form, markdown message. #1137 already adds the hyphen and mid-word wraps (04:21), wrapped hints (#910), a mid-redraw read, a retry after a scroll, and a six-field form whose tab bar shows only the labels around each field (and a wrong bar that gets no keys); slice 4 adds the rest. | no (tests) | groundwork for #1123, #910, #848 |
+| 4 | Failing-first tests: the three-field choice, text, choice form (#1101's ask), output streaming during a form (#1123), narrow window (#910), mid-word wrap (#848), tall form, markdown message. #1137 already adds the hyphen and mid-word wraps (04:21), wrapped hints (#910), a mid-redraw read, a retry after a scroll, and a six-field form whose tab bar hides titles, refused as `bar-window` with nothing typed; slice 4 adds the rest. | no (tests) | groundwork for #1123, #910, #848 |
 | 5 | Real-screen corpus and replay test, seeded first from #1137's test screens, then #510 and slice 1's outlines (section 6) | no | part of #1132 |
 | 6 | Hold keys to the form's frame, and settle on the frame (sections 5.1–5.2), building on #1137's re-read and retry. **Approved by the owner (2026-11-07); ships only once Trust agrees** that the frame plus "nothing below it" is enough identity | **yes** (injector; Trust's agreement before merge) | with slice 8, closes #1123 and #1012 |
 | 7 | Normalised comparison (section 5.3) | **yes** | closes what #1137 leaves of #910 and #848 (item 1) |
@@ -945,6 +952,7 @@ its re-read and retry, and slice 7 on its white-space-free matching.
 | 13 | Coverage on the screen path: Other through the pinned input box; a no-schema `ask_user`; field limits | **yes** | closes #908, #887 (if supported), #1000; follows the #876 decision; #146 (say why Other is missing) |
 | 14 | Structured-channel trial (time-boxed, run in parallel from slice 4): Copilot `--ui-server`/ACP, Claude stream-json/`--permission-prompt-tool`, Codex app server, for sessions the app launches. **If the trial works, those sessions use the channel by default** (owner, 2026-11-07); sessions a person started keep the screen path | spike: no; adoption: **yes** | if it holds, adoption closes #998, #1002, #1003, #1004, #1005, #1008, #947, #1001/#42 |
 | 15 | Reply path parity: show what is in the composer and offer Clear and send, using the same frame-scoped reads | **yes** | closes #804; with slice 6, #467 |
+| 16 | **Candidate.** Keep wide forms answerable (F9): launch sessions at a console width that fits every tab title, or have the host widen the console of a session it launched before answering, never by typing. Measure first: slice 1's `bar-window` counts and the width at each refusal. Sessions a person started keep the refusal and the "answer at the machine, or widen the window" message. | **yes** (launch path; Trust reviews any resize of a session's console) | lifts F9 for launched sessions; part of #1123 |
 
 ### 9.1 Every related issue in #1132, mapped
 
