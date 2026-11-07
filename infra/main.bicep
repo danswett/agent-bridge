@@ -65,6 +65,11 @@ param productionDeployerPrincipalId string = ''
 param productionDomainState string = 'none'
 @allowed(['none', 'added', 'bound'])
 param stagingDomainState string = 'none'
+@description('Step for each app\'s additionalDomains (every extra hostname moves together); see modules/relay-app.bicep.')
+@allowed(['none', 'added', 'bound'])
+param productionAdditionalDomainState string = 'none'
+@allowed(['none', 'added', 'bound'])
+param stagingAdditionalDomainState string = 'none'
 
 @description('Object id of the person running deploy.ps1, who seeds the vaults\' secrets.')
 param operatorPrincipalId string = ''
@@ -178,6 +183,7 @@ module stagingApp 'modules/relay-app.bicep' = {
     deployBlobStore: true
     deployRosterStore: true
     domainState: stagingDomainState
+    additionalDomainState: stagingAdditionalDomainState
     operatorPrincipalId: operatorPrincipalId
     tags: union(tags, { 'agent-bridge-env': 'staging' })
   }
@@ -200,6 +206,7 @@ module productionApp 'modules/relay-app.bicep' = {
     deployBlobStore: deployProduction
     deployRosterStore: deployProduction
     domainState: productionDomainState
+    additionalDomainState: productionAdditionalDomainState
     operatorPrincipalId: operatorPrincipalId
     tags: union(tags, { 'agent-bridge-env': 'production' })
   }

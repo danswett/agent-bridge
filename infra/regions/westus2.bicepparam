@@ -26,6 +26,9 @@ param production = {
   cpu: '0.25'
   memory: '0.5Gi'
   customDomain: 'relay.bad-duck.com'
+  // Served directly beside the old name: a redirect cannot carry a WebSocket upgrade, so old clients keep
+  // relay.bad-duck.com until the owner retires it (#540).
+  additionalDomains: ['relay.slipgates.com']
   blobStorageName: 'abblobprodwus2'
   rosterStorageName: 'abrosterprodwus2'
 }
@@ -46,6 +49,8 @@ param staging = {
 
 param productionDomainState = readEnvironmentVariable('RELAY_PRODUCTION_DOMAIN_STATE', 'none')
 param stagingDomainState = readEnvironmentVariable('RELAY_STAGING_DOMAIN_STATE', 'none')
+param productionAdditionalDomainState = readEnvironmentVariable('RELAY_PRODUCTION_ADDITIONAL_DOMAIN_STATE', 'none')
+param stagingAdditionalDomainState = readEnvironmentVariable('RELAY_STAGING_ADDITIONAL_DOMAIN_STATE', 'none')
 param stagingDeployerPrincipalId = readEnvironmentVariable('RELAY_STAGING_DEPLOYER', '')
 param productionDeployerPrincipalId = readEnvironmentVariable('RELAY_PRODUCTION_DEPLOYER', '')
 param deployApps = bool(readEnvironmentVariable('RELAY_DEPLOY_APPS', 'true'))

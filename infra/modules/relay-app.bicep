@@ -39,6 +39,10 @@ param workloadProfileName string = ''
 @allowed(['none', 'added', 'bound'])
 param domainState string = 'none'
 
+@description('Where the app\'s additionalDomains stand, all together: none, added or bound (see domainState). Kept apart so the primary name keeps its certificate while a new one is still being validated.')
+@allowed(['none', 'added', 'bound'])
+param additionalDomainState string = 'none'
+
 @description('Create this app\'s blob store (app.blobStorageName) and point the relay at it. Production\'s waits for the cutover flag, like the app itself, so a staging deploy never touches it.')
 param deployBlobStore bool = false
 
@@ -64,6 +68,13 @@ var blobsOn = deployBlobStore && !empty(blobStorageName)
 var rosterStorageName = app.?rosterStorageName ?? ''
 var rosterOn = deployRosterStore && !empty(rosterStorageName)
 var domainOn = !empty(customDomain) && domainState != 'none'
+var additionalDomains = app.?additionalDomains ?? []
+var additionalOn = additionalDomainState != 'none'
+var additionalBindings = [for (d, i) in additionalDomains: {
+  name: d
+  bindingType: additionalDomainState == 'bound' ? 'SniEnabled' : 'Disabled'
+  certificateId: additionalDomainState == 'bound' ? additionalCertificates[i].id : null
+}]
 var environmentName = last(split(environmentId, '/'))
 var certificateName = 'mc-${replace(customDomain, '.', '-')}'
 
@@ -83,6 +94,17 @@ resource certificate 'Microsoft.App/managedEnvironments/managedCertificates@2025
     domainControlValidation: 'CNAME'
   }
 }
+
+resource additionalCertificates 'Microsoft.App/managedEnvironments/managedCertificates@2025-01-01' = [for d in additionalDomains: if (deployApp && additionalOn && additionalDomainState == 'bound') {
+  parent: environment
+  name: 'mc-${replace(d, '.', '-')}'
+  location: location
+  tags: tags
+  properties: {
+    subjectName: d
+    domainControlValidation: 'CNAME'
+  }
+}]
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: registryName
@@ -243,15 +265,18 @@ resource relay 'Microsoft.App/containerApps@2025-01-01' = if (deployApp) {
         transport: 'auto'
         allowInsecure: false
         traffic: [{ latestRevision: true, weight: 100 }]
-        customDomains: domainOn
-          ? [
-              {
-                name: customDomain
-                bindingType: domainState == 'bound' ? 'SniEnabled' : 'Disabled'
-                certificateId: domainState == 'bound' ? certificate.id : null
-              }
-            ]
-          : []
+        customDomains: concat(
+          domainOn
+            ? [
+                {
+                  name: customDomain
+                  bindingType: domainState == 'bound' ? 'SniEnabled' : 'Disabled'
+                  certificateId: domainState == 'bound' ? certificate.id : null
+                }
+              ]
+            : [],
+          additionalOn ? additionalBindings : []
+        )
       }
       registries: [{ server: registry.properties.loginServer, identity: identity.id }]
       secrets: secretRefs
@@ -325,6 +350,7 @@ resource deployerApp 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (
 
 output fqdn string = deployApp ? relay!.properties.configuration.ingress.fqdn : ''
 output customDomain string = customDomain
+output additionalDomains array = additionalDomains
 output identityPrincipalId string = identity.properties.principalId
 output vaultName string = vault.name
 output blobAccountUrl string = blobsOn ? blobStore!.outputs.accountUrl : ''

@@ -243,6 +243,25 @@ hostname on the app (pass 2), then issues the managed certificate and binds it w
 (pass 3); after that it re-states the binding. Staging has no custom domain; adding
 `customDomain: 'relay-staging.bad-duck.com'` to `staging` and two more records would give it one.
 
+### Second name: `relay.slipgates.com` (#540)
+
+Production also serves `relay.slipgates.com` from the same app, listed in `additionalDomains`.
+Both names serve directly with their own managed certificate and neither redirects: a plain
+HTTP redirect cannot carry a WebSocket upgrade, so old clients keep working on
+`relay.bad-duck.com` until the owner retires it (a separate decision). The relay needs no
+code change; its CSP and WebSocket origin check follow the request host. The DNS records
+(a DNS-only `relay` CNAME and the `asuid.relay` TXT in the slipgates zone) are already in place.
+
+Roll out with the normal flow: `infra/deploy.ps1` (staging), then `-Production` after approval.
+It stages the extra name the same way (hostname, then certificate, then SNI binding) and is
+independent of the primary name's state. Afterwards check `/healthz`, a WebSocket connect and a
+blob upload on **both** names.
+
+**Rollback:** set `RELAY_PRODUCTION_ADDITIONAL_DOMAIN_STATE=none` and redeploy to remove only
+the slipgates hostname; or delete `additionalDomains` from the parameter file. `relay.bad-duck.com`
+stays bound either way. Note `deploy.ps1` re-derives the state from DNS, so remove the entry from
+the parameter file to make a rollback stick.
+
 **Renewal** is automatic as long as the CNAME keeps pointing at the app and stays DNS only.
 Moving the record, proxying it, or deleting the TXT makes renewal fail silently until the
 certificate expires (the current one: 2027-04-29). Check with
