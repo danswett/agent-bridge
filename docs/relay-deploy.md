@@ -11,7 +11,7 @@ builds an image per commit, rolls it onto **staging**, smoke-tests it there, and
 | | Production | Staging |
 |---|---|---|
 | Container App | `agent-bridge-relay` | `agent-bridge-relay-staging` |
-| URL | **`https://relay.bad-duck.com`** (also `https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io`) | `https://agent-bridge-relay-staging.icyflower-4f71155d.westus2.azurecontainerapps.io` |
+| URL | **`https://relay.bad-duck.com`** and **`https://relay.slipgates.com`** (also `https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io`) | `https://agent-bridge-relay-staging.icyflower-4f71155d.westus2.azurecontainerapps.io` |
 | Replicas | 1–1 (always on: hosts hold a socket open) | 0–1 (scales to zero between deploys) |
 | Size | 0.25 vCPU, 0.5 GiB | 0.25 vCPU, 0.5 GiB |
 | Identity (ACR pull, Key Vault) | `id-agent-bridge-relay` | `id-agent-bridge-relay-staging` |
@@ -237,7 +237,36 @@ and Cloudflare's proxy would also cut WebSockets and terminate TLS:
 | CNAME | `relay` | `agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io` |
 | TXT | `asuid.relay` | the environment's verification id, `9E5A7D37AE5B378B92399BA82D0EEEF5F4674EE876FF3BF49EB6BB4B53A20E60` |
 
-The domain is `customDomain` in the region's parameter file. `deploy.ps1` steps it forward
+### Second name: relay.slipgates.com (#540)
+
+Production answers on **both** `relay.bad-duck.com` and `relay.slipgates.com` (`extraCustomDomains` in the
+region's parameter file). Both are served directly by the same app, each with its own managed
+certificate: a WebSocket upgrade does not follow a redirect, so old clients (every paired host, the app
+and PWA already installed) keep working with no re-pairing. Do not put a redirect on either name.
+The relay's Content-Security-Policy follows the request's Host, so it needs no change. DNS for
+`relay.slipgates.com` (DNS-only CNAME to the app, `asuid.relay` TXT) is done; `slipgates.com` has no CAA records.
+
+Rollout, staging first, production on the owner's approval, by someone with Azure access:
+
+1. `./infra/deploy.ps1 -WhatIf -Production -ProductionImage <running digest> -ProductionVersion <running sha>` and read the diff (production is only included with `-Production`): only the new hostname is added;
+   `relay.bad-duck.com`'s binding is unchanged.
+2. `./infra/deploy.ps1 -Production -ProductionImage <running digest> -ProductionVersion <running sha>`. Pass 2
+   puts the hostname on the app, pass 3 issues and binds the certificate (a few minutes). Each hostname steps
+   on its own, so one still waiting for DNS never unbinds the other.
+3. Check both names: `pwsh ops/tools/relay-probe.ps1 -Target production` and `-Target production-slipgates`.
+   For the WebSocket and blob round trip, run `tools/AgentBridge.RelaySmoke` with the token key against each name
+   (`--relay https://relay.bad-duck.com` then `--relay https://relay.slipgates.com`, `--expect-blobs`).
+4. Set the repository variable `RELAY_SLIPGATES_LIVE` to `true` so every later promotion smoke-tests the new name too.
+
+Rollback: first set `RELAY_SLIPGATES_LIVE` to `false` (otherwise every promotion smoke-tests a name that is gone and fails), then remove `extraCustomDomains` from `production` and re-run step 2. The hostname comes off the app
+(an incremental deploy leaves its certificate behind, harmless) and `relay.bad-duck.com` is untouched; nothing else changed, since no client defaults moved. Leave the
+DNS records in place (they are harmless unbound). To delete the leftover certificate:
+`az containerapp env certificate delete -n <environment> -g <resource group> --certificate mc-relay-slipgates-com`.
+
+Moving new pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) to `relay.slipgates.com`
+is a later change, once both names pass step 3. Retiring `relay.bad-duck.com` is the owner's later decision.
+
+The first name's steps work as follows. `deploy.ps1` steps it forward
 as DNS allows: it prints both records while they are missing; once they resolve it puts the
 hostname on the app (pass 2), then issues the managed certificate and binds it with SNI
 (pass 3); after that it re-states the binding. Staging has no custom domain; adding

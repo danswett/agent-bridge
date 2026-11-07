@@ -151,6 +151,9 @@ public sealed record HostStatus
     // Read-only setup evidence; absent on older hosts and until the first scan completes.
     public AgentReadinessReport? Agents { get; init; }
     public AgentInstallProgress? AgentInstallation { get; init; }
+    // Who can sign an agent in on this machine from their device (#972), read-only, from the
+    // machine's person-device roster: none until #55's roster lands. Absent from an older host.
+    public SignInDevices? SignInDevices { get; init; }
 }
 
 // host.signIn: start GitHub's device flow through this relay (or the one the profile used).

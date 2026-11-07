@@ -242,8 +242,8 @@ test('a phone answers a question through the relay, and an answer in flight when
   await ask('ask-3', 'q3');
   await expect(card(page, 'ask-3').locator('.question')).toHaveAttribute('data-answerable', 'true', { timeout: 15000 });
   const direct = (data) => page.evaluate((d) => window.agentBridge.hosts.client.answer({ ...d, request: crypto.randomUUID() }), data);
-  expect(await direct({ id: 'ask-3', question: 'q-old', fields: { answer: 'a' } })).toEqual({ outcome: 'stale', reason: 'the session is no longer asking that question' });
-  expect(await direct({ id: 'ask-3', question: 'q3', fields: { answer: 'zzz' } })).toEqual({ outcome: 'refused', reason: '"Pick": not one of the choices' });
+  expect(await direct({ id: 'ask-3', question: 'q-old', fields: { answer: 'a' } })).toEqual({ outcome: 'stale', reason: 'the session is no longer asking that question', stage: null });
+  expect(await direct({ id: 'ask-3', question: 'q3', fields: { answer: 'zzz' } })).toEqual({ outcome: 'refused', reason: '"Pick": not one of the choices', stage: null });
   expect(typedFor('ask-3')).toHaveLength(0);
   await expect(card(page, 'ask-3').locator('.question')).toHaveCount(1);
 });
@@ -289,7 +289,7 @@ test('a phone replies to a session through the relay, and a reply in flight when
   await host.upsert({ id: 'reply-1', agent: 'copilot', title: 'Takes replies', status: 'waiting', statusSince: asked, updatedAt: asked, activity: {}, question: { id: 'rq1', kind: 'form', message: 'Which?', fields: [], askedAt: asked } });
   await expect(input).toBeDisabled({ timeout: 15000 });
   const direct = await page.evaluate(() => window.agentBridge.hosts.client.reply({ id: 'reply-1', request: crypto.randomUUID(), text: 'not now' }));
-  expect(direct).toEqual({ outcome: 'refused', reason: 'the session is waiting for an answer to its question; answer that first' });
+  expect(direct).toEqual({ outcome: 'refused', reason: 'the session is waiting for an answer to its question; answer that first', stage: null });
   expect(typedFor('reply-1')).toHaveLength(2);
 });
 

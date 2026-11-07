@@ -91,7 +91,11 @@ public static class CopilotPlanner
             for (var i = 0; i < keys.Count; i++)
             {
                 var last = i == keys.Count - 1;
-                sends.Add(new KeySend(keys[i], last, last ? FieldEnterDelayMs : 0, last ? AfterFieldMs : ToggleGapMs));
+                // Words get the reply's pause before their Enter, not a list's: an Enter that
+                // reaches the CLI with them is part of the paste, which a form's text field took
+                // as a new line in the words, leaving the answer typed but never submitted (#467).
+                var enterDelay = HasWords(keys[i]) ? ReplyEnterDelayMs : FieldEnterDelayMs;
+                sends.Add(new KeySend(keys[i], last, last ? enterDelay : 0, last ? AfterFieldMs : ToggleGapMs));
             }
             expected.Add((field.Name, record));
         }
@@ -227,12 +231,21 @@ public static class CopilotPlanner
         return (new CopilotPlan(keys, null, [(field.Name, new Expected.Words(words))]), null);
     }
 
+    // Whether the plan types words through a list's Other, which a live session takes in a box
+    // drawn apart from the form (QuestionMapper; #510 review, Trust on 5c1d5147).
+    public static bool ThroughOther(CopilotForm form, CopilotPlan plan) =>
+        plan.Fields.Any(f => f.Value is Expected.Words && form.Fields.Any(x => x.Name == f.Name && x.Kind == CopilotFieldKind.Choice));
+
     // To a row of an option list from wherever its caret rests: Up far enough to reach the
     // top from any row (Up stops at the first option, as the Other walk relies on), then
     // Down to the row. Counting from the schema default instead would land one row off
     // whenever somebody had moved the caret at the terminal, and Enter would commit it.
     static string ToRow(CopilotField field, int row) =>
         string.Concat(Enumerable.Repeat(KeyPlan.Up, field.Options.Count - 1)) + string.Concat(Enumerable.Repeat(KeyPlan.Down, row));
+
+    // Whether keys type words, not only arrows and Space: the sends whose Enter has to reach the
+    // CLI apart from them, after it has taken them in.
+    public static bool HasWords(string keys) => keys.Replace(KeyPlan.Up, "").Replace(KeyPlan.Down, "").Trim().Length > 0;
 
     // The option a value names; two options with one value make it ambiguous.
     static int Index(CopilotField field, string? value)

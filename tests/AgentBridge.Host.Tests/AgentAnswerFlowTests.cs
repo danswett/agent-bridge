@@ -152,6 +152,38 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Assert.DoesNotContain("at the machine", result.Reason);
     }
 
+    [Theory]
+    // An answer left unconfirmed (typed and never recorded, or its keys interrupted part way),
+    // then recorded by Claude: the same request sent again reads the record without typing
+    // anything, delivered when it is the answer typed, stage recorded when it is another (#510
+    // review, Copilot 4481278490).
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task A_Claude_answer_left_unconfirmed_is_read_back_by_the_same_request_with_nothing_typed_again(bool interrupted, bool same)
+    {
+        if (interrupted) { injector.Result = new InjectionResult(InjectionStatus.Interrupted, "the console stopped taking keys"); }
+        var answerer = Answerer();
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+
+        var first = await answerer.AnswerAsync(request);
+        Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
+        var typed = injector.Plans.Count;
+        Assert.Equal(interrupted ? 1 : 2, typed);
+
+        Fixture.Append(claude, same ? Recorded() : Recorded(database: "DuckDB"));
+        var again = await answerer.AnswerAsync(request);
+
+        if (same) { Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), again); }
+        else
+        {
+            Assert.Equal((AnswerOutcome.Unconfirmed, AnswerStage.Recorded), (again.Outcome, again.Stage));
+            Assert.Contains("different answer", again.Reason);
+        }
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
     [Fact]
     public async Task A_Claude_question_answered_at_the_machine_a_moment_ago_is_stale_and_nothing_is_typed()
     {
@@ -218,7 +250,8 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
         var result = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
 
-        Assert.Equal(new AnswerResult(AnswerOutcome.Unconfirmed, "the machine couldn't deliver it"), result);
+        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        Assert.Equal("the machine couldn't deliver it", result.Reason);
         Assert.Contains(logged, l => l.Contains("pipe 0xC0FFEE to the worker broke", StringComparison.Ordinal));
     }
 

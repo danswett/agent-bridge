@@ -383,7 +383,12 @@ async function startDemo() {
   const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
   // With ?signin=1, each other machine that takes answers needs a sign-in too (#800).
   if (params.get('signin') === '1') {
-    for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) { m.capabilities.push('sessions.signin'); demoSignIn(m); }
+    for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) {
+      m.capabilities.push('sessions.signin', 'signin.devices');
+      // Who can sign Copilot in there (#972): this device and three more, folded on its row.
+      m.signInDevices = { state: 'ready', devices: [{ name: 'This browser', kind: 'pwa', platform: 'Windows', thisDevice: true }, ...['iPhone', 'Work laptop', 'Kitchen tablet'].map((name) => ({ name, kind: 'phone', platform: 'iOS' }))] };
+      demoSignIn(m);
+    }
   }
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   for (const m of machines) { m.attachmentDelayMs = Number(params.get('attachDelay')) || 0; }
@@ -448,6 +453,7 @@ async function startDemo() {
     facts: (id) => fleet.facts(id),
     forget: demoForget,
     updates: demoUpdates,
+    signInDevices: (id) => fleet.signIns(id),
     storage: demoStorage,
     onRendered: () => focusLinked(),
   });
@@ -654,6 +660,7 @@ function begin(account) {
     facts: (id) => fleet.facts(id),
     forget: forgets,
     updates,
+    signInDevices: (id) => fleet.signIns(id),
     onRendered: () => focusLinked(),
   });
   const { answers, replies, stops, launches } = page;

@@ -20,7 +20,7 @@ public sealed class RemoteAuthorization : IDisposable
         LaunchProtocol.Options, LaunchProtocol.Launch, TrustProtocol.Answer,
         UsageProtocol.Get, UsageProtocol.Subscribe,
         UpdateProtocol.Get, UpdateProtocol.Subscribe, UpdateProtocol.Check, UpdateProtocol.Install,
-        AgentSignIn.Start, AgentSignIn.Cancel,
+        AgentSignIn.Start, AgentSignIn.Cancel, AgentSignIn.Devices,
         ManageProtocol.Get, ManageProtocol.Subscribe, ManageProtocol.Restart, ManageProtocol.HooksRepair,
         ManageProtocol.Stop, ManageProtocol.ConfigGet, ManageProtocol.ConfigSet, ManageProtocol.HaTokenSet,
     ];

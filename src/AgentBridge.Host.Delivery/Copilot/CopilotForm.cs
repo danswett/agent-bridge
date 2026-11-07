@@ -13,7 +13,10 @@ public sealed record CopilotOption(string Value, JsonElement Raw);
 
 // One field of Copilot's ask_user prompt, as the keys have to drive it. Checked is the rows
 // a multi-select list opens with ticked (its schema default). Prefill is a text or number
-// field's schema default, which the prompt opens with already typed into it (#662).
+// field's schema default, which the prompt opens with already typed into it (#662). Label is
+// what the prompt heads the field with while it is the one being answered (`title ?? name`;
+// CopilotFormScreen says how each kind draws it), null when its title is something the host
+// cannot say how the CLI draws.
 public sealed record CopilotField(
     string Name,
     CopilotFieldKind Kind,
@@ -21,13 +24,15 @@ public sealed record CopilotField(
     IReadOnlyList<int> Checked,
     bool AllowsEmpty,
     JsonElement? Prefill = null,
-    FieldConstraints? Constraints = null);
+    FieldConstraints? Constraints = null,
+    string? Label = null);
 
 // The ask_user prompt read from the tool call's own arguments, the way agent-ha-bridge
 // reads it (Get-DecisionSchemaFields), rather than from the Question a client saw: the
 // keys depend on things a Question does not carry (which rows open ticked, whether an
 // empty list is an answer, the older `choices` format).
-public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
+// Message is the question the prompt shows over its fields, as asked.
+public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields, string? Message = null)
 {
     // Null with a reason when the prompt cannot be driven by keys from here.
     public static (CopilotForm? Form, string? Problem) Read(JsonElement arguments)
@@ -39,21 +44,25 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
             // takes words only in a box Enter does not submit, and no current build writes it.
             return (null, "this question uses an older Copilot format the host cannot answer; answer it at the machine");
         }
+        var message = arguments.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
         if (!arguments.TryGetProperty("requestedSchema", out var schema) || schema.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
         {
-            return (new CopilotForm([]), null);
+            return (new CopilotForm([], message), null);
         }
         if (schema.ValueKind == JsonValueKind.String)
         {
             try
             {
                 using var doc = JsonDocument.Parse(schema.GetString() ?? "");
-                return Schema(doc.RootElement.Clone());
+                return Asked(Schema(doc.RootElement.Clone()), message);
             }
             catch (JsonException) { return (null, "the question's form could not be read"); }
         }
-        return Schema(schema);
+        return Asked(Schema(schema), message);
     }
+
+    static (CopilotForm?, string?) Asked((CopilotForm? Form, string? Problem) read, string? message) =>
+        read.Form is { } form ? (form with { Message = message }, null) : read;
 
     static (CopilotForm?, string?) Schema(JsonElement schema)
     {
@@ -73,10 +82,14 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
             if (property.Value.ValueKind != JsonValueKind.Object) { return (null, $"the question's field \"{property.Name}\" could not be read"); }
             var (field, problem) = Field(property.Name, property.Value, patterns);
             if (field is null) { return (null, problem); }
-            fields.Add(field);
+            fields.Add(field with { Label = Label(property.Name, property.Value) });
         }
         return (new CopilotForm(fields), null);
     }
+
+    // In Host.Core, so a question the host would not type is listed for the machine (#510
+    // review, Trust on 8335427d).
+    static string? Label(string name, JsonElement p) => CopilotFieldSchema.Label(name, p);
 
     static (CopilotField?, string?) Field(string name, JsonElement p, PatternBudget patterns)
     {

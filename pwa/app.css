@@ -432,8 +432,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3));
 }
 .machine-more:empty { display: none; }
-.machine-update { font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
-.machine-update p { margin: 0; }
+.machine-update, .machine-signin { font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.machine-update p, .machine-signin p { margin: 0; }
 .machine-actions { display: flex; flex-wrap: wrap; gap: var(--ab-space-2); margin-top: var(--ab-space-2); }
 .machine-update > .machine-actions:first-child, .machine-more > .machine-actions:first-child { margin-top: 0; }
 .machine-error { margin: 0; color: var(--ab-danger-text); font-size: var(--type-meta); line-height: var(--type-meta-line); }

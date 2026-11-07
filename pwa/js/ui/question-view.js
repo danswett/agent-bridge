@@ -14,7 +14,7 @@ import { ReceiptClock, answeredValue, describeInFlight, drawReceipt, drawn, hold
 import { openConfirmSheet } from './escaped-sheet.js';
 import { COMMAND_LIFETIME_S } from '../transfer.js';
 import {
-  Limits, draftText, initialState, isRecommended, optionTone, orderOptions, prepareAnswer,
+  AnswerReasons, Limits, NOT_SENT, draftText, initialState, isRecommended, optionTone, orderOptions, prepareAnswer,
   tapToAnswer, utf8Bytes,
 } from '../answers.js';
 
@@ -160,6 +160,11 @@ const OUTCOME_TEXT = {
   refused: () => 'The machine refused this answer.',
 };
 
+const UNCONFIRMED_STAGE_TEXT = {
+  typed: () => 'Typed into the prompt, but not confirmed as submitted. Check the conversation.',
+  recorded: () => 'The session recorded something for this question, but not confirmed as this answer. Check the conversation.',
+};
+
 // What an answer's progress or outcome says, for the form, the Needs you lane and the card once
 // the question has gone: the receipt's words (receipt.js; ui.md §6.4 and §6.5, decided on #617).
 // On its way it is only heard (Sending, Sent, Passed to the agent, never Up next and never
@@ -187,6 +192,10 @@ export function describeAnswer(entry, machineName, { question = null, stalled = 
       }
       let text = OUTCOME_TEXT[outcome]();
       if (outcome === 'refused' && entry.reason) { text = `The machine refused this answer: ${entry.reason}.`; }
+      // A reason with fixed words of its own, the same in every client (#908).
+      if (outcome === 'refused' && AnswerReasons[entry.detail?.code]) { text = NOT_SENT + AnswerReasons[entry.detail.code]; }
+      // How far the host knows it got (#467): typed into the prompt, or recorded differently.
+      if (outcome === 'unconfirmed' && UNCONFIRMED_STAGE_TEXT[entry.detail?.stage]) { text = UNCONFIRMED_STAGE_TEXT[entry.detail.stage](); }
       if (outcome === 'unconfirmed' && entry.reason) { text += ` (${entry.reason})`; }
       return { key: outcome, text, more: null, tone: outcome === 'refused' ? 'bad' : 'warn', line: true, speech: `Answer: ${text}` };
     }
@@ -342,7 +351,11 @@ export class QuestionPanel {
     // the agent gave the field a title of its own.
     const headed = !approval || field.title !== null;
     const titleId = headed ? `${id}-f0-t` : `${id}-h`;
-    const group = h('div', { class: `choices${approval ? ' approval' : ''}`, role: 'group', 'aria-labelledby': titleId });
+    // Other the agent offers and the machine cannot send yet (#908): its reason describes the
+    // choices, read with the group and with the disabled Other, and is said under them.
+    const unavailable = AnswerReasons[field.otherUnavailable] ?? null;
+    const noteId = unavailable ? `${id}-other-unavailable` : null;
+    const group = h('div', { class: `choices${approval ? ' approval' : ''}`, role: 'group', 'aria-labelledby': titleId, 'aria-describedby': noteId });
     const escaped = approval ? this.escaped : null;
     for (const o of orderOptions(field.options)) {
       const tone = approval ? optionTone(o) : 'neutral';
@@ -375,7 +388,11 @@ export class QuestionPanel {
     if (field.description) { parts.push(h('p', { class: 'field-desc' }, field.description)); }
     parts.push(group);
     if (escaped && escaped.mode !== 'confirm') { parts.push(this.#escapedWhy(escaped.mode)); }
-    if (field.allowOther) {
+    if (unavailable) {
+      // Shown as the agent offers it, its label unchanged, and never pressable.
+      group.append(h('button', { type: 'button', class: 'choice other-toggle other-unavailable', disabled: true, 'aria-describedby': noteId }, h('span', { class: 'label' }, 'Other…')));
+      parts.push(h('p', { id: noteId, class: 'field-desc other-unavailable-note' }, unavailable));
+    } else if (field.allowOther) {
       const boxId = `${id}-other`;
       e.otherToggle = h('button', {
         type: 'button', class: 'choice other-toggle', 'aria-expanded': this.otherOpen ? 'true' : 'false', 'aria-controls': boxId,
