@@ -108,7 +108,8 @@ internal static class QuestionMapper
         var message = CopilotFieldSchema.Shown(arguments, "message") ?? CopilotFieldSchema.Shown(arguments, "question") ?? "";
         IReadOnlyList<Field> fields = [];
         var atMachine = false;
-        try { (fields, atMachine) = AskUserFields(id, arguments, patterns); }
+        string? atMachineReason = null;
+        try { (fields, atMachine, atMachineReason) = AskUserFields(id, arguments, patterns); }
         // Text .NET will not read, half a surrogate pair, anywhere in the form (a name, a title,
         // an option, a type): reading it threw, and the transcript line holding it failed on every
         // pass, freezing the session (#921 review). Such a form is answered at the machine, and
@@ -125,11 +126,12 @@ internal static class QuestionMapper
             Fields = fields,
             AskedAt = askedAt,
             AnswerAtMachine = atMachine ? true : null,
+            AnswerAtMachineReason = atMachineReason,
         };
     }
 
 
-    static (IReadOnlyList<Field> Fields, bool AtMachine) AskUserFields(string id, JsonElement arguments, PatternBudget? patterns)
+    static (IReadOnlyList<Field> Fields, bool AtMachine, string? Reason) AskUserFields(string id, JsonElement arguments, PatternBudget? patterns)
     {
         IReadOnlyList<Field> fields = [];
         var atMachine = false;
@@ -173,8 +175,8 @@ internal static class QuestionMapper
         // then a question with no fields once its schema is read: free text, with no form on
         // screen to hold its keys to, or a schema that is empty, not an object, or whose
         // properties are none of them objects (#510 review, Copilot 5784910042, 4480874464).
-        if (Json.Get(arguments, "choices") is not null || fields.Count == 0) { atMachine = true; }
-        return (fields, atMachine);
+        var shape = Json.Get(arguments, "choices") is not null || fields.Count == 0;
+        return (fields, atMachine || shape, shape ? "shape" : null);
     }
 
     static List<string> ChoiceList(JsonElement? value)

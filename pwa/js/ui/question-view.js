@@ -126,6 +126,7 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
     section.append(h('ol', { class: 'fields' }, q.fields.map((f, k) => readOnlyField(f, `${idBase}-f${k}`))));
   }
   const at = where(machineName);
+  const shape = why === 'atMachine' && q.answerAtMachineReason === 'shape';
   // A prompt only the machine could answer anyway still says why the machine is read-only.
   if (readOnly && why !== 'machine') {
     section.append(h('p', { class: 'note warn read-only-machine', role: 'note' },
@@ -139,13 +140,17 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
         `Approving permission prompts from the phone is turned off on this machine. Answer at the machine${at}.`)
       : why === 'atMachine'
         ? h('p', { class: 'note warn read-only-why', role: 'note' },
-          `This prompt can only be answered at the machine${at}.`)
+          shape ? `Answer at the machine${machineName ? ` · ${machineName}` : ''}` : `This prompt can only be answered at the machine${at}.`)
         : readOnly
           // The machine said why (agent-ha-bridge runs there): its words say where to answer.
           ? h('p', { class: 'note warn read-only-why', role: 'note' },
             `This machine is read-only from the phone: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`)
           : h('p', { class: 'note read-only-why', role: 'note' },
             `This machine doesn't take answers from the phone yet. Answer at the machine${at}.`));
+  if (shape) {
+    section.append(h('p', { class: 'note warn at-machine-explanation' },
+      'This kind of question can only be answered at the machine.'));
+  }
   return section;
 }
 
