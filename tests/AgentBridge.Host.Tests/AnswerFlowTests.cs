@@ -1572,6 +1572,21 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains("check=none", (await AttemptLineAsync()));
     }
 
+    [Fact]
+    public async Task A_six_field_form_with_long_titles_is_answered_in_a_console_as_wide_as_the_host_launches_sessions()
+    {
+        var names = await AskSixAsync(SixAnswer);
+        var columns = AgentBridge.Host.Delivery.Launch.LaunchService.ConsoleColumns;
+        injector.Screen = () => SixScreen(names, columns, at => CliBar(SixTitles, at, columns, marked: true));
+        Assert.All(Enumerable.Range(0, SixTitles.Length), at => Assert.DoesNotContain("\u2192", CliBar(SixTitles, at, columns, marked: true)));
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, SixAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(6, Enters());
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -1588,8 +1603,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, SixAnswer, question: "q2");
 
         Assert.Equal("refused", outcome);
-        Assert.Contains("too narrow for the question's form to show every field's title", reason);
-        Assert.Contains("answer it at the machine", reason);
+        Assert.Contains("too narrow for phone answers to this question", reason);
+        Assert.Contains("widen it and answer again, or answer it at the machine", reason);
         Assert.Empty(injector.Attempts);
         Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
     }

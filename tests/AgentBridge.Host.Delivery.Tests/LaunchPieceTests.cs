@@ -322,6 +322,20 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Contains("Windows takes at most", problem);
     }
 
+    [Fact]
+    public void A_wide_console_starts_minimized_without_the_focus_so_the_console_host_keeps_it_to_be_widened()
+    {
+        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowMinimizedNoActivate), ConsoleStartup.For(250, hidden: false));
+    }
+
+    [Fact]
+    public void A_console_without_a_width_opens_as_before_and_a_hidden_one_stays_hidden()
+    {
+        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowNormal), ConsoleStartup.For(null, hidden: false));
+        Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(250, hidden: true).Show);
+        Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(null, hidden: true).Show);
+    }
+
     [WindowsFact]
     [Trait("Category", "Process")]
     public void The_starter_opens_a_console_of_the_agents_own_in_the_working_directory_and_can_tell_when_it_has_gone()

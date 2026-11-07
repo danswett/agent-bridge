@@ -299,7 +299,7 @@ public static partial class CopilotFormScreen
 
     const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
     const string NotForm = "the session's screen no longer showed the question's form";
-    const string Narrow = "the session's window is too narrow for the question's form to show every field's title, so the host cannot tell it is this question; answer it at the machine, or widen the window and answer again";
+    const string Narrow = "the session's window is too narrow for phone answers to this question (its form cannot show every field's title to check); widen it and answer again, or answer it at the machine";
     const string Under = "something other than the question's form was drawn under it on the session's screen";
 
     static string? Find(IReadOnlyList<string> rows, CopilotForm form, int index, Found found)
