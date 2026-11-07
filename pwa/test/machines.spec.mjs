@@ -559,3 +559,19 @@ test('on a phone the Machines page keeps every row to two aligned lines, with it
   expect(Math.abs(heading.y + heading.height / 2 - (sort.y + sort.height / 2))).toBeLessThanOrEqual(8);
   expect(sort.x + sort.width).toBeLessThanOrEqual(390);
 });
+
+// #972 slice 2 (ui.md §6.6): who can sign Copilot in on a machine that has it on, inside its row
+// like its updates, read-only: more than three folded, all of them in the line's tooltip and its
+// accessible text, and no button. A machine without it says nothing of it.
+test('a machine that lets devices sign Copilot in lists who can, read-only, inside its row', async ({ page }) => {
+  await page.goto('?demo=1&static=1&machines=2&signin=1#/machines');
+  await page.waitForSelector('html[data-demo-ready]');
+  const rowOf = (id) => page.locator(`#machine-list > li[data-device-id="${id}"]`);
+  const line = rowOf(LAPTOP).locator('.machine-signin-line');
+  await expect(line).toHaveText('Can sign Copilot in: This browser (this device), iPhone and 2 more: This browser (this device), iPhone, Work laptop, Kitchen tablet');
+  await expect(line).toHaveAttribute('title', 'This browser (this device), iPhone, Work laptop, Kitchen tablet');
+  await expect(line.locator('.sr-only')).toHaveCount(1);
+  await expect(rowOf(LAPTOP).locator('.machine-signin-note')).toHaveText('Removing a single device comes later.');
+  await expect(rowOf(LAPTOP).locator('.machine-signin button')).toHaveCount(0);
+  await expect(rowOf('demo').locator('.machine-signin')).toHaveCount(0);
+});

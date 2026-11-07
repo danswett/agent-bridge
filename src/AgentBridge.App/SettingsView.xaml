@@ -262,6 +262,30 @@
                 <TextBlock
                     Style="{StaticResource AbSecondaryText}"
                     Text="When Copilot needs signing in again, a device pinned as yours here can start Copilot's own sign-in and is shown the one-time code to enter at github.com/login/device. While it runs, this machine opens a browser and copies the code. Off by default. A change applies when the host restarts." />
+                <!-- Who can sign Copilot in here (#972, ui.md 6.9): read-only, only while the switch is on.
+                     No Add or Remove yet, and no disabled button for either. -->
+                <StackPanel Spacing="4" AutomationProperties.AutomationId="SignInDevices" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowSignInDevices), Mode=OneWay}">
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Devices that can sign Copilot in" />
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.SignInDevices, Mode=OneWay}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="core:SignInDeviceRow">
+                                <StackPanel Margin="0,0,0,4">
+                                    <TextBlock AutomationProperties.AutomationId="SignInDevice" TextWrapping="Wrap" Text="{x:Bind Name}" />
+                                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Detail}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        AutomationProperties.AutomationId="SignInDevicesEmpty"
+                        Text="{x:Bind ViewModel.SignInDevicesEmpty, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Some(ViewModel.SignInDevicesEmpty), Mode=OneWay}" />
+                    <TextBlock
+                        Style="{StaticResource AbSecondaryText}"
+                        Text="{x:Bind ViewModel.SignInDevicesNote, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Some(ViewModel.SignInDevicesNote), Mode=OneWay}" />
+                </StackPanel>
                 <ToggleSwitch
                     Header="Answer folder-trust questions from my devices"
                     AutomationProperties.AutomationId="RemoteFolderTrust"

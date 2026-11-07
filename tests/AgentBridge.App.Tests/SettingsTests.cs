@@ -1449,6 +1449,39 @@ public sealed class SettingsTests : IAsyncLifetime
         await Wait.UntilAsync(() => settings.RestartRequired && settings.PhoneSignIn, "the restart offer");
     }
 
+    // #972 slice 2, in Creative's words (6700914747): read-only, only while the running host has the
+    // switch on, and nobody until the machine's roster lists someone.
+    [Fact]
+    public async Task Devices_that_can_sign_Copilot_in_are_listed_under_the_switch_only_while_the_host_has_it_on()
+    {
+        await Connected();
+        Assert.False(settings.ShowSignInDevices);
+        // Turned on, not yet applied: the running host says nobody, so nothing is listed.
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, PhoneSignIn: true), RestartRequired = true };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.PhoneSignIn, "the switch");
+        Assert.False(settings.ShowSignInDevices);
+
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, PhoneSignIn: true), SignInDevices = new(SignInDeviceStates.None, []) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.ShowSignInDevices, "the list");
+        Assert.Empty(settings.SignInDevices);
+        Assert.Equal("No devices can sign Copilot in here yet.", settings.SignInDevicesEmpty);
+        Assert.Equal("Adding a device comes in a later update.", settings.SignInDevicesNote);
+
+        host.Status = host.Status with { SignInDevices = new(SignInDeviceStates.Ready, [new("iPhone", "phone", "iOS"), new("Work laptop", "app", "Windows", true), new("Kitchen", "pwa", "Windows")]) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.SignInDevices.Count == 3, "the devices");
+        Assert.Equal(new SignInDeviceRow[] { new("iPhone", "Phone · iOS"), new("Work laptop (this device)", "App · Windows"), new("Kitchen", "Browser · Windows") }, settings.SignInDevices);
+        Assert.Equal("", settings.SignInDevicesEmpty);
+        Assert.Equal("Removing a single device comes later. To stop them all, turn this off.", settings.SignInDevicesNote);
+
+        host.Status = host.Status with { SignInDevices = new(SignInDeviceStates.Unreadable, []) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.SignInDevicesEmpty == "Can't read the device list on this machine.", "unreadable");
+        Assert.Empty(settings.SignInDevices);
+        Assert.Equal("", settings.SignInDevicesNote);
+    }
     [Fact]
     public async Task Keeping_a_Dev_Box_awake_is_offered_on_a_Dev_Box_only_and_turned_on_through_the_host()
     {

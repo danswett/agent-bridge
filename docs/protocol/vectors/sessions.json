@@ -3081,6 +3081,118 @@
       ],
       "refused": []
     },
+    "SignInDevice": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "this-device",
+          "json": {
+            "name": "iPhone",
+            "kind": "phone",
+            "platform": "iOS",
+            "thisDevice": true
+          }
+        },
+        {
+          "name": "another-device",
+          "json": {
+            "name": "Work laptop",
+            "kind": "app",
+            "platform": "Windows"
+          }
+        },
+        {
+          "name": "wrong-type-name",
+          "json": {
+            "name": 42,
+            "kind": "phone",
+            "platform": "iOS",
+            "thisDevice": true
+          },
+          "reads": {
+            "name": "",
+            "kind": "phone",
+            "platform": "iOS",
+            "thisDevice": true
+          }
+        }
+      ],
+      "refused": []
+    },
+    "SignInDevices": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "listed",
+          "json": {
+            "state": "ready",
+            "devices": [
+              {
+                "name": "iPhone",
+                "kind": "phone",
+                "platform": "iOS",
+                "thisDevice": true
+              },
+              {
+                "name": "Work laptop",
+                "kind": "app",
+                "platform": "Windows"
+              }
+            ]
+          }
+        },
+        {
+          "name": "no-roster-yet",
+          "json": {
+            "state": "none",
+            "devices": []
+          }
+        },
+        {
+          "name": "unreadable",
+          "json": {
+            "state": "unreadable",
+            "devices": []
+          }
+        },
+        {
+          "name": "wrong-type-state",
+          "json": {
+            "state": 42,
+            "devices": [
+              {
+                "name": "iPhone",
+                "kind": "phone",
+                "platform": "iOS",
+                "thisDevice": true
+              },
+              {
+                "name": "Work laptop",
+                "kind": "app",
+                "platform": "Windows"
+              }
+            ]
+          },
+          "reads": {
+            "state": "",
+            "devices": [
+              {
+                "name": "iPhone",
+                "kind": "phone",
+                "platform": "iOS",
+                "thisDevice": true
+              },
+              {
+                "name": "Work laptop",
+                "kind": "app",
+                "platform": "Windows"
+              }
+            ]
+          }
+        }
+      ],
+      "refused": []
+    },
     "Session": {
       "direction": "host",
       "valid": [
