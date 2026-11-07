@@ -962,11 +962,7 @@ jobs:
         # Against a stand-in for az: nothing reaches Azure.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts')) }}
         shell: pwsh
-        run: |
-          pwsh -NoProfile -File quality/lab/test-provision.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          pwsh -NoProfile -File quality/lab/test-run.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: pwsh -NoProfile -File quality/lab/test-scripts.ps1
       - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
         run: bash .github/actions/playwright-system-packages/test.sh

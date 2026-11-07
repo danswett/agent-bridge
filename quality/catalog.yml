@@ -374,7 +374,7 @@ suites:
     platforms: [win-x64, linux-x64]
     runner: local
     triggers: [quality/lab/**]
-    command: pwsh quality/lab/test-provision.ps1; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; pwsh quality/lab/test-run.ps1; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    command: pwsh -NoProfile -File quality/lab/test-scripts.ps1
     where: ci.yml light
     status: exists
 
