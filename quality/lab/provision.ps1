@@ -50,7 +50,7 @@ Create the resources. Refused in this draft (see the description).
 ./quality/lab/provision.ps1 -Subscription <id> -Role win-arm64 -RunId 20261103a | ConvertTo-Json -Depth 5
 #>
 #Requires -Version 7
-[CmdletBinding(SupportsShouldProcess)]
+[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]

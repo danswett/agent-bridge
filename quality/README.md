@@ -703,19 +703,23 @@ where this section differs. Of the pieces below, only a draft of the provisionin
   | `ha` | VM-W's role: disposable Home Assistant and Mosquitto | HA E2E and soak |
   | `perf` | A fixed-size VM kept only for benchmarks | §3.2 comparisons |
   | `macos` | See §9: hosted `macos-latest`, a self-hosted Mac mini, or EC2 Mac | macOS host and app E2E |
-- **`quality/lab/run.ps1 -Subscription <id> -Role <r> -Build <artifact> -Scenario <s> -Relay <staging|ppe|url>`:**
+- **`quality/lab/run.ps1 -Subscription <id> -Role <r> -Build <artifact> -Scenario <s> -Relay <staging|ppe>`:**
   make the run's VM from S0, install the build under test from the CI artifact, run the
   scenario, collect artifacts (logs, transcripts, Hyperloop recordings), then delete the VM.
-  The subscription and relay are always named, never defaulted. It runs from a workflow
+  The subscription and relay are always named, never defaulted; arbitrary relay URLs are
+  refused. It runs from a workflow
   through OIDC, like `relay.yml`, with a `lab` environment and its own principal scoped to
   `rg-agent-bridge-lab` only. Nothing in it can reach the owner's machines, Home Assistant or
   broker.
 - **Accounts:** for v1, `Slipgates-lab-bot`, a dedicated, revocable GitHub account that is
   never the owner's identity, which the owner alone signs in to the relay by GitHub device
-  flow once per lab VM, or once on a golden image if one is separately approved (owner
-  decision B3, its credential plan superseded by Trust's choice A,
+  flow on each fresh VM in every run, not on a golden image (owner decision B3, its
+  credential plan superseded by Trust's choice A,
   [lab/README.md §8](lab/README.md#8-outcomes-retries-and-credentials)). No GitHub token for
-  it is a `lab` environment or vault secret. For v2, test accounts for each agent, with
+  it is a `lab` environment or vault secret. S0 stays credential-free; the run's signed-in
+  disk is deleted at run end or by the independent sweeper after expiry, never snapshotted
+  or retained between runs. Nightly authenticated runs need the owner each time; a missing
+  sign-in makes the run invalid, not a pass. For v2, test accounts for each agent, with
   per-agent caps (the soak already caps Codex). No credential is ever printed, as AGENTS.md
   requires.
 - **Cost guard:** cost and age alerts on the resource group (SRE). Every run deletes its

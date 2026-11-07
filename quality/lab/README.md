@@ -89,9 +89,8 @@ Every run:
    between runs: a deallocated VM's disk still costs money.
 3. Has no public IP, no NSG of its own and no inbound from the Internet; the bootstrap's
    subnet NSG denies it. No admin user or password is passed: the disk is a specialized copy
-   of S0, which itself holds no reusable credential. A relay sign-in reaches an image only if
-   §8's golden-image option is separately approved, and that approval settles its credential
-   and device identity.
+   of S0, which itself holds no reusable credential. The owner signs in on each run's new VM,
+   never on S0; no signed-in disk is snapshotted or turned into an image (§8).
 4. Deletes all three by exact name when it ends.
 
 Cleanup in a `finally` or `catch` is **best effort only**: a cancelled or killed job never
@@ -114,7 +113,7 @@ identity, hooks, settings or processes. That proof is part of the S0 receipt (§
 
 ```
 quality/lab/run.ps1 -Subscription <id> -Role <win-x64|win-arm64> -Build <immutable CI artifact or release>
-                    -Scenario <name> -Relay <staging|ppe|https://...> [-RunId <id>] [-Out <folder>]
+                    -Scenario <name> -Relay <staging|ppe> [-RunId <id>] [-Out <folder>]
 ```
 
 There is no `run.ps1` yet, and nothing here pretends to be one.
@@ -124,8 +123,10 @@ There is no `run.ps1` yet, and nothing here pretends to be one.
   decides anything.
 - `-Build` names an immutable, provenance-verified artifact of a protected CI run or a
   release (§6), never a PR's or a dispatched run's.
-- `-Relay` is required: `staging` until PPE exists, then `ppe`. Never production, and never a
-  default.
+- `-Relay` accepts only `staging` or `ppe`, with no default and no URL override. Each name
+  resolves through the reviewed lab configuration to that environment's HTTPS endpoint;
+  production, arbitrary URLs and redirects to another environment are refused. Until PPE
+  exists, `ppe` is unavailable, not an alias for another relay.
 - `-RunId` defaults to a fresh id; `-Out` holds `result.json` (§7) and the artifacts.
 - `run.ps1` provisions through `provision.ps1`, which registers the run (§4) before any
   create; `run.ps1` never creates a lab resource itself.
@@ -150,6 +151,13 @@ nightly, Arm64 included, within $75/month. Its price check assumes about an hour
 only S0 snapshots kept between runs (§4). Actual cost is unmeasured, and whether the Windows
 licence is billed is checked at bootstrap.
 
+Nightly is a cadence target, not unattended authenticated execution. The selected B3 path
+requires the owner to complete device flow separately on each role's fresh VM in every run
+(§8), within that run's existing expiry of at most 4 hours. There is no credential in S0 to
+reuse. If the owner does not sign in before expiry, authenticated steps are `skipped`, the
+run and cut are `invalid`, and cleanup still removes the run's resources. The schedule must
+not claim a pass, extend the expiry or retain a signed-in disk to avoid the next sign-in.
+
 ## 7. `result.json`, schema version 1
 
 One per run per role. Fields are only ever added to version 1, never renamed or removed.
@@ -164,7 +172,7 @@ One per run per role. Fields are only ever added to version 1, never renamed or 
 | `agentMode` | `simulated` (v1) or `real` (v2) |
 | `coverageVersion` | `v1` or `v2` |
 | `updatePair` | The explicit `from` and `to` (version and digest) the update step installs |
-| `relay` | `target` (`staging`, `ppe` or the URL), `digestAtStart`, `digestAtEnd` |
+| `relay` | `target` (`staging` or `ppe` only), `digestAtStart`, `digestAtEnd` |
 | `steps` | One per step (`launch`, `reply`, `answer`, `stop`, `update`, and v2's): `name`, `outcome` (`pass`, `fail` or `skipped`), `startedAt`, `endedAt`, sanitized `detail` |
 | `outcome` | `pass`, `fail` or `invalid` (§8) |
 | `artifacts` | Paths relative to `-Out`, sanitized, with a SHA-256 each |
@@ -177,7 +185,8 @@ One per run per role. Fields are only ever added to version 1, never renamed or 
   the run is not `pass`.
 - `invalid` when the run can't count either way: the relay digest changed during the run
   (B5: staging churn will make this common until PPE), the VM was lost, or the build's
-  provenance didn't verify. If either role's run is `invalid`, the cut is invalid.
+  provenance didn't verify, or the owner did not complete that run's required sign-in before
+  expiry. If either role's run is `invalid`, the cut is invalid.
 - `invalid` is never admission or promotion evidence. A cut gets at most one retry, after a
   diagnosis, under a new run id; the original result is kept.
 - Accounts (owner decision B3, its credential plan superseded by Trust's choice A): the lab
@@ -187,15 +196,19 @@ One per run per role. Fields are only ever added to version 1, never renamed or 
   relay's sign-in has no allowlist, organization or invite check, so it needs only that the
   relay's OAuth app has device flow enabled and asks for no organization-membership scope;
   this file changes no OAuth setting.
-  - The owner, who alone holds the account's password and second factor, completes GitHub
-    device flow once per lab VM, or once on a golden image if one is separately approved. No
+  - The selected path is owner sign-in per run, not a signed-in golden image. The owner,
+    who alone holds the account's password and second factor, completes GitHub device flow
+    on each fresh lab VM in every run, including each role and any diagnosed retry. No
     GitHub token is provisioned as a `lab` environment or vault secret, or put in the
     repository, CI, logs or screenshots (PNGs). The account is named; its sign-in is the
     owner's alone and has not been done.
   - After sign-in the app keeps its normal local relay credential on that VM, as any
-    installation does, so the VM's disk is handled as holding a credential. Any snapshot or
-    image that holds it stays tagged and private inside `rg-agent-bridge-lab`, is never
-    exported or shared, is named in the sweeper's inventory and is deleted with the group.
+    installation does, only on that run's OS disk. The disk stays private inside
+    `rg-agent-bridge-lab` and is already named in the sweeper's inventory before creation
+    (§4). Platform deletes it by exact name at run end; Platform's independent sweeper
+    deletes it by that same name after expiry even if the run crashes. No credential-bearing
+    disk is kept between runs, exported, shared, snapshotted or made into an image; S0 stays
+    credential-free. Cleanup never depends on deleting the shared resource group.
   - Nothing here authorizes a new VM, image, clone, snapshot, resource or OAuth-setting
     change: images and cloning are future work, each separately approved.
   - Devices are named `lab-<role>-<runId>`, a label and not an authorization. Each run signs
@@ -237,7 +250,7 @@ receipt.
 | Durable expiry sweeper (§4) | **Absent** | Platform |
 | Run registration before the first create (§4): the trusted inventory, `provision.ps1` writing each run's exact names and expiry to it, and a verified read-back receipt | **Absent**; `Register-LabRun` refuses | Platform |
 | Cost and age alerts | **Absent** | SRE |
-| B3 sign-in (§8): the relay OAuth app's device flow enabled with no organization-membership scope, the owner's device-flow sign-in as `Slipgates-lab-bot`, and proof the credential, relay and device guards hold. No lab token or secret | **Absent**: account named, OAuth settings unverified, sign-in not done | owner, Platform |
+| B3 sign-in (§8): the relay OAuth app's device flow enabled with no organization-membership scope, the owner's device-flow sign-in as `Slipgates-lab-bot` on each role's fresh VM in every run, and proof the credential, relay and device guards hold. No lab token, secret or signed-in image | **Absent**: account named, OAuth settings unverified, per-run sign-in not done | owner, Platform |
 | PPE (B4, #590): **population decided**, the lab and the owner's Beta machines | Enrollment, keys, DNS and deploy **pending**; staging until then | SRE, owner |
 | Relay churn (B5) | **Open**: makes runs `invalid` | SRE |
 
@@ -253,6 +266,11 @@ it would run, every one naming the subscription, the group and a run-owned name,
 prerequisites still unmet. Planning calls nothing in Azure. It never creates or changes a
 resource group, network, identity, role assignment, public IP, NSG or credential, and it
 holds no subscription id or account of its own.
+
+`-Apply` remains blocked by the prerequisites and registration stub. Any future reviewed
+implementation that reaches creation also uses `ConfirmImpact='High'` and `ShouldProcess`
+to request confirmation under PowerShell's default confirmation preference; `-WhatIf`
+cannot create resources. Suppressing confirmation is not execution or spend authorization.
 
 `test-provision.ps1` checks that against a stand-in `az`: planning makes no call; every
 command stays in scope; expiry is at most 4 hours; `win-arm64` is native; a missing, default
