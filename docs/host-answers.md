@@ -249,8 +249,9 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     still-open call, no other question asked), even while the session's listing shows that
     approval as its question or the form as answered at the machine; the question no longer
     asked ends it. What a resume checks is
-    kept in memory for that delivery only, never the answer's words on disk: after a host
-    restart, a resent answer finds the prompt in the attempt ledger and types nothing.
+    kept in memory for that delivery only: after a host restart, a resent answer finds the
+    prompt in the attempt ledger and types nothing (its words kept while it is unconfirmed,
+    step 6 below, are only read again, never resumed or typed).
   * Before the first key goes into a text or number field, on a first pass and a resume alike
     (the first field included), the screen must show that field as it opens
     (`CopilotFormScreen.Untouched`): its input's "❯ " alone, or, for a field that opens with
@@ -663,11 +664,16 @@ In order, for every answer:
    (decided with the admission itself): another sender, or the same id under another question,
    replaying it gets the answer a request of its own would, never the first's outcome or
    progress. That
-   record is the host's memory only, and is kept while the prompt's claim is; it never
-   covers an answer that typed nothing, nor a different answer. A request UUID's own outcome,
-   by contrast, is also kept in the attempt ledger, so that window survives a host restart; those
-   receipts carry the UUID only, with no sender, session or question, so the ownership rule above
-   holds only in memory until receipts are reconciled with #1100's.
+   record is kept while the prompt's claim is, in the host's memory and, since #1159 slice 0, in
+   the attempt ledger (step 6), so it survives a restart: a host that starts finds a prompt's
+   first answer there, with its sender, hash and outcome, and while it is `unconfirmed` reads it
+   again as above, so a retry is told the same before a restart as after it. It never covers an
+   answer that typed nothing, nor a different answer. A request UUID's own outcome is also kept
+   in the ledger for its 15 minutes, with the sender, session and question it was admitted for;
+   after a restart, a UUID the ledger knows (by its receipt, or by a claim with no outcome yet)
+   asked for by anyone else, or under another session or question, is a request of its own as
+   above, so it gets exactly what an unknown UUID with the same answer would and cannot be
+   probed. An entry from before slice 0 has no owner and is nobody's.
 4. The session's process is still the live agent process; it does not run elevated
    (integrity level High or above, or unreadable, is refused).
 5. One answer is typed at a time across sessions, and its turn is taken before these last
@@ -692,8 +698,31 @@ In order, for every answer:
    A failed write is retryable: it refuses that request, the next one re-reads the file and keeps every
    claim held in memory, and only a corrupt file latches refusal until restart. The ledger's
    refusal reasons can name a question's label or field names (never answer text), and its folder's
-   ACL lets the Codex sandbox group read it; the ledger holds no secrets. Receipts are request UUIDs
-   only; reconciling them with #1100's receipts is open.
+   ACL lets the Codex sandbox group read it; the ledger holds no answer's words. Each claim and
+   receipt keeps the sender, session and question it was admitted for (step 3), and a claim keeps
+   a SHA-256 hash of the answer (its fields and text) and the answer's first result (outcome and
+   stage), updated as a read settles it (step 9).
+
+   While a Copilot form's or Claude answer is `unconfirmed`, the claim also keeps what reading
+   it again needs (the agent, transcript path, call or tool-use id and read offset) and a key to
+   the answer's words, which are kept apart, on Trust's conditions (#1161): in
+   `private\answer-words.json` under the profile folder, a folder whose ACL is protected and
+   grants this user and SYSTEM alone (0700, and 0600 for the file, elsewhere), checked before
+   every write; the text as sent and nothing else, written to a temporary file in that folder and
+   renamed over the old one. The words go at the first of: any result but `unconfirmed`; the
+   claim released; its session or question gone (after one last read of its record, so an
+   answer recorded at the machine still settles); and 24 hours after they were typed. A host
+   that starts deletes leftover temporary files, words past those exits and words no claim
+   refers to. A delete that fails fails closed: the claim no longer has words, so a retry is told
+   only that nothing was typed again and is never read from them; the delete is tried again at
+   every write, before every bound check and at every start, and until it succeeds the words
+   still count against the bounds. At most 32 answers' words are kept, 16 KiB each and 256 KiB in
+   all; an answer past a bound, or while the folder can be read by anyone else, is `refused`
+   before any key with `DeliveryReasons.CannotHoldAnswer` ("the machine can't keep this answer
+   safely until it's confirmed, so nothing was typed; answer at the machine"), and nothing kept is
+   evicted or cut. Copilot permission prompts and Codex approvals are not read again, so they
+   keep no words. The words go nowhere else: not to a log, an error message, a reply or the
+   relay (the canary test in `AnswerFlowTests`).
 7. The worker types the plan. Nothing written (it could not start, attach or open the
    console input) is `refused`, and releases the claim. Anything after its first write that
    is not a clean finish (the worker died, hung, or the console closed) is `unconfirmed`,
@@ -714,7 +743,8 @@ In order, for every answer:
    Every `unconfirmed` answer says its `stage`: `typed` when nothing was recorded for the
    call (the keys reached the prompt, but it may not have been submitted), `recorded` when
    something else was (#467).
-9. In the same host run, a repeat of a request settled `unconfirmed` (a client's resend after a reconnect) reads
+9. A repeat of a request settled `unconfirmed` (a client's resend after a reconnect), in the
+   same host run or, while its words are kept (step 6), after a restart, reads
    the same call's record again from the same point, and types nothing. An answer recorded
    since, the one typed (submitted at the machine, or recorded late), makes the request
    `delivered` from then on; another makes it `recorded`. Only that call is read, so a newer

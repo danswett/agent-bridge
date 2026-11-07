@@ -56,8 +56,9 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    AnswerService Answerer(Func<string, string?>? codexUnsettled = null, TimeSpan? remembered = null) => new(source, f.Processes, probe, guard, injector, new AnswerOptions
+    AnswerService Answerer(Func<string, string?>? codexUnsettled = null, TimeSpan? remembered = null, AttemptLedger? attempts = null) => new(source, f.Processes, probe, guard, injector, new AnswerOptions
     {
+        AttemptLedger = attempts,
         CodexApprovalsUnsettled = codexUnsettled,
         CopilotHome = f.CopilotHome,
         PlatformSupported = true,
@@ -84,6 +85,24 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
     string Recorded(string database = "SQLite", string features = "Auth, Search") =>
         Claude.Answered("toolu_1", second++, new Dictionary<string, string> { ["Which database?"] = database, ["Which features?"] = features });
+
+    static readonly Dictionary<string, object> Other = new() { ["Which database?"] = "DuckDB", ["Which features?"] = new[] { "Auth", "Search" } };
+
+    // Where an unconfirmed answer's words are kept across a restart (#1159 slice 0).
+    string Words => Path.Combine(f.Root, "profile", AnswerWords.FolderName, AnswerWords.FileName);
+
+    static async Task Until(Func<bool> done)
+    {
+        for (var i = 0; i < 400 && !done(); i++) { await Task.Delay(25); }
+        Assert.True(done());
+    }
+
+    // Another question in the Claude session, so the one answered is no longer asked.
+    async Task AskAnotherAsync()
+    {
+        Fixture.Append(claude, Claude.Assistant(second++, "tool_use", Claude.ToolUse("toolu_2", "AskUserQuestion", Input)));
+        await source.RefreshAsync();
+    }
 
     [Fact]
     public async Task A_resend_after_the_answer_service_restarts_returns_the_recorded_outcome_without_typing()
@@ -290,17 +309,214 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     public async Task A_prompt_once_typed_into_is_never_typed_into_again_by_a_new_request_or_after_a_restart()
     {
         // The first attempt reaches the prompt, which records nothing.
-        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
+        var answerer = Answerer();
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
         var typed = injector.Plans.Count;
 
-        var again = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+        var again = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Other));
         Assert.Equal(AnswerOutcome.Refused, again.Outcome);
         Assert.Contains("already typed into this prompt once", again.Reason);
+        // Since #1159 slice 0 the same answer after a restart is the first sent again (its outcome,
+        // nothing typed; below), so the restart is shown with a different answer.
+        Assert.Equal(again, await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Other)));
 
         var codex = Answerer();
         Assert.Equal(AnswerOutcome.Unconfirmed, (await codex.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }))).Outcome);
         Assert.Equal(AnswerOutcome.Refused, (await Answerer().AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "deny" }))).Outcome);
         Assert.Equal(typed + 1, injector.Plans.Count);
+    }
+
+    // #1159 slice 0: what each answer came to, and who sent it, outlive the host. Each Answerer()
+    // below is the host started again over the same ledger.
+    [Fact]
+    public async Task An_answer_delivered_before_a_restart_is_told_delivered_when_its_sender_sends_it_again_under_a_new_request_after_it()
+    {
+        injector.OnInject = _ => Fixture.Append(claude, Recorded());
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone"));
+        var typed = injector.Plans.Count;
+        Assert.False(File.Exists(Words));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone"));
+        Assert.NotEqual(AnswerOutcome.Delivered, (await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "laptop")).Outcome);
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // A UUID is its sender's, for the session and question it was admitted for, after a restart
+    // as before it: replayed by anyone else, whether the ledger holds its receipt or only its
+    // claim (the host stopped before recording an outcome), it is a request of its own, so it
+    // cannot be probed for what it came to.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Another_sender_replaying_a_known_UUID_after_a_restart_gets_exactly_what_an_unknown_UUID_with_the_same_answer_gets(bool claimOnly, bool otherQuestion)
+    {
+        if (claimOnly) { injector.OnInject = _ => Directory.CreateDirectory(ledger + ".tmp"); }
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer().AnswerAsync(request, sender: "phone")).Outcome);
+        if (claimOnly) { Directory.Delete(ledger + ".tmp"); }
+        Assert.Equal(claimOnly, new AttemptLedger(ledger, clock, null, expire: false).Outcome(Guid.Parse(request.Request))?.Reason == AttemptLedger.NotRecorded);
+        var typed = injector.Plans.Count;
+        var question = otherQuestion ? "toolu_elsewhere" : "toolu_1";
+        var heard = 0;
+
+        var replayed = await Answerer().AnswerAsync(request with { Question = question }, watch: new DeliveryWatch(_ => heard++), sender: "laptop");
+        var unknown = await Answerer().AnswerAsync(Request(ClaudeId, question, Chosen), sender: "laptop");
+
+        Assert.Equal(otherQuestion ? AnswerOutcome.Stale : AnswerOutcome.Refused, replayed.Outcome);
+        Assert.Equal(unknown, replayed);
+        Assert.Equal(0, heard);
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // Unconfirmed, the answer's words are kept apart while it is, so a host started again can
+    // read the session's record of it as the first host would have; nothing is typed again.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_unconfirmed_answer_retried_after_a_restart_is_read_again_and_never_typed_again(bool sameRequest)
+    {
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        var first = await Answerer().AnswerAsync(request, sender: "phone");
+        Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
+        var typed = injector.Plans.Count;
+        Assert.Contains("SQLite", File.ReadAllText(Words));
+        Assert.DoesNotContain("SQLite", File.ReadAllText(ledger));
+
+        // Nothing recorded yet: the same request is given its receipt; a new one, that nothing was typed again.
+        var waiting = await Answerer().AnswerAsync(sameRequest ? request : Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+        Assert.Equal(sameRequest ? first : first with { Reason = DeliveryReasons.AnswerNotConfirmed }, waiting);
+
+        Fixture.Append(claude, Recorded());
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), await Answerer().AnswerAsync(sameRequest ? request : Request(ClaudeId, "toolu_1", Chosen), sender: "phone"));
+        Assert.False(File.Exists(Words));
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone"));
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // The words' life is the claim's, and at most a day (Trust's condition 3): once they have gone,
+    // a retry is told nothing was typed again, before a restart and after it, even when the
+    // session has recorded the answer since; nothing is read, nothing typed.
+    [Fact]
+    public async Task An_unconfirmed_answer_s_words_go_after_a_day_and_a_retry_then_gets_only_that_nothing_was_typed_again()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        var attempts = new AttemptLedger(ledger, time);
+        var answerer = Answerer(attempts: attempts);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone")).Outcome);
+        var typed = injector.Plans.Count;
+        Assert.True(File.Exists(Words));
+
+        time.Advance(AttemptLedger.WordsFor + TimeSpan.FromSeconds(1));
+        Assert.False(File.Exists(Words));
+        Fixture.Append(claude, Recorded());
+
+        var before = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+        var after = await Answerer(attempts: new AttemptLedger(ledger, time)).AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+
+        Assert.Equal((AnswerOutcome.Unconfirmed, DeliveryReasons.AnswerNotConfirmed), (before.Outcome, before.Reason));
+        Assert.Equal(before, after);
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // Cancelled: an answer that typed nothing releases its claim, and its words go with it; one
+    // whose question has gone from the session has its record read one last time (so an answer
+    // recorded at the machine still settles) and then its words go.
+    [Theory]
+    [InlineData("released")]
+    [InlineData("gone")]
+    [InlineData("gone, recorded")]
+    [InlineData("gone while the host was stopped")]
+    [InlineData("gone while it was typed")]
+    public async Task A_cancelled_answer_s_words_go_and_a_question_gone_is_read_one_last_time_first(string how)
+    {
+        var held = false;
+        injector.Before = () => held = File.Exists(Words) && File.ReadAllText(Words).Contains("SQLite", StringComparison.Ordinal);
+        if (how == "released") { injector.Result = new InjectionResult(InjectionStatus.NothingTyped, "could not attach to the session's console"); }
+        // Typed: the session moves on as the keys go, and nothing changes in it once the answer settles.
+        var during = how.EndsWith("typed", StringComparison.Ordinal);
+        if (during) { injector.OnInject = _ => { if (source.Get(ClaudeId)?.Question?.Id == "toolu_1") { AskAnotherAsync().GetAwaiter().GetResult(); } }; }
+        var answerer = Answerer();
+        var first = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+        Assert.True(held);
+        var typed = injector.Plans.Count;
+
+        if (how == "released")
+        {
+            Assert.Equal(AnswerOutcome.Refused, first.Outcome);
+            Assert.False(File.Exists(Words));
+            return;
+        }
+        if (!during)
+        {
+            Assert.True(File.Exists(Words));
+            if (how == "gone, recorded") { Fixture.Append(claude, Recorded()); }
+            var stopped = how.EndsWith("stopped", StringComparison.Ordinal);
+            // Stopped: the host that typed it no longer hears the session change.
+            if (stopped) { await source.DisposeAsync(); source = new SessionSource(f.Options(), f.Processes, TimeProvider.System); }
+            await AskAnotherAsync();
+            if (stopped)
+            {
+                Assert.True(File.Exists(Words));
+                _ = Answerer();
+            }
+        }
+        await Until(() => !File.Exists(Words));
+
+        var retried = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+        Assert.Equal(how == "gone, recorded" ? (AnswerOutcome.Delivered, null) : (AnswerOutcome.Unconfirmed, DeliveryReasons.AnswerNotConfirmed), (retried.Outcome, retried.Reason));
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // A delete that fails is the words gone as far as any answer is concerned (fail closed): a
+    // retry gets #1100's reply, that nothing was typed again, and never a read from words the
+    // host meant to have deleted, before a restart or after it.
+    [Fact]
+    public async Task Words_whose_delete_failed_are_never_read_again_and_a_retry_gets_only_that_nothing_was_typed_again()
+    {
+        var attempts = new AttemptLedger(ledger, clock, logged.Enqueue, expire: false);
+        var answerer = Answerer(attempts: attempts);
+        var request = Request(ClaudeId, "toolu_1", Chosen);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await answerer.AnswerAsync(request, sender: "phone")).Outcome);
+        var typed = injector.Plans.Count;
+        var key = Guid.Parse(request.Request);
+        attempts.WordsStore.Failing = () => new IOException("the disk said no");
+
+        await AskAnotherAsync();
+        await Until(() => !attempts.HoldsWords(key));
+        Assert.True(File.Exists(Words));
+        Fixture.Append(claude, Recorded());
+
+        var before = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+        var after = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+
+        Assert.Equal((AnswerOutcome.Unconfirmed, DeliveryReasons.AnswerNotConfirmed), (before.Outcome, before.Reason));
+        Assert.Equal(before, after);
+        Assert.False(File.Exists(Words));
+        Assert.Equal(typed, injector.Plans.Count);
+        Assert.DoesNotContain(logged, l => l.Contains("the disk said no", StringComparison.Ordinal));
+    }
+
+    // Over the bounds, a new answer is refused before anything is typed and is told to answer at
+    // the machine; none of the answers already held is evicted or cut to make room.
+    [Fact]
+    public async Task A_full_store_of_unconfirmed_answers_refuses_a_new_one_before_any_key_saying_to_answer_at_the_machine()
+    {
+        var attempts = new AttemptLedger(ledger, clock, null, expire: false);
+        var held = Enumerable.Range(0, AnswerWords.MaxEntries).Select(_ => Guid.NewGuid()).ToList();
+        for (var i = 0; i < held.Count; i++)
+        {
+            // Kept for questions still asked, so nothing sweeps them.
+            var admission = new AttemptLedger.Admission(new("phone", ClaudeId, $"toolu_held{i}"), new byte[32], new("claude", claude, "toolu_1", 0), new AnswerWords.Words(null, null));
+            Assert.Null(attempts.Claim($"held{i}", held[i], admission));
+        }
+
+        var result = await Answerer(attempts: attempts).AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, DeliveryReasons.CannotHoldAnswer), result);
+        Assert.Empty(injector.Plans);
+        Assert.All(held, request => Assert.True(attempts.HoldsWords(request)));
     }
 
     // #1093: the phone reloaded (its request UUIDs are kept in memory only), or a second device
@@ -1000,10 +1216,13 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     {
         public readonly List<(int Pid, KeyPlan Plan)> Plans = [];
         public Action<KeyPlan>? OnInject;
+        // Run for every call, whatever it comes to.
+        public Action? Before;
         public InjectionResult Result = new(InjectionStatus.Typed, "ok");
 
         public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
         {
+            Before?.Invoke();
             lock (Plans) { Plans.Add((processId, plan)); }
             if (Result.Status == InjectionStatus.Typed) { OnInject?.Invoke(plan); }
             return Task.FromResult(Result);

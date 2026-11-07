@@ -157,11 +157,14 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
     {
         var first = await Answerer().AnswerAsync(Request("approve"));
         var again = await Answerer().AnswerAsync(Request("approve"));
+        var other = await Answerer().AnswerAsync(Request("deny"));
 
         Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
         Assert.Contains("did not record an answer", first.Reason);
         Assert.DoesNotContain("at the machine", first.Reason);
-        Assert.Equal(AnswerOutcome.Refused, again.Outcome);
+        // The same answer after a restart is the first sent again (#1159 slice 0): nothing typed again.
+        Assert.Equal((AnswerOutcome.Unconfirmed, DeliveryReasons.AnswerNotConfirmed), (again.Outcome, again.Reason));
+        Assert.Equal(AnswerOutcome.Refused, other.Outcome);
         Assert.Single(injector.Plans);
     }
 
