@@ -92,6 +92,19 @@ suites:
     baseline: { tests: 571, seconds: 3 }
     status: exists
 
+  - id: agent-envelope
+    kind: unit
+    ring: 0
+    select: affected
+    security_sensitive: true  # AGENTS.md rule 5: signed-command parsing and verification
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.AgentEnvelope.Tests
+    triggers: [docs/protocol/vectors/agent-envelope.json]
+    command: dotnet test tests/AgentBridge.AgentEnvelope.Tests -c Release
+    where: ci.yml product
+    status: exists
+
   - id: connector-conformance
     kind: component
     ring: 0
