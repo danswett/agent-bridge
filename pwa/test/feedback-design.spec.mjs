@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 test.use({ viewport: { width: 1440, height: 1000 } });
 
 async function openFeedbackDialog(page) {
-  await page.goto('/agent-bridge/app/');
+  await page.goto('./');
   await page.evaluate(() => {
     const text = (selector, value) => { document.querySelector(selector).textContent = value; };
     const fill = (selector, values) => {
