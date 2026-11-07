@@ -35,9 +35,11 @@ public static class HostProbe
     public static string? CheckRelay(Uri relay, bool allowProduction)
     {
         if (relay.Scheme != Uri.UriSchemeHttps) { return $"the relay must be https (staging: {Staging})"; }
-        if (!allowProduction && ProductionHosts.Contains(relay.IdnHost, StringComparer.OrdinalIgnoreCase))
+        // .NET keeps a trailing dot (an absolute DNS name that resolves the same), so trim it.
+        var host = relay.IdnHost.TrimEnd('.');
+        if (!allowProduction && ProductionHosts.Contains(host, StringComparer.OrdinalIgnoreCase))
         {
-            return $"{relay.IdnHost} is a production relay; use staging ({Staging}), or pass --allow-production";
+            return $"{host} is a production relay; use staging ({Staging}), or pass --allow-production";
         }
         return null;
     }

@@ -51,6 +51,11 @@ public class DisconnectCauseTests
     [InlineData("https://relay.bad-duck.com", false)]
     [InlineData("https://RELAY.bad-duck.com", false)]
     [InlineData("https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io", false)]
+    [InlineData("https://relay.bad-duck.com.", false)]
+    [InlineData("https://relay.slipgates.com", false)]
+    [InlineData("https://relay.slipgates.com.", false)]
+    [InlineData("https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io.", false)]
+    [InlineData("https://user@relay.bad-duck.com", false)]
     public void The_host_probe_refuses_cleartext_and_production_relays(string url, bool allowProduction)
     {
         Assert.NotNull(HostProbe.CheckRelay(new Uri(url), allowProduction));
@@ -61,5 +66,7 @@ public class DisconnectCauseTests
     {
         Assert.Null(HostProbe.CheckRelay(new Uri("https://agent-bridge-relay-staging.icyflower-4f71155d.westus2.azurecontainerapps.io"), false));
         Assert.Null(HostProbe.CheckRelay(new Uri("https://relay.bad-duck.com"), true));
+        Assert.Null(HostProbe.CheckRelay(new Uri("https://relay.slipgates.com."), true));
+        Assert.Null(HostProbe.CheckRelay(new Uri("https://user@relay.bad-duck.com"), true));
     }
 }
