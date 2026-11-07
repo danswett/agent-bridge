@@ -2899,6 +2899,32 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains("resume=uncancelled", await AttemptLineAsync());
     }
 
+    [Theory]
+    // Leading spaces are read from the column right after the caret, never inferred from the
+    // words; a trailing space cannot be seen on a screen read (its padding is trimmed), so words
+    // planned with one are never held, and a row showing one after the words is not the words.
+    [InlineData(" OK", "OK")]
+    [InlineData("OK", " OK")]
+    [InlineData("OK ", "OK")]
+    [InlineData("OK", "OK ")]
+    public void Words_differing_only_by_a_leading_or_trailing_space_are_not_held_by_the_field_for_a_resume_Enter(string planned, string actual)
+    {
+        var form = global::AgentBridge.Host.Delivery.Copilot.CopilotForm.Read(JsonSerializer.SerializeToElement(new
+        {
+            message = "Approve the mark?",
+            requestedSchema = new
+            {
+                properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } }, feedback = new { type = "string", title = "Feedback (optional)" } },
+                required = new[] { "pick" },
+            },
+        })).Form!;
+        List<string> Shown(string words) => Framed("Approve the mark?", ["pick", "Feedback (optional)"], 1, [.. Input(words)], colon: false);
+
+        Assert.False(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Holds(Shown(actual), form, 1, planned));
+        // The words drawn exactly as planned are held, unless they end in a space nothing shows.
+        Assert.Equal(!planned.EndsWith(' '), global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Holds(Shown(planned), form, 1, planned));
+    }
+
     [Fact]
     public async Task A_form_whose_keys_were_cut_short_is_given_the_whole_quiet_wait_before_its_Esc()
     {

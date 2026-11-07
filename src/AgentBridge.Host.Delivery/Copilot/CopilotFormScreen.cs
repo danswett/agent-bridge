@@ -181,16 +181,21 @@ public static partial class CopilotFormScreen
     // Whether the text or number field `index` shows exactly `words` in its input, and nothing
     // else (#1123 review): the box's two rules (`Fxn`, `qc`), its first row "❯ " and the words, the
     // rows they wrap onto at the same column, read as the question is (Drawn) with only its
-    // row-wrap tolerance, every character of the words compared. A resume presses a field's Enter
-    // on nothing less: words edited at the machine since they were typed can end the same way.
-    // False for any other field or layout, and for words the box cannot be read whole in (scrolled
-    // or clipped), or with white space other than spaces, or control characters.
+    // row-wrap tolerance, every character of the words compared from the column right after the
+    // caret's "❯ " (never inferred from the words, so " OK" is not "OK"), leading spaces included.
+    // A resume presses a field's Enter on nothing less: words edited at the machine since they
+    // were typed can end the same way. False for any other field or layout, for words the box
+    // cannot be read whole in (scrolled or clipped), with white space other than spaces, or
+    // control characters, and for words ending in a space: a screen read does not show a row's
+    // trailing spaces (the injector trims its padding), so they cannot be verified. A row that
+    // does show one after the words is something else typed there. (An edit adding only
+    // trailing spaces is the one change the screen cannot show; see docs/host-answers.md.)
     public static bool Holds(IReadOnlyList<string> rows, CopilotForm form, int index, string words)
     {
         if (index < 0 || index >= form.Fields.Count || form.Fields[index].Kind is not (CopilotFieldKind.Text or CopilotFieldKind.Number)) { return false; }
         if (Locate(rows, form, index, out var heading, out var hints) is not null) { return false; }
-        var text = words.TrimEnd(' ');
-        if (text.Trim(' ').Length == 0 || text.Any(c => char.IsControl(c) || (char.IsWhiteSpace(c) && c != ' '))) { return false; }
+        var text = words;
+        if (text.Trim(' ').Length == 0 || text.EndsWith(' ') || text.Any(c => char.IsControl(c) || (char.IsWhiteSpace(c) && c != ' '))) { return false; }
         var region = rows.Skip(heading + 1).Take(hints - heading - 1).ToList();
         var rules = Enumerable.Range(0, region.Count).Where(r => IsRule(region[r])).ToList();
         if (rules.Count != 2 || rules[1] - rules[0] < 2) { return false; }
@@ -198,11 +203,13 @@ public static partial class CopilotFormScreen
         var first = box[0].TrimEnd(' ');
         var caret = first.IndexOf('\u276F');
         if (caret < 0 || first[..caret].Trim(' ').Length != 0 || first.Length < caret + 3 || first[caret + 1] != ' ') { return false; }
-        // The caret's two columns read as indent: the words start where the rows they wrap onto do.
-        List<string> drawn = [new string(' ', caret + 2) + first[(caret + 2)..], .. box.Skip(1)];
+        // The caret's two columns read as indent: the words start right after them, where the
+        // rows they wrap onto do, and are read from that column exactly (anchor).
+        List<string> drawn = [new string(' ', caret + 2) + box[0][(caret + 2)..], .. box.Skip(1)];
+        if (drawn.LastOrDefault(r => r.Trim(' ').Length > 0) is not { } last || last.EndsWith(' ')) { return false; }
         var width = Math.Max(1, region[rules[0]].TrimEnd(' ').Length - caret - 2);
         var at = 0;
-        return Drawn(drawn, ref at, text, width) && drawn.Skip(at).All(r => r.Trim(' ').Length == 0);
+        return Drawn(drawn, ref at, text, width, caret + 2) && drawn.Skip(at).All(r => r.Trim(' ').Length == 0);
     }
 
     static string? Locate(IReadOnlyList<string> rows, CopilotForm form, int index, out int fieldHeading, out int hintsStart) =>
@@ -467,10 +474,11 @@ public static partial class CopilotFormScreen
     // left out or drawn at the next row's start; where there is none, the break must be one
     // line breaking allows (Breaks), and the next row starts at the question's column, so
     // "ag-" over " test-ops" (a space after the hyphen the CLI would not draw there) is not
-    // "ag-test-ops". Blank rows are taken only between lines.
-    static bool Drawn(IReadOnlyList<string> rows, ref int at, string text, int width)
+    // "ag-test-ops". Blank rows are taken only between lines. With `anchor`, the column is that
+    // one, never inferred from the text's own indent.
+    static bool Drawn(IReadOnlyList<string> rows, ref int at, string text, int width, int anchor = -1)
     {
-        var (p, column, spaced) = (0, -1, false);
+        var (p, column, spaced) = (0, anchor, false);
         while (true)
         {
             if (at >= rows.Count) { return false; }

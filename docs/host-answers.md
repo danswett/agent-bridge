@@ -218,7 +218,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     typed showing in its input whole and exactly as typed, every character compared
     (`CopilotFormScreen.Holds`; only a row-wrap break read as the question's are, never just
     their last characters, so words edited at the machine to another answer that ends the
-    same get no Enter). Words the input cannot be read whole in (scrolled or clipped) are not
+    same get no Enter). The words are read from the column right after the input's "❯ ", so a
+    leading space added or removed is a different answer. A screen read does not show a row's
+    trailing spaces (the injector trims the window's padding), so words typed with one are
+    never entered on resume (the form is reset), and a row showing a space after the words is
+    not them; an edit at the machine that only adds spaces after the words is the one change
+    a screen read cannot show. Words the input cannot be read whole in (scrolled or clipped) are not
     entered: the form is reset instead. A field whose keys may have gone in part, or whose
     walk went and never settled, or a pass whose keys were cut short, has nothing to check
     that by, and is not resumed, but is still given the whole wait before any Esc. A permission prompt
