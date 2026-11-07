@@ -180,8 +180,10 @@ internal static unsafe partial class Program
         return 0;
     }
 
-    // The visible window of the attached console's active screen buffer, each row with its
-    // trailing spaces removed. Only read: nothing is written to CONOUT$.
+    // The visible rows of the attached console's active screen buffer, each whole (the
+    // buffer's full width, as the agent draws to it: libuv takes a console's columns from its
+    // buffer, so a window narrower than its buffer, clamped to the screen or scrolled, still
+    // reads as drawn), with trailing spaces removed. Only read: nothing is written to CONOUT$.
     static (List<string>? Rows, string? Failure) Window()
     {
         var screen = CreateFile("CONOUT$", GenericRead | GenericWrite, FileShareRead | FileShareWrite, 0, OpenExisting, 0, 0);
@@ -189,7 +191,7 @@ internal static unsafe partial class Program
         try
         {
             if (!GetConsoleScreenBufferInfo(screen, out var info)) { return (null, $"fail output {Marshal.GetLastPInvokeError()}"); }
-            var width = info.WindowRight - info.WindowLeft + 1;
+            var width = Math.Max((int)info.SizeX, info.WindowRight + 1);
             if (width <= 0 || info.WindowBottom < info.WindowTop) { return (null, "fail output 0"); }
             var buffer = new char[width];
             var rows = new List<string>();
@@ -198,7 +200,7 @@ internal static unsafe partial class Program
                 uint read;
                 fixed (char* first = buffer)
                 {
-                    if (!ReadConsoleOutputCharacterW(screen, first, (uint)width, new Coord { X = info.WindowLeft, Y = (short)y }, out read))
+                    if (!ReadConsoleOutputCharacterW(screen, first, (uint)width, new Coord { X = 0, Y = (short)y }, out read))
                     {
                         return (null, $"fail output {Marshal.GetLastPInvokeError()}");
                     }

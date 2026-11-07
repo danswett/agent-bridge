@@ -179,11 +179,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     too, and refused there. A bar too wide for the console shows only the labels around the
     field being answered, between arrows ("←" when labels are hidden before them, "→" when
     after, `Da`'s `Hfn` window). Read as exactly such a window at that field, it is refused
-    with nothing typed and named (`bar-window`), for the machine or a wider window: a form
+    with nothing typed and named (`bar-window`), telling the person the window is too narrow
+    for phone answers (widen it, or answer at the machine): a form
     that differs from the question only in a hidden title reads the same, and each field's
     own heading is read only once the keys reach it, after earlier fields are already filled
     (#1137 review). A six-field form with long titles at 102 columns showed two labels and
-    "→", and was refused as no form at all, unnamed (#1123).
+    "→", and was refused as no form at all, unnamed (#1123). Sessions the host launches open
+    250 columns wide so such a bar shows whole (host-launch.md, Width); the screen read takes
+    each row at the console buffer's full width, the width the CLI draws to.
     What cannot be known beforehand (a permission prompt opening over a later field, or a
     long field scrolling the form's heading off a short window) still stops the keys there:
     the answer is then `unconfirmed`, and its reason names the fields that were answered,
@@ -432,7 +435,7 @@ with the kind and with what Copilot may offer, and the path prompt opens on its 
 option, so Enter is never pressed and no option is found by position:
 
 * The host reads the session's screen (`agent-bridge-injector <pid> --screen`: the visible
-  window of its console, read-only) and takes the last block of numbered rows, numbered
+  rows of its console, each at the buffer's full width, read-only) and takes the last block of numbered rows, numbered
   from 1 without a gap.
 * **Approve once** is the one row whose label is exactly "Yes": Copilot's approve-once in
   every permission prompt. Its digit commits it directly whatever is highlighted. Every
@@ -725,7 +728,8 @@ If neither the namespace listing nor the task scheduler can be read, it counts a
 `writing <n>` (flushed) before every console write, so the host always knows whether a key
 may have landed. A send may carry screen rows and their text, written only if every row
 still reads so. `agent-bridge-injector.exe <pid> --screen` types nothing and prints the
-visible window's rows. It is a separate process because Windows ends every process attached to
+visible rows, each at the console buffer's full width (the width the agent draws to, wider
+than the window where a screen clamps it). It is a separate process because Windows ends every process attached to
 a console when that console's window closes (spike S1). It ignores Ctrl+C, re-registering
 after each attach. One worker runs at a time. The host only reads everything else: it
 never writes, locks, renames or deletes anything the agents or agent-ha-bridge own.

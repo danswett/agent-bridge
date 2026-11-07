@@ -8,7 +8,38 @@ namespace AgentBridge.Host.Delivery.Launch;
 
 // What to start: the program, its arguments, and where; Environment is added to (or replaces
 // what) the host's own environment the agent inherits. A null value removes a variable.
-public sealed record StartSpec(string Executable, IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string?>? Environment = null);
+// Columns, when set, is how wide the agent's console is to be (ConsoleStartup); null leaves
+// the console as the person's defaults make it.
+public sealed record StartSpec(string Executable, IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string?>? Environment = null, int? Columns = null);
+
+// How a launched agent's console is asked for, kept apart from the Windows calls so it can be
+// tested anywhere. A width is honoured only by the classic console host (conhost), from
+// STARTUPINFO's count of characters (STARTF_USECOUNTCHARS: its screen buffer, and with text
+// wrapping on, as it is by default, its window as wide). Windows Terminal, when it is the
+// default terminal, takes the console over (handoff) and keeps only the title, icon and show
+// state, never the size; but the console host does not hand over a console started minimized
+// or hidden. So a wide launch starts minimized without taking the focus (SW_SHOWMINNOACTIVE):
+// on the taskbar, a click away, in the console host, as wide as asked (#1123).
+// A screen too narrow for the whole window clamps the window, not the buffer: the agent
+// draws to the buffer's width, and the injector reads whole buffer rows.
+internal static class ConsoleStartup
+{
+    public const int UseShowWindow = 0x1;
+    public const int UseCountChars = 0x8;
+    public const short Hide = 0;
+    public const short ShowNormal = 1;
+    public const short ShowMinimizedNoActivate = 7;
+    // The console host's own default screen buffer height (its scrollback).
+    public const int Rows = 9001;
+
+    public readonly record struct Shape(int Flags, short Show, int XCountChars, int YCountChars);
+
+    public static Shape For(int? columns, bool hidden)
+    {
+        if (columns is not { } width) { return new(UseShowWindow, hidden ? Hide : ShowNormal, 0, 0); }
+        return new(UseShowWindow | UseCountChars, hidden ? Hide : ShowMinimizedNoActivate, Math.Clamp(width, 80, 32766), Rows);
+    }
+}
 
 // A started process, by id and start time (which tells it from a later one given the same id),
 // or why nothing started.
@@ -40,7 +71,8 @@ public interface IAgentStarter
 // the working directory, with this host's environment. Whatever the user has as the default
 // terminal (Windows Terminal or the console host) shows it. The window is deliberately
 // visible: a session started from a phone is still one a person can walk over to and take
-// over at the keyboard.
+// over at the keyboard. One started with Columns (as the host's launches are) opens wide,
+// minimized on the taskbar, in the console host (ConsoleStartup).
 //
 // The agent inherits this process's token, desktop and environment, so this host must itself
 // run as the user, unelevated, on the interactive desktop. Started from Explorer, a shortcut
@@ -68,7 +100,12 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
     public Started Start(StartSpec spec)
     {
         var line = WindowsCommandLine.For(spec.Executable, spec.Arguments, out var problem) ?? throw new InvalidOperationException(problem);
-        var info = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Flags = StartfUseShowWindow, ShowWindow = hidden ? SwHide : SwShowNormal };
+        var shape = ConsoleStartup.For(spec.Columns, hidden);
+        var info = new StartupInfo
+        {
+            Size = Marshal.SizeOf<StartupInfo>(), Flags = shape.Flags, ShowWindow = shape.Show,
+            XCountChars = shape.XCountChars, YCountChars = shape.YCountChars,
+        };
         var command = new StringBuilder(line.CommandLine, line.CommandLine.Length + 1);
         var environment = spec.Environment is { Count: > 0 } extra ? Marshal.StringToHGlobalUni(EnvironmentBlock(extra)) : 0;
         try
@@ -181,9 +218,6 @@ public sealed class WindowsAgentStarter(bool hidden = false) : IAgentStarter
         return GetUserObjectInformationW(station, UoiName, buffer, buffer.Length * 2, out var needed) ? new string(buffer, 0, Math.Max(0, needed / 2 - 1)) : null;
     }
 
-    const int StartfUseShowWindow = 0x1;
-    const short SwHide = 0;
-    const short SwShowNormal = 1;
     const uint CreateNewConsole = 0x10;
     const uint CreateUnicodeEnvironment = 0x400;
     const int UoiName = 2;

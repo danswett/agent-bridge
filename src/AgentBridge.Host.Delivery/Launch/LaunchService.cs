@@ -194,6 +194,13 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // approved folders it caches, and so decides the resume labels over.
     const int KindsAmong = 200;
 
+    // How wide a launched session's console is asked to be: wide enough for Copilot's form tab
+    // bar (the console's width less four) to show every field's title, so the host can tell an
+    // answer's form is the question's before typing (#1123; a six-field form with long titles
+    // took about 230). Sessions a person started keep their own width, and a too-narrow
+    // form's refusal.
+    internal const int ConsoleColumns = 250;
+
     public bool Available => Config.Enabled && options.PlatformSupported && probe.Recent() is null && starter.Unavailable() is null;
 
     // A session a launch started, with what it was started with: the host's restore record keeps it,
@@ -887,7 +894,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (options.ClaudeConfigDirExplicit is { } explicitConfigDir) { environment["CLAUDE_CONFIG_DIR"] = explicitConfigDir ? options.ClaudeHome : null; }
             else if (!Folders.Same(options.ClaudeHome, inherited.ClaudeHome)) { environment["CLAUDE_CONFIG_DIR"] = options.ClaudeHome; }
             if (!Folders.Same(options.CodexHome, inherited.CodexHome)) { environment["CODEX_HOME"] = options.CodexHome; }
-            var spec = new StartSpec(plan.Executable, args, directory, environment);
+            var spec = new StartSpec(plan.Executable, args, directory, environment, ConsoleColumns);
             if (starter.CommandLine(spec, out var tooLong) is null)
             {
                 return Refused($"the prompt is too long to start {plan.Launcher.Label} with on this machine: {tooLong}; shorten it, or send the rest as a reply once it has started");

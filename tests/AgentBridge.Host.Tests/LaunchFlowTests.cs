@@ -198,6 +198,23 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     }
 
     [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task A_launched_session_asks_for_a_console_wide_enough_for_every_tab_title_of_a_long_form(string agent)
+    {
+        locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        starter.Registers = false;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = agent, Prompt = "go" }, "fixture");
+
+        // As wide as a six-field form's whole bar needs (AnswerFlowTests): the person's own
+        // default width is not asked for.
+        Assert.Equal(LaunchService.ConsoleColumns, Assert.Single(starter.Specs).Columns);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     [InlineData(null)]
