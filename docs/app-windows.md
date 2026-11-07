@@ -475,7 +475,8 @@ into one folder with one version. An app update is a host update, so they never 
     while an answer or reply is being typed. If the machine is busier than the person confirmed
     when it is ready (a turn started during the download), it keeps the download and installs at
     the next quiet moment, using the settled gap, or when the person confirms again (Product, on
-    #1161). A press signed on that device within two minutes, `permissions.remoteManage` on, and
+    #1161), within the press's 15 minutes from its signature; after that the press is dropped and
+    the release stays ready. A press signed on that device within two minutes, `permissions.remoteManage` on, and
     at most two such restarts in six hours, shared with a remote restart.
   * **Ready:** a banner over every page, "Version *v* is ready. Restart to update." with
     **Restart to update** (an `InfoBar` with no close button, like the other app banners, so it

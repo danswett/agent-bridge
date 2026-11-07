@@ -1288,9 +1288,10 @@ since a restart cancels a pending sign-in (Connection, Q-C8). The owner's 2026-1
 #1159 ("I need a way to force updates to happen from my phone ... I want to be able to accept the
 temporary downtime of an update") supersedes "never carried out later" for an update a person
 presses **Update now** for, and for nothing else: that press waits for its download and up to a
-minute for the same lease, never goes over a turn nobody confirmed (a machine that became busier
-meanwhile keeps the download and installs at its next quiet moment; Product, #1161), is still
-never forced past the lease, and counts against the same cap
+minute for the same lease, never goes over a busy session its confirmation didn't cover (a
+machine that became busier meanwhile keeps the download and installs at its next quiet moment;
+Product, #1161), lives at most 15 minutes from its signature (then it is dropped, spending no
+restart and cancelling no sign-in), is still never forced past the lease, and counts against the same cap
 below ([v1-update.md](v1-update.md#update-now-1159-design-not-built-yet); design, not built).
 At most **2 committed restarts
 every 6 hours** per machine until #55 (`rate-limited`), and 3 presses of each kind per device
