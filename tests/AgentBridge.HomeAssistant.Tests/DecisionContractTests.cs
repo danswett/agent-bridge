@@ -247,6 +247,27 @@ public sealed class DecisionContractTests
         Assert.Equal(approval.Message, Source(plan.Question));
     }
 
+    // Copilot asks a permission for each of a batch of parallel tool calls and shows them one at a
+    // time (#690): the card says how many wait above the one it shows, and answers only that one.
+    [Fact]
+    public void A_permission_shown_while_others_wait_says_how_many_above_it_and_is_still_answered_on_a_tap()
+    {
+        var approval = new Question
+        {
+            Id = "r1#d", Kind = QuestionKind.Approval, Message = "Allow **read**?\n\n```\nC:\\notes\\a.md\n```", AskedAt = DateTimeOffset.UnixEpoch, Waiting = 3,
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+
+        var plan = HaDecision.Plan(approval, AgentKind.Copilot);
+        var alone = HaDecision.Plan(approval with { Waiting = null }, AgentKind.Copilot);
+
+        Assert.True(plan.AnswerOnTap);
+        Assert.Equal("r1#d", plan.QuestionId);
+        Assert.StartsWith("_1 of 3 permissions waiting_\n\n", plan.Question, StringComparison.Ordinal);
+        Assert.Equal(approval.Message, Source(plan.Question));
+        Assert.DoesNotContain("permissions waiting", alone.Question, StringComparison.Ordinal);
+    }
+
     // The agent's own words, before a host escapes them (#212), drawn as Markdown: a line of backticks
     // closes the command's fence early, so a block the agent wrote shows `npm test` while the command
     // after it draws as a link; or a link shows words, not where it goes; or an intention ending in

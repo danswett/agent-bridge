@@ -379,6 +379,7 @@ public sealed partial class SessionCardViewModel : Observable
             }
             Question = next;
         }
+        if (q is not null) { question?.UpdateWaiting(q.Waiting); }
         if (q is not null && receiptKey is not null && ctx.Deliveries.Get(receiptKey) is { State: DeliveryState.Done }) { receiptKey = null; }
         UpdateReceipt();
 

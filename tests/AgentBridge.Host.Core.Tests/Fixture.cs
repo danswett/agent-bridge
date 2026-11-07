@@ -413,6 +413,47 @@ internal static class Copilot
         Event("system.notification", new { content = $"<system_notification>\nShell command \"Fixture\" (shellId: {shellId}) has completed successfully.\n</system_notification>", kind = new { type = "shell_completed", shellId, exitCode = 0, description = "Fixture" } }, s);
 }
 
+// A permission prompt as Copilot CLI 1.0.105 draws it (its Dialog component): a round frame the
+// screen's width, the title, a rule, the body's parts a blank row apart (a box's lines one to a
+// row in a box of their own), the question, a blank row, then the options. Lines are drawn as
+// given: a test wraps one by passing its rows.
+internal static class CopilotScreen
+{
+    public static string[] ShellOptions => ["\u276F 1. Yes", "  2. No, and tell Copilot what to do differently (Esc to stop)"];
+
+    public static string[] PathOptions => ["  1. Yes", "\u276F 2. Yes, and remember these paths for this session", "  3. No (Esc)"];
+
+    public static string[] Shell(string title, params string[] command) =>
+        Dialog(title, [(true, command)], "Do you want to run this command?", ShellOptions);
+
+    public static string[] Path(params string[] paths) =>
+        Dialog("Allow path access", [(false, [$"This action may read the following {(paths.Length == 1 ? "path" : "paths")} outside the paths currently allowed for this session."]), (true, paths)], "Do you want to allow this?", PathOptions);
+
+    public static string[] Dialog(string title, (bool Boxed, string[] Lines)[] body, string question, string[] options, int width = 120)
+    {
+        var inner = width - 2;
+        string Row(string content) => "\u2502" + (" " + content).PadRight(inner) + "\u2502";
+        var box = inner - 2;
+        var rows = new List<string> { "\u256D" + new string('\u2500', inner) + "\u256E", Row(title), Row(new string('\u2500', inner - 2)) };
+        foreach (var (boxed, lines) in body)
+        {
+            if (boxed)
+            {
+                rows.Add(Row("\u256D" + new string('\u2500', box - 2) + "\u256E"));
+                rows.AddRange(lines.Select(l => Row(("\u2502 " + l).PadRight(box - 1) + "\u2502")));
+                rows.Add(Row("\u2570" + new string('\u2500', box - 2) + "\u256F"));
+            }
+            else { rows.Add(Row(lines[0])); }
+            rows.Add(Row(""));
+        }
+        rows.Add(Row(question));
+        rows.Add(Row(""));
+        rows.AddRange(options.Select(Row));
+        rows.Add("\u2570" + new string('\u2500', inner) + "\u256F");
+        return [.. rows];
+    }
+}
+
 internal static class Claude
 {
     static JsonObject Entry(string type, JsonNode? message, int s, bool sidechain = false) => new()

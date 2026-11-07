@@ -1831,6 +1831,59 @@
           }
         },
         {
+          "name": "one-of-several-permissions-waiting",
+          "json": {
+            "id": "req-41#3f9a",
+            "kind": "approval",
+            "message": "Run `git push`?",
+            "fields": [
+              {
+                "name": "decision",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "approve",
+                    "label": "Approve once"
+                  },
+                  {
+                    "value": "deny",
+                    "label": "Deny"
+                  }
+                ]
+              }
+            ],
+            "askedAt": "2026-10-28T04:22:43.182Z",
+            "waiting": 3
+          }
+        },
+        {
+          "name": "a-path-permission-listed-while-copilot-draws-another-first",
+          "json": {
+            "id": "req-42#7c1e",
+            "kind": "approval",
+            "message": "Allow path access?",
+            "fields": [
+              {
+                "name": "decision",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "approve",
+                    "label": "Approve once"
+                  },
+                  {
+                    "value": "deny",
+                    "label": "Deny"
+                  }
+                ]
+              }
+            ],
+            "askedAt": "2026-10-28T04:22:43.182Z",
+            "answerAtMachine": true,
+            "waiting": 2
+          }
+        },
+        {
           "name": "an-unknown-kind-reads-as-a-form",
           "json": {
             "id": "q",
