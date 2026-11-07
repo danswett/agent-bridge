@@ -93,11 +93,12 @@ public static partial class CopilotFieldSchema
     // the labels, so the field was found missing only once the fields before it had been
     // answered (#510 review, Trust on 412f1b2d). Without a label every field of the form is
     // refused before the first key, rather than this one only once the fields before it have
-    // been answered (#510 review, Copilot 5780656913). Nor, last, is one the screen could read as
-    // another's: the field's heading is read with its runs of white space as one space and its
-    // ends trimmed, so "Pick  one", " Pick one" and "Pick\u00A0one" all read as "Pick one", and
-    // a form of either title would pass for the other's at that field (#1137 review). A title of
-    // words between single spaces is read exactly, in the tab bar and the heading alike.
+    // been answered (#510 review, Copilot 5780656913). Nor, last, is one whose spaces the host
+    // cannot be sure how the CLI draws: white space at its ends, a run of spaces, or a space of
+    // another kind ("Pick one ", "Pick  one", "Pick\u00A0one"). The screen's heading and tab bar
+    // are read exactly as drawn, so read for another drawing of such a title they would refuse
+    // the form, or pass one titled otherwise (#1137 review). A title of words between single
+    // spaces is read exactly, in the tab bar and the heading alike.
     public static string? Label(string name, JsonElement p) =>
         (!p.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null ? name
         : title.ValueKind == JsonValueKind.String && title.GetString() is { Length: > 0 } text ? text

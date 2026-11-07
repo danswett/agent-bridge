@@ -122,14 +122,20 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     frame closed by the same rule with nothing drawn under it (the CLI draws a prompt in place
     of its input box and footer, so another form or an input under it is refused, Copilot
     4479698033, and everything below is read inside the frame), the whole question under it
-    (its lines, each wrapped onto as many rows as it takes: each row, its runs of white space
-    read as one space, must be the question's next characters exactly, a space being missing
-    only where a row breaks. 1.0.105's renderer, `gVr`, breaks a line wherever Unicode line
+    (its lines, each wrapped onto as many rows as it takes: each row, read as drawn from the
+    question's column, must be the question's next characters exactly, its spaces as they
+    are (the question itself read with its runs of white space as one, or as written), a
+    space being missing, or drawn at the next row's start, only where a row breaks. 1.0.105's
+    renderer, `gVr`, breaks a line wherever Unicode line
     breaking allows, so with no space at a break the break must be one it allows: after a
     hyphen, a dash or a slash, beside a wide character, or inside a word longer than the
-    frame is wide. A question broken after "ag-" was refused on a steady screen every time it
+    frame is wide, and the next row then starts at the question's column, so "ag-" over
+    " test-ops" is refused. A question broken after "ag-" was refused on a steady screen every time it
     was answered, #1123, #848; read with every space left out, "Now here" read as "Nowhere",
-    #1137 review), with more than one field the tab
+    #1137 review. What a break hides stays unseen: two questions that differ only by a space
+    at a break, such as "ag-test-ops" and "ag- test-ops" broken after the hyphen, or "Now here"
+    and "Nowhere" broken inside a word too long for the row, draw the same rows; the tab bar,
+    the field's heading and the hints must still match exactly), with more than one field the tab
     bar naming exactly this form's fields in order, on one row read exactly as `Da` draws it
     (titles as written, brackets included, each ` <title> ` with a column between; the field
     being answered may be in the bar's own brackets; the bar fits the console's width less
@@ -155,12 +161,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     So is a form with two fields of the same heading the tab hints cannot tell apart (both
     between the first and the last): the tab bar marks the field being answered by colour
     alone, which the screen read does not carry, so a repaint while the CLI still showed the
-    first could pass for the second. Headings are compared with every run of whitespace as
-    one space and the ends trimmed, a list's colon taken with its title as the CLI draws them
-    together. So a title the screen reads as another's (white space at its ends, a run of
-    spaces, or a space of another kind, such as a no-break space: "Pick one ", "Pick  one"
-    and "Pick one" with a no-break space all read "Pick one", and a form titled either way
-    would pass for the other's, #1137 review) is refused before the first key, as is a title of
+    first could pass for the second. Headings are compared exactly as drawn, their ends
+    trimmed, a list's colon taken with its title as the CLI draws them together, so with no
+    tab bar "Pick  one:" or "Pick one:" with a no-break space is not "Pick one:" (#1137
+    review). A title whose spaces the host cannot be sure how the CLI draws (white space at
+    its ends, a run of spaces, or a space of another kind, such as a no-break space) is
+    refused before the first key, as is a title of
     white space alone, drawn as a blank row or a lone colon, or with a line break or another
     control character, which splits its heading across rows while the tab bar's first row
     still reads as the labels. All, like a `requestedSchema`

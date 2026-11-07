@@ -1654,8 +1654,12 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains($"check={where}@", (await AttemptLineAsync()));
     }
 
-    [Fact]
-    public async Task A_question_and_titles_with_spaces_are_still_this_questions_where_a_row_breaks_at_one()
+    [Theory]
+    // The question says "Now here"; the row breaks at its space, which the CLI leaves out or
+    // draws at the start of the next row.
+    [InlineData("Now\nhere")]
+    [InlineData("Now\n here")]
+    public async Task A_question_and_titles_with_spaces_are_still_this_questions_where_a_row_breaks_at_one(string drawn)
     {
         const string Message = "Put it Now here or archive it?";
         var answer = new { pick = "b", here = "c", archive = "a" };
@@ -1666,13 +1670,57 @@ public sealed class AnswerFlowTests : IAsyncLifetime
             here = new { type = "string", title = "Now here", @enum = new[] { "a", "b", "c" } },
             archive = new { type = "string", title = "Archive", @enum = new[] { "a", "b", "c" } },
         }, 3, answer, Message);
-        injector.Screen = () => FieldsScreen(names, message: Message.Replace("Now here", "Now\nhere", StringComparison.Ordinal), labels: ["pick", "Now here", "Archive"]);
+        injector.Screen = () => FieldsScreen(names, message: Message.Replace("Now here", drawn, StringComparison.Ordinal), labels: ["pick", "Now here", "Archive"]);
         var ch = await OpenAsync();
 
         var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
 
         Assert.Equal("delivered", result.GetProperty("outcome").GetString());
         Assert.Equal(3, Enters());
+    }
+
+    [Fact]
+    public async Task A_question_broken_after_a_hyphen_whose_next_row_starts_with_a_space_gets_no_keys()
+    {
+        // The CLI breaks "ag-test-ops" after the hyphen and starts the next row at the
+        // question's column. A row that starts a space further in says "ag- test-ops": another
+        // question (#1137 review).
+        const string Message = "Which mailbox should the test mail go out from (from ag-test-ops)?";
+        var answer = new { first = "b", second = "c" };
+        string[] names = ["first", "second"];
+        await AskFieldsAsync(new
+        {
+            first = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            second = new { type = "string", @enum = new[] { "a", "b", "c" } },
+        }, 2, answer, Message);
+        injector.Screen = () => FieldsScreen(names, message: Message.Replace("ag-test-ops", "ag-\n test-ops", StringComparison.Ordinal));
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=message@", (await AttemptLineAsync()));
+    }
+
+    [Theory]
+    // A form of one field has no tab bar: its heading alone says which field it is. Titled
+    // "Pick one", a form whose heading shows "Pick  one" or "Pick\u00A0one" is another form's
+    // (#1137 review).
+    [InlineData("Pick  one")]
+    [InlineData("Pick\u00A0one")]
+    public async Task A_single_field_form_whose_heading_shows_spaces_its_title_has_not_gets_no_keys(string shown)
+    {
+        var answer = new { pick = "b" };
+        await AskFieldsAsync(new { pick = new { type = "string", title = "Pick one", @enum = new[] { "a", "b", "c" } } }, 1, answer);
+        injector.Screen = () => FieldsScreen(["pick"], labels: [shown]);
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=field-heading@", (await AttemptLineAsync()));
     }
 
     [Theory]
@@ -2258,9 +2306,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     // next, while the tab bar's first row still reads as the labels). It is refused before the
     // first key, not found missing once the field before it has been answered (#510 review,
     // Copilot 5780656913; Trust on 412f1b2d), and listed for the machine (Trust on 8335427d).
-    // So is one with white space at its ends, a run of spaces, or a space of another kind: the
-    // screen reads "Pick one ", "Pick  one" and "Pick\u00A0one" as "Pick one", so a form titled
-    // either way would pass for the other's at that field (#1137 review).
+    // So is one with white space at its ends, a run of spaces, or a space of another kind: how
+    // the CLI draws those is not known, and the screen's headings are read exactly as drawn
+    // (#1137 review).
     [InlineData("string", "   ")]
     [InlineData("enum", "   ")]
     [InlineData("enum", "Pick\n")]

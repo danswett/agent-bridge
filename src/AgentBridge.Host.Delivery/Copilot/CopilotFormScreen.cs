@@ -232,11 +232,20 @@ public static partial class CopilotFormScreen
         // CJK characters, inside a word too long for a row. Joined with a space, "from ag-" over
         // "agent-bridge-ops" read "ag- agent", and every answer to that question was refused, the
         // form steady on screen (#1123, #848). Only where a row breaks may a space be missing;
-        // every space inside a row is the question's own, so "Now here" is never "Nowhere".
-        if (Lines(form.Message) is { Length: > 0 } message)
+        // every space inside a row is the question's own, so "Now here" is never "Nowhere". The
+        // rows are read as drawn, never with their spaces evened out: the question is read two
+        // ways the CLI could draw it (runs of white space as one, or as written), the rows not.
+        if (Lines(form.Message, Collapse) is { Length: > 0 } message)
         {
-            at = Next(rows, at);
-            if (!Drawn(rows, ref at, message, top.Trim(' ').Length - 2)) { return found.Fail(FormCheck.Message, at, NotForm); }
+            var (from, columns) = (Next(rows, at), top.Trim(' ').Length - 2);
+            at = from;
+            var shown = Drawn(rows, ref at, message, columns);
+            if (!shown && AsWritten(form.Message) is { } written && written != message)
+            {
+                var again = from;
+                if (Drawn(rows, ref again, written, columns)) { (shown, at) = (true, again); }
+            }
+            if (!shown) { return found.Fail(FormCheck.Message, at, NotForm); }
         }
         if (index < 0 || index >= form.Fields.Count) { return found.Fail(FormCheck.Field, -1, "the question's form has no such field"); }
         if (form.Fields.Any(f => f.Label is null))
@@ -270,8 +279,11 @@ public static partial class CopilotFormScreen
             if (windowed) { return found.Fail(FormCheck.BarWindow, at, Narrow); }
             at++;
         }
+        // The heading as drawn, its spaces read as they are: with no tab bar (a form of one
+        // field), "Pick  one:" or "Pick\u00A0one:" is another form's, not "Pick one:" (#1137
+        // review).
         at = Next(rows, at);
-        if (at >= rows.Count || Collapse(rows[at]) != heading) { return found.Fail(FormCheck.FieldHeading, at, off); }
+        if (at >= rows.Count || rows[at].Trim(' ') != heading) { return found.Fail(FormCheck.FieldHeading, at, off); }
         if (Hints(rows, at + 1, index, form.Fields.Count) is not var (start, end)) { return found.Fail(FormCheck.Hints, at + 1, off); }
         (found.Heading, found.Hints) = (at, start);
         // A permission prompt drawn against the form: one ending just above its frame, read by
@@ -296,7 +308,7 @@ public static partial class CopilotFormScreen
     // (#510 review, Copilot 4478963305). Two forms on screen still have two headings.
     static bool Heads(IReadOnlyList<string> rows, int r)
     {
-        if (r == 0 || Collapse(rows[r]) != Heading) { return false; }
+        if (r == 0 || rows[r].Trim(' ') != Heading) { return false; }
         var rule = rows[r - 1].TrimEnd(' ');
         var line = rule.TrimStart(' ');
         return line.Length > 0 && line.All(c => c == '\u2500') && Indent(rows[r]) == rule.Length - line.Length + 1;
@@ -390,10 +402,9 @@ public static partial class CopilotFormScreen
         return null;
     }
 
-    // Rows `start` to `end`, each read with its runs of white space as one space, a line break
-    // where each row ends.
+    // Rows `start` to `end`, each as drawn, its ends trimmed, a line break where each row ends.
     static string Joined(IReadOnlyList<string> rows, int start, int end) =>
-        string.Join('\n', rows.Skip(start).Take(end - start + 1).Select(Collapse));
+        string.Join('\n', rows.Skip(start).Take(end - start + 1).Select(r => r.Trim(' ')));
 
     // The hint a part of the hints reads as, each row break in it a space or nothing; null when
     // it is none.
@@ -410,29 +421,47 @@ public static partial class CopilotFormScreen
         return null;
     }
 
-    // The question as the form draws it, line by line: each line's runs of white space as one
-    // space, its ends trimmed, blank lines left out (Drawn skips the blank rows between lines).
-    static string Lines(string? text) =>
-        string.Join('\n', (text ?? "").Split('\n', '\r').Select(Collapse).Where(l => l.Length > 0));
+    // The question as the form may draw it, line by line, each line as `line` reads it, blank
+    // lines left out (Drawn skips the blank rows between lines).
+    static string Lines(string? text, Func<string, string> line) =>
+        string.Join('\n', (text ?? "").Split('\n', '\r').Select(line).Where(l => l.Trim(' ').Length > 0));
+
+    // The question as written, each line's own indent and spaces kept (its trailing spaces are
+    // not drawn), for a CLI that draws them so; null when it holds white space of another kind,
+    // which the host does not know how the CLI draws.
+    static string? AsWritten(string? text) =>
+        (text ?? "").Any(c => char.IsWhiteSpace(c) && c is not (' ' or '\n' or '\r')) ? null : Lines(text, l => l.TrimEnd(' '));
 
     // Whether the rows from `at` read as `text` (Lines), each line wrapped onto as many rows as
     // it takes, rows of `width` columns; `at` is left after its last row, or at the row that
-    // does not read so. Each row, its runs of white space as one space, must be the text's next
-    // characters exactly. Between two rows of a line, the space the row broke at is not drawn;
-    // where there is none, the break must be one line breaking allows (Breaks). Blank rows are
-    // taken only between lines.
+    // does not read so. Every row is read as drawn, from the question's column (where its first
+    // row starts, less that line's own indent): it must be the text's next characters exactly,
+    // its spaces as they are. Between two rows of a line, the space the row broke at may be
+    // left out or drawn at the next row's start; where there is none, the break must be one
+    // line breaking allows (Breaks), and the next row starts at the question's column, so
+    // "ag-" over " test-ops" (a space after the hyphen the CLI would not draw there) is not
+    // "ag-test-ops". Blank rows are taken only between lines.
     static bool Drawn(IReadOnlyList<string> rows, ref int at, string text, int width)
     {
-        var p = 0;
+        var (p, column, spaced) = (0, -1, false);
         while (true)
         {
             if (at >= rows.Count) { return false; }
-            var row = Collapse(rows[at]);
-            if (row.Length == 0 || row.Length > text.Length - p || string.CompareOrdinal(text, p, row, 0, row.Length) != 0) { return false; }
-            (p, at) = (p + row.Length, at + 1);
+            var row = rows[at].TrimEnd(' ');
+            if (column < 0)
+            {
+                var own = 0;
+                while (own < text.Length && text[own] == ' ') { own++; }
+                column = Indent(row) - own;
+            }
+            if (column < 0 || Indent(row) < column) { return false; }
+            var drawn = row[column..];
+            if (spaced && !drawn.StartsWith(' ')) { p++; }
+            if (drawn.Length == 0 || drawn.Length > text.Length - p || string.CompareOrdinal(text, p, drawn, 0, drawn.Length) != 0) { return false; }
+            (p, at, spaced) = (p + drawn.Length, at + 1, false);
             if (p == text.Length) { return true; }
             if (text[p] == '\n') { (p, at) = (p + 1, Next(rows, at)); }
-            else if (text[p] == ' ') { p++; }
+            else if (text[p] == ' ') { spaced = true; }
             else if (!Breaks(text, p, width)) { return false; }
         }
     }
