@@ -162,5 +162,5 @@ test('the client sends session.reply, waits longer for it than for anything else
   await new Promise((r) => setTimeout(r, 60));
   assert.deepEqual(sent[0], { id: 1, op: 'session.reply', data: { id: 's1', request: 'r1', text: 'go' } });
   t.onmessage({ re: 1, ok: true, result: { outcome: 'queued' } });
-  assert.deepEqual(await p, { outcome: 'unconfirmed', reason: null });
+  assert.deepEqual(await p, { outcome: 'unconfirmed', reason: null, stage: null });
 });

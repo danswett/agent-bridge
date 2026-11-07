@@ -137,7 +137,7 @@ internal sealed class ClaudeSubagents
             var e = doc.RootElement;
             if (e.ValueKind != JsonValueKind.Object || Json.Str(e, "agentId") != id) { return (null, null); }
             var message = Json.Obj(e, "message");
-            var prompt = message is { } m && Json.Get(m, "content") is { ValueKind: JsonValueKind.String } c ? c.GetString() : null;
+            var prompt = message is { } m && Json.Get(m, "content") is { ValueKind: JsonValueKind.String } c ? Json.Text(c) : null;
             return (Json.Time(e, "timestamp"), prompt);
         }
         catch (Exception x) when (x is JsonException or InvalidOperationException) { return (null, null); }

@@ -8,10 +8,12 @@ namespace AgentBridge.Host.Delivery.Copilot;
 // how many permission requests and ask_user calls are waiting in all, and the line boundary the
 // answer is looked for after. Others: every other permission request waiting, in the order
 // asked, each described (null where it cannot be read), so the screen can be checked for
-// them too. First: the request asked about is the earliest of those waiting (#690).
-public sealed record CopilotPermissionState(bool Readable, CopilotPermissionPrompt? Request, int PendingPermissions, int PendingAsks, long ScannedTo)
+// them too. First: the request asked about is the earliest of those waiting (#690). Asks: the
+// tool call ids of the ask_user calls waiting.
+public sealed record CopilotPermissionState(bool Readable, CopilotPermissionPrompt? Request, int PendingPermissions, int PendingAsks, long ScannedTo,
+    IReadOnlySet<string>? Asks = null, bool Replaced = false)
 {
-    public IReadOnlyList<(string RequestId, CopilotPermissionPrompt? Prompt)> Others { get; init; } = [];
+    public IReadOnlyList<(string RequestId, Lazy<CopilotPermissionPrompt?> Described)> Others { get; init; } = [];
     public bool First { get; init; }
 }
 
@@ -27,61 +29,7 @@ public static class CopilotPermissionTranscript
     // until the session's own abort, shutdown or resume in a new CLI. ask_user calls are counted as CopilotInput
     // counts them, since either kind of prompt holding the session's input changes what a key
     // typed now would answer.
-    public static CopilotPermissionState Before(string path, string requestId)
-    {
-        // In the order asked: a Dictionary's enumeration order is not kept once one is removed.
-        var permissions = new List<(string Id, JsonElement Data)>();
-        var asks = new Dictionary<string, string?>(StringComparer.Ordinal);
-        if (Jsonl.Lines(path, 0, skipFirst: false, Line) is not { } to)
-        {
-            return new CopilotPermissionState(false, null, 0, 0, 0);
-        }
-        // Completed edits can carry entire files: format and hash only what is still waiting.
-        var pending = permissions.Select(p => (p.Id, Prompt: CopilotPermission.Describe(p.Data))).ToList();
-        var at = pending.FindIndex(p => p.Id == requestId);
-        return new CopilotPermissionState(true, at < 0 ? null : pending[at].Prompt, pending.Count, asks.Count, to)
-        {
-            Others = [.. pending.Where(p => p.Id != requestId)],
-            First = at == 0,
-        };
-
-        void Line(ReadOnlySpan<byte> bytes, long start)
-        {
-            var ask = bytes.IndexOf("\"type\":\"tool.execution_start\""u8) >= 0 && bytes.IndexOf("\"ask_user\""u8) >= 0;
-            var permission = bytes.IndexOf("\"type\":\"permission."u8) >= 0;
-            var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
-            var answer = asks.Count > 0 && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
-            if (!ask && !permission && !ending && !answer) { return; }
-            if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
-            using (e.Doc)
-            {
-                var data = e.Data;
-                switch (e.Type)
-                {
-                    case "tool.execution_start" when CopilotPrompts.Str(data, "toolName") == "ask_user" && CopilotPrompts.Str(data, "toolCallId") is { } id:
-                        asks[id] = e.AgentId;
-                        break;
-                    case "tool.execution_complete" or "human_response.recorded" when CopilotPrompts.Str(data, "toolCallId") is { } id:
-                        asks.Remove(id);
-                        break;
-                    case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
-                        permissions.RemoveAll(p => p.Id == id);
-                        permissions.Add((id, data.Clone()));
-                        break;
-                    case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:
-                        permissions.RemoveAll(p => p.Id == id);
-                        break;
-                    case "abort" or "session.shutdown" or "session.resume" when e.AgentId is null:
-                        asks.Clear();
-                        permissions.Clear();
-                        break;
-                    case "abort" or "session.shutdown":
-                        foreach (var id in asks.Where(a => a.Value == e.AgentId).Select(a => a.Key).ToList()) { asks.Remove(id); }
-                        break;
-                }
-            }
-        }
-    }
+    public static CopilotPermissionState Before(string path, string requestId) => new CopilotPermissionWatch(path, requestId).Read();
 
     public static CopilotPermissionResult Since(string path, string requestId, long from)
     {
@@ -121,6 +69,144 @@ public static class CopilotPermissionTranscript
             }
         }
     }
+}
+
+// The same reading, kept up to date: each Read takes in only the lines the transcript has
+// gained since the last, from the line boundary that one stopped at, with the requests and
+// asks still waiting carried over. A form's answer is checked before every write, twice (by
+// the host, then by the injector once it holds the typing slot every session shares); read
+// from the start each time, those checks grew with the transcript and held up every other
+// session's typing behind them (#510 review, Copilot 4478363669). A transcript that is not the
+// file read so far (shorter, another file, or other bytes where it was read: JsonlMark, Copilot
+// 4484702591) is not the one that was read: everything read of it is dropped, it is read again
+// from its start, and that Read says it was Replaced, which an answer being typed stops on.
+// describe: how the request asked about is described (CopilotPermission.Describe
+// unless a test says otherwise); no other request is.
+public sealed class CopilotPermissionWatch(string path, string requestId, Func<JsonElement, CopilotPermissionPrompt?>? describe = null)
+{
+    // In the order asked, each with the request as recorded (a Dictionary does not keep that order
+    // once one is removed) and the agent asking it, null for the main agent's own: as the parser
+    // attributes it, stamped or by the tool call it is for (CopilotParser.Permission).
+    readonly List<(string Id, JsonElement Data, string? Agent)> permissions = [];
+    readonly Dictionary<string, string?> asks = new(StringComparer.Ordinal);
+    // Delegates' tool calls by id, from their stamped starts, to attribute a permission written
+    // without a stamp, as the parser's tool history does; dropped once the call completes.
+    readonly Dictionary<string, string> tools = new(StringComparer.Ordinal);
+    // Delegates by the task call that started them, and whether they run in the background, as
+    // the session's parser keeps them (BackgroundWork): a delegate's failure is written by its
+    // task call before CLI 1.0.10x stamped it with the delegate's id, and a task (synchronous)
+    // delegate is done when that call returns, where a background one's returns at once.
+    readonly Dictionary<string, (string Agent, bool Background)> delegates = new(StringComparer.Ordinal);
+    readonly JsonlMark mark = new();
+    long to;
+
+    // The bytes the last Read took in.
+    public long LastRead { get; private set; }
+
+    public CopilotPermissionState Read()
+    {
+        LastRead = 0;
+        var end = Jsonl.Lines(path, to, skipFirst: false, Line, mark);
+        var replaced = mark.Replaced;
+        if (replaced)
+        {
+            permissions.Clear();
+            asks.Clear();
+            delegates.Clear();
+            tools.Clear();
+            to = 0;
+            mark.Reset();
+            end = Jsonl.Lines(path, to, skipFirst: false, Line, mark);
+        }
+        if (end is not { } read) { return new CopilotPermissionState(false, null, 0, 0, 0, Replaced: replaced); }
+        (LastRead, to) = (read - to, read);
+        // Completed edits can carry entire files: format and hash only what is still waiting.
+        var at = permissions.FindIndex(p => p.Id == requestId);
+        var pending = permissions;
+        return new CopilotPermissionState(true, at < 0 ? null : (describe ?? CopilotPermission.Describe)(pending[at].Data), pending.Count, asks.Count, to, asks.Keys.ToHashSet(StringComparer.Ordinal), replaced)
+        {
+            Others = [.. pending.Where(p => p.Id != requestId).Select(p => (p.Id, new Lazy<CopilotPermissionPrompt?>(() => CopilotPermission.Describe(p.Data))))],
+            First = at == 0,
+        };
+    }
+
+    // A delegate that aborted, shut down or failed asks nothing any more, nor does a task
+    // delegate whose call has returned (CopilotParser): left waiting, its ask refused every
+    // answer to the session's own question (#510 review). Only what ends that delegate retires
+    // its asks. A run's completion does not: a background delegate can wake and ask again, and
+    // taken for its end, its live question went with an unrelated delegate's failure (Copilot
+    // 4479871566). A delegate the parser ends only by cascade (a task delegate of one that
+    // ended) is not followed here: its ask stays, and refuses, which fails closed.
+    void Retire(string agent)
+    {
+        foreach (var id in asks.Where(a => a.Value == agent).Select(a => a.Key).ToList()) { asks.Remove(id); }
+    }
+
+    void Line(ReadOnlySpan<byte> bytes, long start)
+    {
+        var ask = bytes.IndexOf("\"type\":\"tool.execution_start\""u8) >= 0 && bytes.IndexOf("\"ask_user\""u8) >= 0;
+        var permission = bytes.IndexOf("\"type\":\"permission."u8) >= 0;
+        var ending = bytes.IndexOf("\"type\":\"abort\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.shutdown\""u8) >= 0 || bytes.IndexOf("\"type\":\"session.resume\""u8) >= 0;
+        var answer = asks.Count > 0 && (bytes.IndexOf("\"type\":\"tool.execution_complete\""u8) >= 0 || bytes.IndexOf("\"type\":\"human_response.recorded\""u8) >= 0);
+        var delegated = bytes.IndexOf("\"type\":\"subagent."u8) >= 0;
+        var errored = bytes.IndexOf("\"type\":\"session.error\""u8) >= 0;
+        var tool = !ask && bytes.IndexOf("\"type\":\"tool.execution_"u8) >= 0 && (tools.Count > 0 || bytes.IndexOf("\"agentId\""u8) >= 0);
+        if (!ask && !permission && !ending && !answer && !delegated && !errored && !tool) { return; }
+        if (CopilotPrompts.Parse(bytes) is not { } e) { return; }
+        using (e.Doc)
+        {
+            var data = e.Data;
+            switch (e.Type)
+            {
+                case "tool.execution_start" when CopilotPrompts.Str(data, "toolCallId") is { } id:
+                    if (CopilotPrompts.Str(data, "toolName") == "ask_user") { asks[id] = e.AgentId; }
+                    if (e.AgentId is { } agent) { tools[id] = agent; }
+                    break;
+                case "tool.execution_complete" or "human_response.recorded" when CopilotPrompts.Str(data, "toolCallId") is { } id:
+                    asks.Remove(id);
+                    if (e.Type == "tool.execution_complete") { tools.Remove(id); }
+                    // A task delegate's call returning ends it (BackgroundWork.TaskCallDone); a
+                    // background delegate's returns as it starts (Copilot 4479871616).
+                    if (e.Type == "tool.execution_complete" && delegates.TryGetValue(id, out var task) && !task.Background) { Retire(task.Agent); }
+                    break;
+                case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
+                    {
+                        var by = e.AgentId ?? (CopilotPermission.ToolCallId(data) is { } call ? tools.GetValueOrDefault(call) : null);
+                        permissions.RemoveAll(p => p.Id == id);
+                        permissions.Add((id, data.Clone(), by));
+                        break;
+                    }
+                case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:
+                    permissions.RemoveAll(p => p.Id == id);
+                    break;
+                case "abort" or "session.shutdown" or "session.resume" when e.AgentId is null:
+                    asks.Clear();
+                    permissions.Clear();
+                    break;
+                case "abort" or "session.shutdown":
+                    Retire(e.AgentId!);
+                    break;
+                // The main agent's turn ended on an error (SessionState.FailTurn): its own asks and
+                // permission requests end with it, a delegate's stay, as the parser has them. Kept,
+                // one left by an earlier turn refused every later answer in the session (Copilot
+                // 5784408127). A delegate's own error, and one the turn survives, end nothing.
+                case "session.error" when e.AgentId is null && CopilotTurnErrors.EndsTurn(data):
+                    foreach (var id in asks.Where(a => a.Value is null).Select(a => a.Key).ToList()) { asks.Remove(id); }
+                    permissions.RemoveAll(p => p.Agent is null);
+                    break;
+                case "subagent.started" when e.AgentId is { } started && CopilotPrompts.Str(data, "toolCallId") is { } call:
+                    delegates[call] = (started, CopilotPrompts.Str(data, "executionMode") == "background");
+                    break;
+                case "subagent.failed" when (e.AgentId ?? Delegate(data)) is { } failed:
+                    Retire(failed);
+                    break;
+            }
+        }
+    }
+
+    string? Delegate(JsonElement data) => Delegate(CopilotPrompts.Str(data, "toolCallId"));
+
+    string? Delegate(string? call) => call is not null && delegates.TryGetValue(call, out var started) ? started.Agent : null;
 }
 
 // Where on the session's screen the prompt's answers are, read from the rows themselves. The
@@ -353,6 +439,54 @@ public static class CopilotPermissionScreen
             if (wanted.Any(w => above.Contains(w, StringComparison.Ordinal))) { return i; }
         }
         return -1;
+    }
+
+    // Whether a permission prompt is the last thing drawn above row `before`, with only blank
+    // rows (or a box's edges, or the conversation's scrollbar) between: where one would be drawn
+    // live, in the place the session draws its prompt. Read by its structure, as Copilot CLI
+    // 1.0.105 draws it (`cxo`'s permission, hook, path and URL prompts; their list, `tz`/`Xs`):
+    // a list of options numbered from 1 without a gap, every one "N. <label>" behind a
+    // two-column indicator, exactly one of them carrying the pointer (U+276F, or
+    // "Current selection:" for a screen reader); under it, its key hints ("↑↓ to navigate ·
+    // enter to select · esc to cancel", wrapping) unless hidden, then its box's bottom edge if
+    // it has one. Not any row reading "1. Yes": the session's own output above a form (an
+    // agent's numbered list) read so, and refused every answer to it (#510 review, Copilot
+    // 4484009805); a list the session printed has no pointer on one of its rows.
+    public static bool Ends(IReadOnlyList<string> rows, int before)
+    {
+        var r = Up(rows, before - 1);
+        // The key hints, wrapped onto up to three rows, the first saying "to navigate".
+        for (var k = r; k >= Math.Max(0, r - 2) && Item(rows[k]) is null; k--)
+        {
+            if (Clean(rows[k]).Text.Contains("to navigate", StringComparison.Ordinal))
+            {
+                r = Up(rows, k - 1);
+                break;
+            }
+        }
+        // The last option, with the rows its label wraps onto under it.
+        var last = r;
+        while (last >= 0 && last > r - 4 && Item(rows[last]) is null && Clean(rows[last]).Text.Length > 0) { last--; }
+        if (last < 0 || Item(rows[last]) is not { } item || item.Number < 2) { return false; }
+        // The options above it, each the one before, no blank row and no more than three wrapped
+        // rows between.
+        var (number, pointed, at) = (item.Number, item.Selected ? 1 : 0, last);
+        for (var i = last - 1; i >= 0 && number > 1 && at - i <= 4; i--)
+        {
+            if (Clean(rows[i]).Text.Length == 0) { return false; }
+            if (Item(rows[i]) is not { } above) { continue; }
+            if (above.Number != number - 1) { return false; }
+            (number, at) = (above.Number, i);
+            pointed += above.Selected ? 1 : 0;
+        }
+        return number == 1 && pointed == 1;
+    }
+
+    // The first row at or above `row` that is not blank once its frame is taken off.
+    static int Up(IReadOnlyList<string> rows, int row)
+    {
+        while (row >= 0 && Clean(rows[row]).Text.Length == 0) { row--; }
+        return row;
     }
 
     static (int Number, string Label, bool Selected)? Item(string row)

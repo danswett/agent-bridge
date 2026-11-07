@@ -164,17 +164,7 @@ public static class CopilotFieldConstraints
         return Options(o, consts, values).All(c => Key(c) is { } k && allowed.Contains(k));
     }
 
-    // A scalar as CopilotFieldSchema.SameScalar compares it: equal keys exactly when SameScalar
-    // holds. Null for one equal to nothing, as a number it cannot read exactly is.
-    static string? Key(JsonElement v) => v.ValueKind switch
-    {
-        JsonValueKind.String => "s" + v.GetString(),
-        JsonValueKind.Number => CopilotFieldSchema.ExactNumber(v.GetRawText()) is { } n ? "n" + n : null,
-        JsonValueKind.True => "t",
-        JsonValueKind.False => "f",
-        JsonValueKind.Null => "z",
-        _ => null,
-    };
+    static string? Key(JsonElement v) => CopilotFieldSchema.ScalarKey(v);
 
     // What the form itself carries besides its fields: anything but annotations, "required" and
     // "additionalProperties" (answers name only its fields) limits them in a way the host does not
@@ -231,18 +221,21 @@ public static class CopilotFieldConstraints
     // The default a text or number box opens with, which is the only answer it can be given from
     // another device (#662), checked as what it would be recorded as: a number box's as the number
     // the CLI holds, a text box's as the words in it. One the host cannot read exactly is refused
-    // elsewhere (CopilotForm.Keeps), so it is not judged here.
+    // elsewhere (CopilotForm.Keeps), so it is not judged here. A string is read through
+    // CopilotFieldSchema.Text: half a surrogate pair threw here, before PrefillAnswerable could
+    // send the field to the machine, and the transcript line that held it failed on every pass,
+    // freezing the session (#921 review). Such a default is not judged here either.
     static string? Kept(JsonElement p, CopilotFieldSchema.Input input, FieldConstraints c, PatternBudget budget)
     {
         if (!p.TryGetProperty("default", out var def) || def.ValueKind == JsonValueKind.Null) { return null; }
-        if (def.ValueKind == JsonValueKind.String && def.GetString()!.Length == 0) { return null; }
+        if (def.ValueKind == JsonValueKind.String && (CopilotFieldSchema.Text(def) is not { Length: > 0 })) { return null; }
         if (input == CopilotFieldSchema.Input.Number)
         {
-            var text = def.ValueKind switch { JsonValueKind.Number => def.GetRawText(), JsonValueKind.String => def.GetString(), _ => null };
+            var text = def.ValueKind switch { JsonValueKind.Number => def.GetRawText(), JsonValueKind.String => CopilotFieldSchema.Text(def), _ => null };
             return text is not null && CopilotFieldSchema.HeldExactly(text) is not null ? c.NumberProblem(text) : null;
         }
         if (input != CopilotFieldSchema.Input.Text) { return null; }
-        var words = def.ValueKind == JsonValueKind.String ? def.GetString()! : def.GetRawText();
+        var words = def.ValueKind == JsonValueKind.String ? CopilotFieldSchema.Text(def)! : def.GetRawText();
         // Whitespace is words too: the CLI records a default of spaces as it is (review of #844).
         return words.Length == 0 ? null : c.TextProblem(words, budget);
     }
@@ -274,15 +267,15 @@ public static class CopilotFieldConstraints
     static string? Pattern(JsonElement p, PatternBudget budget, ref string? problem)
     {
         if (!Has(p, "pattern", out var v)) { return null; }
-        if (v.ValueKind != JsonValueKind.String || !FieldConstraints.Readable(v.GetString()!, budget)) { problem ??= Uncheckable; return null; }
-        return v.GetString();
+        if (CopilotFieldSchema.Text(v) is not { } pattern || !FieldConstraints.Readable(pattern, budget)) { problem ??= Uncheckable; return null; }
+        return pattern;
     }
 
     // The four formats the CLI knows; any other it would not check either, so neither does this.
     static string? Format(JsonElement p, ref string? problem)
     {
         if (!Has(p, "format", out var v)) { return null; }
-        if (v.ValueKind != JsonValueKind.String) { problem ??= Uncheckable; return null; }
-        return FieldConstraints.Formats.Contains(v.GetString()) ? v.GetString() : null;
+        if (CopilotFieldSchema.Text(v) is not { } format) { problem ??= Uncheckable; return null; }
+        return FieldConstraints.Formats.Contains(format) ? format : null;
     }
 }

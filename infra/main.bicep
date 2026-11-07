@@ -65,6 +65,10 @@ param productionDeployerPrincipalId string = ''
 param productionDomainState string = 'none'
 @allowed(['none', 'added', 'bound'])
 param stagingDomainState string = 'none'
+@description('Steps for production.extraCustomDomains, by position (modules/relay-app.bicep).')
+param productionExtraDomainStates string[] = []
+@description('Steps for staging.extraCustomDomains, by position.')
+param stagingExtraDomainStates string[] = []
 
 @description('Object id of the person running deploy.ps1, who seeds the vaults\' secrets.')
 param operatorPrincipalId string = ''
@@ -178,6 +182,7 @@ module stagingApp 'modules/relay-app.bicep' = {
     deployBlobStore: true
     deployRosterStore: true
     domainState: stagingDomainState
+    extraDomainStates: stagingExtraDomainStates
     operatorPrincipalId: operatorPrincipalId
     tags: union(tags, { 'agent-bridge-env': 'staging' })
   }
@@ -200,6 +205,7 @@ module productionApp 'modules/relay-app.bicep' = {
     deployBlobStore: deployProduction
     deployRosterStore: deployProduction
     domainState: productionDomainState
+    extraDomainStates: productionExtraDomainStates
     operatorPrincipalId: operatorPrincipalId
     tags: union(tags, { 'agent-bridge-env': 'production' })
   }
@@ -228,6 +234,8 @@ output productionFqdn string = productionApp.outputs.fqdn
 output environmentDomain string = manageEnvironment ? environment!.properties.defaultDomain : ''
 output verificationId string = manageEnvironment ? environment!.properties.customDomainConfiguration.customDomainVerificationId : ''
 output productionCustomDomain string = productionApp.outputs.customDomain
+output productionExtraCustomDomains array = productionApp.outputs.extraCustomDomains
+output stagingExtraCustomDomains array = stagingApp.outputs.extraCustomDomains
 output stagingCustomDomain string = stagingApp.outputs.customDomain
 output stagingVault string = stagingApp.outputs.vaultName
 output productionVault string = productionApp.outputs.vaultName

@@ -140,6 +140,29 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Other_the_machine_cannot_send_yet_is_shown_unavailable_with_why_and_a_refusal_for_it_says_so_in_the_same_words()
+    {
+        // #908: the CLI offers Other, and the machine can't send it yet. The field says so in the
+        // fixed sentence, and a refusal carrying the code is shown as "Not sent · " and the same.
+        const string Why = "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.";
+        var choice = Make.Choice();
+        var q = Question(choice with { Fields = [choice.Fields[0] with { OtherUnavailable = AnswerReasons.OtherNotSendable }] });
+        Assert.Equal((false, Why), (q.Fields[0].AllowOther, q.Fields[0].OtherUnavailable));
+        // Not for a code this app does not know, nor beside an Other that is offered.
+        Assert.Null(Question(choice with { Fields = [choice.Fields[0] with { OtherUnavailable = "somethingNewer" }] }).Fields[0].OtherUnavailable);
+        Assert.Null(Question(Make.Choice(other: true) with { Fields = [Make.Choice(other: true).Fields[0] with { OtherUnavailable = AnswerReasons.OtherNotSendable }] }).Fields[0].OtherUnavailable);
+
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Refused, Why) { Code = AnswerReasons.OtherNotSendable });
+        var other = Question(Make.Choice(other: true));
+        other.ToggleOther();
+        other.Fields[0].OtherText = "DuckDB";
+        other.Send();
+
+        await Wait.UntilAsync(() => other.StatusText == "Not sent · " + Why, "refused, in the reason's own words");
+        Assert.True(other.CanAnswer);
+    }
+
+    [Fact]
     public void A_form_is_checked_before_it_goes_and_the_field_at_fault_is_marked()
     {
         var q = Question(Make.Form(

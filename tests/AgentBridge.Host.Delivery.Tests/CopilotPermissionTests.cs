@@ -1,3 +1,4 @@
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Copilot;
 using Xunit;
@@ -191,7 +192,7 @@ public sealed class CopilotPermissionTests : IDisposable
         var crowded = CopilotPermissionTranscript.Before(events, "r1");
         Assert.Equal((2, 1), (crowded.PendingPermissions, crowded.PendingAsks));
         Assert.True(crowded.First);
-        Assert.Equal("r2", Assert.Single(crowded.Others).Prompt?.RequestId);
+        Assert.Equal("r2", Assert.Single(crowded.Others).Described.Value?.RequestId);
         Assert.False(CopilotPermissionTranscript.Before(events, "r2").First);
 
         Fixture.Append(events, Copilot.PermissionDone("r1", "c1", "approved", 4));
@@ -215,7 +216,7 @@ public sealed class CopilotPermissionTests : IDisposable
         long Allocated()
         {
             var before = GC.GetAllocatedBytesForCurrentThread();
-            CopilotPermissionTranscript.Before(events, "r1");
+            foreach (var other in CopilotPermissionTranscript.Before(events, "r1").Others) { _ = other.Described.Value; }
             return GC.GetAllocatedBytesForCurrentThread() - before;
         }
         var pendingAllocations = Allocated();
@@ -229,12 +230,12 @@ public sealed class CopilotPermissionTests : IDisposable
         Assert.True(waiting.First);
         Assert.Equal(2, waiting.PendingPermissions);
         Assert.Equal("r1", waiting.Request?.RequestId);
-        Assert.Equal("r2", Assert.Single(waiting.Others).Prompt?.RequestId);
+        Assert.Equal("r2", Assert.Single(waiting.Others).Described.Value?.RequestId);
 
         Fixture.Append(events, Copilot.Permission("r1", "c3", Copilot.Prompts["path"], 5));
         var replaced = CopilotPermissionTranscript.Before(events, "r2");
         Assert.True(replaced.First);
-        Assert.Equal("c3", Assert.Single(replaced.Others).Prompt?.ToolCallId);
+        Assert.Equal("c3", Assert.Single(replaced.Others).Described.Value?.ToolCallId);
     }
 
     [Theory]
@@ -421,6 +422,229 @@ public sealed class CopilotPermissionTests : IDisposable
             var beside = crowd with { Others = [new CopilotPermissionScreen.Other("MCP tool, request r2", mcp.Drawn, mcp.Dialog)] };
             Assert.Contains("could be drawn as part of Copilot's own dialog", CopilotPermissionScreen.Locate(screen, approve: true, described.Probes, beside).Problem);
         }
+    }
+
+    [Fact]
+    public void Prompts_kept_up_to_date_are_read_from_what_the_transcript_gained_not_from_its_start()
+    {
+        // A form's answer checks before every write, with the typing slot every session shares
+        // held: each check takes in only the lines added since the last (Copilot 4478363669).
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, [.. Enumerable.Range(0, 2000).Select(i => Copilot.ToolStart($"t{i}", "powershell", new { command = $"echo {i}" }, i))]);
+        var watch = new CopilotPermissionWatch(events, "r1");
+
+        var all = watch.Read();
+        Assert.Equal((true, 0, 0), (all.Readable, all.PendingPermissions, all.PendingAsks));
+        Assert.Equal(new FileInfo(events).Length, watch.LastRead);
+
+        long Added(Action append)
+        {
+            var before = new FileInfo(events).Length;
+            append();
+            return new FileInfo(events).Length - before;
+        }
+        var opened = Added(() => Fixture.Append(events, Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2001), Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 2002)));
+        var waiting = watch.Read();
+        Assert.Equal(("r1", 1, 1), (waiting.Request?.RequestId, waiting.PendingPermissions, waiting.PendingAsks));
+        Assert.Equal(opened, watch.LastRead);
+        Assert.Equal(new FileInfo(events).Length, waiting.ScannedTo);
+
+        Assert.Equal(1, watch.Read().PendingPermissions);
+        Assert.Equal(0, watch.LastRead);
+
+        var closed = Added(() => Fixture.Append(events, Copilot.PermissionDone("r1", "c1", "approved", 2003)));
+        var done = watch.Read();
+        Assert.Equal((null, 0, 1), (done.Request, done.PendingPermissions, done.PendingAsks));
+        Assert.Equal(closed, watch.LastRead);
+        // The same as a reading from the start.
+        var whole = CopilotPermissionTranscript.Before(events, "r1");
+        Assert.Equal((whole.Request, whole.PendingPermissions, whole.PendingAsks, whole.ScannedTo), (done.Request, done.PendingPermissions, done.PendingAsks, done.ScannedTo));
+    }
+
+    [Fact]
+    public void Asks_are_named_by_their_calls_and_a_failed_delegates_ask_waits_no_longer()
+    {
+        // As the session's parser retires them (CopilotParser): a delegate that failed asks
+        // nothing, its failure stamped with its id, or written by its task call before 1.0.10x.
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 1),
+            Copilot.Event("subagent.started", new { toolCallId = "task1", agentName = "helper" }, 2, agentId: "helper"),
+            Copilot.ToolStart("q8", "ask_user", new { message = "?" }, 3, agentId: "helper"),
+            Copilot.Event("subagent.started", new { toolCallId = "task2", agentName = "other" }, 4, agentId: "other"),
+            Copilot.ToolStart("q9", "ask_user", new { message = "?" }, 5, agentId: "other"));
+        var watch = new CopilotPermissionWatch(events, "");
+        Assert.Equal(["q1", "q8", "q9"], watch.Read().Asks!.Order());
+
+        Fixture.Append(events, Copilot.Event("subagent.failed", new { toolCallId = "task1", error = "x" }, 6));
+        Assert.Equal(["q1", "q9"], watch.Read().Asks!.Order());
+
+        Fixture.Append(events, Copilot.Event("subagent.failed", new { toolCallId = "task2", error = "x" }, 7, agentId: "other"));
+        var left = watch.Read();
+        Assert.Equal(["q1"], left.Asks!.Order());
+        Assert.Equal(1, left.PendingAsks);
+    }
+
+    [Fact]
+    public void A_background_delegate_that_completed_a_run_and_asked_again_still_asks_when_another_fails()
+    {
+        // A run's completion is not the delegate's end: it can wake and ask again (Copilot
+        // 4479871566). Only its own failure, abort or shutdown retires its ask.
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 1),
+            Copilot.Event("subagent.started", new { toolCallId = "t1", agentName = "bg", executionMode = "background" }, 2, agentId: "bg"),
+            Copilot.ToolDone("t1", 3),
+            Copilot.Event("subagent.completed", new { toolCallId = "t1" }, 4, agentId: "bg"),
+            Copilot.ToolStart("q8", "ask_user", new { message = "?" }, 5, agentId: "bg"),
+            Copilot.Event("subagent.started", new { toolCallId = "t2", agentName = "other" }, 6, agentId: "other"),
+            Copilot.Event("subagent.failed", new { toolCallId = "t2", error = "x" }, 7, agentId: "other"));
+
+        Assert.Equal(["q1", "q8"], new CopilotPermissionWatch(events, "").Read().Asks!.Order());
+    }
+
+    [Fact]
+    public void A_task_delegates_ask_goes_when_its_call_returns_and_a_background_delegates_stays()
+    {
+        // As BackgroundWork.TaskCallDone has it: a task (synchronous) delegate is done when the
+        // call that started it returns; a background delegate's call returns as it starts
+        // (Copilot 4479871616).
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 1),
+            Copilot.Event("subagent.started", new { toolCallId = "t3", agentName = "sync" }, 2, agentId: "sync"),
+            Copilot.ToolStart("q9", "ask_user", new { message = "?" }, 3, agentId: "sync"),
+            Copilot.Event("subagent.started", new { toolCallId = "t4", agentName = "bg", executionMode = "background" }, 4, agentId: "bg"),
+            Copilot.ToolStart("q10", "ask_user", new { message = "?" }, 5, agentId: "bg"));
+        var watch = new CopilotPermissionWatch(events, "");
+        Assert.Equal(["q1", "q10", "q9"], watch.Read().Asks!.Order());
+
+        Fixture.Append(events, Copilot.ToolDone("t4", 6));
+        Assert.Equal(["q1", "q10", "q9"], watch.Read().Asks!.Order());
+
+        Fixture.Append(events, Copilot.ToolDone("t3", 7));
+        Assert.Equal(["q1", "q10"], watch.Read().Asks!.Order());
+    }
+
+    [Fact]
+    public void A_turn_ended_by_an_error_retires_the_main_agents_prompts_and_never_a_delegates()
+    {
+        // As SessionState.FailTurn has it (Copilot 5784408127): the main agent's asks and
+        // permission requests end with its turn; a delegate's, stamped or attributed by its tool
+        // call, are still the person's to answer. A model call's or a hook's error, and a
+        // delegate's own, end nothing.
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 1),
+            Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2),
+            Copilot.ToolStart("c2", "powershell", new { command = "ls" }, 3, agentId: "helper"),
+            Copilot.Permission("r2", "c2", Copilot.Prompts["commands"], 4),
+            Copilot.Permission("r3", "c3", Copilot.Prompts["read"], 5, agentId: "helper"),
+            Copilot.ToolStart("q8", "ask_user", new { message = "?" }, 6, agentId: "helper"));
+        var watch = new CopilotPermissionWatch(events, "r2");
+        Assert.Equal((3, 2), (watch.Read().PendingPermissions, watch.Read().PendingAsks));
+
+        Fixture.Append(events, Copilot.Event("session.error", new { errorType = "model_call", message = "retrying" }, 7),
+            Copilot.Event("session.error", new { errorType = "hook", message = "x" }, 8),
+            Copilot.Event("session.error", new { errorType = "authorization", statusCode = 401 }, 9, agentId: "helper"));
+        var survived = watch.Read();
+        Assert.Equal((3, 2), (survived.PendingPermissions, survived.PendingAsks));
+
+        Fixture.Append(events, Copilot.Event("session.error", new { errorType = "authorization", statusCode = 401, remediation = "sign_in" }, 10));
+        var ended = watch.Read();
+        Assert.Equal((2, "r2"), (ended.PendingPermissions, ended.Request?.RequestId));
+        Assert.Equal(["q8"], ended.Asks!);
+        Assert.Null(CopilotPermissionTranscript.Before(events, "r1").Request);
+
+        // The main agent's prompts opened after the error are its next turn's, and wait.
+        Fixture.Append(events, Copilot.Permission("r5", "c5", Copilot.Prompts["commands"], 11), Copilot.ToolStart("q5", "ask_user", new { message = "?" }, 12));
+        var next = watch.Read();
+        Assert.Equal(3, next.PendingPermissions);
+        Assert.Equal(["q5", "q8"], next.Asks!.Order());
+    }
+
+    [Fact]
+    public void Only_the_request_asked_about_is_described_and_the_others_are_still_attributed_by_their_tool_call()
+    {
+        // Describing formats and hashes what a request would run, and these reads hold the typing
+        // slot every session shares (Copilot 4484009896): the others are attributed by their
+        // tool call alone, promptRequest's or, without one, permissionRequest's.
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.ToolStart("c2", "powershell", new { command = "ls" }, 1, agentId: "helper"),
+            Copilot.ToolStart("c3", "powershell", new { command = "ls" }, 2, agentId: "helper"),
+            Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 3),
+            Copilot.Event("permission.requested", new { requestId = "r2", promptRequest = new { kind = "write", fileName = "a.txt" }, permissionRequest = new { kind = "write", toolCallId = "c2" } }, 4),
+            Copilot.Event("permission.requested", new { requestId = "r3", permissionRequest = new { kind = "shell", toolCallId = "c3", fullCommandText = new string('x', 100_000) } }, 5),
+            Copilot.Permission("r4", "c4", Copilot.Prompts["read"], 6));
+        var described = new List<string?>();
+        var watch = new CopilotPermissionWatch(events, "r4", data =>
+        {
+            described.Add(data.GetProperty("requestId").GetString());
+            return CopilotPermission.Describe(data);
+        });
+
+        var read = watch.Read();
+        Assert.Equal((4, "r4"), (read.PendingPermissions, read.Request?.RequestId));
+        Assert.Equal(["r4"], described);
+
+        // r2 and r3 are the helper's, by their tool calls: the main agent's turn ending on an
+        // error ends r1 and r4, and leaves them.
+        Fixture.Append(events, Copilot.Event("session.error", new { errorType = "authorization", statusCode = 401, remediation = "sign_in" }, 7));
+        var ended = watch.Read();
+        Assert.Equal((2, null), (ended.PendingPermissions, ended.Request));
+        Assert.Equal(["r4"], described);
+    }
+
+    [Fact]
+    public void A_transcript_shorter_than_what_was_read_is_read_again_from_its_start()
+    {
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 1), Copilot.Permission("r2", "c2", Copilot.Prompts["read"], 2));
+        var watch = new CopilotPermissionWatch(events, "r1");
+        Assert.Equal(2, watch.Read().PendingPermissions);
+
+        File.WriteAllText(events, "");
+        Fixture.Append(events, Copilot.Permission("r3", "c3", Copilot.Prompts["read"], 3));
+
+        var again = watch.Read();
+        Assert.Equal((null, 1, true), (again.Request, again.PendingPermissions, again.Replaced));
+        Assert.Equal(new FileInfo(events).Length, watch.LastRead);
+        // Read from its start, it is the file read from now on.
+        Fixture.Append(events, Copilot.Permission("r4", "c4", Copilot.Prompts["read"], 4));
+        Assert.Equal((2, false), (watch.Read().PendingPermissions, watch.Read().Replaced));
+    }
+
+    // Another file of the same length in its place (Copilot 4484702591), byte for byte the same or
+    // rewritten with another call's request where the first was: nothing read of the first is
+    // kept, and the Read says it was replaced, which stops an answer being typed. Only an append
+    // is read as more of the same transcript.
+    [Theory]
+    [InlineData("moved into place")]
+    [InlineData("rewritten")]
+    public void A_transcript_replaced_by_one_of_the_same_length_is_read_again_from_its_start_and_said_to_be(string how)
+    {
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        Fixture.Append(events, Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 1), Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 2));
+        var watch = new CopilotPermissionWatch(events, "r1");
+        var first = watch.Read();
+        Assert.Equal(("r1", "q1"), (first.Request?.RequestId, first.Asks!.Single()));
+
+        Fixture.Append(events, Copilot.ToolStart("c9", "powershell", new { command = "ls" }, 3));
+        var appended = watch.Read();
+        Assert.Equal((false, "r1"), (appended.Replaced, appended.Request?.RequestId));
+
+        var text = File.ReadAllText(events);
+        if (how == "moved into place")
+        {
+            File.WriteAllText(events + ".new", text);
+            File.Move(events + ".new", events, overwrite: true);
+        }
+        else
+        {
+            File.WriteAllText(events, text.Replace("\"r1\"", "\"r7\"").Replace("\"q1\"", "\"q7\""));
+        }
+
+        var replaced = watch.Read();
+        Assert.True(replaced.Replaced);
+        Assert.Equal(new FileInfo(events).Length, watch.LastRead);
+        Assert.Equal(how == "rewritten" ? ((string?)null, "q7") : ("r1", "q1"), (replaced.Request?.RequestId, replaced.Asks!.Single()));
+        Assert.False(watch.Read().Replaced);
     }
 
     [Fact]

@@ -35,10 +35,10 @@ Agents: **Cp** Copilot CLI, **Cl** Claude Code, **Cx** Codex, **All**.
 
 | Status | Rows |
 |---|---|
-| `Verified` | 49 |
+| `Verified` | 48 |
 | `Implemented, untested live` | 53 |
 | `Partial` | 1 |
-| `Missing` | 9 |
+| `Missing` | 10 |
 | `Intentionally different` | 20 |
 | `N/A` | 12 |
 | `In flight (…)` | 6: Claude/Codex live 6 |
@@ -77,7 +77,7 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 | Single choice: Up×(N−1) to the top, Down to the row, Enter | Cp | `hooks/decision-inject.ps1` | `Verified` | `CopilotPlannerTests.A_choice_walks_up_to_the_top_wherever_the_caret_was_left_then_down_to_the_chosen_row_and_commits_with_Enter`. Live: Progress › Answers (single choice), Windows app (card and toast) | |
 | Forms of any number of fields (choice, boolean, text, number), each committed with its own Enter | Cp | `Get-BridgeFormPayloads`, `Send-CopilotSessionForm`; `tests/test-decision-args.ps1` | `Verified` | `CopilotPlannerTests.Each_field_of_a_form_is_answered_in_order_with_its_own_Enter_and_a_pause_after_it`, `pwa/test/answer.spec.mjs` (forms). Live: Progress › Answers (five-field form, é and 🚀 exact) | |
 | Multi-select checkboxes, toggling only rows that must change | Cp | `tests/test-choices-form.ps1` | `Implemented, untested live` | `CopilotPlannerTests.A_multi_select_list_is_walked_once_from_its_top_row_wherever_the_caret_was_left_toggling_only_rows_that_must_change` | `docs/host-answers.md`: "Up stops at the first row of a checkbox list" is assumed, not seen. #39 |
-| Other (type your answer): Up×(N−1), Down×N, the words, a single Enter (#240) | Cp | `hooks/decision-inject.ps1`; `tests/test-answer-match.ps1` | `Verified` | `CopilotPlannerTests.Words_through_Other_walk_up_to_the_top_then_down_past_the_last_option_and_submit_separately`, `TranscriptAndVerifierTests.Words_through_Other_match_only_when_the_words_were_recorded_and_not_an_option`. Live: Progress › Answers (Other with smart quotes) | |
+| Other (type your answer): Up×(N−1), Down×N, the words, a single Enter (#240) | Cp | `hooks/decision-inject.ps1`; `tests/test-answer-match.ps1` | `Missing` | Planned as before (`CopilotPlannerTests.Words_through_Other_walk_up_to_the_top_then_down_past_the_last_option_and_submit_separately`), but refused before any key and shown disabled with why (`AnswerFlowTests.An_Other_answer_to_a_lone_list_is_refused_before_any_key_saying_why_as_the_list_already_does`): a live 1.0.105 session takes the words in a box drawn apart from the form, which #510 holds no key to | [#908](https://github.com/danswett/agent-bridge/issues/908): type into that box. A temporary exception to #876 until then; agent-ha-bridge typed blind and reached it |
 | Other inside a multi-field form or a checkbox list | Cp | No walk in agent-ha-bridge either | `Intentionally different` | Refused (`CopilotPlannerTests.Other_in_a_tabbed_form_or_a_checkbox_list_is_refused_because_no_walk_reaches_it`) | `docs/host-answers.md` › What can be answered |
 | The older `question` / `choices` format | Cp | Not driven by agent-ha-bridge | `Intentionally different` | Shown, refused for typing (`CopilotPlannerTests.The_older_choices_format_and_a_default_that_names_no_option_are_refused_before_planning`) | `docs/host-answers.md` |
 | Non-Latin-1 text typed exactly (dashes, smart quotes, CJK, emoji) | All | Broken before agent-ha-bridge #252 | `Verified` | `CopilotPlannerTests.Emoji_and_CJK_are_typed_as_they_are_and_long_words_go_in_one_burst`. Live: Progress › Answers (é 🚀), Other (smart quotes) | |

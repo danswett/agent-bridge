@@ -36,7 +36,7 @@
 // agent-ha-bridge still runs does. Each is its own DemoHost behind DemoConnection, the relay's
 // presence and channels in the page, so the app shows them as it shows real ones: one at a
 // time, or every machine at once.
-import { checkAnswer } from './answers.js';
+import { answerReasonCode, checkAnswer } from './answers.js';
 import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
 import { USAGE } from './usage.js';
@@ -769,11 +769,12 @@ export class DemoHost {
     const q = s?.question ? readQuestion(s.question) : null;
     if (!q || q.id !== data.question) { return { outcome: 'stale', reason: 'the session is no longer asking that question' }; }
     const problem = checkAnswer(q, data) ?? this.#escapedRefusal(q, data);
-    if (problem) { return { outcome: 'refused', reason: problem }; }
+    // With the code a host sends for a reason that has one, as AnswerService does.
+    if (problem) { const code = answerReasonCode(problem); return { outcome: 'refused', reason: problem, ...(code ? { code } : {}) }; }
     const { outcome } = scripted;
     if (outcome === 'stale') { return { outcome, reason: scripted.reason ?? 'answered at the machine' }; }
     if (outcome === 'busy') { return { outcome, reason: scripted.reason ?? 'another answer or reply to this session is being delivered' }; }
-    if (outcome === 'refused') { return { outcome, reason: scripted.reason ?? 'the session is running elevated' }; }
+    if (outcome === 'refused') { return { outcome, reason: scripted.reason ?? 'the session is running elevated', ...(scripted.code ? { code: scripted.code } : {}) }; }
     // Typed: the question goes, and the session works on the answer.
     const said = data.text ?? Object.entries(data.fields ?? {}).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('; ');
     typed(s.status === 'working');

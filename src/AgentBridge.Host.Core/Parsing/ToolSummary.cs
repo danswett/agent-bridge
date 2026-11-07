@@ -54,8 +54,11 @@ internal static class ToolSummary
         if (arguments is not { } args) { return null; }
         if (args.ValueKind == JsonValueKind.String)
         {
-            // Codex passes function arguments as a JSON string, and custom tools a raw one.
-            var raw = args.GetString();
+            // Codex passes function arguments as a JSON string, and custom tools a raw one. Every
+            // string here is read as shown (CopilotFieldSchema.Shown): half a surrogate pair in a
+            // tool's argument threw, and the line holding it failed on every pass, dropping the
+            // session and holding discovery (#921 review).
+            var raw = CopilotFieldSchema.Shown(args);
             if (raw is { Length: > 0 } && raw.TrimStart().StartsWith('{'))
             {
                 try
@@ -69,14 +72,14 @@ internal static class ToolSummary
             return Cut(raw);
         }
         if (args.ValueKind != JsonValueKind.Object) { return null; }
-        if (Json.Str(args, "description") is { } description && Cut(description) is { } d) { return d; }
+        if (CopilotFieldSchema.Shown(args, "description") is { } description && Cut(description) is { } d) { return d; }
         foreach (var name in MainArguments)
         {
             if (Json.Get(args, name) is { } value && Cut(Describe(value)) is { } s) { return s; }
         }
         foreach (var property in args.EnumerateObject())
         {
-            if (property.Value.ValueKind == JsonValueKind.String && Cut(property.Value.GetString()) is { } s) { return s; }
+            if (property.Value.ValueKind == JsonValueKind.String && Cut(CopilotFieldSchema.Shown(property.Value)) is { } s) { return s; }
         }
         return null;
     }
@@ -85,9 +88,9 @@ internal static class ToolSummary
     // is what a person wants to see.
     static string? Describe(JsonElement value)
     {
-        if (value.ValueKind == JsonValueKind.String) { return value.GetString(); }
+        if (value.ValueKind == JsonValueKind.String) { return CopilotFieldSchema.Shown(value); }
         if (value.ValueKind != JsonValueKind.Array) { return null; }
-        var parts = value.EnumerateArray().Where(p => p.ValueKind == JsonValueKind.String).Select(p => p.GetString()!).ToList();
+        var parts = value.EnumerateArray().Where(p => p.ValueKind == JsonValueKind.String).Select(p => CopilotFieldSchema.Shown(p)).ToList();
         if (parts.Count >= 3 && parts[1] is "-lc" or "-c" or "/c" or "-Command") { return parts[^1]; }
         return parts.Count == 0 ? null : string.Join(' ', parts);
     }
