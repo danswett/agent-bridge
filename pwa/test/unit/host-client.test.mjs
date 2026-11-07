@@ -396,7 +396,7 @@ test('progress frames tell a reply how far it has got, in order, and never settl
   assert.equal(settled, false);
   assert.deepEqual(heard, [{ stage: 'received', working: false }, { stage: 'typed', working: true }, { stage: 'pondering', working: false }]);
   t.host({ re, ok: true, result: { outcome: 'delivered', timings: { typed: 352, recorded: 1190, confirmed: 1361, bogus: 'x' } } });
-  assert.deepEqual(await p, { outcome: 'delivered', reason: null, timings: { typed: 352, recorded: 1190, confirmed: 1361 } });
+  assert.deepEqual(await p, { outcome: 'delivered', reason: null, stage: null, timings: { typed: 352, recorded: 1190, confirmed: 1361 } });
 });
 
 test('a progress frame for a request the client is not waiting on is ignored', async () => {
@@ -407,7 +407,7 @@ test('a progress frame for a request the client is not waiting on is ignored', a
   const re = t.lastRequest('session.reply').id;
   t.host({ re: re + 7, progress: { stage: 'typed', working: false } });
   t.host({ re, ok: true, result: { outcome: 'delivered' } });
-  assert.deepEqual(await p, { outcome: 'delivered', reason: null });
+  assert.deepEqual(await p, { outcome: 'delivered', reason: null, stage: null });
   // Nor one for the request after its response: it is settled and gone.
   t.host({ re, progress: { stage: 'received' } });
   assert.deepEqual(heard, []);

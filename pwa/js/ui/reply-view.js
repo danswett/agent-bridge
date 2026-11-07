@@ -23,6 +23,7 @@ import { CANCELLED } from '../reply-service.js';
 import { isSendKey, shortcutHints } from '../platform.js';
 import { ReceiptClock, describeInFlight, drawReceipt, drawn, dropCheck, holdCheck, receiptLive } from './receipt.js';
 import { PHONE } from './collapse-header.js';
+import { UPDATING, holdOf } from './hold.js';
 
 let seq = 0;
 const kib = (n) => `${(n / 1024).toFixed(1)} KiB`;
@@ -105,6 +106,8 @@ export class ReplyBox {
   #edited = null;
   // Why nothing can be sent now (its machine offline, #269), or null.
   #offline = null;
+  // The hold it was last given (hold.js): a quiet one while the app catches up after a return.
+  #hold = holdOf(null);
   // Below 760 (a phone): the box is one line at rest and grows with its words.
   #phone = null;
   #resize = null;
@@ -266,7 +269,7 @@ export class ReplyBox {
         h('div', { class: 'text-wrap' }, e.input, e.bytes),
         e.files,
         e.tools = h('div', { class: 'reply-tools' }, e.attach, e.send)),
-      e.hint, e.error,
+      e.hint, e.updating = h('p', { class: 'note reply-updating', hidden: true }), e.error,
       h('div', { class: 'answer-actions' }, e.resend, e.cancel),
       e.picker,
       e.status, e.live);
@@ -289,7 +292,9 @@ export class ReplyBox {
     this.#session = session;
     this.#attach = attach;
     this.#largeMax = largeMax;
-    this.#offline = offline || null;
+    const hold = holdOf(offline);
+    this.#offline = hold.text;
+    this.#hold = hold;
     this.#show(this.entry);
   }
 
@@ -326,6 +331,14 @@ export class ReplyBox {
       say('The session is waiting for an answer to its question. Answer that first, then reply.');
     }
     e.held.classList.toggle('reply-notice', e.held.contains(e.toQuestion));
+    // The offline line takes the place of Attach and Send; focus on one goes to the line (rule 8).
+    const offlineLine = this.#hold.offline && !!this.#offline;
+    const doc = e.send.ownerDocument;
+    const onTools = e.tools.contains(doc.activeElement);
+    e.tools.hidden = offlineLine;
+    if (offlineLine) { e.held.tabIndex = -1; } else { e.held.removeAttribute('tabindex'); }
+    if (offlineLine && onTools) { e.held.focus(); }
+    e.form.dataset.hold = this.#hold.updating ? (this.#hold.drawn ? 'drawn' : 'quiet') : 'none';
     // Offline, the words can still be written, to go once it is back; a question would take them.
     e.input.disabled = !!this.#session?.question;
     // The link gone with the question it led to: focus goes to the words, not the top of the page.
@@ -340,7 +353,8 @@ export class ReplyBox {
     const off = held || this.#preparing > 0 || (text.trim() === '' && this.#files.length === 0);
     if (off && e.send === e.send.ownerDocument.activeElement && !e.input.disabled) { e.input.focus(); }
     e.send.disabled = off;
-    if (!off && (pending || this.#busyTimer)) { e.send.setAttribute('aria-disabled', 'true'); } else { e.send.removeAttribute('aria-disabled'); }
+    if (!off && (pending || this.#busyTimer || this.#hold.updating)) { e.send.setAttribute('aria-disabled', 'true'); } else { e.send.removeAttribute('aria-disabled'); }
+    if (!this.#hold.updating) { e.updating.hidden = true; e.updating.textContent = ''; }
     e.resend.disabled = !!this.#offline;
     this.fit();
     this.#onChange?.();
@@ -425,6 +439,11 @@ export class ReplyBox {
   }
 
   #send() {
+    if (this.#hold.updating && !this.#held() && !this.#pending() && !this.#busyTimer && this.#preparing === 0 && (this.els.input.value.trim() !== '' || this.#files.length > 0)) {
+      this.els.updating.textContent = UPDATING;
+      this.els.updating.hidden = false;
+      return;
+    }
     if (this.#held() || this.#pending() || this.#busyTimer || this.#preparing > 0) { return; }
     const text = this.els.input.value;
     const files = [...this.#files];

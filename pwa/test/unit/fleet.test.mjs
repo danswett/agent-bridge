@@ -553,3 +553,31 @@ test('a press on a machine not shown keeps the app busy from opening its channel
   assert.deepEqual(await call, { outcome: 'accepted' });
   assert.equal(fleet.busy, false);
 });
+
+// #972 slice 2: who can sign Copilot in, read only where a machine offers it (its switch on), on
+// the channel of a machine shown and with the look at one that isn't; dropped when it stops.
+test('who can sign Copilot in is read from each machine that offers it, and dropped when it stops offering it', async () => {
+  const listed = { state: 'ready', devices: [{ name: 'iPhone', kind: 'phone', platform: 'iOS', thisDevice: true }] };
+  const { connection, hosts, fleet } = fleetWith({
+    b: { machine: {}, capabilities: ['sessions.read', 'signin.devices'], answer: (op) => (op === 'signin.devices' ? listed : null) },
+    c: { machine: {}, capabilities: ['sessions.read'] },
+  });
+  const asked = [];
+  const client = { synced: true, on: () => {}, request: async (op) => { asked.push(op); return { state: 'none', devices: [] }; } };
+  const link = hosts.view({ id: 'v', client, machine: {}, capabilities: ['sessions.read', 'signin.devices'] });
+  await flush();
+  await fleet.idle();
+
+  assert.deepEqual(fleet.signIns('b'), { state: 'ready', devices: [{ name: 'iPhone', kind: 'phone', platform: 'iOS', thisDevice: true }] });
+  assert.deepEqual(connection.hosts.b.requests, [{ op: 'signin.devices', data: undefined }]);
+  assert.equal(fleet.signIns('c'), null);
+  assert.equal(connection.hosts.c.requests, undefined);
+  assert.deepEqual(asked, ['signin.devices']);
+  assert.deepEqual(fleet.signIns('v'), { state: 'none', devices: [] });
+
+  link.capabilities = ['sessions.read'];
+  hosts.change();
+  assert.equal(fleet.signIns('v'), null);
+  fleet.clear();
+  assert.equal(fleet.signIns('b'), null);
+});

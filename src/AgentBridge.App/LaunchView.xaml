@@ -179,7 +179,7 @@
                     AutomationProperties.LiveSetting="Polite"
                     TextWrapping="Wrap" IsTextSelectionEnabled="True"
                     Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
-                    Foreground="{x:Bind local:Ui.ToneBrush(ViewModel.StatusTone), Mode=OneWay}"
+                    Foreground="{x:Bind local:Ui.ReceiptBrush(ViewModel.StatusTone), Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Some(ViewModel.StatusText), Mode=OneWay}" />
                 <local:WrapRow Spacing="8">
                     <Button

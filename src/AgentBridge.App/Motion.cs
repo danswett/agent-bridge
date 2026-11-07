@@ -186,11 +186,33 @@ public static class Motion
         return false;
     }
 
-    // A banner (an InfoBar over a page or the list) slides 12 down from its top edge and fades in
-    // as it opens (ui.md §5.3, Toast and banner); never one open as the window first draws.
+    // A banner (an InfoBar over a page or the list) opens by growing from no height to its own,
+    // with the toast's duration and easing, so what is under it moves down with it instead of
+    // being jumped (ui.md §5.3, Toast and banner; §7, #1064); never one open as the window first
+    // draws, and at once with animations off. Its closing is the InfoBar's own.
     public static void Banner(InfoBar bar) =>
         bar.RegisterPropertyChangedCallback(InfoBar.IsOpenProperty, (_, _) =>
         {
-            if (bar.IsOpen && bar.IsLoaded) { Enter(bar, "Toast", new Vector2(0, -1)); }
+            if (!bar.IsOpen || !bar.IsLoaded) { return; }
+            var step = Catalogue.Enter("Toast", Enabled);
+            if (!step.Runs || step.Distance <= 0) { return; }
+            bar.Measure(new Windows.Foundation.Size(bar.ActualWidth > 0 ? bar.ActualWidth : double.PositiveInfinity, double.PositiveInfinity));
+            var full = bar.DesiredSize.Height;
+            if (full <= 0) { return; }
+            var grow = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                From = 0,
+                To = full,
+                Duration = step.Duration,
+                EnableDependentAnimation = true,
+                EasingFunction = new Microsoft.UI.Xaml.Media.Animation.CubicEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut },
+            };
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(grow, bar);
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(grow, "Height");
+            var board = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
+            board.Children.Add(grow);
+            // Auto again once done, so a longer message or a narrower window still fits.
+            board.Completed += (_, _) => { board.Stop(); bar.ClearValue(FrameworkElement.HeightProperty); };
+            board.Begin();
         });
 }

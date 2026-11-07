@@ -10,6 +10,7 @@
 // session is still the same process. Here the first press's answer is shown with the time
 // left, and a press after the window has lapsed is another first press.
 import { h, icon } from './dom.js';
+import { UPDATING, holdOf } from './hold.js';
 
 export const CONFIRM_NOTE = 'Press End session again to end it';
 export const LAPSED_NOTE = 'End session NOT confirmed';
@@ -68,7 +69,8 @@ export class EndSession {
   #busyTimer = null;
   #busyFor = null;
   #held = null;
-
+  // On a return the app is catching up (hold.js): the button is aria-disabled, and a press says so.
+  #quiet = false;
   // stopping: { service, hostId, sessionId }.
   constructor({ machineName, stopping, now = () => Date.now() }) {
     this.machineName = machineName;
@@ -93,13 +95,17 @@ export class EndSession {
     e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again');
     e.status = h('p', { class: 'answer-status stop-status', role: 'status', 'aria-live': 'polite' });
     e.held = h('p', { class: 'note warn stop-held', hidden: true });
-    this.element = h('div', { class: 'end-session', dataset: { stop: 'none' } }, e.button, e.held, e.status, e.resend);
+    e.updating = h('p', { class: 'note stop-updating', hidden: true });
+    this.element = h('div', { class: 'end-session', dataset: { stop: 'none' } }, e.button, e.held, e.updating, e.status, e.resend);
   }
 
   // held: why it can't be pressed now (its machine offline, #269), or null.
   update(session, { held = null } = {}) {
     this.#session = session;
-    this.#held = held || null;
+    const hold = holdOf(held);
+    this.#held = hold.text;
+    this.#quiet = hold.updating;
+    this.element.dataset.hold = hold.updating ? (hold.drawn ? 'drawn' : 'quiet') : 'none';
     this.#show(this.entry);
   }
 
@@ -115,10 +121,15 @@ export class EndSession {
   // Whether a press would do anything now.
   get pressable() { return this.#pressable(this.entry); }
 
-  #pressable(entry) { return !this.#held && !this.#pending(entry) && !this.#busyTimer && this.#session?.status !== 'ending'; }
+  #pressable(entry) { return !this.#held && !this.#quiet && !this.#pending(entry) && !this.#busyTimer && this.#session?.status !== 'ending'; }
 
   #press() {
     const entry = this.entry;
+    if (this.#quiet && !this.#held && !this.#pending(entry) && !this.#busyTimer && this.#session?.status !== 'ending') {
+      this.els.updating.textContent = UPDATING;
+      this.els.updating.hidden = false;
+      return;
+    }
     if (!this.#pressable(entry)) { return; }
     const { service, hostId, sessionId } = this.stopping;
     const confirm = this.#left(entry) !== null ? entry.detail.confirm : null;
@@ -161,6 +172,7 @@ export class EndSession {
     e.resend.disabled = !!this.#held;
     e.held.textContent = this.#held ?? '';
     e.held.hidden = !this.#held;
+    if (!this.#quiet) { e.updating.hidden = true; e.updating.textContent = ''; }
     e.button.setAttribute('aria-label', left === null ? 'End session' : `End session: press again to confirm, ${left} seconds left`);
   }
 }

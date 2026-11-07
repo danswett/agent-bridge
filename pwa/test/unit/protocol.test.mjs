@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { readSession, readHello, readBackground } from '../../js/protocol.js';
+import { readSession, readHello, readBackground, readQuestion, readAnswerResult } from '../../js/protocol.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 
@@ -137,4 +137,14 @@ test('hello keeps only string capabilities', () => {
 test('hello carries why a machine is read-only, when it says', () => {
   assert.equal(readHello({ protocol: 1, machine: { readOnly: 'agent-ha-bridge is running for this user' }, capabilities: [] }).machine.readOnly, 'agent-ha-bridge is running for this user');
   assert.equal(readHello({ protocol: 1, machine: { readOnly: 7 }, capabilities: [] }).machine.readOnly, null);
+});
+
+test('Other the machine cannot send yet is read only by a reason this app knows, and never beside an Other offered', () => {
+  const field = (extra) => readQuestion({ id: 'q', kind: 'form', message: 'm', fields: [{ name: 'f', type: 'choice', options: [{ value: 'a' }], ...extra }] }).fields[0];
+  assert.equal(field({ otherUnavailable: 'otherNotSendable' }).otherUnavailable, 'otherNotSendable');
+  assert.equal(field({ otherUnavailable: 'somethingNewer' }).otherUnavailable, null);
+  assert.equal(field({ otherUnavailable: 'otherNotSendable', allowOther: true }).otherUnavailable, null);
+  assert.equal(readAnswerResult({ outcome: 'refused', reason: 'r', code: 'otherNotSendable' }).code, 'otherNotSendable');
+  assert.equal(readAnswerResult({ outcome: 'refused', reason: 'r', code: 'somethingNewer' }).code, undefined);
+  assert.equal(readAnswerResult({ outcome: 'delivered', code: 'otherNotSendable' }).code, undefined);
 });

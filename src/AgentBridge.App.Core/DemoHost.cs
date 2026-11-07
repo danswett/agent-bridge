@@ -171,7 +171,27 @@ public sealed partial class DemoHost : IAsyncDisposable
             new Subagent { Id = "demo-agent-grep", Parent = "demo-agent-witness", Kind = SubagentKind.Task, Name = "Find the timer reset", Model = "gpt-5.6-luna", Status = SubagentStatus.Working, StartedAt = now.AddMinutes(-2), Line = "Two candidates in RestartWitness.cs." },
             new Subagent { Id = "demo-agent-review", Parent = "demo-agent-witness", Kind = SubagentKind.Task, Name = "Review the witness change", Model = "gpt-5.6-luna", Status = SubagentStatus.Ended, Outcome = SubagentOutcome.Done, StartedAt = now.AddMinutes(-12), EndedAt = now.AddMinutes(-11), Line = "No regressions: the flag now follows the latest reply." },
             new Subagent { Id = "demo-agent-lint", Kind = SubagentKind.Task, Name = "Lint the PWA", Model = "claude-haiku-5.5", Status = SubagentStatus.Ended, Outcome = SubagentOutcome.Failed, StartedAt = now.AddMinutes(-15), EndedAt = now.AddMinutes(-14), Line = "eslint could not start: no config found." },
+            // Five that reported back, minutes apart so each has a line of its own: with the three
+            // above, the conversation's delegate lines are a long run, which fold into one row (#1063).
+            Reported(now, "demo-agent-changelog", "Tidy the changelog", -19.8, -19.2, "Two entries merged, one reworded."),
+            Reported(now, "demo-agent-shots", "Update the screenshots", -18.7, -18.2, "Eleven screenshots retaken in both themes."),
+            Reported(now, "demo-agent-logging", "Audit the logging", -13, -12.5, "No secrets in the logs; two noisy lines trimmed."),
+            Reported(now, "demo-agent-docs", "Format the docs", -10, -9.2, "Tables realigned in four files."),
+            Reported(now, "demo-agent-settings", "Read the settings code", -7, -6.4, "Nothing writes a setting twice."),
         ],
+    };
+
+    static Subagent Reported(DateTimeOffset now, string id, string name, double started, double ended, string line) => new()
+    {
+        Id = id,
+        Kind = SubagentKind.Task,
+        Name = name,
+        Model = "claude-haiku-5.5",
+        Status = SubagentStatus.Ended,
+        Outcome = SubagentOutcome.Done,
+        StartedAt = now.AddMinutes(started),
+        EndedAt = now.AddMinutes(ended),
+        Line = line,
     };
 
     // What the demo's delegates said in full, beyond the latest line a list carries.
@@ -385,6 +405,8 @@ public sealed partial class DemoHost : IAsyncDisposable
 
     // What the next signin.code says: GitHub's, unless a test sets a spoof.
     public string NextUserCode { get; set; } = "WDJB-MJHT";
+    // A host whose discovery is held holds a resume back (#1064): set, resumes come back busy with this reason.
+    public string? ResumeHeldReason { get; set; }
     public string NextVerificationUri { get; set; } = "https://github.com/login/device";
     // How long the next code lives, and how long the next start's result takes (its code comes first).
     public TimeSpan NextCodeLife { get; set; } = TimeSpan.FromMinutes(15);
@@ -629,6 +651,7 @@ public sealed partial class DemoHost : IAsyncDisposable
             if (launches.TryGetValue(r.Request, out var again)) { return again; }
             var choices = LaunchChoices();
             if (LaunchProtocol.Check(r) is { } problem) { return launches[r.Request] = new LaunchResult(LaunchOutcome.Refused, problem); }
+            if (r.Resume is not null && ResumeHeldReason is { } held) { return new LaunchResult(LaunchOutcome.Busy, $"Held: session discovery is waiting on {held}, so whether that session is still running cannot be told yet. Try again in a minute or two."); }
             var agent = choices.Agents.FirstOrDefault(a => a.Id == (r.Agent ?? "copilot"));
             if (agent is null) { return launches[r.Request] = new LaunchResult(LaunchOutcome.Refused, $"{r.Agent} is not installed on this machine"); }
             var resumed = r.Resume is { } id ? resumable.FirstOrDefault(x => x.Id == id) : null;

@@ -26,7 +26,7 @@ public static class CodexApprovalId
     // Null for a marker that is not there or not readable.
     public static string? Of(ApprovalMarkerRead marker) =>
         marker is { State: ApprovalMarkerState.Present, DecisionId: { } decision }
-            ? QuestionMapper.CodexApproval(decision, marker.Tool, marker.Command, marker.CommandCut, marker.Question ?? "", DateTimeOffset.UnixEpoch, atMachine: false).Id
+            ? QuestionMapper.CodexApproval(decision, marker.Tool, marker.Command, marker.CommandCut, marker.Question ?? "", DateTimeOffset.UnixEpoch, atMachine: false, lossy: marker.Lossy).Id
             : null;
 
     // Strict: a non-blank DecisionId, one '#', then 16 lowercase hex digits. Anything else (the
@@ -41,12 +41,14 @@ public static class CodexApprovalId
         return (decision, digest);
     }
 
-    internal static string For(string decisionId, string? tool, string? command, bool cut, string preview, Question shown) =>
-        $"{decisionId}#{Digest(tool, command, cut, preview, shown)}";
+    internal static string For(string decisionId, string? tool, string? command, bool cut, string preview, Question shown, string? lossy = null) =>
+        $"{decisionId}#{Digest(tool, command, cut, preview, shown, lossy)}";
 
     // Each part with its length, so no part can spell its neighbour; an absent one (a marker
     // without a tool or command) is written apart from an empty one.
-    static string Digest(string? tool, string? command, bool cut, string preview, Question shown)
+    // lossy: the marker as written, for one the tolerant read had to rewrite, so commands that read
+    // alike once rewritten (\uD800, \uD801, a literal U+FFFD) are still different approvals.
+    static string Digest(string? tool, string? command, bool cut, string preview, Question shown, string? lossy)
     {
         var b = new StringBuilder("\0codex-approval/1");
         void Part(string? text)
@@ -62,6 +64,7 @@ public static class CodexApprovalId
         Part(shown.Message);
         Part(shown.Truncated == true ? "truncated" : "");
         Part(shown.AnswerAtMachine == true ? "at-machine" : "");
+        if (lossy is not null) { b.Append("\0lossy"); Part(lossy); }
         return CopilotPermission.IdentityHash(b.ToString());
     }
 }

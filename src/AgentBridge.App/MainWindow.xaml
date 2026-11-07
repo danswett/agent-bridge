@@ -114,8 +114,13 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Tag="settings" AutomationProperties.AutomationId="NavSettings" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings">
+                <NavigationViewItem x:Name="SettingsItem" Tag="settings" AutomationProperties.AutomationId="NavSettings" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings">
                     <ContentControl Style="{StaticResource AbIconSettings}" Width="20" Height="20" Margin="-8,0,0,0" AutomationProperties.AutomationId="NavIcon" />
+                    <!-- An agent installed after the bridge (#231; ui.md §6.7, §6.9): a grey dot, never a count. It
+                         is in the item's name too ("Settings, new agent found"), and goes with its card. -->
+                    <NavigationViewItem.InfoBadge>
+                        <InfoBadge x:Name="SettingsDot" Background="{ThemeResource AbNeutral}" Visibility="Collapsed" AutomationProperties.AutomationId="NavSettingsDot" />
+                    </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>
 
@@ -135,28 +140,6 @@
                         Severity="Warning"
                         IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
                         Message="{x:Bind ViewModel.Banner, Mode=OneWay}" />
-                    <!-- Each machine's discovery hold, one banner each, closable (#293; ui.md §7, Windows). -->
-                    <ItemsControl
-                        x:Name="HeldList"
-                        AutomationProperties.AutomationId="DiscoveryHeld"
-                        IsTabStop="False"
-                        ItemsSource="{x:Bind ViewModel.HeldNotices}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="core:HeldNotice">
-                                <InfoBar
-                                    Margin="24,12,24,0"
-                                    Tag="{x:Bind}"
-                                    AutomationProperties.AutomationId="{x:Bind AutomationId}"
-                                    IsClosable="True"
-                                    IsOpen="True"
-                                    Severity="Informational"
-                                    Message="{x:Bind Text, Mode=OneWay}"
-                                    Loaded="OnHeldLoaded"
-                                    Closing="OnHeldClosing"
-                                    Closed="OnHeldClosed" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
                     <!-- This machine's update, downloaded and waiting for the person (#516): no dismiss, so the
                          action stays while the release waits, and nothing restarts until it is pressed. -->
                     <InfoBar

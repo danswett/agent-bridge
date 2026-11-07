@@ -268,8 +268,8 @@ export function descendants(id, list) {
 
 // Starts this close together share a line.
 const TOGETHER_MS = 60000;
-// More lines than this in a row fold into one (D3).
-export const FOLD_AFTER = 3;
+// Two or more lines in a row fold into one (D3, #1063): one line stays a line.
+export const FOLD_AFTER = 1;
 
 // How a delegate reported back: its glyph and the words for it, or null while it hasn't. Only
 // once the host says it stopped (idle or ended) and when.
@@ -357,7 +357,7 @@ export function eventParts(line, { expanded = false } = {}) {
   return parts;
 }
 
-// More than FOLD_AFTER lines in a row (D3) fold into one, drawn "5 delegates · 3 reported back,
+// More than FOLD_AFTER lines (two or more) in a row (D3) fold into one, drawn "5 delegates · 3 reported back,
 // 1 failed › 1 still working": every delegate in the run counted, failed and ended each apart
 // after reported back, a count of 0 left out. It never shows the working glyph. The button is the
 // counts, its chevron ending it, and the still-working count (when any is) a link of its own

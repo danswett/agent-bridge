@@ -46,6 +46,7 @@ import { CollapsingHeader, PHONE } from './collapse-header.js';
 import { CollapsingFoot } from './collapse-foot.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
+import { holdKey } from './hold.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // Each session's delegate events as the person left them (ui.md §6.4): its fold (D3) open or
@@ -394,11 +395,18 @@ const leaves = (entry) => entry.state === 'sending' || entry.state === 'waiting'
 
 // Why nothing can be given for a session now, for under its controls, or null (#269): its
 // machine is offline, reconnecting, back and its whole list not yet in, or no longer offering
-// sessions. what: 'answered', 'replied to'...
+// sessions. what: 'answered', 'replied to'... While the app is catching up after a return (#950) the
+// hold says nothing: { updating, drawn }. An offline machine's reply box and question say so in one
+// line in place of their actions (ui.md rule 8): { text, offline }.
 export function staleNote(stale, machineName, what) {
   if (!stale) { return null; }
+  if (stale.grace) { return { updating: true, drawn: stale.drawn === true }; }
   const name = machineName || 'The machine';
-  if (stale.reason === 'offline') { return `${name} is offline. This can't be ${what} from here until it is back.`; }
+  if (stale.reason === 'offline') {
+    return what === 'ended'
+      ? `${name} is offline. This can't be ${what} from here until it is back.`
+      : { text: `${name} is offline \u00b7 you can answer once it's back`, offline: true };
+  }
   if (stale.reason === 'unsupported') { return `${name} ${UNSUPPORTED_SESSIONS} now, so this can't be ${what} from here.`; }
   const where = stale.reason === 'confirming' ? 'is back' : 'is reconnecting';
   return `${name} ${where}. This can be ${what} once it has sent its sessions again.`;
@@ -611,7 +619,7 @@ export class SessionCard {
     e.toolGlyph = glyph('working', { size: 12 });
     e.tool = h('p', { class: 'tool-line', hidden: true }, e.toolGlyph, e.toolName, e.toolSummary);
     // Its own delegates starting and reporting back (§6.4, #661): one meta line per delegate, the
-    // name opening it; after its words and before what it is running now. More than three lines
+    // name opening it; after its words and before what it is running now. Two or more lines
     // fold into one (D3): its button, the chevron ending it, then a link of its own to the
     // earliest delegate still working.
     e.events = h('ol', { class: 'delegate-events', 'aria-label': 'Delegates started and finished', hidden: true });
@@ -731,7 +739,7 @@ export class SessionCard {
     const stale = this.#staleText();
     this.#shownStale = stale?.join(' ') ?? null;
     for (const el of [this.element, this.view]) {
-      if (this.#stale) { el.dataset.stale = this.#stale.reason; } else { delete el.dataset.stale; }
+      if (this.#stale && !this.#stale.grace) { el.dataset.stale = this.#stale.reason; } else { delete el.dataset.stale; }
     }
     const away = stale?.join(' \u00b7 ');
     const words = stale ? { ...state, glyph: 'failed', driven: false, facts: stale, text: away, tone: 'muted', spoken: away.charAt(0).toLowerCase() + away.slice(1) } : state;
@@ -1128,7 +1136,8 @@ export class SessionCard {
   // Its machine went offline, came back, or sent a whole new list since (#269): what the row and
   // header say. What it offers to send follows answering(), drawn again by refreshQuestion().
   setStale(stale) {
-    const same = (a, b) => (a?.reason ?? null) === (b?.reason ?? null) && (a?.since ?? null) === (b?.since ?? null);
+    const same = (a, b) => (a?.reason ?? null) === (b?.reason ?? null) && (a?.since ?? null) === (b?.since ?? null)
+      && (a?.grace ?? false) === (b?.grace ?? false) && (a?.drawn ?? false) === (b?.drawn ?? false);
     if (same(stale, this.#stale)) { return; }
     this.#stale = stale ?? null;
     if (this.#s) { this.update(this.#s); }
@@ -1140,7 +1149,8 @@ export class SessionCard {
   // nothing) and for a machine that no longer offers sessions (its host line says so).
   #staleText(now = Date.now()) {
     const stale = this.#stale;
-    if (!stale || stale.reason === 'confirming' || stale.reason === 'unsupported') { return null; }
+    // On a return the row is as it was last seen: the away states wait for the grace to end (#950).
+    if (!stale || stale.grace || stale.reason === 'confirming' || stale.reason === 'unsupported') { return null; }
     if (stale.reason === 'reconnecting') { return ['Reconnecting…']; }
     const seen = ago(stale.since, now);
     return seen ? ['Offline', `last seen ${seen}`] : ['Offline'];
@@ -1393,7 +1403,9 @@ export class SessionCard {
     const held = staleNote(ctx?.stale, this.machineName, 'answered');
     // An approval the host escaped anything in (#803): how Approve is given for it from here.
     const escapedMode = q && answerable ? escapedApprove(q, ctx.capabilities) : null;
-    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held, escapedMode])) { return; }
+    // A quiet hold starting or turning drawn changes the controls only: the panel stays, with what it says,
+    // so a sheet open on it keeps the panel whose hold its signing checks (#950).
+    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held?.updating ? '' : holdKey(held), escapedMode])) { this.#panel?.setHeld(held); return; }
     // Drawn by the app, not by the person typing in it: whatever this moves counts.
     this.#moves?.notOwn();
     // A new question while the last one's answer is still on its way: that answer goes on as a receipt.

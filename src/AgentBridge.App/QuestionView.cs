@@ -100,7 +100,17 @@ public sealed class QuestionView : StackPanel
 
         if (!vm.Answerable)
         {
-            Children.Add(new TextBlock { Text = vm.ReadOnlyNote, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") });
+            var note = new TextBlock { Text = vm.ReadOnlyNote, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") };
+            Children.Add(note);
+            if (vm.AtMachineExplanation is { } explanation)
+            {
+                var line = new TextBlock { Text = explanation, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") };
+                void Ink() => note.Foreground = line.Foreground = Ui.ThemedBrush("AbNeedsText", line.ActualTheme);
+                line.Loaded += (_, _) => Ink();
+                line.ActualThemeChanged += (_, _) => Ink();
+                AutomationId(line, "AtMachineExplanation");
+                Children.Add(line);
+            }
             if (vm.ShowReadOnlyFields)
             {
                 foreach (var f in vm.Fields)
@@ -341,6 +351,10 @@ public sealed class QuestionView : StackPanel
     {
         var panel = new StackPanel { Spacing = 6 };
         var escaped = vm.EscapedMode;
+        // Other the agent offers and this machine cannot send yet (#908): the reason is the
+        // choices' description, read with each of them, and said under them.
+        var unavailable = f.OtherUnavailable;
+        if (unavailable is not null) { HelpText(panel, unavailable); }
         foreach (var o in f.Options)
         {
             // Approve once on an approval the host escaped anything in opens the sheet, or is not
@@ -354,6 +368,7 @@ public sealed class QuestionView : StackPanel
             if (o.Recommended || (vm.Approval && o.Tone == "allow")) { b.Style = (Style)Application.Current.Resources["AccentButtonStyle"]; }
             if (vm.Approval && o.Tone == "deny") { b.Foreground = Ui.Brush("AbDangerText"); }
             AutomationProperties(b, shown, $"Option:{o.Value}");
+            if (unavailable is not null) { HelpText(b, unavailable); }
             // Choose changes the selection first, so only while the question can be answered.
             Acting(b).Click += (_, _) => { if (vm.CanAnswer) { vm.Choose(o); } };
             refreshers.Add(() =>
@@ -388,6 +403,18 @@ public sealed class QuestionView : StackPanel
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                 });
             }
+        }
+        if (unavailable is not null)
+        {
+            // Shown as the agent offers it, its label unchanged, and never pressable.
+            var shown = new ToggleButton { Content = "Other…", IsEnabled = false, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
+            AutomationProperties(shown, "Other", "OtherUnavailable");
+            HelpText(shown, unavailable);
+            panel.Children.Add(shown);
+            var note = new TextBlock { Text = unavailable, Style = Muted(), TextWrapping = TextWrapping.Wrap };
+            AutomationId(note, "OtherUnavailableNote");
+            Children.Add(note);
+            return;
         }
         if (!f.AllowOther) { return; }
 
@@ -592,6 +619,8 @@ public sealed class QuestionView : StackPanel
     }
 
     static Style Muted() => (Style)Application.Current.Resources["AbSecondaryText"];
+
+    static void HelpText(DependencyObject o, string text) => Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(o, text);
 
     static void AutomationId(DependencyObject o, string id) => Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(o, id);
 

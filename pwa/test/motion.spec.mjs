@@ -444,56 +444,52 @@ test('what leaves is a copy with nothing in it to find, use or run: text stays t
   expect(copy.gone).toBe(true);
 });
 
-// An app banner leaving (ui.md §5.3, Toast and banner; PWA app banners): its space closes at once,
-// and a copy goes back up the way it came in, quicker; under reduced motion the copy only fades.
-async function bannerLeaving(page) {
+// An app banner opening and closing (ui.md §5.3, Toast and banner; §7, #1064): its height opens
+// from nothing and closes back over the toast times, and what is below moves with it; under
+// reduced motion it is instant.
+async function bannerMoving(page) {
   return page.evaluate(async () => {
     const { conceal, reveal } = await import('./js/ui/motion.js');
     const banner = document.getElementById('replaced-banner');
+    const drawn = (from) => window.__motions.slice(from).filter((x) => x.a.id === 'ab-motion-toast');
+    const frames = (m) => m?.keyframes.map((k) => ({ height: k.height ?? null, opacity: k.opacity })) ?? [];
+    let from = window.__motions.length;
     reveal(banner);
+    const opening = drawn(from)[0];
+    const opened = { shown: !banner.hidden, duration: opening?.duration ?? 0, keyframes: frames(opening) };
     await Promise.all(banner.getAnimations().map((a) => a.finished.catch(() => {})));
-    const from = window.__motions.length;
+    from = window.__motions.length;
     conceal(banner);
-    const hiddenAtOnce = banner.hidden;
-    const m = window.__motions.slice(from).find((x) => x.a.id === 'ab-motion-toast');
-    const copy = m && window.__shadows.at(-1);
-    const out = {
-      hiddenAtOnce,
-      moved: !!m,
-      duration: m?.duration ?? 0,
-      keyframes: m?.keyframes.map((k) => ({ opacity: k.opacity, transform: k.transform ?? null })) ?? [],
-      text: copy?.textContent ?? '',
-    };
-    await m?.a.finished.catch(() => {});
-    out.gone = m ? !m.el.isConnected : true;
-    return out;
+    const closing = drawn(from)[0];
+    const closed = { stillShown: !banner.hidden, duration: closing?.duration ?? 0, keyframes: frames(closing) };
+    await closing?.a.finished.catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+    return { opened, closed, hiddenAfter: banner.hidden, full: banner.getBoundingClientRect().height };
   });
 }
 
-test('an app banner leaves as it came, quicker: up and out over the toast exit time, its space closing at once', async ({ page }) => {
+test('an app banner opens and closes in height over the toast times, kept in view while it closes', async ({ page }) => {
   await openDemo(page);
   const t = await tokens(page);
-  const out = await bannerLeaving(page);
-  expect(out.hiddenAtOnce).toBe(true);
-  expect(out.moved).toBe(true);
-  expect(out.text).toContain('This app is open in another window or tab.');
-  expect(out.duration).toBe(t.toast[1]);
-  expect(out.duration).toBeLessThan(t.toast[0]);
-  expect(out.keyframes).toEqual([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translate(0px, -12px)' }]);
-  expect(out.gone).toBe(true);
+  const out = await bannerMoving(page);
+  expect(out.opened.shown).toBe(true);
+  expect(out.opened.duration).toBe(t.toast[0]);
+  expect(out.opened.keyframes[0]).toEqual({ height: '0px', opacity: 0 });
+  expect(out.opened.keyframes[1].opacity).toBe(1);
+  expect(out.closed.stillShown).toBe(true);
+  expect(out.closed.duration).toBe(t.toast[1]);
+  expect(out.closed.duration).toBeLessThan(t.toast[0]);
+  expect(out.closed.keyframes.at(-1)).toEqual({ height: '0px', opacity: 0 });
+  expect(out.hiddenAfter).toBe(true);
 });
 
-test('with reduced motion an app banner leaving only cross-fades, and its space still closes at once', async ({ page }) => {
+test('with reduced motion an app banner opens and closes at once, drawing no motion', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openDemo(page);
-  const t = await tokens(page);
-  const out = await bannerLeaving(page);
-  expect(out.hiddenAtOnce).toBe(true);
-  expect(out.moved).toBe(true);
-  expect(out.duration).toBeGreaterThan(0);
-  expect(out.keyframes).toEqual([{ opacity: 1, transform: null }, { opacity: 0, transform: null }]);
-  expect(out.duration).toBeLessThanOrEqual(t.crossFade);
-  expect(out.gone).toBe(true);
+  const out = await bannerMoving(page);
+  expect(out.opened).toEqual({ shown: true, duration: 0, keyframes: [] });
+  expect(out.closed).toEqual({ stillShown: false, duration: 0, keyframes: [] });
+  expect(out.hiddenAfter).toBe(true);
 });
 
 test('a copy shows only what showed of what left: clipped by its scroller, and drawn where it was even mid-motion', async ({ page }) => {

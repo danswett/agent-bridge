@@ -29,6 +29,7 @@ import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js'
 import { accountStore, startDeviceFlow } from './signin.js';
 import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
+import { ReturnGrace } from './return-grace.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
 import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
@@ -42,6 +43,7 @@ import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
 import { ReleaseWatch } from './release-watch.js';
+import { LastingBanner } from './banner-rule.js';
 import { UsageView } from './ui/usage-view.js';
 import { conceal, reveal, watchDisclosures, watchPresses } from './ui/motion.js';
 import { cameBack, watchFocusRing } from './ui/focus.js';
@@ -144,9 +146,9 @@ const signInAgent = (p) => { const v = p.get('signin'); return ['copilot', 'clau
 // A link's machine, session and question, or the agent whose sign-in it is about, taken out of the
 // address so neither a reload nor a later sign-in, possibly as another account, reuses it.
 function takeLink() {
-  const link = { host: param(params, 'host'), session: param(params, 'session'), question: param(params, 'question'), signin: signInAgent(params) };
-  if (!['host', 'session', 'question', 'signin'].some((k) => params.has(k))) { return null; }
-  for (const k of ['host', 'session', 'question', 'signin']) { params.delete(k); }
+  const link = { host: param(params, 'host'), session: param(params, 'session'), question: param(params, 'question'), signin: signInAgent(params), needsyou: params.get('needsyou') === '1' };
+  if (!['host', 'session', 'question', 'signin', 'needsyou'].some((k) => params.has(k))) { return null; }
+  for (const k of ['host', 'session', 'question', 'signin', 'needsyou']) { params.delete(k); }
   const rest = params.toString();
   history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`);
   return { ...link, host: link.host && ID.test(link.host) ? link.host : null };
@@ -164,6 +166,7 @@ function takeLink() {
 function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
   if (linked.signin) { focusSignIn(); return; }
+  if (linked.needsyou) { focusNeedsYou(); return; }
   const card = page.view.card(linked.host, linked.session);
   if (!card) { return; }
   if (!linked.shown) {
@@ -217,6 +220,29 @@ function focusSignIn() {
   setLinked(null);
 }
 
+// A group push's link (#913): the list with Needs you in view, focus on its heading (never an
+// answer: Enter or Space would send one unread), once the machine's list is whole (#269) and only
+// if the person has not moved on. The lane is hidden when nothing needs anyone (answered since the
+// push): the machine as it is, and nothing said.
+function focusNeedsYou() {
+  if (!linked.shown) {
+    page.showList();
+    const want = { ...linked, shown: true, left: document.activeElement };
+    setLinked(want);
+    watchFocus(want);
+  }
+  if (!page.hosts.route(linked.host)) { return; }
+  const { left } = linked;
+  setLinked(null);
+  const now = document.activeElement;
+  if (now && now !== document.body && now !== left) { return; }
+  const lane = page.lane;
+  lane?.render();
+  if (!lane || lane.container.hidden) { return; }
+  lane.head.tabIndex = -1;
+  lane.head.focus({ preventScroll: false });
+}
+
 // A tap on a notification while the app is open: the worker says where to go.
 navigator.serviceWorker?.addEventListener('message', (e) => {
   if (e.data?.type !== 'agent-bridge.open' || typeof e.data.url !== 'string') { return; }
@@ -226,11 +252,21 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
   try { p = new URL(e.data.url).searchParams; } catch { return; }
   const host = param(p, 'host');
   if (!host || !ID.test(host)) { return; }
-  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question'), signin: signInAgent(p) });
+  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question'), signin: signInAgent(p), needsyou: p.get('needsyou') === '1' });
 });
 navigator.serviceWorker?.startMessages?.();
 
+// Coming back to the app (#950): watched from the start, so a return begins before the connection's
+// own wake-ups report anything.
+const grace = new ReturnGrace();
+grace.watch();
+// The pill's last word, held back while the grace is on: it says it once the grace is over.
+let pillAfterGrace = null;
+grace.onChange(() => { if (!grace.active && pillAfterGrace) { const [text, cls] = pillAfterGrace; pillAfterGrace = null; shell.setConnection(text, cls); } });
+
 function setPill(text, cls = '') {
+  if (grace.active && cls === 'warn') { pillAfterGrace = [text, cls]; return; }
+  pillAfterGrace = null;
   shell.setConnection(text, cls);
 }
 
@@ -257,6 +293,10 @@ function hideStatus(banner) {
   if (said.textContent === banner.querySelector('span').textContent) { said.textContent = ''; }
 }
 
+// Banners for states that come and go: only a lasting one is drawn (ui.md §7, #1064).
+const stuckBanner = new LastingBanner({ show: () => showStatus($('stuck-banner')), hide: () => hideStatus($('stuck-banner')) });
+const replacedBanner = new LastingBanner({ show: () => reveal($('replaced-banner')), hide: () => conceal($('replaced-banner')) });
+
 // An installed PWA keeps running the code it has until restarted (S5 limitation), so a
 // new version is announced with a reload button instead of waiting for a force-quit.
 function registerServiceWorker() {
@@ -265,7 +305,7 @@ function registerServiceWorker() {
   // Only an app running a release it has can be stuck on it: without one, each load is the network's.
   const releases = new ReleaseWatch({
     onChange: (stuck) => {
-      if (stuck && hadController) { showStatus($('stuck-banner')); } else { hideStatus($('stuck-banner')); }
+      stuckBanner.set(stuck && hadController);
     },
   });
   // Which release is in control, read again after each takeover; only the latest read counts.
@@ -372,7 +412,12 @@ async function startDemo() {
   const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
   // With ?signin=1, each other machine that takes answers needs a sign-in too (#800).
   if (params.get('signin') === '1') {
-    for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) { m.capabilities.push('sessions.signin'); demoSignIn(m); }
+    for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) {
+      m.capabilities.push('sessions.signin', 'signin.devices');
+      // Who can sign Copilot in there (#972): this device and three more, folded on its row.
+      m.signInDevices = { state: 'ready', devices: [{ name: 'This browser', kind: 'pwa', platform: 'Windows', thisDevice: true }, ...['iPhone', 'Work laptop', 'Kitchen tablet'].map((name) => ({ name, kind: 'phone', platform: 'iOS' }))] };
+      demoSignIn(m);
+    }
   }
   // ?attachDelay= slows each file chunk, so its progress can be watched.
   for (const m of machines) { m.attachmentDelayMs = Number(params.get('attachDelay')) || 0; }
@@ -391,7 +436,7 @@ async function startDemo() {
   // ?timeout= shortens how long a request waits for its response, for the tests of resends.
   const timeoutMs = Number(params.get('timeout')) || 0;
   const timeouts = timeoutMs ? { timeoutMs, answerTimeoutMs: timeoutMs, replyTimeoutMs: timeoutMs, stopTimeoutMs: timeoutMs, launchTimeoutMs: timeoutMs, transferTimeoutMs: timeoutMs } : {};
-  const hosts = new HostSession({ connection, storage: demoStorage, makeClient: (ch, store) => new HostClient(ch, { store, ...timeouts }) });
+  const hosts = new HostSession({ connection, storage: demoStorage, grace, makeClient: (ch, store) => new HostClient(ch, { store, ...timeouts }) });
   const forgetOutcomes = [];
   const demoForget = new ForgetControl({
     connection: {
@@ -437,6 +482,7 @@ async function startDemo() {
     facts: (id) => fleet.facts(id),
     forget: demoForget,
     updates: demoUpdates,
+    signInDevices: (id) => fleet.signIns(id),
     storage: demoStorage,
     onRendered: () => focusLinked(),
   });
@@ -457,7 +503,7 @@ async function startDemo() {
   const script = params.get('static') === '1' ? null : runScript(host, { tickMs: Number(params.get('tick')) || 4000 });
   const { answers, replies, stops, launches, launchPanel, view } = page;
   window.agentBridgeDemo = {
-    host, hosts, connection, store: hosts.sessions, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore, page,
+    host, hosts, grace, connection, store: hosts.sessions, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore, page,
     // This device's timing marks for its last answers and replies (timing.js).
     timings: recentTimings,
     // Each demo machine, by its id: 'demo', 'demo-laptop', 'demo-shadow'.
@@ -578,10 +624,10 @@ function begin(account) {
   $('machines').hidden = false;
 
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
-  const hosts = new HostSession({ connection, me: identity.deviceId });
+  const hosts = new HostSession({ connection, me: identity.deviceId, grace });
   const link = takeLink();
   // A session's link wins over a sign-in's: a push carries one or the other.
-  const wanted = (l) => (l?.host && l.session ? { host: l.host, session: l.session, question: l.question } : l?.host && l.signin ? { host: l.host, signin: l.signin } : null);
+  const wanted = (l) => (l?.host && l.session ? { host: l.host, session: l.session, question: l.question } : l?.host && l.signin ? { host: l.host, signin: l.signin } : l?.host && l.needsyou ? { host: l.host, needsyou: true } : null);
   setLinked(wanted(link));
   // A link's machine is shown: with every other when every machine is, else on its own. A
   // notification is not a choice in the Machines panel, so what is remembered stays.
@@ -643,6 +689,7 @@ function begin(account) {
     facts: (id) => fleet.facts(id),
     forget: forgets,
     updates,
+    signInDevices: (id) => fleet.signIns(id),
     onRendered: () => focusLinked(),
   });
   const { answers, replies, stops, launches } = page;
@@ -764,7 +811,7 @@ function begin(account) {
   connection.on('presence', () => page.drawMachines());
   connection.on('log', (line) => console.log(line));
   connection.on('state', ({ state }) => {
-    if (state === 'replaced') { reveal($('replaced-banner')); } else { conceal($('replaced-banner')); }
+    replacedBanner.set(state === 'replaced');
     switch (state) {
       // News, as reconnecting is: the strip shows on a phone, in plain words.
   case 'connecting': return setPill('Connecting…', 'busy');
@@ -820,7 +867,7 @@ function begin(account) {
 
   // For the E2E tests and debugging from the console. Holds no secrets beyond what the
   // page already has.
-  window.agentBridge = { connection, hosts, store: hosts.sessions, answers, replies, stops, launches, notices, fleet, book, page, timings: recentTimings };
+  window.agentBridge = { connection, hosts, grace, store: hosts.sessions, answers, replies, stops, launches, notices, fleet, book, page, timings: recentTimings };
   drawNotify();
   connection.start();
 }
