@@ -1,6 +1,7 @@
 // Why the acceptance rule refuses an entry, or a veto's or person command's check refuses it: the
 // C# library's codes (Invalid in src/AgentBridge.Roster/RosterVerifier.cs).
 export const INVALID = Object.freeze({
+  version: 'version',
   parent: 'parent',
   account: 'account',
   generation: 'generation',

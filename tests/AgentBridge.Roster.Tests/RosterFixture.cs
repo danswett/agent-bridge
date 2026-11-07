@@ -22,12 +22,13 @@ public static class RosterFixture
     public static readonly TestKey AppSign = TestKey.Named("app sign");
     public static readonly TestKey Host1 = TestKey.Named("host one dh");
     public static readonly TestKey Host2 = TestKey.Named("host two dh");
+    public static readonly TestKey Host1Sign = TestKey.Named("host one sign");
 
     public static readonly byte[] CredentialId = SHA256.HashData(Encoding.UTF8.GetBytes("pwa credential"));
 
     public static readonly JsonSerializerOptions Raw = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
-    public static IEnumerable<TestKey> Keys => [Phone, PhoneSign, Pwa, PwaSign, PwaCredential, App, AppSign, Host1, Host2];
+    public static IEnumerable<TestKey> Keys => [Phone, PhoneSign, Pwa, PwaSign, PwaCredential, App, AppSign, Host1, Host2, Host1Sign];
 
     public static JsonObject Person(TestKey dh, TestKey sign, string kind, string platform, string name, string presence)
     {
@@ -62,6 +63,19 @@ public static class RosterFixture
     {
         ["id"] = dh.Device,
         ["dh"] = Codec.Base64Url(dh.Public),
+        ["kind"] = RosterKinds.Host,
+        ["platform"] = platform,
+        ["name"] = name,
+    };
+
+    // A roster v2 host (agent-principals.md §8.10): its signing key and the proof it holds it.
+    public static JsonObject HostDeviceV2(TestKey dh, TestKey hostSign, string platform, string name) => new()
+    {
+        ["id"] = dh.Device,
+        ["dh"] = Codec.Base64Url(dh.Public),
+        ["hostSign"] = Codec.Base64Url(hostSign.Public),
+        ["hostSignAlg"] = EntryBody.SignAlgorithm,
+        ["hostSignProof"] = Codec.Base64Url(hostSign.Sign(HostKey.Binding(Account, Generation, dh.Public))),
         ["kind"] = RosterKinds.Host,
         ["platform"] = platform,
         ["name"] = name,
