@@ -280,7 +280,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
 
         var first = AnswerAsync(ch, new { pick = "b" });
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
         var second = await AnswerAsync(ch, new { pick = "c" });
         release.SetResult();
 
@@ -303,7 +303,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
 
         var first = AnswerAsync(ch, new { pick = "b" });
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
         var waiting = ch.RequestAsync(Ops.SessionAnswer, new { id = Second, question = "r1", request = Guid.NewGuid().ToString(), fields = new { pick = "a" } });
         await Task.Delay(300);
         // Only one answer is typed at a time, and the second session's question is answered
@@ -340,7 +340,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         injector.Gate = release.Task;
         injector.OnInject = () => Fixture.Append(events, Recorded("q1", new { pick = "b" }));
         var first = AnswerAsync(ch, new { pick = "b" });
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
         var busyId = Guid.NewGuid().ToString();
         Assert.Equal("busy", (await AnswerAsync(ch, new { pick = "c" }, busyId)).Outcome);
         release.SetResult();
@@ -360,7 +360,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var request = Guid.NewGuid().ToString();
 
         var first = AnswerAsync(ch, new { pick = "b" }, request);
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the answer to start typing", Patience);
         // Resent while the first is still being typed, then again on a new channel after.
         var during = AnswerAsync(ch, new { pick = "b" }, request);
         release.SetResult();
@@ -424,7 +424,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var request = Guid.NewGuid().ToString();
 
         var first = AnswerAsync(ch, new { pick = "a", days = 3 }, request, "q2");
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the answer to start typing", Patience);
         var during = AnswerAsync(ch, new { pick = "a", days = 3 }, request, "q2");
         release.SetResult();
         var again = await AnswerAsync(await OpenAsync(), new { pick = "a", days = 3 }, request, "q2");
@@ -1976,7 +1976,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
 
         var first = AnswerAsync(ch, new { pick = "b" });
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
         var waiting = ch.RequestAsync(Ops.SessionAnswer, new { id = Second, question = "r1", request = Guid.NewGuid().ToString(), fields = new { pick = "a" } });
         await Task.Delay(300);
         Fixture.Append(other, Copilot.ToolStart("r9", "ask_user", new { message = "Which one?", requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } } } } }, 3, "helper"));
@@ -2434,7 +2434,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     async Task<(long Start, long End, long? Typed)> TimingAsync(string request)
     {
         bool Mine(string m) => m.StartsWith($"answer {request[..8]} timings ", StringComparison.Ordinal);
-        await Wait.UntilAsync(() => { lock (logged) { return logged.Any(Mine); } }, "the timing line", Patience);
+        await HostWait.UntilAsync(() => { lock (logged) { return logged.Any(Mine); } }, "the timing line", Patience);
         string line;
         lock (logged) { line = logged.Single(Mine); }
         var inject = System.Text.RegularExpressions.Regex.Match(line, @"inject (?<a>\d+)-(?<b>\d+)");

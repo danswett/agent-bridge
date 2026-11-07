@@ -87,6 +87,17 @@ disposable-host only: no relay enrollment, production enablement or live migrati
 is authorized by this slice. Independent implementation review and final-head CI
 remain gates; the wider HA architecture redirect is tracked separately in #388.
 
+### Test timeout diagnostics (#660)
+
+App polling waits, Host polling waits and AgentReadiness's outer task waits report
+available/busy pool workers (against the pool maximum), active test collections and
+total process threads. Collections are counted within the reporting test assembly;
+available workers mean maximum-based capacity, not already-created idle threads.
+Existing App observation-gap, pool-thread and queued-work details remain.
+These are adjacent observations, not a causal explanation for the
+Arm CI timeouts; pool settings, collection admission and wait budgets are unchanged.
+Other raw App/Host task waits are outside this bounded diagnostic slice.
+
 ### Built and merged
 
 Fresh Windows hook setup now has an explicit local CLI path (`hooks install|remove`,
