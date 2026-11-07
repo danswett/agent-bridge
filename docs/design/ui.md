@@ -2003,7 +2003,7 @@ Settings' page (§6.9), each agent from its row.
 above the agent rows (§6.9). It reads the same readiness as the rows, names the one next step, and
 adds no host operation. "Sign in to the CLI itself" is always **Yours to check**, because the host
 cannot verify it yet (#691). The list hides once every step is Done, Yours to check or Optional. Each
-step is read to a screen reader with its state and position first, for example "Next, step 3 of 5,
+step is read to a screen reader with its state and position first, for example "Next, step 3 of 6,
 Connect its hooks". The stepper below replaces it.
 
 Settings with a guide. Six steps, in a stepper that **replaces Settings' own pane** while setup

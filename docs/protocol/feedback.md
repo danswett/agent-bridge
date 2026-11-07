@@ -41,7 +41,7 @@ Errors: `disabled`, `bad-request`, `too-large` (over `max`), `bad-size` (not a b
   overwrites, so a second `PUT` is refused, and it takes no more or fewer bytes than ticketed, so
   the size limit is enforced by the relay, not left to storage.
 * The relay's storage identity can only create blobs in this container: its role assignment
-  carries a condition that removes read, list, tags and delete. A compromised relay can add
+  carries a condition that removes read, list and delete. A compromised relay can add
   garbage (within the limits above) but cannot read or delete feedback. Reading is the
   feedback lead's role (#740).
 * The container has a 30-day time-based retention policy, so a stored bundle cannot be

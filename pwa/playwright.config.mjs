@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // The PWA in Chromium and WebKit (Safari's engine), served as GitHub Pages serves it:
-// built by tools/build-site.mjs, under /agent-bridge/app/, with the CSP in the page.
+// built by tools/build-site.mjs, at the site's root, with the CSP in the page.
 // test/e2e/ also needs the spike dev stack built (see test/e2e/e2e.spec.mjs).
 // PWA_TEST_PORT moves it, for a machine running another checkout's tests at the same time.
 const PORT = Number(process.env.PWA_TEST_PORT) || 8790;
@@ -21,7 +21,7 @@ export default defineConfig({
   // glyph's snapshot is about its shape and colours, which a tolerance holds across platforms.
   snapshotPathTemplate: '{testDir}/{testFileDir}/{testFileName}-snapshots/{arg}-{projectName}{ext}',
   use: {
-    baseURL: `http://127.0.0.1:${PORT}/agent-bridge/app/`,
+    baseURL: `http://127.0.0.1:${PORT}/`,
     // So page.route sees every request; the worker gets its own test with workers allowed.
     serviceWorkers: 'block',
   },
@@ -31,7 +31,7 @@ export default defineConfig({
   ],
   webServer: {
     command: `node test/serve.mjs --port ${PORT}`,
-    url: `http://127.0.0.1:${PORT}/agent-bridge/app/`,
+    url: `http://127.0.0.1:${PORT}/`,
     reuseExistingServer: !process.env.CI,
   },
 });

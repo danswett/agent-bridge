@@ -573,7 +573,7 @@ test.describe('installed', () => {
   test('the service worker controls only the app path', async ({ page }) => {
     await openDemo(page);
     const scope = await page.evaluate(async () => (await navigator.serviceWorker.ready).scope);
-    expect(new URL(scope).pathname).toBe('/agent-bridge/app/');
+    expect(new URL(scope).pathname).toBe('/');
   });
 
   test('an app whose new releases keep failing to install says so after a grace, and goes on with the one it has', async ({ page }) => {

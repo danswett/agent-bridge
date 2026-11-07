@@ -365,6 +365,13 @@ test('a release\'s own files come from its cache, with nothing asked of the netw
   assert.deepEqual(sw.fetched, []);
 });
 
+test('a page of another site under the same scope is left to the browser, never answered with the app', async () => {
+  const sw = cachingWorker({ [CURRENT]: { [scope]: 'page' } });
+  assert.equal(await sw.get(`${scope}s4/`, 'navigate'), undefined);
+  assert.equal(await sw.get(`${scope}app/?demo=1`, 'navigate'), undefined);
+  assert.deepEqual(sw.fetched, []);
+});
+
 test('a file that is not the release\'s own is served as kept, and fetched again for next time', async () => {
   const sw = cachingWorker({ [CURRENT]: { [`${scope}js/ui/glyph.js`]: 'kept' } });
   assert.equal((await sw.get(`${scope}js/ui/glyph.js`)).body, 'kept');
@@ -421,8 +428,9 @@ test('a tap brings an open app forward and tells it where to go, keeping its con
   const messages = [];
   let focused = 0;
   const elsewhere = { url: 'https://danswett.github.io/other-app/', postMessage: () => assert.fail('not this app'), focus: async () => assert.fail('not this app') };
+  const spike = { url: `${scope}s4/`, postMessage: () => assert.fail('a page of another site, not the app'), focus: async () => assert.fail('a page of another site, not the app') };
   const app = { url: `${scope}?x=1`, postMessage: (m) => messages.push(m), focus: async () => { focused++; } };
-  const sw = worker({ clients: [elsewhere, app] });
+  const sw = worker({ clients: [elsewhere, spike, app] });
   await sw.fire('notificationclick', tapped({ url: `${scope}?host=${MACHINE}&session=s1&question=q1` }));
   assert.deepEqual(plain(messages), [{ type: 'agent-bridge.open', url: `${scope}?host=${MACHINE}&session=s1&question=q1` }]);
   assert.equal(focused, 1);
