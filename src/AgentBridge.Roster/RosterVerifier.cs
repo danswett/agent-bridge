@@ -38,6 +38,8 @@ public static class Invalid
     public const string Cap = "cap";
     public const string Budget = "budget";
     public const string Evidence = "evidence";
+    // A v2 host add on a roster whose verifier has not switched v2 on.
+    public const string Version = "version";
 
     // A veto (§5.6) naming another reset than the one held.
     public const string Reset = "reset";
@@ -72,6 +74,9 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
 
     // The generation's caps and the evidence limits as this verifier applies them: always the
     // constants, except in tests that fill a smaller cap rather than write thousands of entries.
+    // Roster v2 (a host add with hostSign) is switched on per roster, never inferred (§8.10, V1);
+    // until then a v2 add is refused.
+    public bool AcceptHostSign { get; init; }
     internal int AddCap { get; init; } = MaxAdds;
     internal int EntryCap { get; init; } = MaxEntries;
     internal int EvidenceSignerCap { get; init; } = EvidencePerSigner;
@@ -327,6 +332,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         {
             case EntryOp.Add:
                 {
+                    if (body.Version == 2 && !AcceptHostSign) { return Invalid.Version; }
                     foreach (var a in ancestors.Members())
                     {
                         if (_g[a].IsAdd && _g[a].DeviceId == body.Device!.Id) { return Invalid.Readded; }

@@ -44,6 +44,7 @@ bytes.
 | `agent-bridge roster head v1` | A head attestation's MAC input (below) |
 | `agent-bridge person command v1` | What a person command's `by` signs: `F(label, bodyBytes)` |
 | `agent-bridge reset veto v1` | What a veto's `by` signs: `F(label, bodyBytes)` |
+| `agent-bridge host key binding v1` | A host's `hostSignProof`: `hostSign` signs `F(label, account, generation, dh)` |
 
 ## Encodings
 
@@ -101,6 +102,8 @@ transcript }`, `{ method: "qr", transcript, shown: "approver" | "joiner" }`,
 `{ method: "grandfather" }`, or, on a genesis only, `{ method: "genesis" }`. A transcript is
 32 bytes. `target` is `{ id, add }`, `add` being an entry hash.
 
+**Version 2 (a host's add).** An entry has `v` `1`, or `2` only on an `add` of a host device. A version 2 host device also has `hostSign` (a P-256 point), `hostSignAlg` (`p256-sha256-der`) and `hostSignProof`, a low-S DER signature by `hostSign` over `F("agent-bridge host key binding v1", account, generation, dh)`: it proves the host holds the key and ties it to this account, generation and `dh`. A version 1 host device must not carry them (`unknown-member`). `hostSign` is a key for a host's own statements only: it is not `sign`, and no signature by it is accepted as an entry `sig`, a `cosig`, a person command or a veto (those need a person's `sign`). A verifier refuses a version 2 add (`version`) unless it was built to accept them (`AcceptHostSign`, default off).
+
 ### Strict parsing, in order
 
 The input is I-JSON (RFC 7493): valid UTF-8, no byte-order mark, valid JSON, at most 16 levels of
@@ -116,7 +119,7 @@ with exactly its three members and minimal DER. Then the size against 46 KiB; th
 then the size against 8 KiB unless it is a `remove`. Last, `cosig` is present exactly when
 the body has `cosigner`, and `uv.cosigner` only when it does (`cosigner`).
 
-**The body:** an object; `v` present (`missing-member`), and exactly the number `1`
+**The body:** an object; `v` present (`missing-member`), and the number `1`, or `2` on an `add` of a host
 (`version`); `op` present, a string (`type`) and one of the six (`value`). Then any member its op
 does not allow (`unknown-member`, the first in document order), then the first missing one, in
 the order `v op account generation seq prev by cosigner at device approval target keep name
@@ -129,7 +132,7 @@ adopt`. Then each field in that same order:
 | `seq` | Not plain decimal digits below 2³¹, or not 0 exactly on a genesis (`seq`). A leading zero is not JSON (`json`) |
 | `prev`, `keep` | Not an array (`type`); the wrong number of hashes (`count`); a hash not base64url (`base64`) or not 32 bytes (`length`); not strictly ascending in head order (`order`) |
 | `at` | Not `YYYY-MM-DDTHH:MM:SS` with up to nine fraction digits and `Z`, on a real calendar date (`time`) |
-| `device` | In the order `kind` (missing, then a known kind: `value`), `presence` for a person's device (missing, then `value`), its members (`unknown-member`, then `missing-member` in the order `id dh sign signAlg presence webauthn kind platform name`), `id`, `dh`, `id` being `dh`'s (`device`), `sign`, `signAlg` (`value`), `webauthn`, `platform` (`value`), `name` |
+| `device` | In the order `kind` (missing, then a known kind: `value`), `presence` for a person's device (missing, then `value`), its members (`unknown-member`, then `missing-member` in the order `id dh sign signAlg presence webauthn hostSign hostSignAlg hostSignProof kind platform name`), `id`, `dh`, `id` being `dh`'s (`device`), `sign`, `signAlg` (`value`), `webauthn`, `hostSign` (a point), `hostSignAlg` (`value`), `hostSignProof` (base64url, DER, low-S), `platform` (`value`), `name`, then the proof against the binding (`host-proof`) |
 | `webauthn` | Its five members; `rpId` a lowercase DNS name of at most 253 characters (`value`); `credentialId` 1 to 1,023 bytes (`length`); `key` a point; `attested` and `backupEligible` booleans (`type`) |
 | `approval` | Anything wrong in it at all (`approval`) |
 | `target` | Exactly `id` and `add`; `add` 32 bytes |

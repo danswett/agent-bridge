@@ -78,6 +78,17 @@ public sealed class RosterVectorTests
         return chain;
     }
 
+    // A roster v2 host add (agent-principals.md §8.10, V1), after the PWA's add.
+    public static Signed HostV2Add()
+    {
+        var parent = Chain()[1];
+        var b = Body("add", 2, [parent.Hash], Phone, "2026-11-03T17:31:00Z");
+        b["v"] = 2;
+        b["device"] = HostDeviceV2(Host1, Host1Sign, "linux", "Agent host");
+        b["approval"] = new JsonObject { ["method"] = "qr", ["transcript"] = Codec.Base64Url(Transcript(2)), ["shown"] = "joiner" };
+        return new("add-host-v2", Bytes(b), PhoneSign, null, null, null);
+    }
+
     static byte[] Transcript(int i) => SHA256.HashData(Encoding.UTF8.GetBytes($"transcript {i}"));
 
     // Size boundaries: a body padded through an assertion's client data until the entry's fixed
@@ -105,7 +116,7 @@ public sealed class RosterVectorTests
     public static IReadOnlyList<Signed> Valid()
     {
         var chain = Chain();
-        return [.. chain, Padded("add-at-8-kib", chain[2], Entry.MaxBytes), Padded("remove-at-46-kib", chain[7], Entry.MaxRemoveBytes)];
+        return [.. chain, HostV2Add(), Padded("add-at-8-kib", chain[2], Entry.MaxBytes), Padded("remove-at-46-kib", chain[7], Entry.MaxRemoveBytes)];
     }
 
     public sealed record Refused(string Name, byte[] Wrapper, string Code);

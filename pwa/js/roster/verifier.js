@@ -59,8 +59,11 @@ export class RosterVerifier {
   #addCap;
 
   // addCap is for the vectors' shrunken cap; a real verifier keeps MAX_ADDS.
-  constructor(account, generation, clock, { addCap = MAX_ADDS } = {}) {
+  // acceptHostSign: roster v2 (a host add with hostSign) is switched on per roster, never inferred
+  // (agent-principals.md §8.10, V1); until then a v2 add is refused.
+  constructor(account, generation, clock, { addCap = MAX_ADDS, acceptHostSign = false } = {}) {
     this.#addCap = addCap;
+    this.acceptHostSign = acceptHostSign;
     this.account = account;
     this.generation = generation;
     this.#clock = clock;
@@ -294,6 +297,7 @@ export class RosterVerifier {
 
     switch (body.op) {
       case 'add': {
+        if (body.version === 2 && !this.acceptHostSign) return INVALID.version;
         for (const a of ancestors.members()) {
           if (g.at(a).isAdd && g.at(a).deviceId === body.device.id) return INVALID.readded;
         }
