@@ -1,17 +1,17 @@
 # Slipgates beta guide
 
-Thank you for trying Slipgates early. This page is the whole guide: what it is, how to install
-it, what is rough, what we collect, and how to reach us. It is the source for slipgates.com/docs
-(#762).
+<!-- Source for slipgates.com/docs (#762). Items marked [confirm] wait on the owner or Platform
+and are filled in before the first tester gets the link. -->
 
-Open items marked **[confirm]** are waiting on the owner or Platform and are filled in before
-the first tester gets the link.
+Thank you for trying Slipgates early. This page is the whole guide: what it is, how to install
+it, what is rough, what we collect, and how to reach us.
 
 ## What Slipgates is
 
 Slipgates lets you keep an eye on your AI coding sessions (Copilot CLI, Claude Code) from your
-phone. When a session needs you, a toast on your PC and a card on your phone say so, and you can
-answer, reply or stop it from wherever you are.
+phone. When a session needs you, a notification on your PC and a card on your phone say so, and
+you can answer its questions, approve or deny what it wants to do, or stop it from wherever you
+are.
 
 ## Install on Windows
 
@@ -24,7 +24,9 @@ answer, reply or stop it from wherever you are.
    | Intel or AMD (most PCs) | `AgentBridgeApp-win-Setup.exe` |
    | Windows on Arm (Snapdragon and similar) | `AgentBridgeApp-win-arm64-Setup.exe` |
 
-   Not sure? Settings, System, About, "System type" says which.
+   Not sure? Open Settings > System > About and look at "System type". "x64-based processor"
+   means the first file; "ARM-based processor" means the second. The installer files are named
+   `AgentBridgeApp`, but the app itself is called Slipgates.
 3. Run it. Windows shows a blue box, **Windows protected your PC**. This is expected: the beta
    installer is not signed yet, and Windows warns about any installer it does not recognise.
    Click **More info**, then **Run anyway**.
@@ -44,16 +46,16 @@ answer, reply or stop it from wherever you are.
 ## What we collect
 
 **[confirm: copy the exact wording of what Send feedback and the opt-in telemetry collect from
-the D2 design (#732).]** Nothing leaves your PC beyond that.
+the D2 design (#732).]** Separately, the sessions you watch send their prompts, replies and
+approvals to your own phone through Slipgates' relay; that is how the phone sees them.
 
 ## Getting help and sending feedback
 
-Until the in-app Send feedback button lands (#738, #739), send feedback to the owner by email or
-Teams message **[confirm: the address the owner names]**. Please do not file it as a public
-issue.
+Until the in-app Send feedback button lands (#738, #739), email or message us on Teams
+**[confirm: the address the owner names]**. Please do not file it as a public issue.
 
 ## Uninstall
 
-Settings, Apps, Installed apps, Slipgates, **Uninstall**. This stops the background service and
+Settings > Apps > Installed apps > Slipgates > **Uninstall**. This stops the background service and
 removes what Slipgates added: its scheduled task, its hooks in your CLIs and its app data. It
 never removes a CLI or signs you out of an account. Your project files are untouched.
