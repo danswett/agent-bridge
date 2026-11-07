@@ -109,7 +109,7 @@ test('an answer, a reply with files, and End session from a session go to the ma
   await openDemo(page);
   const asked = await open(page, 'laptop-ask-1', LAPTOP);
   await asked.locator('.choice[data-value="now"]').click();
-  await expect(asked.locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.');
+  await expect(asked.locator('.answer-receipt')).toHaveText('You answered · Yes, now');
   expect((await machine(page, LAPTOP, 'typed')).map((t) => t.said)).toEqual(['answer: "now"']);
   expect(await machine(page, 'demo', 'answerLog')).toEqual([]);
 
@@ -123,7 +123,7 @@ test('an answer, a reply with files, and End session from a session go to the ma
   ]);
   await reply.getByRole('textbox', { name: 'Reply' }).fill('see these');
   await reply.getByRole('button', { name: 'Send' }).click();
-  await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.');
+  await expect(reply).toHaveAttribute('data-reply', 'delivered');
   expect((await machine(page, LAPTOP, 'typedReplies')).map((r) => r.files.map((f) => f.name))).toEqual([['notes.md', 'photo.jpg']]);
   expect(await page.evaluate(() => window.agentBridgeDemo.blobs.log.filter((l) => l.op === 'put').map((l) => l.to))).toEqual([LAPTOP]);
   expect(await machine(page, 'demo', 'replyLog')).toEqual([]);
@@ -132,7 +132,7 @@ test('an answer, a reply with files, and End session from a session go to the ma
   // The laptop's session is working on the reply now: ending it takes two presses. On a phone,
   // End session is in the header's overflow menu (ui.md §6.2), and its second press in Details.
   const end = idle.locator('.end-session .end-button');
-  await idle.locator('.session-header .more').click();
+  await idle.locator('.session-bar .more').click();
   await idle.getByRole('menuitem', { name: 'End session' }).click();
   await expect(end).toBeVisible();
   await expect(end).toHaveAttribute('aria-label', /press again to confirm/);

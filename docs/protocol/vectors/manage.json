@@ -1,0 +1,546 @@
+{
+  "about": "Restarting a machine and repairing its hooks from a person's other device (#801).",
+  "spec": "v1-sessions.md",
+  "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
+  "contexts": {},
+  "records": {
+    "ManageCommand": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "a-press",
+          "json": {
+            "command": {
+              "body": "eyJ2IjoxfQ",
+              "by": "BHf3a2",
+              "mac": "_PJ9LEydaL4_cLc4dUQ-wkKfhFj1DfQi-9K7Bl_0fxs"
+            }
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-command",
+          "json": {},
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-command",
+          "json": {
+            "command": "wrong"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "ManageRepairArgs": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "copilot",
+          "json": {
+            "agent": "copilot"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-agent",
+          "json": {
+            "agent": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "ManageConfigArgs": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "held-until-the-roster",
+          "json": {
+            "key": "push.enabled",
+            "value": false,
+            "was": true,
+            "revision": "r-1"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-key",
+          "json": {
+            "key": 42,
+            "value": false,
+            "was": true,
+            "revision": "r-1"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "ManageHaTokenRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "held-until-the-roster",
+          "json": {
+            "command": {
+              "body": "eyJ2IjoxfQ",
+              "by": "BHf3a2",
+              "mac": "_PJ9LEydaL4_cLc4dUQ-wkKfhFj1DfQi-9K7Bl_0fxs"
+            },
+            "secret": "not-a-token"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-command",
+          "json": {
+            "secret": "not-a-token"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-secret",
+          "json": {
+            "command": {
+              "body": "eyJ2IjoxfQ",
+              "by": "BHf3a2",
+              "mac": "_PJ9LEydaL4_cLc4dUQ-wkKfhFj1DfQi-9K7Bl_0fxs"
+            }
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-secret",
+          "json": {
+            "command": {
+              "body": "eyJ2IjoxfQ",
+              "by": "BHf3a2",
+              "mac": "_PJ9LEydaL4_cLc4dUQ-wkKfhFj1DfQi-9K7Bl_0fxs"
+            },
+            "secret": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "ManageRestarts": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "one-left",
+          "json": {
+            "left": 1,
+            "nextAt": "2026-10-28T10:22:43.182Z"
+          }
+        },
+        {
+          "name": "none-used",
+          "json": {
+            "left": 2
+          }
+        },
+        {
+          "name": "wrong-type-left",
+          "json": {
+            "left": "many",
+            "nextAt": "2026-10-28T10:22:43.182Z"
+          },
+          "reads": {
+            "left": 0,
+            "nextAt": "2026-10-28T10:22:43.182Z"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "ManagePending": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-restart",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "kind": "restart",
+            "by": "pwa 8e7d6c5b",
+            "at": "2026-10-28T04:22:43.182Z",
+            "transition": "4f3e2d1c0b0a99887766554433221100"
+          }
+        },
+        {
+          "name": "wrong-type-request",
+          "json": {
+            "request": 42,
+            "kind": "restart",
+            "by": "pwa 8e7d6c5b",
+            "at": "2026-10-28T04:22:43.182Z",
+            "transition": "4f3e2d1c0b0a99887766554433221100"
+          },
+          "reads": {
+            "request": "",
+            "kind": "restart",
+            "by": "pwa 8e7d6c5b",
+            "at": "2026-10-28T04:22:43.182Z",
+            "transition": "4f3e2d1c0b0a99887766554433221100"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "ManageLast": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "restarted",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "kind": "restart",
+            "outcome": "done",
+            "by": "pwa 8e7d6c5b",
+            "at": "2026-10-28T04:22:43.182Z",
+            "tookSeconds": 41
+          }
+        },
+        {
+          "name": "refused",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "kind": "restart",
+            "outcome": "refused",
+            "by": "pwa 8e7d6c5b",
+            "at": "2026-10-28T04:22:43.182Z",
+            "reason": "not-quiet"
+          }
+        },
+        {
+          "name": "wrong-type-request",
+          "json": {
+            "request": 42,
+            "kind": "restart",
+            "outcome": "done",
+            "by": "pwa 8e7d6c5b",
+            "at": "2026-10-28T04:22:43.182Z",
+            "tookSeconds": 41
+          },
+          "reads": {
+            "request": "",
+            "kind": "restart",
+            "outcome": "done",
+            "by": "pwa 8e7d6c5b",
+            "at": "2026-10-28T04:22:43.182Z",
+            "tookSeconds": 41
+          }
+        }
+      ],
+      "refused": []
+    },
+    "ManageState": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "restarting",
+          "json": {
+            "phase": "restarting",
+            "pending": {
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "kind": "restart",
+              "by": "pwa 8e7d6c5b",
+              "at": "2026-10-28T04:22:43.182Z",
+              "transition": "4f3e2d1c0b0a99887766554433221100"
+            },
+            "restarts": {
+              "left": 1,
+              "nextAt": "2026-10-28T10:22:43.182Z"
+            },
+            "last": {
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "kind": "restart",
+              "outcome": "done",
+              "by": "pwa 8e7d6c5b",
+              "at": "2026-10-28T04:22:43.182Z",
+              "tookSeconds": 41
+            }
+          }
+        },
+        {
+          "name": "idle",
+          "json": {
+            "phase": "idle",
+            "restarts": {
+              "left": 2
+            }
+          }
+        },
+        {
+          "name": "an-unknown-phase-reads-as-idle",
+          "json": {
+            "phase": "rebooting",
+            "restarts": {
+              "left": 2
+            }
+          },
+          "reads": {
+            "phase": "idle",
+            "restarts": {
+              "left": 2
+            }
+          }
+        },
+        {
+          "name": "missing-restarts",
+          "json": {
+            "phase": "restarting",
+            "pending": {
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "kind": "restart",
+              "by": "pwa 8e7d6c5b",
+              "at": "2026-10-28T04:22:43.182Z",
+              "transition": "4f3e2d1c0b0a99887766554433221100"
+            },
+            "last": {
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "kind": "restart",
+              "outcome": "done",
+              "by": "pwa 8e7d6c5b",
+              "at": "2026-10-28T04:22:43.182Z",
+              "tookSeconds": 41
+            }
+          },
+          "reads": {
+            "phase": "restarting",
+            "pending": {
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "kind": "restart",
+              "by": "pwa 8e7d6c5b",
+              "at": "2026-10-28T04:22:43.182Z",
+              "transition": "4f3e2d1c0b0a99887766554433221100"
+            },
+            "restarts": {
+              "left": 0
+            },
+            "last": {
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "kind": "restart",
+              "outcome": "done",
+              "by": "pwa 8e7d6c5b",
+              "at": "2026-10-28T04:22:43.182Z",
+              "tookSeconds": 41
+            }
+          }
+        },
+        {
+          "name": "wrong-type-pending",
+          "json": {
+            "phase": "restarting",
+            "pending": "wrong",
+            "restarts": {
+              "left": 1,
+              "nextAt": "2026-10-28T10:22:43.182Z"
+            },
+            "last": {
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "kind": "restart",
+              "outcome": "done",
+              "by": "pwa 8e7d6c5b",
+              "at": "2026-10-28T04:22:43.182Z",
+              "tookSeconds": 41
+            }
+          },
+          "reads": {
+            "phase": "restarting",
+            "restarts": {
+              "left": 1,
+              "nextAt": "2026-10-28T10:22:43.182Z"
+            },
+            "last": {
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "kind": "restart",
+              "outcome": "done",
+              "by": "pwa 8e7d6c5b",
+              "at": "2026-10-28T04:22:43.182Z",
+              "tookSeconds": 41
+            }
+          }
+        }
+      ],
+      "refused": []
+    },
+    "ManageResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "accepted",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "outcome": "accepted",
+            "transition": "4f3e2d1c0b0a99887766554433221100",
+            "state": {
+              "phase": "restarting",
+              "pending": {
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "kind": "restart",
+                "by": "pwa 8e7d6c5b",
+                "at": "2026-10-28T04:22:43.182Z",
+                "transition": "4f3e2d1c0b0a99887766554433221100"
+              },
+              "restarts": {
+                "left": 1,
+                "nextAt": "2026-10-28T10:22:43.182Z"
+              },
+              "last": {
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "kind": "restart",
+                "outcome": "done",
+                "by": "pwa 8e7d6c5b",
+                "at": "2026-10-28T04:22:43.182Z",
+                "tookSeconds": 41
+              }
+            }
+          }
+        },
+        {
+          "name": "repaired",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "outcome": "done",
+            "detail": "Copilot's hooks are set up",
+            "restartRequired": false
+          }
+        },
+        {
+          "name": "held-until-the-roster",
+          "json": {
+            "outcome": "refused",
+            "reason": "needs-roster"
+          }
+        },
+        {
+          "name": "an-unknown-outcome-reads-as-failed",
+          "json": {
+            "outcome": "rolledBack"
+          },
+          "reads": {
+            "outcome": "failed"
+          }
+        },
+        {
+          "name": "missing-outcome",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "transition": "4f3e2d1c0b0a99887766554433221100",
+            "state": {
+              "phase": "restarting",
+              "pending": {
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "kind": "restart",
+                "by": "pwa 8e7d6c5b",
+                "at": "2026-10-28T04:22:43.182Z",
+                "transition": "4f3e2d1c0b0a99887766554433221100"
+              },
+              "restarts": {
+                "left": 1,
+                "nextAt": "2026-10-28T10:22:43.182Z"
+              },
+              "last": {
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "kind": "restart",
+                "outcome": "done",
+                "by": "pwa 8e7d6c5b",
+                "at": "2026-10-28T04:22:43.182Z",
+                "tookSeconds": 41
+              }
+            }
+          },
+          "reads": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "outcome": "failed",
+            "transition": "4f3e2d1c0b0a99887766554433221100",
+            "state": {
+              "phase": "restarting",
+              "pending": {
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "kind": "restart",
+                "by": "pwa 8e7d6c5b",
+                "at": "2026-10-28T04:22:43.182Z",
+                "transition": "4f3e2d1c0b0a99887766554433221100"
+              },
+              "restarts": {
+                "left": 1,
+                "nextAt": "2026-10-28T10:22:43.182Z"
+              },
+              "last": {
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "kind": "restart",
+                "outcome": "done",
+                "by": "pwa 8e7d6c5b",
+                "at": "2026-10-28T04:22:43.182Z",
+                "tookSeconds": 41
+              }
+            }
+          }
+        },
+        {
+          "name": "wrong-type-request",
+          "json": {
+            "request": 42,
+            "outcome": "accepted",
+            "transition": "4f3e2d1c0b0a99887766554433221100",
+            "state": {
+              "phase": "restarting",
+              "pending": {
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "kind": "restart",
+                "by": "pwa 8e7d6c5b",
+                "at": "2026-10-28T04:22:43.182Z",
+                "transition": "4f3e2d1c0b0a99887766554433221100"
+              },
+              "restarts": {
+                "left": 1,
+                "nextAt": "2026-10-28T10:22:43.182Z"
+              },
+              "last": {
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "kind": "restart",
+                "outcome": "done",
+                "by": "pwa 8e7d6c5b",
+                "at": "2026-10-28T04:22:43.182Z",
+                "tookSeconds": 41
+              }
+            }
+          },
+          "reads": {
+            "outcome": "accepted",
+            "transition": "4f3e2d1c0b0a99887766554433221100",
+            "state": {
+              "phase": "restarting",
+              "pending": {
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "kind": "restart",
+                "by": "pwa 8e7d6c5b",
+                "at": "2026-10-28T04:22:43.182Z",
+                "transition": "4f3e2d1c0b0a99887766554433221100"
+              },
+              "restarts": {
+                "left": 1,
+                "nextAt": "2026-10-28T10:22:43.182Z"
+              },
+              "last": {
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "kind": "restart",
+                "outcome": "done",
+                "by": "pwa 8e7d6c5b",
+                "at": "2026-10-28T04:22:43.182Z",
+                "tookSeconds": 41
+              }
+            }
+          }
+        }
+      ],
+      "refused": []
+    }
+  },
+  "knownDifferences": []
+}

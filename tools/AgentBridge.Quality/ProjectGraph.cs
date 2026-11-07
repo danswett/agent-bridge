@@ -8,7 +8,7 @@ sealed record Project(string Folder, IReadOnlyList<string> References, IReadOnly
     public static Project Create(string folder, IEnumerable<string>? references = null, IEnumerable<string>? linkedFiles = null, bool isTestProject = false) =>
         new(RepoPath.Normalize(folder),
             (references ?? []).Select(RepoPath.Normalize).ToList(),
-            (linkedFiles ?? []).Select(g => new Glob(g)).ToList(),
+            (linkedFiles ?? []).Select(g => new Glob(g, ignoreCase: true)).ToList(),
             isTestProject);
 }
 
@@ -18,26 +18,33 @@ sealed record Project(string Folder, IReadOnlyList<string> References, IReadOnly
 /// </summary>
 sealed class ProjectGraph
 {
+    /// <summary>
+    /// How project folders, references and the paths in them compare. The Windows build that ships
+    /// the app compiles src/agentbridge.host/X.cs into src/AgentBridge.Host and MSBuild resolves a
+    /// ProjectReference in any case, so the graph must too, on whatever OS the planner runs.
+    /// </summary>
+    public static readonly StringComparer PathComparer = StringComparer.OrdinalIgnoreCase;
+
     static readonly HashSet<string> SkippedFolders = new(StringComparer.OrdinalIgnoreCase) { "bin", "obj", "node_modules", ".git", ".vs", "TestResults", "out" };
 
     readonly Dictionary<string, Project> projects;
     readonly Dictionary<string, int> csprojCounts;
-    readonly Dictionary<string, List<string>> referencedBy = new(StringComparer.Ordinal);
-    readonly Dictionary<string, IReadOnlySet<string>> reachers = new(StringComparer.Ordinal);
+    readonly Dictionary<string, List<string>> referencedBy = new(PathComparer);
+    readonly Dictionary<string, IReadOnlySet<string>> reachers = new(PathComparer);
 
     public ProjectGraph(IEnumerable<Project> projects)
     {
         // Two .csproj files in one folder share its files, so the selector treats them as one
         // project; the catalog check refuses such a folder as a suite's project.
-        var byFolder = projects.GroupBy(p => p.Folder, StringComparer.Ordinal).ToList();
-        csprojCounts = byFolder.ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        var byFolder = projects.GroupBy(p => p.Folder, PathComparer).ToList();
+        csprojCounts = byFolder.ToDictionary(g => g.Key, g => g.Count(), PathComparer);
         this.projects = byFolder.ToDictionary(
             g => g.Key,
             g => g.Count() == 1 ? g.First() : new Project(g.Key,
-                g.SelectMany(p => p.References).Distinct(StringComparer.Ordinal).ToList(),
+                g.SelectMany(p => p.References).Distinct(PathComparer).ToList(),
                 g.SelectMany(p => p.LinkedFiles).ToList(),
                 g.Any(p => p.IsTestProject)),
-            StringComparer.Ordinal);
+            PathComparer);
         foreach (var project in this.projects.Values)
             foreach (var reference in project.References)
             {
@@ -94,7 +101,7 @@ sealed class ProjectGraph
                 else if (item.Replace('\\', '/').StartsWith("../", StringComparison.Ordinal))
                     // A file linked from outside the project's folder (a shared fixture, the protocol
                     // examples) belongs to this project too, or a change to it would reach nothing.
-                    linked.Add(new Glob(RepoPath.Combine(folder, item)));
+                    linked.Add(new Glob(RepoPath.Combine(folder, item), ignoreCase: true));
             }
         }
         return new Project(RepoPath.Normalize(folder), references, linked, isTest);
@@ -127,7 +134,7 @@ sealed class ProjectGraph
         Project? byFolder = null;
         foreach (var folder in projects.Keys.Concat(referencedBy.Keys.Where(k => !projects.ContainsKey(k))))
         {
-            if ((folder.Length == 0 || path.StartsWith(folder + "/", StringComparison.Ordinal))
+            if ((folder.Length == 0 || path.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase))
                 && (byFolder is null || folder.Length > byFolder.Folder.Length))
                 byFolder = projects.GetValueOrDefault(folder) ?? Project.Create(folder);
         }
@@ -145,7 +152,7 @@ sealed class ProjectGraph
         // A change touches many files in few projects, so each walk is done once per run.
         if (reachers.TryGetValue(folder, out var cached))
             return cached;
-        var seen = new HashSet<string>(StringComparer.Ordinal) { folder };
+        var seen = new HashSet<string>(PathComparer) { folder };
         var queue = new Queue<string>([folder]);
         while (queue.Count > 0)
             foreach (var next in referencedBy.GetValueOrDefault(queue.Dequeue()) ?? [])

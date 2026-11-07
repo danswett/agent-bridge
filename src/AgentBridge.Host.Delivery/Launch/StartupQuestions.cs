@@ -180,8 +180,9 @@ public static class StartupQuestions
         if (warning.Count == 0 || WarningOf(kind).Any(w => !words.Contains(w, StringComparison.Ordinal))) { return null; }
         var text = Limits.KeepStart(words, TrustProtocol.MaxText);
         // Everything from the folder to the last option, blank rows too: the folder, the root, the
-        // agent's words and every option, highlight included, as they were read.
-        var hold = Enumerable.Range(from, options[^1] - from + 1).Select(r => new ScreenRow(r, rows[r].TrimEnd())).ToList();
+        // agent's words and every option, highlight included, as the worker reads them (only the
+        // window's ASCII padding trimmed: a no-break space drawn there is held as drawn, #843 review).
+        var hold = Enumerable.Range(from, options[^1] - from + 1).Select(r => new ScreenRow(r, rows[r].TrimEnd(' '))).ToList();
         return new TrustScreen(root, note, text, options, selected, trustAt, hold) { Words = words };
     }
 

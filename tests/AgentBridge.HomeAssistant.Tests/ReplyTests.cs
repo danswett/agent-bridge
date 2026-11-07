@@ -222,6 +222,25 @@ public sealed partial class ReplyTests : IDisposable
         Assert.True(ha.Images.ContainsKey(kept));
     }
 
+    [Theory]
+    // A person's draft left in Copilot's input box: the refusal the host returns names it, for
+    // the person's own client, but Home Assistant keeps what it is shown in its history, so it
+    // is told the draft's length only (#843 review).
+    [InlineData(AnswerOutcome.Refused)]
+    [InlineData(AnswerOutcome.Unconfirmed)]
+    public async Task A_draft_left_at_the_machine_reaches_home_assistant_as_its_length_only(AnswerOutcome refused)
+    {
+        const string Secret = "ghp_SENTINEL0123456789";
+        outcome = _ => Task.FromResult(new ReplyResult(refused, ReplyReasons.Draft($"token {Secret}", $"token {Secret}")));
+        await using var c = await Ready();
+
+        await Do(c, ha.SendFromCard(Node, "Look"));
+
+        Assert.Single(replied);
+        Assert.Equal("something is already typed in Copilot's input box at the machine (28 characters, not shown here); send or clear it there first", Detail.GetProperty("error").GetString());
+        Assert.DoesNotContain(ha.Retained.Values, v => v.Contains(Secret, StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task A_refused_reply_keeps_its_images_in_home_assistant()
     {

@@ -41,6 +41,10 @@ public static class DelegateLabel
     static readonly HashSet<int> Dots = [0x00B7, 0x0387, 0x1427, 0x16EB, 0x2022, 0x2027, 0x2219, 0x22C5, 0x2E31, 0x2E33, 0x30FB, 0x318D, 0xA78F, 0xFF65, 0x10101];
 
     static string Undotted(string s) => Replaced(s, r => Dots.Contains(r.Value) ? "-" : null);
+    // A prompt's label (PromptOrigin) is cleaned by the same rules: no fact of its own, and its
+    // quotes can't close the ones it is shown in.
+    internal static string WithoutDots(string s) => Undotted(s);
+    internal static string Quoted(string s) => $"“{Unquoted(s)}”";
 
     // Inside the quotes, a quote of its own could close them and carry on as other words: every
     // character Unicode files as an opening or closing quote (Pi, Pf) or marks Quotation_Mark, and

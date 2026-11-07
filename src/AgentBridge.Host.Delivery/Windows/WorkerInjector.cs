@@ -21,9 +21,15 @@ public sealed class WorkerInjector : IConsoleInjector
     static readonly SemaphoreSlim One = new(1, 1);
 
     readonly string path;
+    readonly Action<string> log;
 
-    public WorkerInjector(string? path = null) =>
+    // log: the host's log, which alone is told why the worker could not start (#995): the
+    // result's detail reaches a person's receipt, and an exception's text must not (#802).
+    public WorkerInjector(string? path = null, Action<string>? log = null)
+    {
         this.path = path ?? Path.Combine(AppContext.BaseDirectory, FileName);
+        this.log = log ?? (_ => { });
+    }
 
     public async Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default)
     {
@@ -62,8 +68,8 @@ public sealed class WorkerInjector : IConsoleInjector
         start.ArgumentList.Add("--screen");
         Process? process;
         try { process = ProcessLaunch.Start(start); }
-        catch (Exception e) { return new ConsoleScreen(null, $"the injector could not start: {e.Message}"); }
-        if (process is null) { return new ConsoleScreen(null, "the injector could not start"); }
+        catch (Exception e) { return new ConsoleScreen(null, CouldNotStart(processId, e)); }
+        if (process is null) { return new ConsoleScreen(null, NotStarted); }
         using (process)
         {
             process.StandardInput.Close();
@@ -116,8 +122,8 @@ public sealed class WorkerInjector : IConsoleInjector
         start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
         Process? process;
         try { process = ProcessLaunch.Start(start); }
-        catch (Exception e) { return Nothing($"the injector could not start: {e.Message}"); }
-        if (process is null) { return Nothing("the injector could not start"); }
+        catch (Exception e) { return Nothing(CouldNotStart(processId, e)); }
+        if (process is null) { return Nothing(NotStarted); }
 
         using (process)
         {
@@ -160,6 +166,9 @@ public sealed class WorkerInjector : IConsoleInjector
                 var parts = final.Split(' ');
                 var stage = parts.Length > 1 ? parts[1] : "?";
                 var code = parts.Length > 2 && int.TryParse(parts[2], CultureInfo.InvariantCulture, out var c) ? c : 0;
+                // A later send held to the screen, refused after an earlier one went: what went
+                // stays, and nothing after it does.
+                if (wrote && (stage, code) == ("screen", 0)) { return Interrupted(ScreenChangedPartway); }
                 return wrote ? Interrupted($"the injector failed while typing ({stage} error {code})") : Nothing(Explain(stage, code));
             }
             var exit = process.ExitCode;
@@ -177,6 +186,9 @@ public sealed class WorkerInjector : IConsoleInjector
     // What a send held to the screen (KeySend.Expect) comes to when the screen no longer reads so.
     public const string ScreenChanged = "the prompt on the session's screen changed before anything was typed; look again and answer, or answer at the machine";
 
+    // The same, for a send after the first: the keys before it went, and nothing after.
+    public const string ScreenChangedPartway = "the session's screen changed after part of it was typed, so nothing more was";
+
     // What a person can do about a failure that happened before any key was written.
     internal static string Explain(string stage, int code) => (stage, code) switch
     {
@@ -189,6 +201,17 @@ public sealed class WorkerInjector : IConsoleInjector
         ("screen", _) => $"the host could not read the session's screen (error {code}); answer at the machine",
         _ => $"the injector could not type ({stage} error {code}); answer at the machine",
     };
+
+    // The worker did not start, so nothing was typed. Fixed words: each caller says it in its own
+    // (a reply or an answer "the machine couldn't deliver it", DeliveryReasons.Of; Launch's folder
+    // trust its own, #995), and why goes to the host's log only (#802).
+    public const string NotStarted = "the injector could not start";
+
+    string CouldNotStart(int processId, Exception e)
+    {
+        log($"the injector could not start for pid {processId}: {e.GetType().Name}: {e.Message}");
+        return NotStarted;
+    }
 
     static InjectionResult Nothing(string detail) => new(InjectionStatus.NothingTyped, detail);
     static InjectionResult Interrupted(string detail) => new(InjectionStatus.Interrupted, detail);

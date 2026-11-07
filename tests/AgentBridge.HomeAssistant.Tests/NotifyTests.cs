@@ -1272,4 +1272,278 @@ public sealed class NotifyTests : IDisposable
             await Task.Delay(20);
         }
     }
+
+    // #800: what Home Assistant tells the owner when an agent needs signing in again.
+    static Attention SignInNeeded(string? account = "octocat", RecoveryState? recovery = null) => new()
+    {
+        Kind = AttentionKind.SignInNeeded, Since = FakeSessions.T0.AddMinutes(1), Agent = AgentKind.Copilot, Provider = "github", Account = account,
+        Message = "Copilot needs you to sign in again (401).", SignIn = SignInWhere.Phone, Recovery = recovery,
+    };
+
+    static readonly Attention Failure = new()
+    {
+        Kind = AttentionKind.Error, Since = FakeSessions.T0.AddMinutes(1), Agent = AgentKind.Copilot, ErrorClass = ErrorClass.Other, Message = "Copilot stopped with an error.",
+    };
+
+    void Fail(Attention? attention, string id = A, string title = "Fix the relay", string response = "The previous turn's answer", int turn = 2) =>
+        sessions.Set(FakeSessions.Copilot(id, title: title, status: SessionStatus.Idle) with
+        {
+            Activity = new Activity { Response = response, TurnCount = turn, UserMessage = "go" },
+            Attention = attention,
+        });
+
+    string SignInTagFor(string? account = "octocat") => HaNotify.SignInTag(HaContract.MachineSlug(Machine), "copilot", account);
+    List<JsonObject> Notices(string service = Phone, string? account = "octocat") =>
+        [.. Sent(service).Select(n => n.Data).Where(d => d["data"]?["tag"]?.GetValue<string>() == SignInTagFor(account) && d["message"]?.GetValue<string>() != HaNotify.ClearMessage)];
+    int NoticeClears(string service = Phone, string? account = "octocat") =>
+        Sent(service).Count(n => n.Data["message"]?.GetValue<string>() == HaNotify.ClearMessage && n.Data["data"]?["tag"]?.GetValue<string>() == SignInTagFor(account));
+
+    [Fact]
+    public async Task A_turn_that_ends_on_a_401_is_not_pushed_as_finished_with_the_previous_answer_but_as_needing_sign_in()
+    {
+        await using var c = Connector(Phones with { Enabled = true });
+        Ask(null, response: "The previous turn's answer", turn: 1);
+        await Pass(c);
+        // The prompt that hit the 401: a new turn, idle again with the turn before's answer beside it.
+        Ask(null, response: "The previous turn's answer", status: SessionStatus.Working, turn: 2);
+        await Pass(c);
+        Fail(SignInNeeded());
+        await Pass(c);
+
+        // Told within the pass, well inside the owner's 60 s, on the phones and the push service.
+        var notice = Assert.Single(Notices());
+        Assert.Single(Notices(Tablet));
+        Assert.Equal($"Copilot on {Machine} needs sign-in", notice["title"]!.GetValue<string>());
+        Assert.Equal("1 session: Copilot: Fix the relay", notice["message"]!.GetValue<string>());
+        Assert.Equal($"{Machine} - needs sign-in", notice["data"]!["subtitle"]!.GetValue<string>());
+        Assert.False(notice["data"]!.AsObject().ContainsKey("actions"));
+        var push = Assert.Single(Pushes());
+        Assert.Equal($"Copilot on {Machine} needs sign-in", push["title"]!.GetValue<string>());
+        // No account, code or URL, and not the agent's answer from before.
+        foreach (var sent in Sent().Select(n => HaContract.Serialize(n.Data)))
+        {
+            Assert.DoesNotContain("octocat", sent, StringComparison.Ordinal);
+            Assert.DoesNotContain("github.com", sent, StringComparison.Ordinal);
+            Assert.DoesNotContain("previous turn", sent, StringComparison.Ordinal);
+        }
+
+        // Its card says so, never idle.
+        Assert.Equal("Needs sign-in", ha.Retained[HaContract.Topics(Node).StatusState]);
+        Assert.Contains("\"sign_in_needed\"", ha.Retained[HaContract.Topics(Node).StatusAttributes], StringComparison.Ordinal);
+        await Pass(c, 5);
+        await Pass(c, 20);
+        Assert.Single(Pushes());
+    }
+
+    [Fact]
+    public async Task A_turn_that_ends_on_an_error_pushes_nothing_and_a_later_answer_is_pushed_as_ever()
+    {
+        await using var c = Connector(Phones with { Enabled = true });
+        Ask(null, response: "The previous turn's answer", turn: 1);
+        await Pass(c);
+        Ask(null, response: "The previous turn's answer", status: SessionStatus.Working, turn: 2);
+        await Pass(c);
+        Fail(Failure);
+        await Pass(c);
+        await Pass(c, 5);
+        await Pass(c, 20);
+        Assert.Empty(Pushes());
+        Assert.Empty(Notices());
+        Assert.Equal("Agent error", ha.Retained[HaContract.Topics(Node).StatusState]);
+
+        // The attention came only after the finished wait began: still not pushed.
+        Ask(null, response: "The previous turn's answer", status: SessionStatus.Working, turn: 3);
+        await Pass(c);
+        Ask(null, response: "The previous turn's answer", status: SessionStatus.Idle, turn: 3);
+        await Pass(c);
+        Fail(Failure, turn: 3);
+        await Pass(c, 5);
+        Assert.Empty(Pushes());
+
+        // The next turn that does finish is pushed in its own words.
+        Ask(null, response: "Fixed it.", status: SessionStatus.Working, turn: 4);
+        await Pass(c);
+        Ask(null, response: "Fixed it.", status: SessionStatus.Idle, turn: 4);
+        await Pass(c);
+        await Pass(c, 5);
+        Assert.Equal("Fixed it.", Assert.Single(Pushes())["message"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Sign_in_is_one_notice_per_agent_and_account_at_most_hourly_and_withdrawn_once_signed_in()
+    {
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(null);
+        await Pass(c);
+        Fail(SignInNeeded());
+        Fail(SignInNeeded(), id: B, title: "Cut the release");
+        await Pass(c);
+        var notice = Assert.Single(Notices());
+        Assert.StartsWith("2 sessions: ", notice["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Contains("Copilot: Cut the release", notice["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Single(Pushes());
+
+        // Another account is its own notice; more sessions within the hour are not.
+        Fail(SignInNeeded("hubot"), id: "8b000000-0000-4000-8000-0000000000cc");
+        await Pass(c);
+        Assert.Single(Notices(account: "hubot"));
+        Fail(SignInNeeded(), id: "9c000000-0000-4000-8000-0000000000dd");
+        await Pass(c, 30 * 60);
+        Assert.Single(Notices());
+        Assert.Equal(2, Pushes().Count);
+
+        // Still signed out an hour on: told again, under the same tag.
+        await Pass(c, 31 * 60);
+        Assert.Equal(2, Notices().Count);
+        Assert.StartsWith("3 sessions: ", Notices()[^1]["message"]!.GetValue<string>(), StringComparison.Ordinal);
+
+        // Signed in and waiting for the sessions to confirm: nobody is needed, and the phones are cleared.
+        foreach (var id in new[] { A, B, "9c000000-0000-4000-8000-0000000000dd" }) { Fail(SignInNeeded(recovery: RecoveryState.Pending), id: id); }
+        await Pass(c);
+        Assert.Equal(1, NoticeClears());
+        Assert.Equal(1, NoticeClears(Tablet));
+        Assert.Equal(0, NoticeClears(account: "hubot"));
+        Assert.Equal("Signed in · waiting for the session to confirm", ha.Retained[HaContract.Topics(Node).StatusState]);
+        await Pass(c, 20);
+        Assert.Equal(1, NoticeClears());
+
+        // Without a phone or the push service named, nothing is sent.
+        await using var off = Connector(HaNotifySettings.Default);
+        var before = Sent().Count;
+        Fail(SignInNeeded("someone-else"), id: "aa000000-0000-4000-8000-0000000000ee");
+        await Pass(off);
+        Assert.Equal(before, Sent().Count);
+    }
+
+    [Fact]
+    public async Task A_restart_within_the_hour_does_not_send_the_sign_in_notice_again_and_still_withdraws_it()
+    {
+        await using (var c = Connector(Phones))
+        {
+            Fail(SignInNeeded());
+            await Pass(c);
+            Assert.Single(Notices());
+        }
+        await using (var again = Connector(Phones))
+        {
+            await Pass(again, 60);
+            Assert.Single(Notices());
+            Fail(null);
+            await Pass(again);
+            Assert.Equal(1, NoticeClears());
+        }
+    }
+
+    [Fact]
+    public async Task Each_destination_is_told_again_an_hour_after_its_own_delivery_not_another_ones()
+    {
+        ha.NotifyFailsFor = s => s == "notify.notify";
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(SignInNeeded());
+        await Pass(c);
+        Assert.Single(Notices());
+        Assert.Empty(Pushes());
+
+        // The push service comes back at minute 59: told then, and not again a minute later when
+        // the phones' hour is up.
+        await Pass(c, 59 * 60);
+        Assert.Empty(Pushes());
+        ha.NotifyFailsFor = null;
+        await Pass(c, 20);
+        Assert.Single(Pushes());
+        await Pass(c, 2 * 60);
+        Assert.Equal(2, Notices().Count);
+        Assert.Single(Pushes());
+        await Pass(c, 60 * 60);
+        Assert.Equal(2, Pushes().Count);
+    }
+
+    [Fact]
+    public async Task A_need_that_comes_back_while_a_withdrawal_is_still_retried_is_told_again()
+    {
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(SignInNeeded());
+        await Pass(c);
+        Assert.Single(Notices());
+        Assert.Single(Pushes());
+
+        // Signed in: the phone is cleared, the tablet can't be reached.
+        ha.NotifyFailsFor = s => s == Tablet;
+        Fail(null);
+        await Pass(c);
+        Assert.Equal(1, NoticeClears());
+
+        // Signed out again within the hour: news again, everywhere it can go.
+        Fail(SignInNeeded() with { Since = FakeSessions.T0.AddMinutes(5) });
+        await Pass(c, 20);
+        Assert.Equal(2, Notices().Count);
+        Assert.Equal(2, Pushes().Count);
+    }
+
+    [Fact]
+    public async Task A_restart_under_a_discovery_hold_neither_withdraws_the_sign_in_notice_nor_sends_it_again_within_the_hour()
+    {
+        await using (var c = Connector(Phones))
+        {
+            Fail(SignInNeeded());
+            await Pass(c);
+            Assert.Single(Notices());
+        }
+        // Restarted while discovery is held: the session isn't found yet, which is not signing in.
+        sessions.End(A);
+        sessions.Held = new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
+        await using var again = Connector(Phones);
+        await Pass(again, 60);
+        Assert.Equal(0, NoticeClears());
+        sessions.Held = null;
+        Fail(SignInNeeded());
+        await Pass(again);
+        Assert.Single(Notices());
+        Assert.Equal(0, NoticeClears());
+    }
+
+    [Fact]
+    public async Task A_destination_that_missed_the_sign_in_notice_is_tried_again_and_one_that_took_it_is_not_told_twice()
+    {
+        ha.NotifyFailsFor = s => s is Tablet or "notify.notify";
+        await using var c = Connector(Phones with { Enabled = true });
+        Fail(SignInNeeded());
+        await Pass(c);
+        Assert.Single(Notices());
+        Assert.Empty(Notices(Tablet));
+        Assert.Empty(Pushes());
+
+        ha.NotifyFailsFor = null;
+        await Pass(c, 20);
+        Assert.Single(Notices());
+        Assert.Single(Notices(Tablet));
+        Assert.Single(Pushes());
+        await Pass(c, 20);
+        Assert.Single(Notices(Tablet));
+        Assert.Single(Pushes());
+    }
+
+    [Fact]
+    public async Task A_pass_stopped_between_phones_does_not_send_the_sign_in_notice_again_to_the_phone_that_took_it()
+    {
+        // agent-ha-bridge starts just after the first phone took it: the pass stops there.
+        ha.NotifyFailsFor = s =>
+        {
+            if (s == Phone) { daemon = "agent-ha-bridge"; }
+            return false;
+        };
+        await using (var c = Connector(Phones))
+        {
+            Fail(SignInNeeded());
+            await Pass(c);
+            Assert.Single(Notices());
+            Assert.Empty(Notices(Tablet));
+        }
+        ha.NotifyFailsFor = null;
+        daemon = null;
+        await using var again = Connector(Phones);
+        await Pass(again, 60);
+        Assert.Single(Notices());
+        Assert.Single(Notices(Tablet));
+    }
 }

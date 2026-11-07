@@ -14,6 +14,7 @@ project's priorities (§4 step 6 and §5).
 |---|---|---|
 | The owner signs off ui.md and subagents.md, and answers subagents.md §8 | Owner | Every slice in track B. S1 may start before it (see below) |
 | #181: the monospace | Owner | Decided 2026-11-01: Agent Bridge Mono, in `design/fonts`. #177 bundles it |
+| #384: first-run setup and Settings, in [proposals/384-first-run.md](proposals/384-first-run.md) | Owner | Decided 2026-11-03 (option (a) for all 13 in §12) and specified in ui.md §6.8–§6.10 (#532). Slices 1–3 proceed; slice 4 (Workspaces and trust) is **Parked (#699)** apart from its two shipped toggles; slice 5 (the guided shell) can start |
 
 **S1 may start before sign-off.** Its model and protocol are additive and change nothing a
 current client shows. Its fixtures also feed the shadow gate (#40). If sign-off changes

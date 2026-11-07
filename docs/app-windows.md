@@ -1,6 +1,6 @@
 # The Windows app (P3 core)
 
-The first shippable desktop app: a WinUI 3 window over this machine's Bridge Host, the
+The first shippable desktop app: a WinUI 3 window over this machine's Slipgates host, the
 host's installer and manager, and toasts that take answers. It is a client of the host,
 never the host itself (design §3.2): closing the app never stops a session's bridge, and
 everything the app does goes through the same protocol ops and the same host code as the
@@ -26,10 +26,54 @@ Settings' **Agents on this machine** section uses the host's shared readiness re
 (`#384` foundation, partial `#231`), with executable/version detection, hook ownership/intake
 evidence and separately labelled current-run hook activity. **Check agents again** requests
 a fresh host scan. CLI sign-in, trust and new-session activation stay explicitly unverified;
-this is not yet the first-run installer. **Set up / Repair** and **Remove connection** ask
-for explicit confirmation and use the host's owned hook backend. Setup results and failures
-stay visible, successful changes refresh readiness evidence, and restart remains a separate
-person's action. No CLI sign-in, hook trust or workspace approval is implied.
+this is not yet the first-run installer. Each row offers one verb for its hooks' state (#678),
+from the host's `hookSetup` (`notSetUp`, `incomplete`, `completed`, `unknown`; App.Core reads it
+through one adapter, `HookSetups`, which reads a missing field as `unknown`): **Set up** while
+they aren't set up (`notSetUp`, or this profile's intake off), **Repair** only for `incomplete`, a
+setup that failed after the host saved its record, across fresh checks, and none when nothing
+needs doing: set up (`completed`) but not yet tested by a new session, which the host can't do
+yet, says "Not tested yet" (#705), never "Ready". Removing Copilot CLI's connection can leave its
+owned record when other entries share the file, which the host reads as a setup that didn't
+finish; that row keeps its removal and offers **Set up** through a fresh check. Agency runs on
+Copilot CLI's hooks (the host sets them up as Copilot's), so what a setup or removal on either row
+left counts for both rows; the row that ran it keeps its words.
+
+A row the app can't act on has its own words and no verb, in the neutral secondary text with no
+status colour, never Ready, Not set up or Needs repair, and nothing on it is a button that can't
+work (Creative's rulings on #784 and #705):
+- hooks the host holds back (`blocked`: a read-only host, or another profile's) say
+  "Read-only · *why*" ("this machine's bridge is older", "another bridge profile owns its
+  hooks", or "set in this bridge's settings"), and Install CLI is hidden on them;
+- hooks the host reports `failed` with `hookSetup: unknown`, which its setup refuses, say "Hook
+  ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or
+  "Hook intake couldn't be checked · *why*" for this profile's intake record;
+- `unknown` beside any other hooks comes only from a host older than the field, and says
+  "Can't check · this machine's bridge is older". Its rows offer no Set up, Repair or Remove: the
+  detail's words they once fell back on offered actions the host might refuse.
+
+Each reason is said once, on the status line: a Version or Hooks line beneath it that would give
+the same reason says only the fact ("Hooks: Not checked").
+
+No row shows an exception's, a command's or an installer's own text, which named paths: each
+says why from a known set (`AgentWords`), and the app's log keeps the host's words. That
+includes a setup's outcome: "Set up · restart the bridge, then start a new session to check it",
+"Repaired · …", "Removed · sessions already running keep their hooks until they end", or
+"Setup failed · *why*" ("Repair failed", "Removal failed"), and the CLI's line: "Not installed"
+with **Install CLI** where the host installs it, else "Not installed · install it on this
+machine" with no verb; "Installing…" while it runs, **Install CLI** showing its ring (a plain button,
+never a toggle, with its item status "Installing…", still focusable and its presses ignored, ui.md
+§9.1 A4) and **Cancel** beside it ("Cancel CLI installation"); then the
+state the check finds, or "Install failed · *why*" (for example "Windows Package Manager couldn't
+install it") with **Install CLI** offered again. **Remove connection** comes after the verb, in
+Danger text, never an accent button, and is shown only when the host says this profile has a
+setup to remove (`completed` or `incomplete`; the host refuses a removal without one). Both ask for
+confirmation naming the agent (Cancel is the default) and use the host's owned hook backend. The
+buttons are named for the product they act on ("Set up Copilot CLI", "Remove Copilot CLI's connection"; sessions, pushes and banners name the agent instead), with
+AutomationIds of their own (`SetUpAgent_<id>`, `RemoveAgent_<id>`). A setup's progress ("Setting
+up…", "Repairing…", "Removing…") and result stay on its own row (`AgentStatus_<id>`), a polite
+live region named for its agent ("Copilot CLI: Setting up…") and raised again as each is drawn,
+once per status: a raise for a status the row has moved on from is skipped. A failure is in Danger. Successful changes refresh
+readiness evidence, and restart remains a separate person's action. No CLI sign-in, hook trust or workspace approval is implied.
 Older hosts explain that an update
 and restart are needed, and disconnected hosts show no stale agent rows. See
 [agent readiness evidence](protocol/local-pipe.md#agent-readiness-evidence) for the contract.
@@ -185,7 +229,7 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   longer approval, a Codex one, a
   form and anything this app can't answer open the session in the session pane, its row selected; a prompt marked
   `answerAtMachine` says so, with no controls. The lane never moves a row. Its count is the
-  tray's "N waiting on you" and the Sessions badge.
+  tray's "Slipgates · N need you" and the Sessions badge.
 
 ### Starting the host at logon: a scheduled task
 
@@ -216,10 +260,21 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   not stop; 1 from Task Manager; 0xC000013A for Ctrl+C or logging off. A Stop from the app
   also covers the launcher, which no pipe reaches between crash restarts or while the host it
   restarted is still starting: Stop writes a marker (`host.stopped` in the profile's folder)
-  that the launcher checks after every host exit and every wait before starting the host again;
+  that the launcher checks after every host exit and every wait before starting the host again.
+  It is written only once the host's usage probes are done, just before the host is asked to
+  stop (or when no host answers), so a host that crashes during that wait, or while the app
+  quits during it, is still started again; the Stop then says the host ended unexpectedly
+  rather than that nothing was stopped, but only when its process has gone and nothing answers
+  on its pipe (a host whose process is still there but no longer answers is reported as not
+  stopped). Stops run one at a
+  time (Settings' Stop and Restart, an update's), so a second waits for the first and finds the
+  host stopped, rather than clearing the first's marker (#238). The app then
   waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
   the run itself if it is still there after the 20 s start timeout. A host the launcher starts
-  also looks for the marker once its pipe is open and, finding it, exits 0 without serving, so
+  also looks for the marker once its pipe is open and, finding it, exits 0 without serving (it
+  looks first before it starts restoring what a reboot or a crash took, and exits then having
+  restored nothing; a restore it starts resumes no agent until the look with its pipe open has
+  passed, #986), so
   a host still starting when the launcher was ended, or under a launcher this app did not start
   (one from before the app was last opened), stops too: either the app's Stop reaches its pipe
   or the host sees the marker. A host that refuses the app's connection (one of them elevated)
@@ -246,9 +301,25 @@ into one folder with one version. An app update is a host update, so they never 
   `%LOCALAPPDATA%\AgentBridge`: that is the host's data root (device keys, accounts,
   config, logs), and Velopack deletes its install folder on uninstall.
 * `OnBeforeUpdateFastCallback` (the old version, before files are replaced) stops the host
-  over the pipe and waits for its process to exit, so nothing in `current\` is locked;
-  `OnAfterUpdateFastCallback` (the new version) starts it again through its logon task.
-  The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
+  over the pipe and waits for its process to exit, so nothing in `current\` is locked. Every
+  update the app starts has stopped the host already, after waiting for its usage probes (below),
+  so the hook finds it stopped and begins nothing. One it finds running (an update the app did
+  not start) is stopped only if its usage probes are done within 6 s. Velopack gives this hook
+  15 s and kills it after that, carrying on with the update
+  ([Velopack: App Hooks](https://docs.velopack.io/integrating/hooks)), so the hook waits at most
+  10 s in all and leaves the rest to the app's own start and exit. If the probes are not done, the
+  host is not asked to stop at all, and Velopack ends it with the package, which can cut a Codex
+  app-server it started mid-refresh (#238). The app turns off Velopack's own apply of a downloaded
+  update when the app starts (`SetAutoApplyOnStartup(false)`), so an update is applied only by
+  the app's own install, which waits for the probes, or by a person: `Update.exe` run by hand,
+  a newer setup run over the app, or an uninstall. If one of those comes while a Codex usage probe
+  is running (up to about 10 minutes for one that is slow to answer, usually under a minute) and
+  Codex happens to be refreshing its sign-in, the person may have to sign in to Codex again.
+  Keeping the probe alive across those is #974. The same holds for uninstall, whose hook has
+  30 s, and which then goes on;
+  `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon
+  task, waiting at most 10 s.
+  The app also stops the host itself before it hands an update to `Update.exe`, and starts it on
   launch if it is not running.
 * `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
   default profile's owned agent hooks and instruction blocks, using its saved agent homes.
@@ -259,6 +330,35 @@ into one folder with one version. An app update is a host update, so they never 
   off; every merge to main publishes one, below), or a folder or URL holding
   `releases.<channel>.json` (`releases.win.json` for x64, `releases.win-arm64.json` for Arm64) in
   `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM).
+* **Release discovery** (#530, `ReleaseDiscovery` in `AgentBridge.Host.Core/Updates`). The only
+  request that counts against GitHub's API limit is the release list
+  (`api.github.com/repos/danswett/agent-bridge/releases`), and it is made unauthenticated: 60 an
+  hour for the whole IP address, shared with everything else behind it. The app's GitHub
+  sign-in is the relay's and is never sent to the API, and the updater borrows no other
+  credential. Each release's `releases.<channel>.json` and the packages come from their browser
+  download URLs, which the limit doesn't count. Velopack's `GithubSource` asked for the list at
+  every check, from every profile's app and host and at every press of Check, and so ran the
+  budget out. Now the app and every host on a machine share one answer, in
+  `%LOCALAPPDATA%\AgentBridge\app\release-discovery.json`, with a lock file beside it so they
+  take turns: GitHub is asked at most once every 10 minutes (plus up to 2 minutes of jitter)
+  whoever asks, and checks in between are answered from the file. After that the request
+  carries the ETag (`If-None-Match`), and a 304 is answered from the file; GitHub doesn't count
+  a 304 against the limit only for authenticated requests, so the interval is what bounds an
+  unauthenticated budget. A 403 or 429 is not asked again until `Retry-After`, or
+  `X-RateLimit-Reset` once `X-RateLimit-Remaining` is 0 (at least a minute and at most an hour,
+  plus up to a minute of jitter). Any other failure (no network, a 5xx, an answer that isn't a
+  list of release objects, or one with a field the updater can't read, such as
+  `[{"prerelease":{}}]`) is backed off from a minute, doubling up to an hour, and such an answer
+  is never kept. A backoff in force
+  is said even when a clock put back makes the last list look fresh again. Until then a check fails at once, with
+  no request, saying when it will next try and when the last good check was. Those times are
+  carried as instants (`ReleaseDiscoveryException.RetryAt`, `LastSuccess`) and said in the local
+  time of the process that shows them. Settings shows that
+  as the update status rather than as an error, and a failure is never reported as "up to date".
+  What the account's other devices are told the app last checked (`UpdateState.CheckedAt`) is
+  when GitHub last answered, not when the shared copy was read.
+  No static feed is published (no Pages copy of `releases.<channel>.json`, and every release is a
+  pre-release, so `releases/latest/download` finds nothing), so the API list stays the source.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and
@@ -266,40 +366,209 @@ into one folder with one version. An app update is a host update, so they never 
   the app nor the host does: an x64 copy is never offered an Arm64 package, nor the reverse,
   whichever is newer (`HostUpdatesTests`). Moving x64 to another channel name would strand every
   installed copy on its last version, so it stays `win`.
-* **Automatic updates** (`AutoUpdater`): Settings has "Include pre-releases in updates" and
-  "Install updates automatically", both per profile (`<profile>-settings.json`) and both on by
-  default. The installed app checks on start and every 30 minutes, and downloads a release it
-  finds at once. It installs it once this machine's host has been idle (no session with a turn
-  running or a question waiting) for two minutes without a break, seen at every minute's tick
-  and every session change, and since its sessions were last read in full (a reconnect starts
-  the wait again), or six hours after it first found one, whatever the sessions are
-  doing (though still only once they are read in full, so not in the middle of a reconnect).
-  The path is that of "Update and restart": the host stopped over the pipe, then
-  `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
-  host again. The new version's first start shows a toast: the version it came from, and the
-  release's notes.
+* **Updates in the background, installed as "When an update is ready" says** (`AutoUpdater`,
+  #516; owner decision on #689, 6674007815; Product, 6674016765 and 6674052423; Creative,
+  6674096426): Settings has "Include pre-releases in updates" and "Download updates
+  automatically", both per profile (`<profile>-settings.json`) and both on by default. The
+  installed app checks on start and every 30 minutes, and downloads a release it finds at once,
+  without stopping the host or closing anything. Then **When an update is ready**, a two-choice
+  picker kept per machine and profile (`whenUpdateReady`, unset meaning the default,
+  `AppPreferences.DefaultWhenReady`), says what happens:
+  * **Restart to update** (*For a machine you use*), the default for a new install and any
+    machine not set: it waits, for as long as it takes, for the person's Restart to update:
+    **nothing installs because the host is idle, or because it has waited long enough**. Before
+    #516 the app installed by itself once the host had been idle for two minutes, or six hours
+    after it found the release whatever the sessions were doing, and so exited under the person
+    without a word.
+  * **Install between turns** (*For a machine agents use*; the owner sets it on dev boxes and VMs
+    until a machine role exists, #384): it installs by itself, through the same path as Restart
+    to update, at the first moment no session on this machine has a turn running or a question
+    waiting, over a whole snapshot read in full and settled for five seconds (`SettleFor`), with
+    no two-minute wait: a session going idle sets a tick for then, rather than the next minute's.
+    A machine that never goes quiet installs at the **six-hour backstop** (`WaitAtMost`, and no
+    sooner than 20 minutes after the machine last stopped refusing, `ReturnGrace`), over a turn
+    running. **An update never strands a waiting question:** installing stops the host
+    (`HostManager.StopAndApplyAsync`), and the app can't establish that a question waiting stays
+    answerable from the person's other devices through that (its own restart warning says it may
+    then have to be answered at the machine), so while a question waits, or whether one does
+    can't be told (the host's link down, its sessions not read in full, or one read past a
+    field), the backstop skips. The update state's `waiting` then reads exactly "Update ready ·
+    waiting for a question to be answered" (for the question; "Needs you: …" for not knowing), its
+    phase `waiting` and `automatic` true, and the log says "Needs you: …" at most daily. The PWA's
+    update line and the app's machine rows show that line as it is. An Install pressed on another
+    device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
+    effect at once (the app looks again). Setting it from the phone is #801's.
+  * **Ready:** a banner over every page, "Version *v* is ready. Restart to update." with
+    **Restart to update** (an `InfoBar` with no close button, like the other app banners, so it
+    stays while the release waits), and the same line and button in Settings. No toast: toasts
+    are for what waits on the person, and an update can wait (Creative on #719, as #231 ruled for
+    a newly found agent). The bar and Settings' update line are polite live regions, each change
+    of their words said once (ready, restarting, failed; a release that became ready while
+    Settings was busy, once it is idle), and Settings' own download at most every quarter
+    (ui.md §9.1 A6). Errors name the next step in one sentence: "The update didn't download.
+    *Product* will try again at *time*.", or "The update didn't install because another bridge
+    profile is running from this installation.", its reason a kind (another profile running, the
+    installer's error, a newer update downloaded meanwhile, the host not answering), never a
+    process id, a path or an error's own words, which go to the log. A failed install is a
+    warning bar whose button reads **Try again**; while restarting, the button shows its progress
+    ring, ignores presses, keeps focus and says "Restarting…" to a screen reader, never drawn at
+    rest in accent (Creative on #719, 6675195544). There is one restart with one state, whichever
+    control starts it: Settings' Restart to update goes through the banner's
+    (`SettingsViewModel.ShareRestart`), so the control pressed shows its ring, the banner shows
+    "Restarting to update…", and a failure shows on the banner as the warning with Try again,
+    never as an error (Engineering's second-family review, 6676638175; Creative, 6676653935). A
+    release Settings downloaded itself, with automatic downloads off, is taken by the app's
+    updater when Settings' Restart to update is pressed, so the press installs it (6677216492).
+    Nothing is said twice on one screen (Creative, 6677102646): while the banner, above Settings,
+    offers the release or says why it didn't install, Settings' line doesn't repeat it; with no
+    banner, Settings says it, once. A check from Settings that GitHub refuses or limits is
+    Settings' own news, said there with its next check as a status, after the offer when Settings
+    says the offer, and whatever the banner says; Restart to update stays. A newer release downloaded while
+    one waits takes its place. A release an earlier run downloaded is
+    ready from the next start, before any check (`UpdateManager.UpdatePendingRestart`), so it is
+    offered offline or while the feed refuses (#530), but only if it came from the feed and
+    pre-release choice selected now and is still the bytes verified for it
+    (`update-downloaded.txt` in the app's data says which, with the checksum).
+  * **Every package is checked against its release** (`DownloadMark`, Engineering's
+    second-family review of #719, 6676612221): Velopack (1.2.161) takes a package already in its
+    folder under the release's file name for the release without checking its bytes, so one
+    downloaded from another feed under the same name and version would pass. Before a download, a
+    package there that doesn't match the chosen release's checksum from its feed (SHA-256 where the
+    feed gives one, else SHA-1) is removed; after it, the package is marked ready only when it
+    matches, and otherwise removed and the download has failed. The mark keeps the checksum and its
+    algorithm. A package offered after a restart must still match it. **The check reaches the
+    installer** (`PackageHandoff`, #984): `Update.exe` opens the package it installs by its path,
+    once the app has exited, and the shared packages folder is every profile's, where another
+    profile could write its own feed's package of the same version after the app's check (#719,
+    6677353697). So just before install the package is copied, from the handle that checked it,
+    into this profile's own folder (`<profile>\app-update`, which no other profile's updater
+    writes, and which is private to this user as the attachment folder is: a protected DACL
+    granting this user alone, nothing inherited, `PrivateFolder`), and the copy is checked against
+    the same checksum again from a handle that keeps it open, read-only to everyone else, until
+    the app exits. The app then starts `Update.exe` itself,
+    as Velopack's `ApplyUpdatesAndRestart` would (`apply --waitPid … --rootDir …`), but with
+    `--package` naming the copy; `--packageDir` stays the shared packages folder, where
+    `Update.exe` takes its install lock (`packages\.velopack_lock`), so profiles still can't
+    install over each other. The copy goes at the app's next start. What remains: `Update.exe`
+    checks nothing itself when it opens the copy (it takes no checksum), so a process running as
+    this same Windows user could still change the copy after the app exits; such a process could as
+    well replace `Update.exe` or the app itself. A release whose feed gives no checksum is never installed. The checksum proves the
+    package is the one the chosen feed names, not who published it: the feed supplies its own
+    checksum. The app downloads full packages only (`AppPackages`): Velopack rebuilds a release
+    from deltas into a package that is never the full package's bytes, so it would fail this
+    check (6677216492).
+  * **Restart to update** says what a restart would interrupt, when a session here is waiting on
+    the person or has a turn running ("Restart to update now?", Not now the default): the agents
+    keep running, but a question or approval the host was carrying may then have to be answered
+    at the machine. It asks last, after any download and every check, just before the host stops,
+    so a session that became busy since the press is counted (and a host reconnecting, or refusing
+    the app, is warned of too, since it may carry a question the app can't see); Not now leaves the release offered
+    and says nothing went wrong. After Restart to update is chosen, another profile running from
+    the installation is looked for again, since the dialog may have stayed open a while. One
+    install at a time: a second press (the banner and Settings at once, or a device's Install) is
+    refused and leaves the first alone, and a press during a background check waits for it, then
+    installs only what is downloaded once it has finished. An install that fails
+    starts the host again and keeps the release offered, to be tried again only when the person
+    presses again. Then the host is stopped over the pipe, and `Update.exe` started with the
+    checked copy and `--background --profile <profile>` (above), whose new version
+    starts the host again, and whose first start shows a toast: the version it came from, and the
+    release's notes. The banner's and Settings' take the same path (`AutoUpdater.RestartToUpdateAsync`),
+    which refuses while another profile's app or host runs from this installation (below), asking
+    the host for its own pid first. The banner offers only a release the updater has ready: while a
+    newer one found since is still downloading, or held after a failed download, it offers nothing.
+  * **Usage probes hold the host's stop** (#238): before the host is stopped, for an install or
+    anything else (Settings' Stop, Restart and Restart to update), the app asks it to hold its
+    usage probes (`host.probes.hold`) and waits until no Codex app-server it started to read
+    Codex's allowance is still answering or in its grace: the app-server's input goes with the
+    host, and cutting it mid-refresh can sign Codex out. A host that cannot say, or is still busy
+    after 11 minutes, is neither stopped nor ended; the stop fails and says why. An install going
+    ahead by itself (a device's Install, or Install between turns at a gap or at the backstop)
+    waits a tick at a time for that, its `waiting` line saying "*why*; it installs once that is
+    done", and is checked again once the host has answered (the press, the machine's refusals,
+    whether it still goes ahead, and the release, as of then), and the host starts no new probe
+    meanwhile. Before an update, every other profile's host running from the package is held and
+    waited for the same way, since Velopack ends them too, each held again every round and once
+    more just before the hand-over, with the package looked at again once they are done (a host
+    started meanwhile is held too); one that cannot confirm, or a host of the package no pipe
+    reaches, stops the update before anything is stopped. Quitting gives up those waits, never a
+    probe, so a host already stopped for the update is started again within Quit's 25 s.
+  * **Never at startup:** Velopack applies a downloaded release by itself whenever the exe starts,
+    by default, a second start that only shows the window included, stopping every process in the
+    package. `Program` turns that off (`SetAutoApplyOnStartup(false)`); the release waits for
+    Restart to update instead.
+  * **A failed download** is tried again in the background, without asking the feed again, ten
+    minutes after it failed, then after twice as long each time it fails again in a row, up to
+    four hours (`ObservedUpdater.HoldAfter`); the app keeps running throughout, and a check finding
+    another release starts the count again.
   * A read-only host (`delivery.readOnly`) and one beside a running agent-ha-bridge (G5) update
     like any other: those rules guard what other devices may do (the Home Assistant Install
     button below), and replacing the app and host touches neither the agents' consoles nor
     agent-ha-bridge. That is how a shadow beside agent-ha-bridge keeps itself current.
   * It never installs while another profile's app or host runs from this installation (Velopack
-    stops every process in the package and restarts only this profile), or while the host is not
-    running or its sessions are not yet read in full (`sessions.synced`), so that it cannot say
-    whether they are busy. Just before stopping the host it asks again: `host.status` from the
-    host itself, and the processes running from the package.
-  * Settings and the automatic updates share one updater, and only the release actually
+    stops every process in the package and restarts only this profile). An Install pressed on
+    another device also waits while the host is not running or its sessions are not yet read in
+    full (`sessions.synced`), so that it cannot say whether they are busy. Just before stopping the
+    host it asks again: `host.status` from the host itself, and the processes running from the
+    package.
+  * Those are the machine's refusals, and they never stop checks and downloads (#800: a VM's
+    app lost its link to a live host and sat on an old release for ~20 h, one log line saying
+    so): a release found behind one is downloaded and offered for Restart to update as ever.
+    Only "Download updates automatically" off stops the checks. A refusal in force is logged
+    again every hour, with the app's link state while the host is the reason; a device's
+    Install held by sessions not yet read in full on a connected host is told as the machine's
+    refusal too, and stays queued.
+  * **Needs you, never silent (#800):** set to Restart to update, a release that has waited more than six hours
+    (`WaitAtMost`, from the first find, restarted only by the person turning the switch back
+    on) is told to the owner, whether the machine keeps it from them (the host gone, another
+    profile running from here, which is asked once it is that old, the host's status unreadable,
+    its sessions unread), it is downloaded and simply not restarted into, or a newer one found since keeps failing to download. The update state the
+    devices see carries `waiting` "Needs you: the update to X has waited since T because Y", and
+    the app logs that line at most daily. It is a reminder only: nothing installs because of it,
+    the phase stays `idle` so the devices keep their Install, and there is no forced install
+    after six hours, nor #923's 20-minute grace, since #516 waits for the person's Restart. Set
+    to Install between turns, Needs you is said only for what keeps the update from installing:
+    the machine refusing, a download failing, or the backstop unable to tell whether a question
+    waits (above).
+    The PWA's update line and the app's rows for other machines show a `waiting` that starts
+    with "Needs you" in any phase, in the host's words; acting on it from the phone (Restart to
+    update) is #801's.
+  * The link to the host lost (not `Connected`, or no `host.status` on it): before refusing again
+    the app re-attaches, at once and then backing off to every 30 minutes, and logs what it did
+    at most hourly. A connected link is asked for the host's status again. Otherwise, when the
+    host answers on its pipe, the link's attempt under way is ended and a new one started
+    (`HostConnection.Reconnect`, which never runs two attempts at once). The updater never starts
+    a host: whether one runs is the person's, and the app's own start's.
+  * A release check the feed refuses for its rate limit (GitHub's unauthenticated 60 requests an
+    hour per address, which machines behind one address share) holds the checks off. GitHub's
+    release list comes through the machine's release discovery (#530, above), whose refusal says
+    so (`ReleaseDiscoveryException.Limited`) with when it will ask GitHub again: GitHub's
+    `Retry-After` or the limit's reset, or, when GitHub named no time, its own backoff from a
+    minute doubling to an hour, which the hold ends with so the devices are told one time. A
+    429, or a 403 whose reason says "rate limit", straight from a feed counts too (any other 403
+    is a failure like any other); it holds for an hour, then two hours each time, until one
+    succeeds, as Velopack's error carries no headers. The next check is made at the hold's end,
+    however recently a press was answered. A check from Settings that succeeds meanwhile ends the
+    hold (#934), and a change of source (Include pre-releases, `feed.txt`) drops it. A press from a
+    device in the meantime is answered with
+    the reason without asking the feed. The reason goes to the devices as the last update's
+    outcome (`failed`), once each time, though never over an update made, or a press answered,
+    in the last day, which the devices may not have seen yet. Velopack's `GithubSource` is given
+    no token, so the checks are unauthenticated.
+  * Settings and the background updates share one updater, and only the release actually
     downloaded is applied (`IUpdater.Ready`), checked again immediately before the host stops: a
     release replaced since (a check from Settings, or "Include pre-releases" or `feed.txt`
     changed, which drops the downloaded release, and any check still running against the old
     source finds nothing) is checked for and downloaded again first.
-  * The host is never left down (`HostManager.StopAndApplyAsync`, one install at a time: Update
-    and restart pressed while the automatic one installs is refused): an install that fails starts
-    it again and waits for the next check; quitting the app while the host is stopping for an
-    update, or stopped and not yet updated, waits for the stop to finish, applies nothing, and
-    starts the host on the way out; and an app killed meanwhile starts it at its next start, as
-    every start does, with the host's logon task at sign-in behind that.
-  * Only the app's own timer starts it, or a person's press on another of their devices (below),
-    so nothing an agent can reach does. A development copy and the demo never update.
+  * The host is never left down (`HostManager.StopAndApplyAsync`, one install at a time: a second
+    Restart to update, or a device's Install, while one installs is refused): an install that
+    fails starts it again and waits for the next check; quitting the app while the host is
+    stopping for an update, or stopped and not yet updated, waits for the stop to finish, applies
+    nothing, and starts the host on the way out; and an app killed meanwhile starts it at its next
+    start, as every start does, with the host's logon task at sign-in behind that.
+  * Only the app's own timer checks and downloads, and only a person's press installs (Restart to
+    update here, or Install on another of their devices, below), unless When an update is ready is
+    Install between turns, so nothing an agent can reach does. A development copy and the demo
+    never update.
 * **From another device** (#51, [v1-update.md](protocol/v1-update.md)): the PWA and the app on
   another machine show this machine's updates and ask for a check, or for the latest release to
   be installed now. The app here does it, through the same `AutoUpdater` (`UpdateReporter`
@@ -307,25 +576,28 @@ into one folder with one version. An app update is a host update, so they never 
   host serves to the account's devices as `update.*`, and takes the presses the host carries in
   its status (`updateAsks`), each once. A check is made at once. An install is refused at once
   if another profile's app or host runs from this installation, or the host is gone; otherwise
-  the latest release is found, downloaded and installed by the rules above (idle for two
-  minutes, or six hours), with "Install updates automatically" off too: being asked stands in
+  the latest release is found, downloaded and installed once this machine's host has been idle
+  (no session with a turn running or a question waiting) for two minutes without a break, seen at
+  every minute's tick and every session change, and since its sessions were last read in full (a
+  reconnect starts the wait again), however long that takes, with "Download updates
+  automatically" off too: being asked stands in
   for the switch, for that release. How it ended is kept in the profile's settings
   (`lastUpdate`, with the press it answers in `updateRequest` across the restart), so the new
   version reports `updated`, or `failed` if it did not take, and the devices see it; an
-  automatic install that fails is reported `failed` too, as is one from Settings (its download
-  included), whose Update and restart also answers a device's Install not yet carried out. A
+  install from the banner that fails is reported `failed` too, as is one from Settings (its
+  download included), whose Restart to update, like the banner's, also answers a device's Install
+  not yet carried out. A
   press the app comes to more than ten minutes after it was made has lapsed at the host and is
   refused, not carried out late. The presses being carried
   out are kept too (`updateInstallAsked`, `updateCheckAsked`): one left unfinished when the app
   stopped for anything but an update is reported `refused` by its next start, never carried out
-  then. Settings and the automatic updates
+  then. Settings and the background updates
   share one `ObservedUpdater`, so a check or download from Settings is reported as well, and a
   release whose download failed is still reported as there, and their downloads take turns
   (Velopack's update lock fails a second rather than waiting): the later one finds the release
-  already downloaded. A pressed install's six hours run from no earlier than the press, and any
-  install's from no earlier than installing was last allowed, so turning the switch on hours
-  after a check found a release still waits for busy sessions. A press within a minute of the last check is answered from it,
-  a failed download is not tried again for ten minutes, and the presses taken are remembered
+  already downloaded. A press within a minute of the last check is answered from it,
+  a failed download is not tried again for ten minutes (longer after each further failure), and
+  the presses taken are remembered
   across restarts (`updateTaken`) so none is carried out twice; the host takes at most three
   presses of each kind from a device in ten minutes ([v1-update.md](protocol/v1-update.md#how-often)). The host
   takes these presses only through the relay, only from a device listed as a person's (`pwa` or
@@ -344,38 +616,50 @@ into one folder with one version. An app update is a host update, so they never 
   that started it, so the update hooks may find their ancestry incomplete and leave the host
   alone (`LifecycleGuard`); the app's own start brings it back either way.
 * Uninstall (`OnBeforeUninstallFastCallback`) stops the host and removes the logon task,
-  the app's `Run` entry and the toast registration. The host's profile (device key,
+  the app's `Run` entry, the toast registration and the host's empty logon markers
+  (`HKCU\Software\AgentBridge\logon-*`, volatile, [host-launch.md](host-launch.md#restoring-after-a-reboot-or-a-crash)),
+  and that key once nothing else is in it. The host's profile (device key,
   account, `config.json`, logs) stays in `%LOCALAPPDATA%\AgentBridge`, like any app's
   data, so a reinstall picks up where it was.
 
 ### Releases and updates: every merge to main is a pre-release
 
-CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` a GitHub
-pre-release, `v0.1.<n>`, of the whole package. Installed copies include pre-releases by
-default and install them by themselves once their host is idle (Automatic updates, above);
-Settings, **Check for updates** and **Install**, does it at once, as does the Home Assistant
+CI's `publish` job (`.github/workflows/ci.yml`) makes every push to `main` whose CI built the
+app a GitHub pre-release, `v0.1.<n>`, of the whole package. A change the app's jobs don't
+select (docs only, say) builds and publishes nothing. Installed copies include pre-releases by
+default and download them in the background, then wait for the person's **Restart to update**
+(Updates in the background, above); Settings, **Check for updates** and **Restart to update**,
+downloads and installs at once, as does the Home Assistant
 connector's Install button on a machine the dashboard drives.
 
 * **Version** `0.1.<CI run number>`. The number is the CI workflow's own count, shared by pull
   requests and pushes, so main's versions only rise, with gaps; a re-run keeps its number.
   Renaming or recreating `ci.yml` starts the count at 1 again, below every release, and no
   installed copy would ever take one: move the minor version up (`0.2.<n>`) in the same change.
-* **When:** after every check job in CI on that commit has passed: the `product` tests (Linux,
-  Windows x64 and Windows on Arm) and both `app` jobs (x64 and Arm64: build, pack, self-test,
-  install), and also the PWA, Home Assistant, spike and light jobs, none of which may have failed
-  or been cancelled. It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
+* **When:** after every check job CI selected on that commit has passed, the `app` jobs among
+  them: the `product` tests (Linux, Windows x64 and Windows on Arm), both `app` jobs (x64 and
+  Arm64: build, pack, self-test, install), and whichever PWA, Home Assistant, spike and light
+  jobs ran, none of which may have failed or been cancelled. Main's CI plans from its last passed
+  commit, so an app change whose own run was replaced while waiting is built by the next run.
+  It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
   request or a fork. It
-  is the only job with `contents: write`, and runs one at a time (concurrency group
-  `publish-prerelease`). Before it, `publish-gate` lets through only the commit `main` is at
-  now: GitHub keeps one waiting job per concurrency group and cancels the older waiting one, so
-  a slow build of an older merge must not reach the group and evict a newer one. A run whose
-  commit main has moved past publishes nothing, and the newer commit's run publishes instead
-  (re-run it if it failed). The `sign` job asks again as its last step, since main can move on
-  while it signs, and `publish` runs only on that answer. This narrows the race rather than
-  closing it: if GitHub is slow to start an older run's `publish` after its check passed, a
-  newer commit's run can meanwhile reach the group and wait there, and the older one's arrival
-  cancels it. That newest commit then stays unpublished until the next merge to main, or until
-  its run is re-run.
+  is the only job with `contents: write` (CI's other writes are `attest`'s `attestations: write`
+  and `id-token: write`, and main's `relay-image-sarif` job's `security-events: write`, which
+  uploads the relay image's scan to code scanning), and runs one at a time (concurrency group
+  `publish-prerelease`), and publishes each version once, never one older than any already
+  out and never from a commit that doesn't hold the latest release's commit, so release order
+  doesn't rest on the order main's CI runs go in (first attempts share
+  concurrency group `ci-main`, whose order GitHub doesn't promise, and a re-run has a group of
+  its own): a run publishes even after `main` has moved on, unless main's head has since
+  changed the app (main's own selector, under the lock, says so; main's later run publishes
+  both, where publishing this first could leave that one's lower version refused), and
+  one that reaches `publish` after a newer release publishes nothing. Its group keeps every
+  waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
+  one already waiting), where by default the next to arrive would replace the one waiting, so a
+  re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
+  start in is not promised, which is why the checks above keep the order. With signing on, the
+  `sign` job (Signing, above) runs between `publish-gate` and `publish`, and `publish` runs only
+  once `sign` has succeeded, so it never falls back to the unsigned packages.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
@@ -410,19 +694,26 @@ connector's Install button on a machine the dashboard drives.
   release's full package must rebuild this version's full package byte for byte. If it does not
   (or there is no delta), it is rebuilt from that release with `vpk delta generate` and checked
   the same way; if that fails too, the full package is published alone, with a warning, since a
-  wrong delta would cost every copy a failed patch first. A copy on the previous version
-  downloads only the delta rather than the ~100 MB full package; one further behind applies the
-  chain of deltas, as far back as the newest ten releases Velopack's GitHub source reads, or
-  else the full package. Each architecture's delta is checked against the same channel's
+  wrong delta would cost every copy a failed patch first. The app downloads only full packages
+  since #719 (its checksum check, above), so the deltas are published but not downloaded by the
+  app. Each architecture's delta is checked against the same channel's
   package; the first release with Arm64 in it has no Arm64 base, so it publishes Arm64's full
   package alone (with the warning) and x64's delta as usual.
 * **Once per version:** a version whose tag exists is skipped, so re-running a run publishes
   nothing twice. A version older than one already published is skipped (two merges close
-  together, the later one's build first). A draft left by a failed attempt is deleted and the
-  version uploaded again.
+  together, the later one's build first). So is a version whose commit doesn't hold the
+  latest release's commit (`compare` says it is behind): an ancestor's run created after its
+  descendant's has the higher number, and would otherwise take installed copies back to older
+  code; a commit off that line, or a tag or comparison that can't be read, stops the publish.
+  A draft left by a failed attempt is deleted and the version uploaded again.
 * **Pruning:** the newest 20 pre-releases stay; older ones are deleted with their assets, and
   their tags stay. A full (non-pre-release) release, a draft, or a release not tagged
   `v<major>.<minor>.<patch>` is never touched.
+* **GitHub failing a call:** listing and deleting releases are each tried 3 times (waits of 2 s
+  and 8 s), because GitHub's API now and then fails a single call. A DELETE that failed but went
+  through counts as done. Pruning that still fails, after the release is out, is a warning, not a
+  red `main`; the next publish prunes again. A leftover draft that can't be deleted still stops the
+  publish before anything is uploaded (#907).
 * **Pull requests** prove it without publishing: each app job runs the same script with
   `-DryRun` on its own folder, which checks the folder and its delta against the latest release
   as above, has vpk read it into a scratch feed (`vpk upload local`) that must list that
@@ -481,8 +772,9 @@ gh release download $tag -R danswett/agent-bridge -p $setup
 ```
 
 (`gh release download` without a tag takes the latest full release, and there is none yet.)
-From then on it keeps itself on the newest pre-release ("Install updates automatically"), or
-Settings, **Check for updates**, then **Install**, takes it there at once; turning off "Include
+From then on it downloads the newest pre-release by itself ("Download updates automatically") and
+offers **Restart to update**, or Settings, **Check for updates**, then **Restart to update**,
+takes it there at once; turning off "Include
 pre-releases" in Settings stops it finding them until there are full releases.
 
 ### Signing
@@ -583,8 +875,14 @@ which always runs it unelevated.
 
 ### agent-ha-bridge on the same machine (G4, G5)
 
-The app never writes agent hook registrations (no Copilot, Claude or Codex hooks), and its
-names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
+The app writes no agent hook registrations itself. Its Settings agent rows ask the host
+(`host.agents.setup`) to set up, repair or remove this profile's own Copilot CLI, Claude Code or
+Codex hooks; the host writes them (`StandaloneHooks`) beside a record of what it owns
+(`agent-bridge-owner.json`), so a removal takes only that. Beside agent-ha-bridge those rows are
+read-only: the host is read-only and refuses setup (`AgentSetupService`, and
+`StandaloneHooks.Preflight` while agent-ha-bridge is active or its directory remains), reports
+the hooks as blocked, and the rows say "Read-only · this machine's bridge is older" with no verb.
+The app's names, folders, pipe, task and AUMID are its own. Without hooks the host still finds Copilot
 sessions (their session folders) and Claude sessions (Claude Code's own
 `~/.claude/sessions/<pid>.json`), and Codex ones run with `--no-daemon`, as every launch
 from this host is (the terminal holds `~/.codex/thread-writer-locks/<id>.lock`). A Codex
@@ -600,14 +898,14 @@ separate, explicit step ([migration.md](migration.md)).
 
 **Inline mono** ([ui.md](design/ui.md) §4.2, #215): a path, an id, a branch or a tool call on a line of text is in Slipgates Mono at that line's role's generated inline size (`AbInlineMono*`, through the app's `InlineMonoRow` and `InlineMonoMeta` styles), so its x-height is Slipgates Sans', on the role's own line height and weight; a code span in a response is scaled the same way (`AbInlineMonoScale`). Repository, machine and model names are in the text face, and separators are always text. Code standing on its own lines keeps the Code role.
 
-**The window** ([ui.md](design/ui.md) §7, #180): Mica behind the app's own 48 px title bar, which carries the mark, "Agent Bridge" and a search box (Ctrl+K), beside the system caption buttons, which the app paints in its theme on the UI thread (not with the title bar's `PreferredTheme`, whose repaint from a thread-pool thread crashed the app on a high-contrast switch, #240) and leaves in the system's colours in high contrast; a compact rail of Sessions, Machines, Launch and Usage, with Settings at its foot and a 3×16 Bridge pill on the page shown; and the pages on a layer with an 8 px top-left radius. Each page has its title in the type ramp's title role. The search box finds sessions on every machine by the words of their title, repository, branch, agent or machine, titles starting with them first, then the most recently updated, whichever machine the list shows, and opens the one chosen as a toast does. The window resizes freely down to 360×600 and opens where it was left (`<profile>-window.json`, maximised too), unless that is off every screen, when it opens centred on the main display at 1280×860 or as large as the display allows. WinUI's controls that follow the system accent (accent buttons, the rail's pill, checked controls, focused fields, selected text and links) are Bridge, from the generated accent palette ([design/README.md](../design/README.md)); high contrast keeps the system's colours.
+**The window** ([ui.md](design/ui.md) §7, #180): Mica behind the app's own 48 px title bar, which carries the mark (its native 20 px cut, in Bridge, which is Highlight in high contrast), the product's name and a search box (Ctrl+K), beside the system caption buttons, which the app paints in its theme on the UI thread (not with the title bar's `PreferredTheme`, whose repaint from a thread-pool thread crashed the app on a high-contrast switch, #240) and leaves in the system's colours in high contrast; a compact rail of Sessions, Machines, Launch and Usage, with Settings at its foot and a 3×16 Bridge pill on the page shown; and the pages on a layer with an 8 px top-left radius. Each page has its title in the type ramp's title role. The search box finds sessions on every machine by the words of their title, repository, branch, agent or machine, titles starting with them first, then the most recently updated, whichever machine the list shows, and opens the one chosen as a toast does. The window resizes freely down to 360×600 and opens where it was left (`<profile>-window.json`, maximised too), unless that is off every screen, when it opens centred on the main display at 1280×860 or as large as the display allows. WinUI's controls that follow the system accent (accent buttons, the rail's pill, checked controls, focused fields, selected text and links) are Bridge, from the generated accent palette ([design/README.md](../design/README.md)); high contrast keeps the system's colours.
 | Page | What it has | Parity source |
 |---|---|---|
-| Sessions | Panes by window width ([ui.md](design/ui.md) §5.2, #180), at the PWA's breakpoints: from 1280 px the list (320), the session and an inspector (336, hidden and shown from the session's header) with the delegate selected in the strip, or with none the session's Details and Tools; from 760 the list (320) and the session with Conversation, Delegates and Tools tabs; below, one column, the list or the session with Back. A divider between the list and the session, and between the session and the inspector (#297), drags, moves 16 px with Left and Right when focused, and goes back to the default on a double-click: the list 264–480, the inspector 280–560, the session never under 440, the inspector then the list giving way at a narrower window and the widths kept coming back once it widens; kept in `<profile>-panes.json` (`PaneWidths`). The session open is the selected row (`MainViewModel.Selected`), whatever opened it (a row, search, a toast, the tray, a launch), and stays open through every resize; a machine tab that hides its row closes it. **List** (§6.1): one row per live session of every machine on the account (this one's over the pipe, the others' through the relay), with machine tabs (All, then each machine) and, on the title's row, the sort menu (Your order, Most recent, Machine) and New, which opens Launch. A row is two lines: the status glyph aligned to line 1 ([ui.md](design/ui.md) §2.2: the generated glyphs, turning while working or delegating unless Windows has animations off, stopping and starting as that setting changes, the violet diamond while an agent drives), the title, semibold with the 6 px Bridge dot for unread activity or else the age, then at most two facts on one line (#214): the status's first fact in its tone's colour, and the machine once there is more than one, else the repository. Never the model, counts or pid: those are in Details. Rows keep the person's order, kept in `<profile>-order.json` (#164): a new session goes to the top once and an update never moves a row; Alt+Up/Down on a row, its menu (right-click, press and hold, Shift+F10: Move up, Move down, Pin) and a drag by the grip that shows on hover move and pin rows, with "Pinned" and "Sessions" over each group once anything is pinned; a row whose session updated since it was last open has the dot; sessions a host removed while the app ran fold into Ended · N below the rows. **Session** (§6.2, §6.4, §6.5): the title and one meta line (glyph, the whole status, machine, repository), with Pin, Details and the inspector toggle as icon buttons; the conversation at the reading measure (770 px), centred in the pane: your last message, the main agent's response (Markdown) with its age, its code blocks wrapped rather than scrolled, left to right with hidden and bidi characters and right-to-left letters drawn as escapes (#220) (an approval's card draws its whole message as one such block, exactly as written, fence markers included; nothing in it is read as Markdown, and it has no Copy; a block says "Contains hidden characters" or "Contains right-to-left text" when it does), and each with Copy, which copies what is drawn (#296), reasoning behind "Show reasoning", the current tool's glyph named for its state with the call in mono; question forms in the stream headed "Main agent asks" or the delegate's name (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny); and the reply box, centred under it, a card with a 2 px Bridge edge (Ctrl+Enter or the icon Send, paste an image, Attach: up to 100 MiB each in chunks over the pipe, `sessions.attach.direct`, or through the relay's blob store to another machine, `sessions.attach.blob`, or 256 KiB where neither is offered, which shrinks a larger image to fit). **Details** (the header's Details and the inspector): status, agent, machine, model, repository, branch and folder (mono, cut in the middle, whole in the tooltip), driver, turns, compactions, process, for how long, updated, ID (mono), then End session with the host's two-press rule. **Tools** (the inspector and the Tools tab): the tool history, loaded as it comes on screen and kept current only while it is. **Delegates** (§6.3, §6.4, #229; the rules are `Attribution`, the PWA's `pwa/js/attribution.js`, case for case): from 1280 px a strip under the header, one item per delegate the main agent started (glyph, name, how long it has run and "N nested"), the selected one in Bridge, the finished folded into "N finished", and "N more delegates not listed" for what the host left out; below 1280 the Delegates tab, every delegate nested under its parent, the finished under "N finished". Every delegate name is its safe label (`DelegateLabel`, §6.3): invisible and bidi characters removed, cut to 60 characters, and "Delegate “…”" for one that reads as the main agent. A delegate opened (from the strip, the tab, a nested list or the conversation) shows in the inspector, or is pushed in the tab: its name under a fixed "Delegate" overline, and its glyph; Status, Model, Kind and ID (mono); its Task, Latest (its own response, fetched with `session.get { id, agent }` while on screen, again every 10 s while it runs) and Reasoning, collapsed; its Tools, mono, a glyph per call with how long each took; and the delegates it started. Its one action, "Ask main agent to stop it", fills the reply box with a message to the main agent naming it by its id alone ("Please stop your delegate *id*.") and sends nothing: replies only ever go to the main agent, and nothing types to a delegate ([subagents.md](design/subagents.md) §6). The conversation has the main agent's own words only, labelled "Main agent" where the host says whose they are, and one meta line for each of its delegates starting ("Started 2 delegates · 17m") and reporting back ("Delegate *name* reported back · 14m"), the name linking to it. A host that lists no delegates (Claude, Codex, an older host: status rule 8) has no strip or list, only the background agents and commands it counts, in the tab and in Details. While a machine's discovery is held, a banner over every page says what holds it ("Discovery held: …", [v1-sessions.md](protocol/v1-sessions.md#discovery-held)), one banner per machine. Its close button ("Dismiss Discovery held on *machine*") hides that machine's banner and no other, and focus moves on to what Tab reaches next. Dismissing changes only what is shown: the host still holds and is told nothing. The banner comes back when that machine's hold has another reason, or clears and comes back, or the app restarts: dismissals last for the app's run and are never saved (#293). The banner that says what stops the app from its job (the host not running, refusing the app, connecting, or view only) has no close button. Each other machine's updates (#51, [v1-update.md](protocol/v1-update.md)) are on the Machines page | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js`; the dashboard's `install_update` and `check_updates` buttons |
+| Sessions | Panes by window width ([ui.md](design/ui.md) §5.2, #180), at the PWA's breakpoints: from 1280 px the list (320), the session and an inspector (336, hidden and shown from the session's header) with the delegate selected in the strip, or with none the session's Details and Tools; from 760 the list (320) and the session with Conversation, Delegates and Tools tabs; below, one column, the list or the session with Back. A divider between the list and the session, and between the session and the inspector (#297), drags, moves 16 px with Left and Right when focused, and goes back to the default on a double-click: the list 264–480, the inspector 280–560, the session never under 440, the inspector then the list giving way at a narrower window and the widths kept coming back once it widens; kept in `<profile>-panes.json` (`PaneWidths`). The session open is the selected row (`MainViewModel.Selected`), whatever opened it (a row, search, a toast, the tray, a launch), and stays open through every resize; a machine tab that hides its row closes it. **List** (§6.1): one row per live session of every machine on the account (this one's over the pipe, the others' through the relay), with machine tabs (All, then each machine) and, on the title's row, the sort menu (Your order, Most recent, Machine) and New, which opens Launch. A row is two lines: the status glyph aligned to line 1 ([ui.md](design/ui.md) §2.2: the generated glyphs, turning while working or delegating unless Windows has animations off, stopping and starting as that setting changes, the violet diamond while an agent drives), the title, semibold with the 6 px Bridge dot for unread activity or else the age, then at most two facts on one line (#214): the status's first fact in its tone's colour, and the machine once there is more than one, else the repository. Never the model, counts or pid: those are in Details. Rows keep the person's order, kept in `<profile>-order.json` (#164): a new session goes to the top once and an update never moves a row; Alt+Up/Down on a row, its menu (right-click, press and hold, Shift+F10: Move up, Move down, Pin) and a drag by the grip that shows on hover move and pin rows, with "Pinned" and "Sessions" over each group once anything is pinned; a row whose session updated since it was last open has the dot; sessions a host removed while the app ran fold into Ended · N below the rows. **Session** (§6.2, §6.4, §6.5): the title and one meta line (glyph, the whole status, machine, repository), with Pin, Details and the inspector toggle as icon buttons; the conversation at the reading measure (770 px), centred in the pane: your last message, or a prompt you didn't type (a schedule's or an agent's, `activity.userMessageFrom`, #489) as a collapsed line at the column's start in agent colour, a clock and "Scheduled prompt · #4" or the driven diamond and "Sent by an agent", two lines of it and Show prompt (a compact disclosure, as the PWA's: a chevron leading its words, pointing right shut and down open, at the label's size, opening on all of it inside a thin agent rule), a schedule's repeat folded to "same as last time"; the main agent's response (Markdown) with its age, its code blocks wrapped rather than scrolled, left to right with hidden and bidi characters and right-to-left letters drawn as escapes (#220) (an approval's card draws its whole message as one such block, exactly as written, fence markers included; nothing in it is read as Markdown, and it has no Copy; a block says "Contains hidden characters" or "Contains right-to-left text" when it does), and each with Copy, which copies what is drawn (#296), reasoning behind "Show reasoning", the current tool's glyph named for its state with the call in mono; question forms in the stream headed "Main agent asks" or the delegate's name (single and multi choice, Other, boolean, text, number, Copilot permission Approve once / Deny); and the reply box, centred under it, a card with a 2 px Bridge edge (Ctrl+Enter or the icon Send, paste an image, Attach: up to 100 MiB each in chunks over the pipe, `sessions.attach.direct`, or through the relay's blob store to another machine, `sessions.attach.blob`, or 256 KiB where neither is offered, which shrinks a larger image to fit). **Details** (the header's Details and the inspector): status, agent, machine, model, repository, branch and folder (mono, cut in the middle, whole in the tooltip), driver, turns, compactions, process, for how long, updated, ID (mono), then End session with the host's two-press rule. **Tools** (the inspector and the Tools tab): the tool history, loaded as it comes on screen and kept current only while it is. **Delegates** (§6.3, §6.4, #229; the rules are `Attribution`, the PWA's `pwa/js/attribution.js`, case for case): from 1280 px a strip under the header, one item per delegate the main agent started (glyph, name, how long it has run and "N nested"), the selected one in Bridge, the finished folded into "N finished", and "N more delegates not listed" for what the host left out; below 1280 the Delegates tab, every delegate nested under its parent, the finished under "N finished". Every delegate name is its safe label (`DelegateLabel`, §6.3): invisible and bidi characters removed, cut to 60 characters, and "Delegate “…”" for one that reads as the main agent. A delegate opened (from the strip, the tab, a nested list or the conversation) shows in the inspector, or is pushed in the tab: its name under a fixed "Delegate" overline, and its glyph; Status, Model, Kind and ID (mono); its Task, Latest (its own response, fetched with `session.get { id, agent }` while on screen, again every 10 s while it runs) and Reasoning, collapsed; its Tools, mono, a glyph per call with how long each took; and the delegates it started. Its one action, "Ask main agent to stop it", fills the reply box with a message to the main agent naming it by its id alone ("Please stop your delegate *id*.") and sends nothing: replies only ever go to the main agent, and nothing types to a delegate ([subagents.md](design/subagents.md) §6). The conversation has the main agent's own words only, labelled "Main agent" where the host says whose they are, and one meta line for each of its delegates starting ("Started 2 delegates · 17m") and reporting back ("Delegate *name* reported back · 14m"), the name linking to it. A host that lists no delegates (Claude, Codex, an older host: status rule 8) has no strip or list, only the background agents and commands it counts, in the tab and in Details. While a machine's discovery is held, a banner over every page says what holds it ("Discovery held: …", [v1-sessions.md](protocol/v1-sessions.md#discovery-held)), one banner per machine. Its close button ("Dismiss Discovery held on *machine*") hides that machine's banner and no other, and focus moves on to what Tab reaches next. Dismissing changes only what is shown: the host still holds and is told nothing. The banner comes back when that machine's hold has another reason, or clears and comes back, or the app restarts: dismissals last for the app's run and are never saved (#293). The banner that says what stops the app from its job (the host not running, refusing the app, connecting, or view only) has no close button. Each other machine's updates (#51, [v1-update.md](protocol/v1-update.md)) are on the Machines page | PWA cards (`pwa/js/ui`), which mirror `agent-bridge-reply-card.js`; the dashboard's `install_update` and `check_updates` buttons |
 | Machines | One row per machine on the account (#180, #213): this one first, then the others connected, then those offline from the relay's roster. A row has the machine icon and the name on line 1 with its status trailing it (This machine, Online, Connecting or Offline), and at most two facts on line 2: the session count, and `View only` for a host that takes no answers, replies or End session from here, with the host's reason as the facts' tooltip rather than on the row. A machine offering updates (#51) has what its app is doing and how the last update ended inside its row, with Check and Install; an offline one has when it was last seen and the two-press Forget; one connected has Show sessions, which picks it in the Sessions page's machine tabs. Its buttons share one style, in one column under the text. Check all, beside the page's title, checks every machine listed and this one | PWA machines (pwa/js/ui/views.js) |
 | Launch | Start or resume a session on any machine on the account that offers it (`sessions.launch`): machine, resume, agent, workspace (a new worktree where the folder is isolated), profile, model, effort, context and permissions as that machine offers them, and a first prompt sent whole. Each press is one launch with its own request id, sent again with the same id after a lost connection, so it starts once; the outcome (started, busy with the reason, refused, failed, unconfirmed) is shown and announced to screen readers, and the new session's card opens when it arrives. Try again sends a launch that could not be sent with the same request, but only to the same host process, never to one that restarted since, and only while the host still remembers the request (9 minutes from the first send). An error from the host says the launch may still have started, and a failure says what Try again would send, since the form may have changed since. A launch the machine reports failed is sent again as a new request. A host that names no run in its hello counts each connection as a new run, so a lost launch to it is reported unconfirmed rather than sent again. What was picked on a machine is kept while it drops out and when another machine is picked. A machine's choices are fetched only while the page is open, since that is costly at the host. A machine waiting on a folder-trust question says it is busy when the page opens or its choices are reloaded. Codex is not launched without a first prompt (nor needs one for a session brought over). Where the machine takes sessions from the account's others (`sessions.transfer`), Resume also lists the ended sessions they hand on (`sessions.transfer.serve`), by machine: picking one copies it over and resumes it as a new session in the workspace picked, with a command the app signs with its own device key, as a person's device (kind `app`), for the machine the session is on ([v1-transfer.md](protocol/v1-transfer.md)); the original stays. A transfer to this machine goes to its host through the relay, as the protocol requires, not the pipe; a transfer waits up to 12 minutes for its outcome and is resent for up to 20; why the form cannot go is said beside the Launch button, apart from the last launch's outcome. A launched agent asking whether to trust its folder ([v1-launch.md](protocol/v1-launch.md#folder-trust)), listed by the machine or named in a launch's outcome (which counts only until the machine's next listing, asked for at once), is shown in full (agent, the whole folder path wrapped and selectable, the repository root it applies to, the agent's own words); where the machine allows it and has approved this app, Trust and Quit answer it with `launch.trust.answer` and a command the app signs as a person's device for that machine, question and choice, through the relay only (this machine's own host through its loopback, never the pipe). Otherwise it says to answer at the machine and why; for this machine, "Allow answering from this app" turns the setting on with this app approved. An answer that may have typed is never offered again; an error offers only that same request again. A machine that takes no launches now (agent-ha-bridge runs there) is still listed, to show such a question read-only | PWA launch view (`pwa/js/ui/launch-view.js`), agent-ha-bridge's launch card |
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
-| Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), answering folder-trust questions from devices (`launch.remoteFolderTrust`, applied at once; turned on with this app approved) and which devices may (`launch.remoteFolderTrustDevices`: this app, the account's phones, browsers and apps the relay lists, and any approved that are not connected; changes from here and from the Launch page go one at a time, each made from the list the host has just then, since the host replaces the whole list; a list changed meanwhile by another app or at a terminal is refused by the host and the change made again from it, so a device revoked there stays revoked), agent-ha-bridge state; on a Microsoft Dev Box only, keeping it awake while the host runs (`devBox.keepAwake`, applied at once; [host-config.md](host-config.md#dev-box-keep-awake)), with the last pass and the next, and a failed or blocked pass (no `az login`, say), Dev Box agent settings the host cannot use, or a stand-back with Task Scheduler unreadable in red since the Dev Box may then hibernate; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
+| Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), answering folder-trust questions from devices (`launch.remoteFolderTrust`, applied at once; turned on with this app approved) and which devices may (`launch.remoteFolderTrustDevices`: this app, the account's phones, browsers and apps the relay lists, and any approved that are not connected; changes from here and from the Launch page go one at a time, each made from the list the host has just then, since the host replaces the whole list; a list changed meanwhile by another app or at a terminal is refused by the host and the change made again from it, so a device revoked there stays revoked), signing Copilot in again from a device pinned as a person here ("Let my devices sign Copilot in on this machine", `permissions.phoneSignIn`, off by default, applied when the host restarts; it says that the machine opens a browser and copies the code while it runs; [host-config.md](host-config.md#phone-sign-in)), agent-ha-bridge state; on a Microsoft Dev Box only, keeping it awake while the host runs (`devBox.keepAwake`, applied at once; [host-config.md](host-config.md#dev-box-keep-awake)), with the last pass and the next, and a failed or blocked pass (no `az login`, say), Dev Box agent settings the host cannot use, or a stand-back with Task Scheduler unreadable in red since the Dev Box may then hibernate; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
 
 **Toasts** (§7.2): a question raises a toast with its options as buttons and a text box
 for Other or a free-text answer; anything larger (several fields, multi-select) gets Open.
@@ -626,10 +924,60 @@ it, where no toast would be raised now), and its card rebuilds its controls: not
 what it said is kept, what was typed stays on the card, and an answer that failed to go is not
 offered again ("The question changed since, so answer it again"). A finished turn raises a toast with the start of the main agent's own response, never a delegate's (it can be turned
 off on its own). A click opens the app on that session, waiting for it to arrive if the
-click is what started the app. Nothing is raised while the app's window is in front.
+click is what started the app, with keyboard focus in it: on its question's heading if it
+has one, never on an answer such as Approve once (#484), or else its reply box. Nothing is raised while the app's window is in front.
 Toasts go quietly into Notification Center, without popping up, while Windows says the
-person is busy (Focus Assist, presentation mode, a full-screen app). The app keeps running
-in the notification area when its window closes, so toasts keep coming.
+person is busy (Focus Assist, presentation mode, a full-screen app). Every toast is silent
+(`<audio silent="true"/>`, added where `ToastXml` closes each toast, so one put up again
+under its tag is silent too): without it Windows plays its default sound, which dinged for
+every question (#754). The app keeps running in the notification area when its window
+closes, so toasts keep coming.
+
+**Progress and timing marks** (#600, [ui.md](design/ui.md) §6.4, §6.5 and §9, as the owner
+decided them on #617 and revised to "quiet unless something's wrong"): an answer or a reply to a
+host whose hello offers `sessions.progress` asks for it (`"progress": true`), and follows the
+host's progress frames before the outcome (`Deliveries`, `Delivery.Stage`; `Receipt` in
+App.Core). The normal path is quiet: Send's ring (an answer's: the button's) is all that shows
+it goes, whatever stage the host reports; once delivered, Send cross-fades from the ring to the
+check for about a second (`ReceiptTiming.SendCheckHold`) and back to its arrow (`CheckGlyph`: the
+`check` icon's geometry as a stroked Path in the button's own ink, never Segoe's CheckMark). A single-choice question sends on a tap, so the tapped option is the
+control that sent it: it keeps full opacity with the ring, then the check, at its trailing edge,
+while the other options are disabled. After a stale or unconfirmed outcome the tapped option stays
+pressed (marked ✓) and the others disabled, since the answer may have been typed and a prompt gets
+one attempt; only busy or refused enables them all again, none pressed. A failed answer's Send again
+resends the same request. Send, too, keeps its look while it shows its
+ring or check, doing nothing until it can send. An
+answer's card then says "You answered · *value*" in text2 (a tap's option, free text's first
+line cut to about 40 characters, nothing for a form of several fields). There is no badge and no
+"Delivered" line. Any other outcome returns Send to rest at once and says why on the line. A
+stage only moves forward, across resends of the same request; an older host is asked for
+nothing, reports no stage, and is otherwise the same. The line under the box (and an answer's
+status line) has words, in text2 and with nothing beside them, only when something needs
+saying: "Still sending…" after 3 s with nothing heard (and for a resend), "Sent · still waiting
+on *machine*" after 5 s, "Passed to the agent · not picked up yet" after 10 s (Up next never
+stalls); a resend that meets the first copy in flight keeps its stage and adds "· still being
+delivered"; one held while the host isn't connected says "Waiting for *machine* · it goes when
+*machine* is back", with Send's ring standing still in text3 (`ReceiptTiming` holds the
+thresholds). The line is a live region that hears every stage, quiet ones included:
+nothing for the first 400 ms, then the furthest stage reached ("Sending reply", "Reply sent",
+"Reply passed to the agent", "Reply up next, after the agent's current step"), each said once,
+at most one a second (the later of two), and the outcome always ("Reply delivered", "Answer
+delivered. You answered *value*"); a failure, a refusal or a question changed since is said
+assertively, since the person must act on it (ui.md §9.1 A6), everything else politely. Between announcements the line is
+named by its words, so it never reads as an earlier state. The timing and what was said are kept
+by request, so the question's line and the card's receipt after the question has gone share
+them, for as long as any receipt shows the request. Past 50 kept, the oldest that no receipt
+shows and that is no longer on its way goes; past 100, an unshown one still on its way goes too. From Send the
+line keeps the room the longest outcome needs (`ReceiptWords.Room`, laid out unseen under it:
+two lines at phone width, one on a wide window) until the box is next typed in, so neither an
+exception, the check nor Send's return to rest moves what is below. Each answer and reply also writes one
+line to `app.log` when it has its outcome: the request's first 8 hex digits (as the host's log
+names it), the outcome (one the protocol names, otherwise `other`), each mark in ms from the tap
+(`sent` once the request is handed to the channel, a resend's `sent 2`, `received`, `typed` or `queued`,
+`result`), and the host's `typed`, `recorded` and `confirmed` timings (ms from its receipt), for
+example
+`reply 1a2b3c4d delivered: sent 3 ms, received 41 ms, typed 388 ms, result 1402 ms; host: typed 352 ms, recorded 1190 ms, confirmed 1361 ms`.
+Nothing of it is sent anywhere. The demo host offers progress too.
 
 The activator is the app's own (`INotificationActivationCallback` in an HKCU
 `LocalServer32` registration, S3 finding 1, without the toolkit S3 used), under the AUMID
@@ -640,14 +988,18 @@ without opening a window. Only the installed app registers anything: a developme
 another `--profile` and the demo show no toasts and write nothing to the registry.
 
 **The product's name and art** (#537): every place the app, the host and its launcher name
-the product, or the host service ("Bridge Host"), reads it from `Product` (`AgentBridge.Protocol`):
+the product, Slipgates, or the host service ("the Slipgates host"), reads it from `Product`
+(`AgentBridge.Protocol`), whose name is the brand token's (`DesignBrand`, generated from
+`design/tokens.json` `brand`; [brand.md](design/brand.md) §2):
 the window and title bar, the tray's tooltip (`MainViewModel.TrayTip`) and menu, the toasts'
 sender (the AUMID's `DisplayName`, not the AUMID) and default title, the update toast, the
 device name other devices see, the logon task's description and the host's messages. The exe's
 `Product` and `AssemblyTitle`, its icon and the toast icon are named once in the app's project
 (`Product`, `AppIconFile`, `AppLogoFile`); `build/app-channels.ps1` reads them for the
 installer's title and icon and the releases' titles, and the app's code reads the files from
-`AppAssets`. `AppBrandTests` holds these together and fails on copy that names the product by
+`AppAssets`. The host's executables carry the name too, as "Slipgates host" and so on, in
+Task Manager and their properties; their file names stay. The title bar draws the mark's
+native 20 px cut (`AbIconMark20`). `AppBrandTests` holds these together and fails on copy that names the product by
 hand. Identifiers that contain the name (the AUMID, the pack id, exe names, paths, the pipe,
 HA ids and names) are not the name and stay (#541).
 
@@ -655,7 +1007,9 @@ HA ids and names) are not the name and stay (#541).
 protocol's example sessions on a private pipe and answering every op as a cooperative
 host would, and a second pretend host ("Build server") that the app reaches as it would
 another machine through the relay. For trying the app without agents, for screenshots, and for CI. It never
-reaches the real host or its profile.
+reaches the real host or its profile. Its Settings agents move as a real host's readiness does
+after a setup, without writing anything: a setup that completes leaves the agent set up and not
+tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to set up again.
 
 ## Deferred, explicitly
 
@@ -663,14 +1017,13 @@ reaches the real host or its profile.
   it, as everywhere else for now.
 * **Cancelling a large attachment** part way. The PWA has a Cancel while a file uploads; the
   app has none yet, over the pipe or through the blob store.
-* Agent hook registration for a fresh install (#54).
 * **Migrate and Roll back on the Settings page** (WinUI slice 2). Both exist in the host
   (`agent-bridge-host migrate` / `rollback`, [migration.md](migration.md)); the page needs
   to show the dry run's report, confirm, and show the result, and it cannot be reached through
   the relay.
 * Turning code signing on: the owner's Azure Artifact Signing account, identity validation
   and the `signing` environment (Signing, above).
-* Arm64 builds, the first-run wizard's agent detection and winget installs.
+* The first-run wizard's agent detection and winget installs.
 
 ## Testing
 
@@ -685,7 +1038,7 @@ reaches the real host or its profile.
   page's choices, every setting and the whole prompt sent, resume, Codex's first prompt,
   busy, failed and Try again, a lost response sent again with the same request, no approved folder,
   profile and context, and a launch on another machine, including one whose machine leaves or drops out; and the app reaching another
-  host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, and the host never left down), host lifecycle with a
+  host through the in-process relay with the host's account), toast plans and activation handling, background updates (`AutoUpdaterTests`: a release downloaded and waiting for Restart to update, a device's Install waiting for the sessions however long that takes, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, the host never left down and never started by it, a lost link made again, "Needs you" past six hours, and the rate-limit hold), host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
 * CI (`app` jobs, one for x64 on `windows-latest` and one for Arm64 on `windows-11-arm`) runs
@@ -704,12 +1057,30 @@ reaches the real host or its profile.
   the arrow keys and sets them through their automation peers, and checks the session keeps its narrowest and no pane leaves the
   page at 1300, 1000 and 800 px, the widths come back at 1440, and resetting them gives the defaults (#297), adds three machines with long names and checks every machine is a tab or under More with nothing past the pane's edge at the narrowest list, at 1000 and at 400 px, More's menu names each with its state and says so while open when one goes offline, and one chosen there becomes a selected tab, its name cut short and named in full (#290), launches a session from the Launch page
   and waits for its row, then checks your message in it and in the session with delegates is at the right of the conversation's column, at most 85% of it, and the column and the reply box at the same measure, centred in the pane with its scroll bar at the pane's edge, at 1440, 1200 and 400 px (#255, #294), and still centred while the list's divider is dragged,
-  checks Codex on the other machine is not launched without a prompt, checks the shell (the 48 px title bar, the
+  sends a session a scheduled prompt and checks it is a line at the column's start, not your bubble, with a clock and "Scheduled prompt · #4" in agent colour, two lines of it and Show prompt (compact: a chevron pointing right before its words, at the label's size, as wide as they are; a control Tab reaches, named "Scheduled prompt 4, Show prompt" and heard as collapsed), which opens, its chevron turned down, on all of it inside a thin agent rule; then its repeat folded to "same as last time", an agent's prompt with the driven diamond, and your bubble back for your own (#489),
+  checks Codex on the other machine is not launched without a prompt, checks Settings' agent rows (#678: each button named for its agent with an id of its own, one verb per hooks' state and none for an agent set up and not tested yet, and a setup made through its button and confirmation, named for the agent with Cancel the default, raised for Narrator as it starts and ends, named for its agent, a superseded raise skipped, its result on its own row as a polite live region, a failure in Danger, pictured in Light, Dark and high contrast, and a failure already drawn repainted in high contrast's Danger text when it comes on, then the rows the app can't act on, each saying why with no raw text and nothing that can't work, pictured in Light, Dark and high contrast as `settings-agents-cant-act.*.png`: Read-only with Install CLI hidden, a failed installation and an unreadable hook ownership by their reasons, and Can't check), checks the shell (the 48 px title bar, the
   search box finding and opening another machine's session, the rail and its Bridge pill, the layer's radius, an
   accent button in Bridge, the caption buttons in the app's theme, the 360×600 minimum), checks the Machines page's rows (#213), draws every page, the Sessions page in three panes with the inspector, in Light and
   Dark and, on CI, turns Windows' high contrast on to draw every page again and check that every role and surface is a
   system colour and the caption buttons the system's, then turns it back off and checks the caption buttons come back in the app's theme, and saves a picture
-  of each page. `build/app-self-test.ps1` runs it; when the app ends with anything but 0, or leaves a check unfinished (the result's `unfinished`, even with 0), it fails and prints the exit code as an NTSTATUS, the check it was in, the end of the app's log and the crash Windows recorded, faulting module and offset (#240). On CI it also has Windows Error Reporting keep a minidump of a crash beside the logs, and prints the crashing thread's stack from it with the runner's `cdb` (#242): for a fail fast the event names no module. Then it runs the `Setup.exe` it packed, silently, on the throwaway runner,
+  of each page. Whole-window pictures capture the window's composed client, including Mica,
+  rather than only the XAML tree: a translucent page layer without its backdrop otherwise
+  becomes light in a PNG viewer (#785). Isolated-control pictures still use XAML rendering.
+  Before native capture, two distinct XAML rendering ticks and another UI dispatcher turn
+  let a preceding update cycle finish even when the page is already idle; the self-test
+  fails if that frame barrier cannot complete within 10 seconds.
+  The dark page pass reopens each output PNG and checks a page-background pixel is opaque
+  and no lighter, in sRGB relative luminance, than the platform's dark layer token's straight
+  colour (the upper bound for that layer over dark Mica). Encoded white and transparent
+  regression samples exercise that guard too; missing, blank or failed window captures fail
+  the self-test. No capture-only page fill or bitmap recolouring is applied.
+  Its progress gallery (#600, ui.md §6.5) puts a reply and an answer through each receipt state against the demo host, which holds a request or picks its outcome for the gallery's sessions (`DemoHost.Script`): Send's ring in the quiet window, Still sending…, Send's check, a failed reply with Send again, a tapped option's ring, unconfirmed and stale (the tapped option pressed, and heard as pressed through its Toggle pattern, the rest disabled), busy and refused (every option again), and You answered for a tap, free text and a form. It checks each and saves `result.progress.<state>.<pass>.png` in light, dark, at the narrowest window and in high contrast. A reply's receipt line on screen as high contrast turns on must turn to the window's text without being bound again: receipt lines and Send's held ring repaint on a theme or system colour change.
+  Last, it measures a live resize (#765): it resizes the window a step a frame, 8 px at a time, from 1560 px to
+  400 and back, and keeps every interval between the UI thread's frames (`CompositionTarget.Rendering`) by the window's width
+  class, once with the demo's own sessions and once with a window as heavy as a real one (16 more sessions, a conversation of
+  over 200 items, 50 tool rows and a strip of 20 delegates, the finished ones unfolded), and writes p50, p95, the longest and how many frames went over
+  16.7 and 33 ms into the result's `resize` and `result.resize.json`, the p95 in each width class in its log line, with a picture of where the drag ended. Through the heavy drag it checks that no piece of a flowing line is measured again (`FlowPanel`; the result's `flowLinesAtNewWidth` and `flowPiecesMeasuredAgain`): the conversation's delegate lines are in the list's footer, laid out at every new width even off screen, and a piece that fits its line is measured once, unconstrained, so only one wider than its line is measured at each width. Before the heavy drag it scrolls a block in the middle of the response to the top of the conversation and pictures the conversation (`result.resize.before.png`); after it, it checks that block is where it was in the layout (its top against the viewport within 0.5 DIP, the proof) and pictures it again (`result.resize.after.png`), which must be drawn alike across the reading column: no more than 4 pixels more than 8 apart in a channel, and none more than 96 apart (`PictureDifference`). So a renderer's noise between two renders (a single speck of a card's fill by its rounded corner, or an anti-aliased edge) doesn't count, while a block moved by a pixel, which differs along every edge of its text, does; the log gives the count and the largest difference either way. It then presses Page Down and Down for real on a link in the conversation (`SendInput` with the window in the foreground, else posted to the window with keyboard focus, as the keyboard sends them; the result's `keysPressedBy` says which) and checks the text scrolled with focus where it was and nothing selected; that Tab from the last link or Copy button drawn goes to the first in the next block with one, which it realises (the move made with `FocusManager.TryMoveFocus`, as Tab makes it, not an injected key), that Tab pressed for real onto the Copy button of a code block laid out across the conversation's bottom edge brings the block's start to the leading edge, and onto one wholly in view moves nothing (the result's `tabInViewProblem`), that Shift+Tab pressed for real onto the Copy button of a code block wholly in view, its top 3 DIP below the view's, where the focus manager's 20 DIP padding round a control would scroll it, move nothing (within 0.5 DIP; the result's `tabNearEdgeProblem`), that Tab pressed for real onto the first link of a block taller than the view (a quoted log of 44 lines just before the run of linked paragraphs) brings its start to the leading edge (within 1.5 DIP), and Shift+Tab onto its last link brings that link wholly into view (within 1.5 DIP) at the nearest edge, no further than WinUI's 20 DIP margin past it, the block's start above the view (the result's `tallTabProblem`), and that Tab, pressed for real (`SendInput`, else posted; the result's `linkTabPressedBy` says which) on the last link of the last block the list has realised, goes to the first link of the next block, which it hadn't, and brings that block in at the leading edge numbered in its set, each block found from its link (a link is a text element in its block's text, not a control; the heavy response ends with a run of 110 short linked paragraphs, more than twice the most the list was seen to realise from a view's top, so with the run's first block at the top of the view the last block realised and the next both fall in it wherever the list stops; the check fails with "setup: ..." rather than skips if they don't); that no block's container is a tab stop, selected, filled or drawn with chrome or a focus visual; that the last block, off screen and named as no other block is, is found by its name and brought into view through the peer the search found; and that a screen reader is given every block as a list item numbered 1 to N in a set of N, with the header and footer outside it. WinUI numbers an item only once it is realised, so the check walks the items as a screen reader does: the list's ItemContainer pattern finds each next item (`FindItemByProperty` with no property), and one not yet realised is realised through its VirtualizedItem pattern (`Realize`) before its numbers are read, none of them -1 (the result's `listRealisedByPeer` counts the realised ones, `listWalkSeconds` the walk). A capture of your message and its three-block reply is also taken in high contrast at 1440, 1200 and 400 (`result.yours.<width>.highcontrast.png`), beside the light and dark ones. The frame times are a report, not a
+  bar: the runners draw in software, so they fail it only when it could not measure: when a sweep never reached all three width classes. The two sweeps share 30 s, a hang guard that keeps the self-test well inside its 360 s (180 s until #800's sign-in captures: the banner, the sheet and a Needs sign-in row in every state they can be in, in Light, Dark and high contrast; then 300 s until #600's progress gallery); a sweep cut short by it is reported (`lightFinished`, `heavyFinished` and the log), not failed. `build/app-self-test.ps1` runs it; when the app ends with anything but 0, or leaves a check unfinished (the result's `unfinished`, even with 0), it fails and prints the exit code as an NTSTATUS, the check it was in, the end of the app's log and the crash Windows recorded, faulting module and offset (#240). On CI it also has Windows Error Reporting keep a minidump of a crash beside the logs, and prints the crashing thread's stack from it with the runner's `cdb` (#242): for a fail fast the event names no module. Then it runs the `Setup.exe` it packed, silently, on the throwaway runner,
   checks the installed copy's channel and that its executables and `Update.exe` are for that
   machine, and runs the same self-test from the installed copy. Last, it dry-runs publishing
   the package (`build/publish-prerelease.ps1

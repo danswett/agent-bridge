@@ -11,7 +11,7 @@ one session at once.
 
 | Agent | Replies | Why |
 |---|---|---|
-| Copilot CLI | Yes | agent-ha-bridge has long typed replies into it, and its transcript records every prompt (`user.message`) with the text as typed, which confirms one by identity |
+| Copilot CLI | Yes, typed only into its input box as seen on screen, and only while it is empty and outside shell mode | agent-ha-bridge has long typed replies into it, and its transcript records every prompt (`user.message`) with the text as typed, which confirms one by identity |
 | Claude Code | Yes, typed only into its input box as seen on screen | Its transcript records a prompt typed while idle as a `user` entry whose content is the line as typed, and one typed while it works as a `queue-operation` `enqueue` with that content (2.1.312, seen live), which confirms one by identity. agent-ha-bridge confirmed only that *some* prompt was submitted |
 | Codex | Yes, typed only into its input box as seen on screen, and only while it is empty | Its rollout records every prompt, idle or mid-turn, as an `item_completed` `UserMessage` with the line as typed (0.165, seen live), which confirms one by identity. agent-ha-bridge typed with no confirmation at all |
 | Any, on macOS or Linux | Refused, and `sessions.reply` is not offered | Delivery through tmux comes later |
@@ -38,6 +38,87 @@ running now have finished (239 of the 267 steering prompts in this machine's tra
 right after a turn start), or `queued` after the turn ends. One typed while idle is recorded
 at once (`delivery: "idle"`). The host therefore waits up to 60 s for the prompt, and frees
 the session for answers as soon as the keys have gone.
+
+**The input box (#825).** A reply is typed only into Copilot's own input box, read off the
+screen (`Copilot/CopilotInputBox.cs`), and only while that box is empty and outside shell
+mode. Words a person left in the box would be sent with the reply, and in shell mode Enter
+runs what the box holds as a shell command. agent-ha-bridge typed without looking; so did
+this host until #825. From CLI 1.0.105's own rendering code, the box is drawn one of two
+ways: by default as a "rail" (`╻`, `┃` per line, `╹`) beside a `▄`/`▀` box with no prompt
+glyph, and with the prompt frame off as a row between two `─` rules led by `❯ ` (or `! ` in
+shell mode). Shell mode shows as that glyph, as the empty box's placeholder "Execute shell
+command", or as the footer's "Shell" label or "esc exit shell mode" hint. The reply is
+`refused`, with nothing typed:
+
+* when the box holds anything, Unicode spaces included (no-break, figure, narrow no-break,
+  ideographic): only ASCII spaces, the box's and the window's padding, are trimmed, by the
+  worker reading the screen and by the reader. A draft of ASCII spaces alone, or of tabs (the
+  CLI draws a tab as four spaces), cannot be told from padding, and reads as empty; idle, the
+  footer then drops "/ commands", and the reply is refused all the same. The requesting
+  client's reply result says how many
+  characters, and shows what, escaped (`ShownText.Reveal`) and cut to 500 characters. That
+  text goes nowhere else: the host's log and Home Assistant (which keeps it in its history)
+  get the fixed reason and the length only (`ReplyReasons.Shared`), since a draft can hold a
+  pasted password or token;
+* in shell mode;
+* in vim's normal mode (the footer's "-- NORMAL --"), where typed keys are commands;
+* when the screen cannot be read, or does not show exactly one box, rail and plain counted
+  together, at the bottom: its bottom edge directly over Copilot's footer row (the sidebar,
+  mode, commands, shell, or file and issue hints), with nothing but blank rows under that.
+  The CLI draws everything else above its input area, and code in the agent's output is
+  drawn as plain text, so the agent can print rows that look like the box and its footer;
+  printed above the real box, or above a dialog in its place, they are not anchored there.
+  An empty box must also show "/ commands" in the footer, which the CLI draws only while
+  the box is empty. While a turn runs, the footer's place holds the turn's own row (spinner,
+  "esc interrupt" or another Esc hint, "ctrl+q enqueue"; `LMe`'s activity layout) instead,
+  never with "/ commands". CLI 1.0.106 uses "ctrl+c interrupt" or "ctrl+c stop agents"
+  when the box is empty (captured live and checked against its rendering code); the Esc
+  hints remain supported. That row is taken for the footer when it carries one of those
+  interrupt hints or the enqueue hint, the box's own rows decide whether it is empty, and its vim and shell labels
+  are read as in the idle footer, so a reply can still steer a working session. In a
+  window under 80 columns (measured by the box's own bottom edge, which spans the frame) the
+  turn's row leaves those labels out, and a box holding only spaces in shell mode draws as
+  empty, so a reply to a working session there is refused ("too narrow to check its input
+box; reply once the turn ends, or widen it"). With the
+  CLI's hints hidden (`hideToggleHelp`), the idle footer is drawn empty and a reply to an
+  idle session is refused; a turn being cancelled shows no hints either, and is refused.
+
+Whenever the screen shows exactly one box, refused or not, the reader also describes it
+(`CopilotInputBoxState`, for #804's Clear and send): its rows, its full text and how many
+lines it draws, whether it is in shell mode, its vim mode as the footer shows it (none,
+insert or normal), whether it is the prompt's own box at the bottom over the footer, and
+whether it is all on screen. A rail box taller than the window,
+its top edge scrolled away, is described as cut off; it is refused as before. A plain box
+cut off the same way cannot be told from output, so it is not described.
+
+The box is read when the reply arrives, so a draft or shell mode is refused at once, and
+read again once the typing turn has come, after the other checks. The words are held to
+that read's box rows (`KeySend.Expect`), and to the footer under them (`KeySend.Checks`):
+in the same attach, just before the first key, the worker reads the box's rows again, which
+must read exactly so, and the footer, which must still be there (one of its own hints or
+labels) and show neither shell mode ("Shell", "shell", "esc exit shell mode") nor vim's
+normal mode ("-- NORMAL --"), with nothing but blank rows under it to the window's bottom, as
+the reader required: the agent can print rows that read like the box and its footer, and
+with only those rows held, a real box holding a draft, or a permission dialog, drawn under
+them afterwards passed. The box's rows alone cannot say so: '!' then a space enters
+shell mode with only a space in the box, which draws as an empty box, and Esc into vim's
+normal mode changes only the footer. In a window under 80 columns (the box's bottom edge)
+the footer must also not have become a running turn's row (Esc's or Ctrl+C's hint, the enqueue hint):
+there that row leaves out the mode labels, so a turn starting after the read would hide
+them, and it is refused as one running at the read is. Anything else in the footer (its
+spinner, its hints) may change. If a check fails, nothing is typed and the reply is `refused` ("input box
+changed just as the reply was to be typed"). The Enter is a send of its own, after
+Copilot's 300 ms pause, held to the box's bottom edge and to the same footer checks, and
+to the box's first text row not starting with '!' (the frame-off box's shell glyph): if
+any fails (a dialog drawn in the input area's place, Home then '!' while the words were
+typed, Esc), no Enter goes, and the reply is `unconfirmed`, its words left in the box for
+the person to send or clear. A box that grows down the screen with the words (a short
+screen, a long reply) moves its edge too, and is reported the same way; one that grows up a
+full screen moves its first text row, which then leaves the '!' check to the footer's. What
+no check can close is the moment between the worker's read and the CLI taking the key: a
+mode changed at the machine in that moment is not seen. The
+screens the tests read are in `tests/fixtures/screens/copilot-input-box.json`, built from
+the captured live screen and the CLI's rendering code, each naming its source.
 
 ## Attachments (Copilot)
 
@@ -107,7 +188,10 @@ own. What guards them is new. agent-ha-bridge's hooks tell it when a permission 
 (words pick an option; Enter accepts the highlighted one). Each of them takes the input
 box's place on screen, so the host reads the screen first (`AgentReplies/Composer.cs`) and
 types only into an **input box that is positively on screen**, with the first send
-held to those rows (`KeySend.Expect`), so nothing is typed if they change in between:
+held to those rows (`KeySend.Expect`), so nothing is typed if they change in between. The
+rows are held as the worker reads them, with only the window's padding (ASCII spaces)
+trimmed: Claude Code draws its prompt as the pointer and a no-break space, and held with
+that space trimmed away, every Claude reply read as a box that had changed and was refused:
 
 - Claude Code 2.1: a row starting `>` at the left edge between two full-width rules. A
   permission prompt shows indented options under one rule; an `AskUserQuestion` shows tabs
@@ -172,12 +256,24 @@ In order, for every reply:
 4. No question or permission prompt in the session as reported (`refused`: "answer that
    first", or, for one marked `answerAtMachine`, "answer it there first"). Its attachments
    are held, complete, for this device (`refused` otherwise), and are reserved for this
-   reply. The process is the live agent process, and not elevated. The attachments are
-   staged (below).
+   reply. The process is the live agent process, and not elevated. A session this host
+   launched, resumed or restored whose window has not been seen ready is `refused`: it may
+   still show a startup question, folder trust above all, that Enter would answer, and a resume's
+   transcript already exists, so the check below never catches it (`LaunchService.HeldForReply`,
+   #780). While following it says what the window shows: the folder-trust question (answered from
+   a device where allowed, #947, else on that machine), another startup question (on that machine),
+   or only "still starting, send it again in a moment" (#1018). Once following has ended unready, it stays so while that agent runs (the launcher, or the
+   process it handed the session to), until a prompt of the person's is in its transcript after the
+   launch (Copilot; a turn count would not do: it leaves out the turn that prompt starts, and a new
+   CLI's `session.resume` ending a killed turn counts one with nobody having typed) or, for an agent
+   that registers only once ready, it registers. The attachments are staged (below).
 5. The single typing turn is taken, then, immediately before typing: agent-ha-bridge again,
    the session again, and its transcript: no `ask_user` from any agent without its
    completion or `human_response.recorded`, and no `permission.requested` without its
-   `permission.completed`, since the last abort or shutdown. The whole transcript counts,
+   `permission.completed`, since the last abort or shutdown. One left open when a new CLI
+   resumed the session (`session.resume`, with no end written for it) still counts, since the
+   new CLI may show it again without writing it again: until it completes, an abort or shutdown,
+   a question the session itself asks since (a subagent's is its own, #855), or a prompt typed at the machine (`refused`, saying it was resumed). The whole transcript counts,
    since a subagent's question stops only that subagent and other work can write any
    amount after it (and the session source does not report a subagent's question): it is
    read from the start once per session, in the background as soon as the session is found
@@ -185,12 +281,22 @@ In order, for every reply:
    reply after a start used to spend before typing, #599), and from where it was
    left on every later read, so the read before typing covers only what was written since. A transcript that cannot be read is `refused`, never taken to
    mean nothing is asking. A Copilot session with no `events.jsonl` yet (its folder there,
-   and no transcript ever read for it) is refused with its own reason. Copilot 1.0.105
+   and no transcript ever read for it) is told apart by its window (#1018). Copilot 1.0.105
    creates the file only with the first prompt, and it registers the session while its
    folder-trust question may still be on screen. There, typed words are dropped and Enter
-   answers "Yes" (seen live: a reply trusted the folder). Without a transcript, the host
-   cannot tell that question from an idle prompt, and only a person answers it. So the
-   first prompt is sent at the machine, or given at launch. The point read up to is where
+   answers "Yes" (seen live: a reply trusted the folder). Copilot draws that question in place
+   of the prompt's box and footer, never beside them (1.0.105 to 1.0.107, seen live), so the
+   reply goes only when the window shows the box and its footer and no startup question is
+   drawn, and the keys are still held to those rows (the worker types nothing if they change).
+   With the trust question showing it is `refused` with words for the phone (`FirstReplyWords`):
+   answer it first, from the phone where the host allows that for a session it launched
+   (#947), else at the machine. With the window unreadable or not drawn yet it is `refused`
+   as "the session is still starting, so it can't take a reply yet. Send it again in a moment"
+   (Creative's words; the clients read it as "The machine refused this reply: {reason}."), and nothing is typed. For a
+   launch the bridge follows it names Needs you ("If it asks whether to trust its folder, that shows in Needs you")
+   only where remote folder trust is on with a device approved, so a reason never promises a place that is not coming.
+   A refused reply stays in the sender's box (only a delivered one comes out), so sending again costs a tap. So a session launched
+   with no first prompt takes its first reply from the phone. The point read up to is where
    confirmation starts.
 6. The worker types it. Nothing written is `refused`, and the staged files are deleted with
    the attachments kept for another try; a worker that stopped after its first write is
@@ -213,6 +319,18 @@ transcript; the reply is added to them, and the prompt recorded differs, so the 
 `unconfirmed`. agent-ha-bridge has the same exposure. A question the agent opens in the
 moments between the transcript check and the keys landing would take the words; the window
 is the worker's start-up, about the same as for an answer.
+
+**What a reason says.** An `unconfirmed` reply's or answer's `reason` states only what
+happened, as a lowercase clause with no full stop, naming the agent's session: never where to
+look, which the client's receipt already says ("Check the conversation…", #967), and never
+"check at the machine" (#995). A refusal is different: nothing was typed, so its reason still
+says where the person's next move is ("answer at the machine", "reply at the machine"; Creative,
+6680283740 on #995). Where the host itself failed (an exception reading the screen, typing, or
+checking the transcript, or the attempt ledger unreadable), the reason is "the machine
+couldn't deliver it", and the exception's text goes to the host's log only (#802). Launch and
+End session reasons follow the same rule (#1021): fixed words ("the machine couldn't start the
+session", "the machine couldn't end the session"), with their "check at the machine" tails
+where they had them (#467), and the exception's text in the host's log only.
 
 ## Progress and timings
 
@@ -254,3 +372,29 @@ reply 0b7e3c1d timings (ms after 2026-11-04T06:56:28.441Z): checked 2, turn 3, i
 A stage not reached is left out: a reply refused at step 1 logs only `settled` and `sent`. The
 receipt time is UTC, unlike the log's own local-time prefix, so a line is matched to the lines
 around it by its request id, and its times to an agent's transcript as they are, without an offset.
+
+### Confirmation, measured (#1025)
+
+Replies go unconfirmed more often than they fail to arrive, so each reply whose keys went and
+whose confirmation ran logs one more line, to measure how long each agent takes to record one:
+
+```
+reply 0b7e3c1d to 99999999 confirm: copilot, working, typed 25, recorded never, timeout 60 s, unconfirmed
+reply 0b7e3c1d late: recorded 93120
+```
+
+The agent; whether the session was `working` or `idle` when the keys went; `typed`, when the
+last key had gone; `recorded`, the agent's own time on the prompt that is the reply (`~` and the
+host's time where its record has none, `never` if it was not found by the timeout); the timeout
+in force; and the outcome. Times are in ms after receipt, as in the timings line. Never the
+reply's words.
+
+A reply that timed out with its prompt not found (not recorded, or another message recorded)
+keeps its outcome, and the host keeps looking for its prompt, without taking it, for five minutes
+more (`ReplyOptions.LateWatch`, every 5 s), and logs a `late:` line: when it was recorded after
+all, or `not recorded within 300 s more`. `ops/tools/reply-confirm-delays.ps1` reads these lines
+from the host's log, read-only, into the delay from `typed` to `recorded` per agent and state. It
+counts a reply as never recorded only once its late watch is known to be over (its `not recorded`
+line, or a log line 300 s after it with no host `stopped` or start line in between); the rest, still
+watched or not observable (transcript unreadable, host stopped or started within the watch), are
+reported apart.

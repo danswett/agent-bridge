@@ -26,7 +26,7 @@
 // snapshot it asks for again is whole. Nothing is sent to a stale machine (route() is null, the one
 // gate every send goes through) until a channel opened since has delivered a whole snapshot.
 import { HostClient } from './host-client.js';
-import { Capabilities, Ops, PROTOCOL_VERSION } from './protocol.js';
+import { Capabilities, Events, Ops, PROTOCOL_VERSION } from './protocol.js';
 import { SessionsStore } from './sessions-store.js';
 import { UNSUPPORTED_SESSIONS } from './brand.js';
 
@@ -40,6 +40,10 @@ export const ALL = 'all';
 // day doesn't leave its sessions looking current, after which the Machines page's offline list
 // (#50) still has it, with when it was last seen. The Windows app keeps them as long.
 export const OFFLINE_KEEP_MS = 15 * 60 * 1000;
+
+// What a machine's channels going says: the app put away, or the relay lost.
+const RESTING = 'Paused while the app is in the background.';
+const DROPPED = 'The relay connection dropped; reconnecting.';
 
 // One machine shown: its channel and what it has said.
 export class HostLink {
@@ -66,6 +70,14 @@ export class HostLink {
   // Its list may be out of date: no channel open now has delivered a whole snapshot (none has
   // opened yet, its channel went, or the machine left presence). Nothing is sent to it meanwhile.
   stale = true;
+  // Stale only because the app rested (#610): nothing is known to have gone wrong with it, so it
+  // is confirming rather than reconnecting, and its questions still count in the app badge (a
+  // rest that emptied the badge took the count away just when the app is out of sight). Until a
+  // whole list is in, its channel fails, or the relay doesn't come back.
+  rested = false;
+  // Its hello changed (hello.changed) while its channel was still being set up: asked for again
+  // once open, as the host says so only once.
+  helloChanged = false;
 
   constructor(id, store) {
     this.id = id;
@@ -97,7 +109,18 @@ export class HostSession {
     Object.assign(this, { connection, me, storage, makeClient, makeStore, maxOpening, retryMs, reopenMs, maxRetryMs, keepOfflineMs, now });
     connection.on('ready', () => this.#pump());
     connection.on('presence', () => this.#onPresence());
-    connection.on('lost', () => this.#detachAll('The relay connection dropped; reconnecting.'));
+    connection.on('lost', (e) => this.#detachAll(e?.resting ? RESTING : DROPPED, e?.resting === true));
+    // Back from a rest, the relay itself failing to come back is a drop after all, and is said as
+    // one: a single machine's note would otherwise go on blaming the background while it retries.
+    connection.on('state', ({ state } = {}) => {
+      if (!['reconnecting', 'signed-out', 'replaced', 'stopped'].includes(state)) { return; }
+      let changed = false;
+      for (const link of this.#links.values()) {
+        if (state === 'reconnecting' && link.error === RESTING) { link.error = DROPPED; changed = true; }
+        if (link.rested) { link.rested = false; changed = true; }
+      }
+      if (changed) { this.#emit(); }
+    });
     // The sessions on screen, from every machine shown, as one list.
     const self = this;
     this.sessions = {
@@ -111,6 +134,12 @@ export class HostSession {
   }
 
   onChange(fn) { this.#listeners.add(fn); return () => this.#listeners.delete(fn); }
+
+  // Whether a request to any machine shown awaits its response.
+  get busy() {
+    for (const link of this.#links.values()) { if (link.client?.pending > 0) { return true; } }
+    return false;
+  }
 
   // Calls fn(hostId) each time a channel to a machine shown is open, subscribed and its snapshot
   // whole: whatever waits to be resent to that machine can go.
@@ -131,11 +160,13 @@ export class HostSession {
   // roster says, else when this device saw it go). 'unsupported': in presence, but it says it
   // has no sessions to give; not tried again. 'reconnecting': in presence, and no channel to it
   // is open. 'confirming': open, and its snapshot (a new channel's first, or the one a gap asked
-  // for again) has not finished.
+  // for again) has not finished, or the app rested and nothing has gone wrong since (rested: true,
+  // whatever its channel's phase).
   staleOf(id) {
     const link = this.#links.get(id);
     if (!link || this.route(id)) { return null; }
     if (link.offlineSince === null) {
+      if (link.rested && link.phase !== 'unsupported') { return { reason: 'confirming', since: null, rested: true }; }
       const reason = link.phase === 'open' ? 'confirming' : link.phase === 'unsupported' ? 'unsupported' : 'reconnecting';
       return { reason, since: null };
     }
@@ -189,15 +220,16 @@ export class HostSession {
 
   // Asks a machine shown for its hello again, on the channel open to it: what it offers, and
   // whether it is read-only and why, change without a new channel when agent-ha-bridge starts
-  // or stops there. Listeners hear only of a change.
+  // or stops there. A machine that offers hello.changed says when; others are asked now and then
+  // (fleet.js). Listeners hear only of a change.
   async refresh(id = this.targetId) {
     const link = this.#links.get(id);
     const client = link?.client;
     if (!link || link.phase !== 'open' || !client) { return; }
-    const hello = await client.hello();
+    const hello = await client.hello({ changes: true });
     if (link.client !== client || link.phase !== 'open') { return; }
     const machine = { ...hello.machine, name: hello.machine.name ?? link.machine?.name ?? null };
-    const key = (m, c) => JSON.stringify([m?.name, m?.hostVersion, m?.dev, m?.readOnly ?? null, c]);
+    const key = (m, c) => JSON.stringify([m?.name, m?.hostVersion, m?.dev, m?.readOnly ?? null, m?.signIn ?? [], c]);
     const changed = key(machine, hello.capabilities) !== key(link.machine, link.capabilities);
     link.machine = machine;
     link.capabilities = hello.capabilities;
@@ -318,6 +350,7 @@ export class HostSession {
         // Still away: a relay drop meanwhile said so on it, which this presence answers.
         if (link.offlineSince !== null) { if (link.phase === 'waiting') { link.error = ''; } continue; }
         link.offlineSince = this.now();
+        link.rested = false;
         this.#cancel(link);
         clearTimeout(link.timer);
         link.timer = null;
@@ -381,14 +414,18 @@ export class HostSession {
     c?.close();
   }
 
-  #detachAll(reason) {
+  #detachAll(reason, rested = false) {
     for (const link of this.#links.values()) {
+      // Only a machine whose list was current when the app rested: one already away or failing
+      // stays as it was.
+      const current = this.route(link.id) !== null;
       this.#cancel(link);
       clearTimeout(link.timer);
       link.timer = null;
       this.#detach(link);
       link.phase = 'waiting';
       link.error = reason;
+      link.rested = rested && current;
     }
     if (this.#links.size) { this.#emit(); }
   }
@@ -440,8 +477,12 @@ export class HostSession {
     const stale = () => this.#links.get(link.id) !== link || link.attempt !== attempt;
     let client;
     try {
-      // hello goes first: a host that takes it early answers it in the handshake (#603).
-      const channel = await this.connection.openChannel(link.id, { signal: attempt.abort?.signal, early: { op: Ops.hello, data: {} } });
+      // hello goes first: a host that takes it early answers it in the handshake (#603). Asked with
+      // the very data the first hello below sends: the channel uses the handshake's answer only
+      // for the same request, and any other costs every reopen a second round trip (#610 reopens
+      // each shown machine's channel whenever the app comes back).
+      const helloData = { changes: true };
+      const channel = await this.connection.openChannel(link.id, { signal: attempt.abort?.signal, early: { op: Ops.hello, data: helloData } });
       if (stale()) { channel.close(); return; }
       client = this.makeClient(channel, link.store);
       link.channel = channel;
@@ -467,6 +508,7 @@ export class HostSession {
         link.client = null;
         link.channel = null;
         link.stale = true;
+        link.rested = false;
         // One closing while it is being set up fails that attempt, which retries it once.
         if (!settled) { return; }
         this.#set(link, 'waiting', 'The channel to this machine closed; reopening.');
@@ -474,7 +516,14 @@ export class HostSession {
         // failed handshake, so the backoff is not advanced.
         this.#later(link, this.reopenMs, { failed: false });
       });
-      const hello = await client.hello().catch((e) => {
+      // What it says changes without a new channel; a machine that can says when (hello.changed),
+      // and is then asked again, rather than every minute on the chance (#610).
+      link.helloChanged = false;
+      client.on('event', (m) => {
+        if (m?.ev !== Events.helloChanged || link.client !== client) { return; }
+        if (link.phase === 'open') { this.refresh(link.id).catch(() => {}); } else { link.helloChanged = true; }
+      });
+      const hello = await client.hello(helloData).catch((e) => {
         // Hosts from before this protocol (the S4 demo host) answer "unknown op". Only such
         // an answer means unsupported; a timeout or a dropped channel is retried below.
         throw Object.assign(e, { unsupported: e.fromHost === true });
@@ -493,6 +542,10 @@ export class HostSession {
       if (link.client !== client) { throw new Error('the channel closed'); }
       link.failures = 0;
       this.#set(link, 'open');
+      if (link.helloChanged) {
+        link.helloChanged = false;
+        this.refresh(link.id).catch(() => {});
+      }
       if (client.synced === true) { this.#confirm(link, client); }
     } catch (e) {
       if (stale()) { client?.close(); return; }
@@ -501,6 +554,7 @@ export class HostSession {
         return;
       }
       if (link.client === client) { link.client = null; link.channel = null; link.stale = true; }
+      link.rested = false;
       client?.close();
       this.#set(link, 'failed', e.message);
       this.#later(link, this.retryMs);
@@ -519,6 +573,7 @@ export class HostSession {
   #confirm(link, client) {
     if (this.#links.get(link.id) !== link || link.client !== client || !link.stale || link.phase !== 'open' || link.offlineSince !== null) { return; }
     link.stale = false;
+    link.rested = false;
     this.#emit();
     this.#opened(link.id);
   }

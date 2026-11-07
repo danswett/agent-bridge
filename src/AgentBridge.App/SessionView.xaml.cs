@@ -37,33 +37,45 @@ public sealed partial class SessionView : UserControl
     public SessionView()
     {
         InitializeComponent();
-        Loaded += (_, _) => { Attach(); WatchReleases(); };
+        Loaded += (_, _) =>
+        {
+            Attach();
+            WatchReleases();
+            FocusManager.GettingFocus -= OnFocusMoving;
+            FocusManager.GettingFocus += OnFocusMoving;
+        };
         SizeChanged += (_, e) => FitComposer(e.NewSize.Height);
-        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); UnwatchReleases(); } };
+        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); UnwatchReleases(); FocusManager.GettingFocus -= OnFocusMoving; } };
         // The Words states' ThemeResources are read as a state is entered: entered again, they are
         // the new theme's.
         ActualThemeChanged += (_, _) => { words = null; ShowWords(); };
         // Where the person has left the conversation, and whether a finger is on it (ui.md §5.3,
-        // Scroll to a question). Touch through handled events too: the scroller handles them.
-        ConversationScroll.ViewChanged += (_, _) =>
+        // Scroll to a question). Touch through handled events too: the scroller handles them. The
+        // scroller is the conversation list's own, there once its template is (HookConversation).
+        // Hooked once the list's template is there: at Loaded, or at its first layout when it was
+        // collapsed then (nothing chosen yet), since showing it raises no Loaded.
+        ConversationList.Loaded += (_, _) => HookConversation();
+        ConversationList.SizeChanged += (_, e) =>
         {
-            follow.Scrolled(ConversationScroll.VerticalOffset, ConversationScroll.ScrollableHeight);
-            // A question still moving into view is held from the pointer until it has stopped.
-            guard.Scrolled(DateTimeOffset.UtcNow);
+            HookConversation();
+            if (e.PreviousSize.Width != e.NewSize.Width) { KeepAnchor(); }
         };
-        ConversationScroll.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) =>
+        AddHandler(LosingFocusEvent, new Windows.Foundation.TypedEventHandler<UIElement, LosingFocusEventArgs>(OnLeavingBlock), true);
+        AddHandler(GettingFocusEvent, new Windows.Foundation.TypedEventHandler<UIElement, GettingFocusEventArgs>(OnReachingBlock), true);
+        AddHandler(PreviewKeyDownEvent, new KeyEventHandler(OnTabKey), true);
+        // A press anywhere in the session moves focus as the person means it: a held Tab then does nothing (Resume).
+        AddHandler(PointerPressedEvent, new PointerEventHandler((_, _) => presses++), true);
+        ConversationList.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) =>
         {
             if (Touch(e)) { follow.TouchDown(e.Pointer.PointerId); }
             else { follow.Pressed(e.Pointer.PointerId); }
         }), true);
-        ConversationScroll.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchUp(e.Pointer.PointerId); } }), true);
-        ConversationScroll.AddHandler(PointerCanceledEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
-        ConversationScroll.AddHandler(PointerCaptureLostEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
+        ConversationList.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchUp(e.Pointer.PointerId); } }), true);
+        ConversationList.AddHandler(PointerCanceledEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
+        ConversationList.AddHandler(PointerCaptureLostEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
         // A mouse or pen over the conversation holds it as a finger does (#261's guard).
-        ConversationScroll.AddHandler(PointerEnteredEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerOver(e.Pointer.PointerId); } }), true);
-        ConversationScroll.AddHandler(PointerExitedEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerLeft(e.Pointer.PointerId); } }), true);
-        ConversationScroll.DirectManipulationStarted += (_, _) => follow.PanStarted();
-        ConversationScroll.DirectManipulationCompleted += (_, _) => follow.PanEnded();
+        ConversationList.AddHandler(PointerEnteredEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerOver(e.Pointer.PointerId); } }), true);
+        ConversationList.AddHandler(PointerExitedEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerLeft(e.Pointer.PointerId); } }), true);
         // The question's answers moved where they are (#491): held again. And a pointer's press on
         // one reads where they are first, and is dropped if they moved (PointerLets).
         answers = new AnswerWatch(QuestionCard, () => questionView, OnAnswersMoved);
@@ -132,6 +144,21 @@ public sealed partial class SessionView : UserControl
         Motion.Settle(Receipt);
         shownMessage = Card?.UserMessage ?? "";
         shownReceipt = Card?.ReceiptText ?? "";
+        promptShownOpen = Card?.PromptOpen == true;
+        Motion.Settle(PromptRule);
+        Motion.Turn(PromptChevron, "Disclosure", promptShownOpen, instant: true);
+    }
+
+    // Show prompt (§5.3, Disclosure): the chevron turns, and what opens settles 4 down into a space
+    // opened at once; closing is at once but for the chevron turning back.
+    bool promptShownOpen;
+    void Disclose()
+    {
+        if (Card is not { } c || c.PromptOpen == promptShownOpen) { return; }
+        promptShownOpen = c.PromptOpen;
+        Motion.Turn(PromptChevron, "Disclosure", promptShownOpen);
+        if (promptShownOpen) { Motion.Enter(PromptRule, "Disclosure", new System.Numerics.Vector2(0, -1)); }
+        else { Motion.Settle(PromptRule); }
     }
 
     // Your message rises 12 as it fades in; an answer's outcome fades in where it is.
@@ -146,7 +173,9 @@ public sealed partial class SessionView : UserControl
         if (c.ReceiptText != shownReceipt)
         {
             shownReceipt = c.ReceiptText;
-            if (c.HasReceipt) { Motion.Enter(Receipt, "Acknowledge"); }
+            // What a screen reader hears of it is the view model's ReceiptAnnouncement, once a
+            // change and at most one a second (Receipt), bound on the line.
+            if (c.ReceiptText.Length > 0) { Motion.Enter(Receipt, "Acknowledge"); }
         }
     }
 
@@ -198,14 +227,15 @@ public sealed partial class SessionView : UserControl
         // Another session's answers: measured from where they are drawn, held as they appear.
         answers.Forget();
         SyncQuestion();
-        Bindings.Update();
+        ReceiptMarkView.Hushed(Bindings.Update);
         Settle();
         // Another session: nothing the last one was doing (a push, a tab's fade) carries over.
         Motion.Settle(ViewRoot);
         Motion.Settle(TabContent);
         ShowWords();
         follow.Reset();
-        ConversationScroll.ChangeView(null, 0, null, disableAnimation: true);
+        ShowResponse(reset: true);
+        ConversationScroll?.ChangeView(null, 0, null, disableAnimation: true);
         TakeFocus();
     }
 
@@ -216,7 +246,8 @@ public sealed partial class SessionView : UserControl
         if (Card is { } c) { c.PropertyChanged += OnCardChanged; c.Delegates.ReplyWanted += OnReplyWanted; }
         answers.Start();
         SyncQuestion();
-        Bindings.Update();
+        ReceiptMarkView.Hushed(Bindings.Update);
+        ShowResponse(reset: false);
         Settle();
         words = null;
         ShowWords();
@@ -252,6 +283,8 @@ public sealed partial class SessionView : UserControl
             }
         }
         if (all || e.PropertyName is nameof(SessionCardViewModel.UserMessage) or nameof(SessionCardViewModel.ReceiptText)) { Acknowledge(); }
+        if (all || e.PropertyName is nameof(SessionCardViewModel.Response) or nameof(SessionCardViewModel.HasVoice)) { ShowResponse(reset: false); }
+        if (all || e.PropertyName == nameof(SessionCardViewModel.PromptOpen)) { Disclose(); }
         if ((all || e.PropertyName == nameof(SessionCardViewModel.AsksText)) && questionView is not null && Card is { } c && questionView.Heading != c.AsksText)
         {
             // Who asks, drawn by the app in the question: not the person's typing laid out.
@@ -262,18 +295,22 @@ public sealed partial class SessionView : UserControl
         if (e.PropertyName == nameof(SessionCardViewModel.WantsFocus)) { TakeFocus(); }
     }
 
-    // Opened from Needs you (SessionCardViewModel.WantsFocus): keyboard focus into the question, or
-    // the reply box when there is none, so the next Tab is in the session and not back in the lane.
-    // A question with nothing to press (one answered at the machine) has the session's own first
-    // control instead. Tried again after each layout pass while the pane is still hidden (one
-    // column, before the layout changes), and cleared only once it lands (it was once cleared by a
-    // row the list had hidden), or once the pane is shown with nothing to take it.
+    // Opened from Needs you or a toast (SessionCardViewModel.WantsFocus): keyboard focus on the
+    // question's heading, or the reply box when there is none, so the next Tab is in the session
+    // and not back in the lane. Never on the question's first control: an approval's is Approve
+    // once, and the next Enter or Space answered it before the person had read the command
+    // (#484). Tried again after each layout pass while the pane is still hidden (one column,
+    // before the layout changes), and cleared only once it lands (it was once cleared by a row
+    // the list had hidden), or once the pane is shown with nothing to take it. The heading is
+    // focused programmatically, so its ring shows only if a key brought it there, not after a
+    // click on a toast (ui.md A12).
     bool focusPending;
     void TakeFocus()
     {
         if (!attached || Card is not { WantsFocus: true } c) { return; }
         var shown = Visibility == Visibility.Visible && ActualWidth > 0 && ActualHeight > 0;
-        var target = (questionView is not null ? FocusManager.FindFirstFocusableElement(questionView) as Control : null)
+        var heading = questionView?.HeadingTarget;
+        var target = heading
             ?? (ReplyBox is { IsEnabled: true, Visibility: Visibility.Visible } ? ReplyBox : null)
             ?? FocusManager.FindFirstFocusableElement(this) as Control;
         if (target is null && shown)
@@ -282,14 +319,19 @@ public sealed partial class SessionView : UserControl
             if (focusPending) { focusPending = false; LayoutUpdated -= OnFocusLayout; }
             return;
         }
-        if (target is not null && target.Focus(FocusState.Keyboard))
+        if (target is not null && (target == heading ? questionView!.FocusHeading(FocusState.Programmatic) : target.Focus(FocusState.Keyboard)))
         {
             c.WantsFocus = false;
             // One scroll for the question: focus inside it brings the whole card into view, heading
             // first, on the same terms as QuestionWanted's (smooth once the page has drawn, a jump
-            // at start or with animations off), and that queued scroll then stands down.
+            // at start or with animations off), and that queued scroll then stands down. A card
+            // taller than the conversation's viewport brings the focused heading instead: brought
+            // in with the least scroll, a card already filling the viewport from midway through
+            // it moves nowhere, and the heading with focus stays out of sight (#893 review, Copilot
+            // 4481392664, the PWA's revealQuestion).
             var inQuestion = Motion.Within(target, QuestionCard);
-            (inQuestion ? (UIElement)QuestionCard : target).StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Ready && Motion.Scrolls });
+            var tall = ConversationScroll is { ViewportHeight: > 0 } scroll && QuestionCard.ActualHeight > scroll.ViewportHeight;
+            (inQuestion && !(tall && target == heading) ? (UIElement)QuestionCard : target).StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Ready && Motion.Scrolls });
             if (inQuestion) { GuardAnswer(); }
             questionScrolled |= inQuestion;
             if (focusPending) { focusPending = false; LayoutUpdated -= OnFocusLayout; }

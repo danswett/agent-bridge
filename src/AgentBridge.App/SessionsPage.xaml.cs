@@ -94,6 +94,7 @@ public sealed partial class SessionsPage : UserControl
             value.Machines.CollectionChanged += (_, _) => BuildMachineTabs();
             value.Sessions.CollectionChanged += OnSessionsChanged;
             value.NeedsYou.CollectionChanged += OnLaneChanged;
+            WatchSignIns(value);
             BuildMachineTabs();
             Bindings.Update();
             Measure();

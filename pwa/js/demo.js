@@ -42,11 +42,13 @@ import { readQuestion } from './protocol.js';
 import { USAGE } from './usage.js';
 import { UPDATE } from './update.js';
 import { LAUNCH, TRUST, checkLaunch, flattenPrompt, trustAction } from './launch.js';
-import { TRANSFER, signTransfer, signTrust } from './transfer.js';
+import { TRANSFER, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
+import { ESCAPED_CAPABILITY } from './escaped.js';
 import { P256KeyPair } from './noise-p256.js';
 import { deviceIdOf } from './identity.js';
 import { fromUtf8 } from './bytes.js';
 import { blobIdOf, fromBase64url, openBlob, storedSize, toBase64url } from './blobs.js';
+import { SIGN_IN } from './auth-state.js';
 
 const BLOB_FILE_MAX = 100 * 1024 * 1024;
 
@@ -157,6 +159,11 @@ export class DemoHost {
   #letResponsesGo = null;
   #snapshotHeld = null;
   #letSnapshotGo = null;
+  // Holds before a delivery types or before its outcome goes (holdBefore), by step.
+  #heldBefore = new Map();
+  // How long after typing an answer or a reply its outcome goes, as a host waits for the
+  // session to record it: long enough, in the demo (?confirmDelay=), to see Typed (#600).
+  confirmDelayMs = 0;
   #arms = new Map();
   // session.launch: outcomes by request, and every request as received.
   launches = new Map();
@@ -179,6 +186,20 @@ export class DemoHost {
   updateLog = [];
   #updateScript = [];
   updateStepMs = 400;
+  // Sign-in (#800): every signin.start and signin.cancel as received; the next starts' failures
+  // (their errors) and outcomes ({ outcome, reason } in place of started); the code the next flow
+  // shows, when a test wants another (a spoofed one, say); and the flow under way, with the
+  // channels in it, which alone are sent its code.
+  signInLog = [];
+  signInFailures = [];
+  signInOutcomes = [];
+  // How long the next starts' replies wait, in ms: a result that comes back after a Cancel.
+  signInDelays = [];
+  // How long the next cancels take to finish, in ms: "cancelled" is logged once each has.
+  signInCancelDelays = [];
+  nextCode = null;
+  signInFlow = null;
+  #flows = 0;
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files; large:
@@ -189,12 +210,16 @@ export class DemoHost {
   // launching: false, one that can't launch sessions; transferring: false, one that takes no
   // sessions from other machines. readOnly: why it takes nothing from the phone, as hello says.
   // updating: true plays a host whose app installs updates asked for from the phone (#51).
-  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false } = {}) {
+  // signingIn: true, one that runs an agent's own device-code sign-in when a person asks (#800).
+  // progress: false plays a host from before sessions.progress, which says nothing of an answer
+  // or a reply until its outcome.
+  // confirming: false, one that does not take an escaped approval's confirmation from this device (#803).
+  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, confirming = approving, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, signingIn = false, progress = true } = {}) {
     this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(answering && confirming ? [ESCAPED_CAPABILITY] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...((answering || replying) && progress ? ['sessions.progress'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : []), ...(signingIn && answering ? [SIGN_IN.capability] : [])];
     if (updating) {
       this.update = { current: '0.1.0', installer: true, available: '0.2.0', notes: 'Updates from your phone', checkedAt: now(), phase: 'idle', automatic: false };
     }
@@ -221,8 +246,10 @@ export class DemoHost {
     this.calls.push(op);
     const reply = (result) => t.deliver({ re: id, ok: true, result });
     switch (op) {
-      case 'hello':
-        return reply({ protocol: 1, machine: { ...this.machine, sessions: this.sessions.size }, capabilities: this.capabilities });
+      case 'hello': {
+        const signIn = this.#rollUp();
+        return reply({ protocol: 1, machine: { ...this.machine, sessions: this.sessions.size, ...(signIn.length ? { signIn } : {}) }, capabilities: this.capabilities });
+      }
       case USAGE.get:
         if (!this.capabilities.includes(USAGE.capability)) { break; }
         return reply(this.usage);
@@ -258,10 +285,10 @@ export class DemoHost {
         return undefined;
       }
       case 'session.answer':
-        return this.#answer(data, reply, (error) => t.deliver({ re: id, ok: false, error }));
+        return this.#answer(data, reply, (error) => t.deliver({ re: id, ok: false, error }), this.#progressTo(t, id, data));
       case 'session.reply':
         if (!this.capabilities.includes('sessions.reply')) { break; }
-        return this.#reply(data, reply);
+        return this.#reply(data, reply, this.#progressTo(t, id, data));
       case 'attachment.start':
       case 'attachment.chunk':
       case 'attachment.discard':
@@ -291,6 +318,10 @@ export class DemoHost {
       case UPDATE.install:
         if (!this.capabilities.includes(UPDATE.capability)) { break; }
         return reply(this.#updateAsk(op, data));
+      case SIGN_IN.start:
+      case SIGN_IN.cancel:
+        if (!this.capabilities.includes(SIGN_IN.capability)) { break; }
+        return this.#signIn(t, op, data, reply, (error) => t.deliver({ re: id, ok: false, error }));
       default:
         return t.deliver({ re: id, ok: false, error: `unknown op ${op}` });
     }
@@ -310,7 +341,7 @@ export class DemoHost {
       this.attachments.set(data.attachment, { name: data.name, type: data.type, size: data.size, sha256: data.sha256, parts: [], received: 0, complete: false, used: false });
       return { received: 0, complete: false };
     }
-    if (!f || f.used) { throw new Error(`attachment ${String(data?.attachment).slice(0, 8)} is not on the host (it expired, was removed, or never arrived); attach it again`); }
+    if (!f || f.used) { throw new Error(`attachment ${String(data?.attachment).slice(0, 8)} is not on the machine (it expired, was removed, or never arrived); attach it again`); }
     if (this.attachmentDelayMs) { await new Promise((r) => setTimeout(r, this.attachmentDelayMs)); }
     // failNextChunk: the next chunk is turned down with this reason, as a host would on a fault.
     if (this.failNextChunk) { const reason = this.failNextChunk; this.failNextChunk = null; throw new Error(reason); }
@@ -338,7 +369,7 @@ export class DemoHost {
   // background from blobStore (a DemoBlobStore), opened, checked against its sha256, then deleted
   // from the store; attachment.start again reports how far it has got, or why it failed.
   #blobAttachment(data) {
-    if (!this.capabilities.includes('sessions.attach.blob')) { throw new Error('this host cannot fetch from the blob store now: it is not connected to a relay that has one'); }
+    if (!this.capabilities.includes('sessions.attach.blob')) { throw new Error('this machine cannot fetch from the blob store now: it is not connected to a relay that has one'); }
     if (!(data.size > 0 && data.size <= BLOB_FILE_MAX)) { throw new Error(data.size > 0 ? 'the attachment is larger than 100 MiB' : 'the attachment is empty'); }
     const f = this.attachments.get(data.attachment);
     if (f) {
@@ -354,7 +385,7 @@ export class DemoHost {
   async #fetchBlob(entry, blob) {
     if (this.attachmentDelayMs) { await new Promise((r) => setTimeout(r, this.attachmentDelayMs)); }
     const stored = this.blobStore?.read(blob.id);
-    if (!stored) { entry.failed = 'the host could not fetch the attachment from the blob store (the relay refused the blob request: not-found); send it again'; return; }
+    if (!stored) { entry.failed = 'the machine could not fetch the attachment from the blob store (the relay refused the blob request: not-found); send it again'; return; }
     let bytes;
     try { bytes = await openBlob(stored, entry.size, fromBase64url(blob.key), blobIdOf(blob.id)); } catch (e) {
       entry.failed = `the attachment in the blob store is not what was sent (${e.message}), so it was dropped; send it again`;
@@ -464,11 +495,11 @@ export class DemoHost {
     if (scripted && scripted.outcome !== 'started') {
       const reasons = {
         busy: "a session this machine launched is waiting at its folder trust prompt; answer it at the machine",
-        refused: 'agent-ha-bridge is running for this user, so this host leaves launching to it',
+        refused: 'agent-ha-bridge is running for this user, so this bridge leaves launching to it',
         unconfirmed: "the session started, but it is asking whether to trust its folder; answer that at the machine",
         failed: 'the agent could not be started (The system cannot find the file specified.)',
       };
-      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host', ...(scripted.trust ? { trust: this.askTrust(scripted.trust) } : {}) };
+      return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host', ...(scripted.session ? { session: scripted.session } : {}), ...(scripted.trust ? { trust: this.askTrust(scripted.trust) } : {}), ...(scripted.outcome === 'unconfirmed' ? this.#launchedFor(data) : {}) };
     }
     const problem = checkLaunch(data);
     if (problem) { return { outcome: 'refused', reason: problem }; }
@@ -496,7 +527,18 @@ export class DemoHost {
     });
     if (resume) { this.launchOptions = { ...o, resumable: o.resumable.filter((r) => r.id !== resume.id) }; }
     const permissions = data.permissions ?? o.defaults.permissions;
-    return { outcome: 'started', session: id, launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd, worktree: !!workspace?.isolate, permissions } };
+    return { outcome: 'started', ...(scripted?.session === null ? {} : { session: id }), launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd, worktree: !!workspace?.isolate, permissions } };
+  }
+
+  // What an unconfirmed launch says it started, as a host's does (docs/protocol/v1-launch.md):
+  // the agent, the folder and whether it is a new worktree.
+  #launchedFor(data) {
+    const o = this.launchOptions;
+    const resume = data.resume ? o.resumable.find((r) => r.id === data.resume) : null;
+    const agent = o.agents.find((a) => a.id === (data.agent ?? resume?.launcher ?? o.defaults.agent));
+    const workspace = resume ? null : o.workspaces.find((w) => w.label === (data.workspace ?? o.defaults.workspace));
+    if (!agent || (!resume && !workspace)) { return {}; }
+    return { launched: { agent: agent.id, ...(resume ? { resume: resume.id } : { workspace: workspace.label }), cwd: resume?.cwd ?? workspace.path, worktree: !!workspace?.isolate, permissions: data.permissions ?? o.defaults.permissions } };
   }
 
   // As the target and the machine the session is on decide between them: the command must be for
@@ -551,9 +593,9 @@ export class DemoHost {
     if (scripted && scripted.outcome !== 'ended') {
       const reasons = {
         busy: 'an answer or reply to this session is being delivered, or it is already being ended',
-        refused: 'the session runs as administrator, and the host does not end elevated sessions; end it at the machine',
+        refused: 'the session runs as administrator, and the machine does not end elevated sessions; end it at the machine',
         stale: 'the session has ended',
-        failed: "the host could not terminate the session's process (Access is denied.)",
+        failed: "the machine could not terminate the session's process (Access is denied.)",
       };
       return { outcome: scripted.outcome, reason: scripted.reason ?? reasons[scripted.outcome] ?? 'from a newer host' };
     }
@@ -578,19 +620,92 @@ export class DemoHost {
     }, this.answerDelayMs));
   }
 
-  #reply(data, reply) {
+  #reply(data, reply, progress) {
     this.replyLog.push(clone(data ?? null));
     const request = typeof data?.request === 'string' ? data.request : '';
     const known = this.replies.get(request);
-    if (known) { known.result.then(reply); return; }
+    if (known) { known.repeat(progress, reply); return; }
     const step = this.#replyScript.shift() ?? 'delivered';
     const scripted = typeof step === 'string' ? { outcome: step } : step;
-    const result = this.#after(() => this.#decideReply(data, scripted));
-    this.replies.set(request, { result });
-    result.then((r) => { if (!scripted.drop) { reply(r); } });
+    const delivery = this.#delivery(progress);
+    const result = this.#delivered(delivery, (typed) => this.#decideReply(data, scripted, typed));
+    this.replies.set(request, delivery);
+    result.then((r) => { if (!scripted.drop) { reply(delivery.told(r, delivery.start, !!progress)); } });
   }
 
-  #decideReply(data, scripted) {
+  // Where the request asked for progress and this host offers it (sessions.progress), a
+  // function sending one frame of it to that copy of the request; otherwise null.
+  #progressTo(t, id, data) {
+    return data?.progress === true && this.capabilities.includes('sessions.progress') ? (p) => t.deliver({ re: id, progress: p }) : null;
+  }
+
+  // One answer's or reply's progress, as a host keeps it: each stage goes to every copy of the
+  // request that asked for progress, and a repeat still on its way gets the stages reached so far.
+  // When each stage was reached is kept once; each copy's outcome counts its timings from that
+  // copy's own arrival, a stage reached before it came as 0 (v1-sessions.md, as the host's
+  // DeliveryTimeline does). A repeat used to be told the first copy's figures.
+  #delivery(progress) {
+    const stages = [];
+    const told = new Set(progress ? [progress] : []);
+    const at = {};
+    return {
+      start: Date.now(),
+      // The first copy's outcome, once #delivered has begun it.
+      result: null,
+      tell(p) {
+        if (p.stage === 'typed') { at.typed = Date.now(); }
+        stages.push(p);
+        for (const fn of told) { fn(p); }
+      },
+      join: (fn) => { if (!fn) { return; } for (const p of stages) { fn(p); } told.add(fn); },
+      done(r) { at.done = Date.now(); return r; },
+      // The outcome as one copy of the request is told it: with timings where that copy asked
+      // for progress and the keys went.
+      told(r, arrived, asked) {
+        if (!asked || at.typed === undefined) { return r; }
+        const since = (t) => Math.max(0, t - arrived);
+        return { ...r, timings: { typed: since(at.typed), ...(r.outcome === 'delivered' ? { recorded: since(at.done), confirmed: since(at.done) } : {}) } };
+      },
+      // A repeat of the request, even one still being delivered: the stages so far and the first
+      // copy's outcome, its timings its own.
+      repeat(fn, reply) {
+        const arrived = Date.now();
+        this.join(fn);
+        this.result.then((r) => reply(this.told(r, arrived, !!fn)));
+      },
+    };
+  }
+
+  // A delivery as a host makes one: received at once (after any hold of responses), then after
+  // the answer delay and any hold before typing, decide(typed) types, saying typed as it does;
+  // then, after any hold before the result and confirmDelayMs, the outcome, with its timings
+  // where progress was asked for. The holds and the delay let a test, or a person in the demo,
+  // see each stage (#600).
+  #delivered(delivery, decide) {
+    Promise.resolve(this.#responsesHeld).then(() => delivery.tell({ stage: 'received' }));
+    delivery.result = this.#after(() => this.#heldBefore.get('typing')?.promise)
+      .then(() => decide((working) => delivery.tell({ stage: 'typed', working })))
+      .then(async (r) => {
+        await this.#heldBefore.get('result')?.promise;
+        if (this.confirmDelayMs) { await new Promise((resolve) => setTimeout(resolve, this.confirmDelayMs)); }
+        return delivery.done(r);
+      });
+    return delivery.result;
+  }
+
+  // Holds every delivery before it types ('typing') or before its outcome goes ('result'), until
+  // releaseBefore() with the same step: Sent and Typed stay to be looked at however slowly the
+  // browser runs, as holdResponses() keeps Sending.
+  holdBefore(step) {
+    if (this.#heldBefore.has(step)) { return; }
+    let release;
+    const promise = new Promise((resolve) => { release = resolve; });
+    this.#heldBefore.set(step, { promise, release });
+  }
+
+  releaseBefore(step) { this.#heldBefore.get(step)?.release(); this.#heldBefore.delete(step); }
+
+  #decideReply(data, scripted, typed = () => {}) {
     const problem = checkReply(data);
     if (problem) { return { outcome: 'refused', reason: problem }; }
     const s = this.sessions.get(data?.id);
@@ -601,7 +716,7 @@ export class DemoHost {
     const files = [];
     for (const { id } of data.attachments ?? []) {
       const f = this.attachments.get(id);
-      if (!f) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} is not on the host (it expired, was removed, or never arrived); attach it again` }; }
+      if (!f) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} is not on the machine (it expired, was removed, or never arrived); attach it again` }; }
       if (f.used) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} went with an earlier reply; attach it again` }; }
       if (!f.complete) { return { outcome: 'refused', reason: `attachment ${id.slice(0, 8)} has not finished arriving; send it again` }; }
       files.push(f);
@@ -615,6 +730,7 @@ export class DemoHost {
     for (const f of files) { f.used = true; }
     const mentions = files.map((f) => `@C:\\Users\\demo\\AppData\\Local\\AgentBridge\\default\\attachments\\${stagedName(f.name)}`);
     const said = files.length ? [...mentions, typedForm(data.text ?? '').trim()].filter(Boolean).join(' ') : typedForm(data.text);
+    typed(s.status === 'working');
     this.typedReplies.push({ id: s.id, request: data.request, said, files: files.map(({ name, type, size }) => ({ name, type, size })) });
     this.upsert({ ...s, status: 'working', statusSince: now(), updatedAt: now(), activity: { ...s.activity, userMessage: said } });
     this.onReplied?.(s.id, said);
@@ -622,27 +738,33 @@ export class DemoHost {
     return { outcome, reason: scripted.reason ?? (outcome === 'unconfirmed' ? 'the session did not record the reply within 60 seconds' : 'from a newer host') };
   }
 
-  #answer(data, reply, fail) {
+  #answer(data, reply, fail, progress) {
     this.answerLog.push(clone(data ?? null));
     const request = typeof data?.request === 'string' ? data.request : '';
     // A repeat, even of one still being delivered, gets the first one's outcome.
     const known = this.answers.get(request);
-    if (known) { known.result.then(reply); return; }
+    if (known) { known.repeat(progress, reply); return; }
     const step = this.#script.shift() ?? 'delivered';
     const scripted = typeof step === 'string' ? { outcome: step } : step;
+    const delivery = this.#delivery(progress);
     // error: the host fails the op itself, with nothing typed, so the same request can go again.
-    if (scripted.error) { this.#after(() => null).then(() => fail(scripted.error)); return; }
-    const result = this.#after(() => this.#decide(data, scripted));
-    this.answers.set(request, { result });
+    // A host says it received a request before any check, so that one says so too.
+    if (scripted.error) {
+      Promise.resolve(this.#responsesHeld).then(() => delivery.tell({ stage: 'received' }));
+      this.#after(() => null).then(() => fail(scripted.error));
+      return;
+    }
+    const result = this.#delivered(delivery, (typed) => this.#decide(data, scripted, typed));
+    this.answers.set(request, delivery);
     // drop: the host did the work, but its response never reached the phone.
-    result.then((r) => { if (!scripted.drop) { reply(r); } });
+    result.then((r) => { if (!scripted.drop) { reply(delivery.told(r, delivery.start, !!progress)); } });
   }
 
-  #decide(data, scripted) {
+  #decide(data, scripted, typed = () => {}) {
     const s = this.sessions.get(data?.id);
     const q = s?.question ? readQuestion(s.question) : null;
     if (!q || q.id !== data.question) { return { outcome: 'stale', reason: 'the session is no longer asking that question' }; }
-    const problem = checkAnswer(q, data);
+    const problem = checkAnswer(q, data) ?? this.#escapedRefusal(q, data);
     if (problem) { return { outcome: 'refused', reason: problem }; }
     const { outcome } = scripted;
     if (outcome === 'stale') { return { outcome, reason: scripted.reason ?? 'answered at the machine' }; }
@@ -650,12 +772,35 @@ export class DemoHost {
     if (outcome === 'refused') { return { outcome, reason: scripted.reason ?? 'the session is running elevated' }; }
     // Typed: the question goes, and the session works on the answer.
     const said = data.text ?? Object.entries(data.fields ?? {}).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('; ');
+    typed(s.status === 'working');
     this.typed.push({ id: s.id, question: q.id, request: data.request, said });
     this.upsert({ ...s, status: 'working', statusSince: now(), updatedAt: now(), question: null, activity: { ...s.activity, userMessage: said } });
     this.onTyped?.(s.id);
     if (outcome === 'delivered') { return { outcome }; }
     return { outcome, reason: scripted.reason ?? (outcome === 'unconfirmed' ? 'the session stopped answering' : 'from a newer host') };
   }
+
+  // As the host's AnswerService.EscapedRefusal, for what a page can check: Approve of an escaped
+  // approval only with a confirmation naming this question, this request and what was read.
+  #escapedRefusal(q, data) {
+    if (q.kind !== 'approval' || !q.escaped || data.fields?.decision !== 'approve') { return null; }
+    if (q.escaped.approve === 'tooMany') { return 'this approval holds too many hidden characters to show on another device, so it can only be approved at the machine; deny it from here, or answer at the machine'; }
+    if (q.escaped.approve !== 'confirm') { return 'this machine takes Approve for an approval with escaped characters only at the machine (permissions.escapedApproval); deny it from here, or answer at the machine'; }
+    let body = null;
+    try { body = JSON.parse(fromUtf8.decode(fromBase64url(data.confirm?.body ?? ''))); } catch { body = null; }
+    if (!body) { return 'this approval holds hidden or right-to-left characters, so Approve needs the escaped-command confirmation, which this app does not give: deny it, update the app, or answer at the machine'; }
+    this.confirmLog.push(body);
+    const t = body.target ?? {};
+    if (body.action !== 'session.approve:escaped' || t.session !== data.id || t.question !== q.id || body.request !== data.request) { return 'the confirmation is for another approval'; }
+    if (t.shown !== q.escaped.shown) { return 'the command changed after it was confirmed: read it again'; }
+    return null;
+  }
+
+  confirmLog = [];
+
+  // An escaped approval's confirmation waits here while a test holds it (demoConfirm).
+  signing = null;
+  holdSigning() { this.signing = new Promise((resolve) => { this.releaseSigning = () => { this.signing = null; resolve(); }; }); }
 
   #event(t, ev, data) { t.deliver({ ev, seq: ++t.seq, data }); }
 
@@ -719,6 +864,112 @@ export class DemoHost {
   hold(held) {
     this.held = held ?? null;
     this.#broadcast('discovery.changed', held ? { discoveryHeld: held } : {});
+  }
+
+  // hello.machine.signIn (#800): one entry per agent and account with sessions needing sign-in.
+  #rollUp() {
+    const groups = new Map();
+    for (const s of this.sessions.values()) {
+      const at = s.attention;
+      if (at?.kind !== 'signInNeeded') { continue; }
+      const k = `${s.agent}\n${at.account ?? ''}`;
+      if (!groups.has(k)) { groups.set(k, { agent: s.agent, provider: at.provider, ...(at.account ? { account: at.account } : {}), since: at.since, sessions: [], signIn: at.signIn, ...(at.recovery ? { recovery: at.recovery } : {}) }); }
+      groups.get(k).sessions.push(s.id);
+    }
+    return [...groups.values()];
+  }
+
+  // As a host runs the agent's own device-code sign-in: started with a flow id, then the code and
+  // URL the agent printed, sent only to the channels in the flow, never in a session or snapshot.
+  // A second start while one runs joins it (busy) and gets its code too.
+  #signIn(t, op, data, reply, fail) {
+    this.signInLog.push({ op, ...clone(data ?? {}) });
+    const failure = this.signInFailures.shift();
+    if (failure) { return fail(failure); }
+    if (op === SIGN_IN.cancel) {
+      if (this.signInFlow?.id === data?.flow) { this.signInFlow = null; }
+      const slow = this.signInCancelDelays.shift() ?? 0;
+      if (slow) { return setTimeout(() => { this.signInLog.push({ op: 'cancelled', flow: data?.flow }); reply({ outcome: 'cancelled' }); }, slow); }
+      return reply({ outcome: 'cancelled' });
+    }
+    const delay = this.signInDelays.shift() ?? 0;
+    if (delay) { const now = reply; reply = (v) => setTimeout(() => now(v), delay); }
+    const scripted = this.signInOutcomes.shift();
+    if (scripted) { return reply(scripted); }
+    if (![...this.sessions.values()].some((s) => s.attention?.kind === 'signInNeeded' && s.agent === data?.agent)) { return reply({ outcome: 'refused', reason: 'nothing on this machine needs that sign-in' }); }
+    const joining = !!this.signInFlow;
+    if (!this.signInFlow) {
+      const code = this.nextCode ?? { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 15 * 60000).toISOString() };
+      this.nextCode = null;
+      this.signInFlow = { id: `flow-${++this.#flows}`, agent: data.agent, code, channels: new Set() };
+    }
+    const flow = this.signInFlow;
+    flow.channels.add(t);
+    reply({ outcome: joining ? 'busy' : 'started', flow: flow.id });
+    setTimeout(() => { if (this.signInFlow === flow && this.transports.has(t)) { this.#event(t, SIGN_IN.code, { flow: flow.id, agent: flow.agent, ...clone(flow.code) }); } }, 50);
+    return undefined;
+  }
+
+  // The person entered the code at github.com (or didn't): signin.done to the flow's channels.
+  // signedIn doesn't clear the sessions: under #800's clear gate the host only marks them pending
+  // (signed in, waiting for the session to confirm) until the model answers (confirmSignIn).
+  finishSignIn(outcome, reason = null) {
+    const flow = this.signInFlow;
+    if (!flow) { return; }
+    this.signInFlow = null;
+    const resumed = outcome === 'signedIn' ? this.#markSignIn(flow.agent, 'pending') : [];
+    for (const t of flow.channels) { if (this.transports.has(t)) { this.#event(t, SIGN_IN.done, { flow: flow.id, outcome, ...(reason ? { reason } : {}), resumed, continue: [] }); } }
+  }
+
+  // Silent recovery: a stored credential still worked, and nobody signed in.
+  recoverSignIn(agent = 'copilot') { this.#clearSignIn(agent); }
+
+  // The model answered after the sign-in: the clear gate passes and the host clears the sessions.
+  confirmSignIn(agent = 'copilot') { this.#clearSignIn(agent); }
+
+  // The next turn failed sign-in again: back to needing it, with a new since.
+  failSignInAgain(agent = 'copilot') { this.#markSignIn(agent, 'failed', true); }
+
+  #markSignIn(agent, recovery, again = false) {
+    const at = now();
+    const ids = [];
+    for (const s of [...this.sessions.values()]) {
+      if (s.agent !== agent || s.attention?.kind !== 'signInNeeded') { continue; }
+      ids.push(s.id);
+      this.upsert({ ...s, attention: { ...s.attention, recovery, ...(again ? { since: at } : {}) }, updatedAt: at });
+    }
+    return ids;
+  }
+
+  // A sign-in another device started: a press here joins it (busy).
+  signInElsewhere(agent = 'copilot') {
+    const code = this.nextCode ?? { userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(Date.now() + 15 * 60000).toISOString() };
+    this.nextCode = null;
+    this.signInFlow = { id: `flow-${++this.#flows}`, agent, code, channels: new Set() };
+  }
+
+  // The sessions' sign-in fails again after it was cleared: a new episode, as a token revoked.
+  needSignInAgain() {
+    const at = now();
+    for (const [id, attention] of this.#signInCleared) {
+      const s = this.sessions.get(id);
+      if (s) { this.upsert({ ...s, attention: { ...attention, recovery: 'failed', since: at }, updatedAt: at }); }
+    }
+    this.#signInCleared.clear();
+  }
+
+  #signInCleared = new Map();
+
+  #clearSignIn(agent) {
+    const at = now();
+    const ids = [];
+    for (const s of [...this.sessions.values()]) {
+      if (s.agent !== agent || s.attention?.kind !== 'signInNeeded') { continue; }
+      ids.push(s.id);
+      this.#signInCleared.set(s.id, s.attention);
+      this.upsert({ ...s, attention: null, statusSince: at, updatedAt: at });
+    }
+    return ids;
   }
 
   // The last seq sent on its channels: the one a client shows, in tests.
@@ -879,6 +1130,19 @@ export async function demoTrust(host, client) {
   };
 }
 
+// Confirming this machine's escaped approvals (#803), signed by a key this page makes for itself,
+// for the demo machine's.
+export async function demoConfirm(host) {
+  const me = await P256KeyPair.generate();
+  host.key ??= await P256KeyPair.generate();
+  const deviceId = await deviceIdOf(me.public);
+  return async ({ session, question, shown, request, now }) => {
+    // Tests hold signing (host.holdSigning()) to press Cancel or Back while it is under way.
+    await host.signing;
+    return signEscapedApproval({ key: me, deviceId, machinePublic: host.key.public, session, question, shown, request, now, to: host.machine.id });
+  };
+}
+
 // The other machine, as the launch panel sees it: its sessions and a key, and commands signed
 // for it by a key this page makes for itself.
 export async function demoTransfers(host, targetId) {
@@ -943,6 +1207,34 @@ export class DemoBlobStore {
     this.log.push({ op: 'delete' });
     return this.stored.delete(String(ticket).split('.')[0]);
   }
+}
+
+// ?signin=1 (#800): four Copilot sessions on this machine that stopped because its sign-in expired
+// (the VM1 fixture's words), rolled up into one sign-in needed; a session whose turn ended on the
+// quota; and one that has said nothing past the host's threshold while working. Each says so in
+// its attention, over a truthful status. The sessions are added to the host given.
+export function demoSignIn(host, base = Date.now()) {
+  const at = (ms) => new Date(base - ms).toISOString();
+  const titles = ['Coordinate the Shiproom', 'Fix the relay reconnect', 'Review the usage panel', 'Draft the release notes'];
+  const ids = titles.map((_, i) => `signin-${i + 1}`);
+  titles.forEach((title, i) => host.sessions.set(ids[i], {
+    id: ids[i], agent: 'copilot', title, repository: 'danswett/agent-bridge', model: 'gpt-6.1-sol',
+    status: 'idle', statusSince: at(300000 + i * 60000), startedAt: at(3600000), updatedAt: at(300000 + i * 60000),
+    activity: { response: 'Working on it.', turnCount: 3 + i },
+    attention: { kind: 'signInNeeded', since: at(300000 + i * 60000), agent: 'copilot', provider: 'github', account: 'demo-user', message: 'Copilot needs you to sign in again (401).', signIn: 'phone', recovery: 'failed' },
+  }));
+  // These two are driven by an agent: their rows still say what is wrong (rules 10-12 over rule 7).
+  host.sessions.set('error-quota', {
+    id: 'error-quota', agent: 'claude', title: 'Summarise the incident', driver: 'agent', driverPrincipal: 'homeassistant:demo', status: 'idle', statusSince: at(120000), updatedAt: at(120000),
+    activity: { response: 'Reading the logs.', turnCount: 2 },
+    attention: { kind: 'error', since: at(120000), agent: 'claude', errorClass: 'quota', message: 'Claude stopped with an error.' },
+  });
+  host.sessions.set('stalled', {
+    id: 'stalled', agent: 'codex', title: 'Re-run the flaky suite', driver: 'agent', driverPrincipal: 'homeassistant:demo', status: 'working', statusSince: at(900000), updatedAt: at(900000),
+    activity: { response: 'Running the suite again.', turnCount: 1 },
+    attention: { kind: 'notResponding', since: at(480000), agent: 'codex', lastEventAt: at(600000) },
+  });
+  return ids;
 }
 
 // The demo's other machines, after the first (?machines=): Laptop, with a session to reply to

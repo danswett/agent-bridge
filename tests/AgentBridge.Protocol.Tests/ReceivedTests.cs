@@ -384,6 +384,21 @@ public class ReceivedTests
     public void A_message_that_is_not_a_record_at_all_is_refused(string json) =>
         Assert.Throws<MalformedRecordException>(() => Received.Read<Session>(JsonDocument.Parse(json).RootElement));
 
+    // Read as "", a session with no id would be offered to resume under no session at all (#780).
+    [Fact]
+    public void A_session_that_went_with_the_host_and_has_no_id_it_can_be_resumed_by_is_not_offered()
+    {
+        var notice = JsonNode.Parse($$"""
+            {"at":"{{T}}","cause":"reboot","why":"pending",
+             "offered":[{"agent":"copilot","title":"No id"},{"id":42,"agent":"claude"},{"id":"s1","agent":"copilot","title":"Fix the build"}]}
+            """)!;
+
+        var n = Received.Read<RestoreNotice>(JsonSerializer.SerializeToElement(notice));
+
+        Assert.Equal(["s1"], n.Offered.Select(o => o.Id));
+        Assert.Throws<MalformedRecordException>(() => Received.Read<RestoreSession>(JsonDocument.Parse("""{"agent":"copilot"}""").RootElement));
+    }
+
     // The spec's table of strict fields and the [Strict] marks are one list: a field marked here and
     // not there, or there and not here, or in the wrong column, fails.
     [Fact]

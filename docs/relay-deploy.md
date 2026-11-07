@@ -43,7 +43,7 @@ and naming changes, and this branch adds operational behaviour. Compared side by
 | Devices | Id = SHA-256 of the device key; nothing stored | Same | None: nothing to migrate |
 | Presence | In memory, rebuilt as devices reconnect | Same | Devices reconnect once (1012), as on any restart |
 | Web Push | `PushGateway`, VAPID key `Relay:VapidPrivateKey`, push-host allowlist, 30/min/account | Same code | **Subscriptions survive only if the VAPID key is carried over** (a browser subscription is bound to the public key). `deploy.ps1` copies it |
-| CORS and origins | `Relay:AllowedOrigins` = `https://danswett.github.io` | Same option and checks | Set the same origin (it is in `regions/westus2.bicepparam`) |
+| CORS and origins | `Relay:AllowedOrigins` = `https://danswett.github.io`, and `https://app.slipgates.com` from #393 | Same option and checks | Set the same origins (they are in `regions/westus2.bicepparam`) |
 | GitHub sign-in | Device flow through the GitHub App client id | Same | Same client id; nothing for users to do |
 | Limits | 200 frames/s per socket, 32 devices per account, 60 sign-in calls/min per IP | Same, plus 120 new sockets/min per IP, 16 KiB request bodies, 10,000 sockets per replica | None for real clients: hosts and the PWA back off 1 s → 30 s |
 | Logs | GitHub login, account id, device id prefix and device name per connection | None of those: a random per-socket tag, kind and counts; JSON lines | Operational only |
@@ -496,6 +496,29 @@ Production needs a person, as any infra change does; the steps after the merge:
 
 Until step 3, production runs the new image with the roster in memory, which is correct, only
 forgetful across restarts.
+
+### Host-gone state (#970, proposed; not built)
+
+What #970 adds beside the roster ([protocol/host-gone.md](protocol/host-gone.md#privacy-and-retention)),
+in #805's lifecycle store, never in this roster blob's v1 schema:
+
+* **Per host, only the current state, overwritten in place:** its arm (the newest
+  `host-gone-arm`, with its sealed notices, and the time the relay received it), the latest
+  witness state with its receipt time and the app device the host
+  declared, the current episode's start, the host's latest departure and reconnect times, the episode's sent targets (handles), `lastSeen` and `gone`. No
+  history and no series: a new value replaces the old one.
+* **Expiry:** an arm and its notices expire at the notices' TTL (21600 s, 6 h) after receipt; notices are
+  deleted once sent; a state witness when its app's connection leaves or 150 s after its receipt
+  (`stopped` and `updating` by the 150 s only), and every witness when the host
+  reconnects; sent targets (routing handles, at most 8) are kept for the episode, until the host confirms its
+  return notice went or the machine is forgotten, **not** on the arm's 6 h clock, so an overnight outage
+  keeps them; the
+  app binding when that app leaves the roster. `gone` lasts until the host returns or is
+  forgotten. The alert caps keep a count per window (at most 24 h), in #805's lifecycle store.
+* **Deleted** on forget, on sign-out and when the account changes, with the machine's roster
+  entry.
+* **Never in logs or metric labels:** no arm, witness, target handle, push body or episode time.
+  Metrics carry fixed categories only.
 
 ### Rolling it back
 

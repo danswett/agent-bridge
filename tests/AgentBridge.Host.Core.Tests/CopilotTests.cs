@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Xunit;
@@ -381,6 +382,298 @@ public class CopilotTests
     }
 
     [Fact]
+    public async Task Permissions_asked_together_are_listed_one_at_a_time_earliest_first_each_saying_how_many_wait_and_each_under_its_own_id()
+    {
+        await using var s = new Session_();
+        var read = Copilot.Prompts["read"];
+        string[] asked =
+        [
+            Copilot.User("go", 1),
+            Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2),
+            Copilot.Permission("r2", "c2", read, 3),
+            Copilot.Permission("r3", "c3", Copilot.Prompts["url"], 4),
+        ];
+
+        var first = (await s.After(asked)).Question!;
+        var second = (await s.After(Copilot.PermissionDone("r1", "c1", "approved", 5))).Question!;
+        var last = (await s.After(Copilot.PermissionDone("r2", "c2", "approved", 6))).Question!;
+
+        // Listing the newest offered Approve once for a request the screen was not showing (#690).
+        Assert.Equal((3, true), (first.Waiting, first.Id.StartsWith("r1#", StringComparison.Ordinal)));
+        Assert.Equal((2, true), (second.Waiting, second.Id.StartsWith("r2#", StringComparison.Ordinal)));
+        Assert.Equal((null, true), (last.Waiting, last.Id.StartsWith("r3#", StringComparison.Ordinal)));
+        Assert.Equal(3, new[] { first.Id, second.Id, last.Id }.Distinct().Count());
+    }
+
+    // While others wait, the host types only for a prompt whose dialog it can identify on screen
+    // (shell and path prompts); any other is shown as answered at the machine until it is alone.
+    [Fact]
+    public async Task A_read_listed_while_others_wait_is_answered_at_the_machine_until_it_is_the_only_one()
+    {
+        await using var s = new Session_();
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["read"], 2), Copilot.Permission("r2", "c2", Copilot.Prompts["commands"], 3))).Question!;
+        var alone = (await s.After(Copilot.PermissionDone("r2", "c2", "approved", 4))).Question!;
+
+        Assert.Equal((true, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+        Assert.Equal(crowded.Id, alone.Id);
+        Assert.Null(alone.AnswerAtMachine);
+    }
+
+    // A warning of nothing but white space draws nothing: the same command with one, beside one
+    // without, would be drawn the same, so the first is answered at the machine. Counted as a part,
+    // it made the two compare unlike, and the screen read for one approved the other (Copilot review
+    // 5781252068 of #769). Spaces outside ASCII (no-break, ideographic) are already refused, as
+    // characters not drawn as written (CopilotDialogs.Unsafe).
+    [Theory]
+    [InlineData(" ")]
+    [InlineData("\n")]
+    [InlineData("  \n \n  ")]
+    public async Task A_permission_beside_the_same_command_with_a_warning_of_white_space_alone_is_answered_at_the_machine(string warning)
+    {
+        await using var s = new Session_();
+        var plain = Copilot.Prompts["commands"].DeepClone().AsObject();
+        plain["fullCommandText"] = "npm test";
+        var warned = Copilot.Prompts["commands"].DeepClone().AsObject();
+        warned["fullCommandText"] = "npm test  ";
+        warned["warning"] = warning;
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", plain, 2), Copilot.Permission("r2", "c2", warned, 3))).Question!;
+
+        Assert.Equal((true, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+        Assert.StartsWith("r1#", crowded.Id);
+    }
+
+    // A request with nothing the host can find on screen (a read naming no path) cannot be told
+    // from the one listed, so delivery refuses every answer while it waits (CopilotPermissionScreen
+    // .Crowded); listed as answerable, the shell request offered controls that could never deliver
+    // (Copilot review of #769).
+    [Fact]
+    public async Task A_permission_beside_one_with_nothing_drawn_to_check_is_answered_at_the_machine_until_that_one_ends()
+    {
+        await using var s = new Session_();
+        var bare = new System.Text.Json.Nodes.JsonObject { ["kind"] = "read" };
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2), Copilot.Permission("r2", "c2", bare, 3))).Question!;
+        var alone = (await s.After(Copilot.PermissionDone("r2", "c2", "approved", 4))).Question!;
+
+        Assert.StartsWith("r1#", crowded.Id);
+        Assert.Equal((true, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+        Assert.Equal((crowded.Id, (bool?)null), (alone.Id, alone.AnswerAtMachine));
+    }
+
+    // Copilot's MCP and custom-tool dialogs can draw an argument's name as well as its value, so a
+    // name holding a line-drawing character, a tab, or a control, bidi or other hidden character
+    // is checked as a value is, at any depth, in every waiting request: checked by value alone, a
+    // name could draw part of Copilot's frame, or hide what is drawn, unseen (#769). A plain name
+    // leaves the listed one answerable, so the check is what holds it.
+    [Theory]
+    [InlineData("owner", false)]
+    [InlineData("\u256D\u2500", true)]
+    [InlineData("a\tb", true)]
+    [InlineData("a\u0007b", true)]
+    [InlineData("a\u202Eb", true)]
+    [InlineData("\u200Bx", true)]
+    public async Task A_permission_beside_one_whose_argument_name_holds_an_unsafe_character_is_answered_at_the_machine(string name, bool held)
+    {
+        await using var s = new Session_();
+        var tool = Copilot.Prompts["mcp"].DeepClone().AsObject();
+        tool["args"] = new System.Text.Json.Nodes.JsonObject { ["owner"] = "octo", ["items"] = new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject { [name] = "x" }) };
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2), Copilot.Permission("r2", "c2", tool, 3))).Question!;
+
+        Assert.StartsWith("r1#", crowded.Id);
+        Assert.Equal((held, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+    }
+
+    [Theory]
+    [InlineData("owner", false)]
+    [InlineData("\u256D\u2500", true)]
+    [InlineData("a\u202Eb", true)]
+    [InlineData("\u200Bx", true)]
+    public async Task A_listed_permission_whose_own_property_name_holds_an_unsafe_character_is_answered_at_the_machine_beside_another(string name, bool held)
+    {
+        await using var s = new Session_();
+        var mine = Copilot.Prompts["commands"].DeepClone().AsObject();
+        mine["meta"] = new System.Text.Json.Nodes.JsonObject { ["deep"] = new System.Text.Json.Nodes.JsonObject { [name] = "x" } };
+        var other = Copilot.Prompts["commands"].DeepClone().AsObject();
+        other["fullCommandText"] = "git status";
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", mine, 2), Copilot.Permission("r2", "c2", other, 3))).Question!;
+
+        Assert.StartsWith("r1#", crowded.Id);
+        Assert.Equal((held, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+    }
+
+    // Only the request's own kind, tool call id and (on a path request, whose dialog draws fixed
+    // words for it) access kind are left out of what is checked, at the request's top level. An
+    // argument or nested property that happens to share one of those names is the agent's text
+    // like any other: exempted by name at every depth, bidi text under args.accessKind left a
+    // shell request beside it answerable, and delivered (Engineering's GPT delta of #769).
+    [Theory]
+    [InlineData("kind", "a\u202Eb", true)]
+    [InlineData("toolCallId", "a\u202Eb", true)]
+    [InlineData("accessKind", "a\u202Eb", true)]
+    [InlineData("accessKind", "\u256D\u2500", true)]
+    [InlineData("kind", "read", false)]
+    [InlineData("accessKind", "read", false)]
+    public async Task An_argument_sharing_a_request_fields_name_is_checked_like_any_other_beside_the_listed_permission(string name, string value, bool held)
+    {
+        await using var s = new Session_();
+        var tool = Copilot.Prompts["mcp"].DeepClone().AsObject();
+        tool["args"] = new System.Text.Json.Nodes.JsonObject { ["owner"] = "octo", ["filter"] = new System.Text.Json.Nodes.JsonObject { [name] = value } };
+        var mine = Copilot.Prompts["commands"].DeepClone().AsObject();
+        mine["meta"] = new System.Text.Json.Nodes.JsonObject { ["deep"] = new System.Text.Json.Nodes.JsonObject { [name] = value } };
+        var other = Copilot.Prompts["commands"].DeepClone().AsObject();
+        other["fullCommandText"] = "git status";
+
+        var beside = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2), Copilot.Permission("r2", "c2", tool, 3))).Question!;
+        await using var t = new Session_();
+        var own = (await t.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", mine, 2), Copilot.Permission("r2", "c2", other, 3))).Question!;
+
+        Assert.Equal((held, held), (beside.AnswerAtMachine == true, own.AnswerAtMachine == true));
+    }
+
+    // The one field left out by name: a path request's own access kind, which its dialog draws as
+    // fixed words. Anywhere else, even a request's top-level accessKind on another kind, is checked.
+    [Theory]
+    [InlineData("path", false)]
+    [InlineData("mcp", true)]
+    public async Task Only_a_path_requests_own_access_kind_is_left_out_of_what_is_checked(string kind, bool held)
+    {
+        await using var s = new Session_();
+        var waiting = Copilot.Prompts[kind].DeepClone().AsObject();
+        waiting["accessKind"] = "read\u202E";
+
+        var listed = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2), Copilot.Permission("r2", "c2", waiting, 3))).Question!;
+
+        Assert.StartsWith("r1#", listed.Id);
+        Assert.Equal(held, listed.AnswerAtMachine == true);
+    }
+
+    // Copilot can write permission.requested again for a request it has already asked, with what
+    // it now asks. The revision replaces the question it revises: kept, the earlier one was listed
+    // first, counted the request twice, and stayed after the request ended (Copilot review of #769).
+    [Fact]
+    public async Task A_permission_asked_again_under_the_same_request_replaces_the_question_it_revises()
+    {
+        await using var s = new Session_();
+        var revised = Copilot.Prompts["commands"].DeepClone().AsObject();
+        revised["fullCommandText"] = "npm run build";
+
+        var first = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2))).Question!;
+        var again = (await s.After(Copilot.Permission("r1", "c1", revised, 3))).Question!;
+        var done = await s.After(Copilot.PermissionDone("r1", "c1", "approved", 4));
+
+        Assert.NotEqual(first.Id, again.Id);
+        Assert.StartsWith("r1#", again.Id);
+        Assert.Contains("npm run build", again.Message);
+        Assert.Null(again.Waiting);
+        Assert.Null(done.Question);
+    }
+
+    // Copilot draws a waiting shell, edit, read, MCP or tool request before a hook's, a hook's
+    // before a path request, and a path request before a URL request, whichever was asked first
+    // (cli-main.js 1.0.105, CopilotDialogs.DrawOrder). A path request listed first while one that
+    // draws ahead of it waits was offered as answerable, though its answer could never be typed
+    // (Quality's review of #769); before a URL request it is the one drawn, and stays answerable.
+    [Theory]
+    [InlineData("commands", true)]
+    [InlineData("read", true)]
+    [InlineData("write", true)]
+    [InlineData("mcp", true)]
+    [InlineData("url", false)]
+    public async Task A_path_permission_asked_first_is_answered_at_the_machine_while_Copilot_draws_another_ahead_of_it(string second, bool behind)
+    {
+        await using var s = new Session_();
+
+        var listed = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["path"], 2), Copilot.Permission("r2", "c2", Copilot.Prompts[second], 3))).Question!;
+
+        Assert.StartsWith("r1#", listed.Id);
+        Assert.Equal((behind, 2), (listed.AnswerAtMachine == true, listed.Waiting));
+    }
+
+    // Copilot wraps a warning without trimming it, so 250 spaces draw a row of nothing, and "x", the
+    // spaces and "y" draw as "x\n\ny" does: whichever of the two is listed first is answered at the
+    // machine. Compared part by part they were unlike (Trust review of #769). And one whose spaces
+    // can wrap so is never answered from the screen, whatever waits beside it: the screen cannot
+    // show where its text breaks, so could not find it.
+    [Theory]
+    [InlineData("wide", "blank")]
+    [InlineData("blank", "wide")]
+    [InlineData("wide", "lint")]
+    public async Task A_permission_whose_warning_wraps_into_a_blank_row_is_answered_at_the_machine_beside_another(string first, string second)
+    {
+        await using var s = new Session_();
+        System.Text.Json.Nodes.JsonObject Prompt(string shape)
+        {
+            var o = Copilot.Prompts["commands"].DeepClone().AsObject();
+            o["fullCommandText"] = shape == "lint" ? "npm run lint" : "npm test";
+            if (shape != "lint") { o["warning"] = shape == "wide" ? "x" + new string(' ', 250) + "y" : "x\n\ny"; }
+            return o;
+        }
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Prompt(first), 2), Copilot.Permission("r2", "c2", Prompt(second), 3))).Question!;
+
+        Assert.Equal((true, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+        Assert.StartsWith("r1#", crowded.Id);
+    }
+
+    // Another waiting request that would be drawn the same (here, the same command with a trailing
+    // space, which is not drawn) cannot be told from it on screen, so the first is answered at the
+    // machine until that one ends; a distinct one beside it changes nothing (Copilot review of #769).
+    [Fact]
+    public async Task A_permission_another_waiting_one_would_draw_the_same_as_is_answered_at_the_machine_until_that_one_ends()
+    {
+        await using var s = new Session_();
+        System.Text.Json.Nodes.JsonObject Command(string text)
+        {
+            var o = Copilot.Prompts["commands"].DeepClone().AsObject();
+            o["fullCommandText"] = text;
+            return o;
+        }
+
+        var alike = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Command("npm test"), 2),
+            Copilot.Permission("r2", "c2", Command("npm test "), 3), Copilot.Permission("r3", "c3", Command("npm run lint"), 4))).Question!;
+        var told = (await s.After(Copilot.PermissionDone("r2", "c2", "denied-interactively-by-user", 5))).Question!;
+        var alone = (await s.After(Copilot.PermissionDone("r3", "c3", "approved", 6))).Question!;
+
+        Assert.Equal((true, 3), (alike.AnswerAtMachine == true, alike.Waiting));
+        Assert.Equal((false, 2), (told.AnswerAtMachine == true, told.Waiting));
+        Assert.Equal((false, (int?)null), (alone.AnswerAtMachine == true, alone.Waiting));
+        Assert.StartsWith("r1#", alike.Id);
+        Assert.Equal([alike.Id, alike.Id], new[] { told.Id, alone.Id });
+    }
+
+    // A pending prompt's payload (an edit's whole file and diff) is kept only while its question
+    // is: a delegate's abort drops its request and the payload with it, a pending one beside it
+    // keeps both, and the session's own abort drops everything (#797).
+    [Fact]
+    public void A_permission_prompts_payload_goes_with_its_question_and_one_still_pending_keeps_its_own()
+    {
+        var state = new SessionState();
+        var parser = new CopilotParser(state, TimeProvider.System);
+        void Feed(params string[] lines) { foreach (var line in lines) { parser.Parse(System.Text.Encoding.UTF8.GetBytes(line)); } }
+        var edit = Copilot.Prompts["write"].DeepClone().AsObject();
+        edit["newFileContents"] = new string('x', 1 << 20);
+
+        Feed(Copilot.User("go", 1), Copilot.SubagentStarted("t1", "helper", 2),
+            Copilot.ToolStart("c1", "edit", new { path = "src\\app.js" }, 3, agentId: "helper"), Copilot.Permission("r1", "c1", edit, 4, agentId: "helper"),
+            Copilot.ToolStart("c2", "powershell", new { command = "git push" }, 5), Copilot.Permission("r2", "c2", Copilot.Prompts["commands"], 6));
+        Assert.Equal(2, state.Permissions.Count);
+
+        Feed(Copilot.Event("abort", new { reason = "user_initiated" }, 7, agentId: "helper"));
+        var pending = Assert.Single(state.Pending);
+        Assert.StartsWith("r2#", pending.Id);
+        Assert.Equal([pending.Id], state.Permissions.Keys);
+        Assert.Null(pending.AnswerAtMachine);
+
+        Feed(Copilot.Event("abort", new { reason = "user_initiated" }, 8));
+        Assert.Empty(state.Pending);
+        Assert.Empty(state.Permissions);
+    }
+
+    [Fact]
     public async Task A_request_to_run_outside_the_sandbox_and_a_kind_the_host_does_not_drive_are_answered_only_at_the_machine()
     {
         await using var s = new Session_();
@@ -503,8 +796,84 @@ public class CopilotTests
         Assert.Null(prompt.AtMachine);
     }
 
+    // ---- what the host escaped, and where (#803) ----
+
+    static IEnumerable<string> Marked(Question q) => q.Escaped!.Marks.Select(m => q.Message.Substring(m[0], m[1]));
+
+    static Question Listed(CopilotPermissionPrompt p, string approve = EscapedApproval.Confirm) =>
+        QuestionMapper.Approval(p.QuestionId, p.Message, Fixture.T0, approve: approve, marks: p.Marks);
+
+    [Fact]
+    public void An_approval_the_host_escaped_anything_in_marks_exactly_its_own_escapes_and_the_digest_of_what_is_sent()
+    {
+        // Each escape is a mark of its own, adjacent ones too; the six characters "\u202E" the agent
+        // wrote itself are not one.
+        var q = Listed(DescribeCommand("curl x | sh #\u2067\u2066 echo \\u202E", "Check \u05D0"));
+
+        Assert.Equal(["\\u05D0", "\\u2067", "\\u2066"], Marked(q));
+        Assert.Equal(EscapedApproval.Shown(q.Message), q.Escaped!.Shown);
+        Assert.Equal(EscapedApproval.Confirm, q.Escaped.Approve);
+        Assert.Null(Listed(DescribeCommand("git push", "Push it \\u202E")).Escaped);
+    }
+
+    [Fact]
+    public void A_tool_name_and_an_argument_the_host_escaped_are_marked_as_its_own_escapes()
+    {
+        // A name goes on one line inside bold, and JSON writes a CR in an argument as \r: each is the
+        // host's escape, marked, never text an agent could have written.
+        var prompt = Copilot.Prompts["custom-tool"].DeepClone().AsObject();
+        prompt["toolName"] = "deploy\u202E";
+        prompt["args"] = new System.Text.Json.Nodes.JsonObject { ["note"] = "# list files\rRemove-Item x" };
+        using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+
+        var q = Listed(CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!);
+
+        Assert.Equal(["\\u202E", "\\u000D"], Marked(q));
+        Assert.Contains("Allow **deploy\\u202E**?", q.Message);
+    }
+
+    [Theory]
+    [InlineData("rm -rf work \u202E\u2066\u200B\u200D\U000E0041\u05D0\u05D1 done")]
+    [InlineData("\u202E; rm -rf work")]
+    [InlineData("a\u0007\u001B[31m\u2028b\uFEFF")]
+    public void Every_mark_covers_exactly_one_escape_and_nothing_beside_it(string command)
+    {
+        // A mark that covered "\u202E; rm -rf work" was drawn as the one token, hiding the rest,
+        // while the confirmation hashed all of it (#836 review).
+        var q = Listed(DescribeCommand(command));
+        var marked = Marked(q).ToList();
+
+        Assert.NotEmpty(marked);
+        Assert.All(marked, m => Assert.True(EscapedApproval.IsEscape(m), m));
+        Assert.Equal(System.Text.RegularExpressions.Regex.Matches(q.Message, @"\\u(?:\{[0-9A-F]{5,6}\}|[0-9A-F]{4})").Count, marked.Count);
+        // Nor does the host send one that covers more, whatever it is given.
+        Assert.Empty(EscapedApproval.For("x \\u202E; rm -rf work", [(2, 18)], EscapedApproval.Confirm).Marks);
+    }
+
+    [Fact]
+    public void A_machine_that_takes_these_only_at_the_machine_says_so_on_each()
+    {
+        Assert.Equal(EscapedApproval.Machine, Listed(DescribeCommand("echo \u202E"), EscapedApproval.Machine).Escaped!.Approve);
+    }
+
+    [Fact]
+    public void An_approval_with_more_escapes_than_a_question_marks_is_whole_and_approved_only_at_the_machine()
+    {
+        // Truncated would take remote Deny too (#836 review): the whole message came, so only
+        // Approve, which cannot be confirmed for what is not described exactly, is the machine's.
+        var command = DescribeCommand(string.Concat(Enumerable.Repeat("a\u200B", EscapedApproval.MaxMarks + 1)));
+        var q = Listed(command);
+
+        Assert.Null(q.Truncated);
+        Assert.Equal(EscapedApproval.TooMany, q.Escaped!.Approve);
+        Assert.Equal(EscapedApproval.MaxMarks, q.Escaped.Marks.Count);
+        Assert.Equal(EscapedApproval.TooMany, Listed(command, EscapedApproval.Machine).Escaped!.Approve);
+        Assert.Equal(EscapedApproval.Confirm, Listed(DescribeCommand(string.Concat(Enumerable.Repeat("a\u200B", EscapedApproval.MaxMarks)))).Escaped!.Approve);
+    }
+
     // A name is shown escaped and on one line, so a real U+202E and the six characters "\u202E"
-    // draw alike; the identity holds the name as Copilot wrote it, so they are not one prompt.
+    // draw alike; the identity holds the name as Copilot wrote it, so they are not one prompt, and
+    // only the host's own escape is marked (#803): the agent's backslash is literal text (#212).
     [Fact]
     public void A_custom_tool_named_with_a_bidi_control_and_one_named_with_its_escape_have_different_ids()
     {
@@ -518,8 +887,37 @@ public class CopilotTests
         var hidden = Named("deploy\u202E");
         var spelled = Named("deploy\\u202E");
 
-        Assert.Equal(hidden.Message, spelled.Message);
+        Assert.StartsWith("Allow **deploy\\u202E**?", hidden.Message);
+        Assert.StartsWith("Allow **deploy\\\\u202E**?", spelled.Message);
+        Assert.Equal("\\u202E", hidden.Message.Substring(hidden.Marks.Single().Start, hidden.Marks.Single().Length));
+        Assert.Empty(spelled.Marks);
         Assert.NotEqual(hidden.Digest, spelled.Digest);
+    }
+
+    [Fact]
+    public void A_Codex_approval_marks_the_hosts_escapes_in_its_tool_and_command_and_carries_the_machines_policy()
+    {
+        var q = QuestionMapper.CodexApproval("d1", "Bash\u200B", "echo ok #\u202E;hs", cut: false, "", Fixture.T0, atMachine: false, approve: EscapedApproval.Machine);
+
+        Assert.StartsWith("Allow **Bash\\u200B**?", q.Message);
+        Assert.Equal(["\\u200B", "\\u202E"], Marked(q));
+        Assert.Equal(EscapedApproval.Machine, q.Escaped!.Approve);
+        Assert.Equal(EscapedApproval.Shown(q.Message), q.Escaped.Shown);
+        // The policy is carried, never bound into the id (#958): the typing slot rebuilds the id from
+        // the marker alone, so a machine that takes Approve only at the machine still has Deny typed.
+        Assert.Equal(CodexApprovalId.Of(new ApprovalMarkerRead(ApprovalMarkerState.Present, "d1", Question: "", Tool: "Bash\u200B", Command: "echo ok #\u202E;hs")), q.Id);
+    }
+
+    [Fact]
+    public void A_name_of_nothing_but_hidden_spaces_shows_their_escapes_never_an_empty_name()
+    {
+        var prompt = Copilot.Prompts["custom-tool"].DeepClone().AsObject();
+        prompt["toolName"] = "\u2028\u3000";
+        using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+        var shown = CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!;
+
+        Assert.StartsWith("Allow **\\u2028\\u3000**?", shown.Message);
+        Assert.Equal(["\\u2028", "\\u3000"], shown.Marks.Select(m => shown.Message.Substring(m.Start, m.Length)));
     }
 
     // An intention is made literal one character at a time, its line never copied at each one: a
@@ -650,10 +1048,10 @@ public class CopilotTests
         var hebrew = Copilot.Prompts["mcp"].DeepClone().AsObject();
         hebrew["toolTitle"] = "Get \u05D0\u05D1 file";
 
-        Assert.StartsWith("Allow **Get file\\\\u2028Delete repo**?", Describe(title).Message);
+        Assert.StartsWith("Allow **Get file\\u2028Delete repo**?", Describe(title).Message);
         Assert.Contains("README.md\\u0007", Describe(bell).Message);
         Assert.Contains("env\\u202E", Describe(bidi).Message);
-        Assert.StartsWith("Allow **Get \\\\u05D0\\\\u05D1 file**?", Describe(hebrew).Message);
+        Assert.StartsWith("Allow **Get \\u05D0\\u05D1 file**?", Describe(hebrew).Message);
         foreach (var p in new[] { title, bell, bidi, hebrew })
         {
             var d = Describe(p);

@@ -49,6 +49,11 @@ are **not** connected now, most recently seen first.
 | `kind` | Always `host` |
 | `lastSeen` | When it was last connected (ISO 8601, UTC) |
 
+Proposed, not implemented: #805's draft ([#815](https://github.com/danswett/agent-bridge/pull/815))
+adds an optional `offline` object saying how and why the machine went, and #970 adds `gone`
+inside it once the relay judges that the machine's host has stopped ([host-gone.md](host-gone.md)).
+A client that doesn't know them ignores them.
+
 A relay without a roster (an older one, or one configured with `Relay:Roster:Backend` `off`)
 sends no `known`, and a client then lists only what is online and offers no Forget. Nor does a
 relay that has not yet read the account's stored roster (the store was down when the device
@@ -63,6 +68,32 @@ after a newer one. So the last `presence` a device has received is the account a
 two in a row are in the order things happened. (Before #151 they could arrive out of order, and an
 older one arriving last listed a machine forgotten a moment earlier until the next change.)
 
+The relay captures `devices` under the account's devices lock, but the roster has its own
+lock. Disconnect bookkeeping therefore happens before removing the device slot, under
+the devices lock; Forget uses the same lock order. Admission publishes the new slot before
+recording the host, so the device remains visible during roster loading. `known` excludes
+the captured device slots, not the roster's separate online counts: a replaced socket
+can still be finishing after its replacement leaves. Closing or kicking a socket uses
+the same disconnect path. A host is thus visible in at least one list across these transitions.
+Admission also confirms its announcement, since the roster cap can remove an offline
+machine when a new one joins.
+
+The .NET transport publishes both lists together as `RelayClient.Snapshot`. Membership
+readers capture it once rather than combine separate reads across messages (#206).
+Captured snapshots stay unchanged. `Previous` holds exactly the preceding wire message,
+with no older history. Host usage sharing retains any machine present in either list of
+either snapshot: only two consecutive roster-bearing messages omitting it confirm
+forgetting. Repeated polls of one snapshot do not count twice, and an intervening valid
+message breaks the omission even if a poll skipped it. This protects cached readings
+from an older relay's disconnect window. Missing `known` remains null and breaks that
+confirmation; a relay without a roster never causes cached usage to be forgotten.
+Each host connection also receives two consecutive copies of its first complete
+roster, under its send lock. This confirms forgets it missed while offline without
+requiring another account change. If the roster store was unavailable at admission,
+the first loaded roster is announced even when empty, then confirmed for that host.
+On an older relay that sends only one snapshot for a real forget, cached usage can
+conservatively linger until another presence change confirms it or the readings expire.
+
 ## `forget` and `forget-result`
 
 ```json
@@ -71,8 +102,18 @@ older one arriving last listed a machine forgotten a moment earlier until the ne
 { "t": "forget-result", "id": 7, "machine": "3f9a…", "error": "online" }
 ```
 
-`id` is the device's own request number, echoed back. On success the relay sends `presence`
-to every device of the account, without the machine in `known`.
+`id` is the device's own request number, echoed back. On success the relay sends two
+consecutive `presence` broadcasts to the account: the update followed immediately by
+a confirmation, each capturing the current membership. With no intervening return,
+both omit the forgotten machine. This confirms host cache deletion on an otherwise
+quiet account without a timer, background task or unrelated membership change. The
+confirmation is an ordinary presence message, with no new wire field; older clients
+can process both normally. An unsuccessful forget sends no confirmation.
+The same confirmation path is used when a roster reload learns a removal from another
+replica, both during a periodic reread and after a write conflict. Already-connected
+hosts therefore clear such cached readings without waiting for unrelated activity.
+Writer pruning also announces a changed offline list through that path, including
+when online hosts exceeded the cap and a departing host only becomes eligible later.
 
 | `error` | Why |
 |---|---|

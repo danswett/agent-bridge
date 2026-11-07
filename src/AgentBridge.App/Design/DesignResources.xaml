@@ -334,6 +334,9 @@
     <x:String x:Key="AbMotionReorderDuration">00:00:00.167</x:String>
     <x:String x:Key="AbMotionReorderEase">0.33,0,0.67,1</x:String>
     <x:String x:Key="AbMotionReorderReduced">Instant</x:String>
+    <x:String x:Key="AbMotionCollapseDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionCollapseEase">0.33,0,0.67,1</x:String>
+    <x:String x:Key="AbMotionCollapseReduced">CrossFade</x:String>
 
     <Style x:Key="AbGlyphDelegating" TargetType="ContentControl">
         <Setter Property="Width" Value="16" />
@@ -810,6 +813,22 @@
                     <Viewbox Stretch="Uniform">
                         <Canvas Width="20" Height="20">
                             <Path Data="F1 M12.5,4.5 L7,10 L12.5,15.5" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                        </Canvas>
+                    </Viewbox>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="AbIconCheck" TargetType="ContentControl">
+        <Setter Property="Width" Value="20" />
+        <Setter Property="Height" Value="20" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContentControl">
+                    <Viewbox Stretch="Uniform">
+                        <Canvas Width="20" Height="20">
+                            <Path Data="F1 M4.5,10.5 L8,14 L15.5,6" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
                         </Canvas>
                     </Viewbox>
                 </ControlTemplate>

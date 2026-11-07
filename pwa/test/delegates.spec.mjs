@@ -26,7 +26,8 @@ const later = () => new Date(Date.now() + 1000).toISOString();
 const showList = (page) => card(page).getByRole('tab', { name: 'Delegates' }).click();
 const openRow = (page, id) => delegate(page, id).locator('.delegate-summary').click();
 
-test.use({ viewport: { width: 900, height: 800 } });
+// A zone far from Pacific, so a time shown in Pacific can't pass for the viewer's own.
+test.use({ viewport: { width: 900, height: 800 }, timezoneId: 'Asia/Tokyo', locale: 'en-US' });
 
 async function openDemo(page, query = '&delegates=1', id = SESSION) {
   await page.addInitScript(() => {
@@ -293,6 +294,94 @@ test('a host that sends no attribution or delegates shows its sessions as before
   await expect(delegating.locator('.response')).toHaveText('Three delegates are building the slices; I\'ll review each PR as it lands.');
 });
 
+// Delegates added to the demo session, their times in minutes ago.
+const addRun = (page, more) => page.evaluate(({ id, now, more }) => {
+  const d = window.agentBridgeDemo;
+  const s = d.host.get(id);
+  const at = (m) => (m === undefined ? undefined : new Date(now - m * 60000).toISOString());
+  const list = more.map((a) => ({ ...a, startedAt: at(a.startedAt), endedAt: at(a.endedAt) }));
+  d.upsert({ ...s, updatedAt: new Date(now).toISOString(), subagents: [...s.subagents, ...list] });
+}, { id: SESSION, now: Date.now(), more });
+// The demo session's delegates, all of them these, their times in minutes ago.
+const listOnly = (page, list) => page.evaluate(({ id, now, list }) => {
+  const d = window.agentBridgeDemo;
+  const s = d.host.get(id);
+  const at = (m) => (m === undefined ? undefined : new Date(now - m * 60000).toISOString());
+  d.upsert({ ...s, updatedAt: new Date(now).toISOString(), subagents: list.map((a) => ({ ...a, startedAt: at(a.startedAt), endedAt: at(a.endedAt) })) });
+}, { id: SESSION, now: Date.now(), list });
+// Three started together and still working, so their line ends "and 1 more", then one more line.
+const THREE = (names) => [
+  ...names.map((name, i) => ({ id: `three-${i}`, kind: 'background', name, status: 'working', startedAt: 3 - i / 10 })),
+  { id: 'one-d', kind: 'background', name: 'Draft', status: 'working', startedAt: 1 },
+];
+// Where a line's "N more" is: its box, its line's, its words' first row, its glyph's centre and
+// the other names'.
+const moreBox = (more) => more.evaluate((el) => {
+  const r = (b) => ({ top: b.top, bottom: b.bottom, left: b.left, right: b.right });
+  const li = el.closest('li');
+  const text = li.querySelector('.delegate-event-text');
+  const range = document.createRange();
+  range.selectNodeContents(text.firstChild);
+  const mark = li.querySelector('.delegate-event-mark').getBoundingClientRect();
+  return { more: r(el.getBoundingClientRect()), li: r(li.getBoundingClientRect()), first: r(range.getClientRects()[0]), mark: mark.top + mark.height / 2,
+    names: [...text.querySelectorAll('.delegate-link:not(.delegate-more)')].flatMap((n) => [...n.getClientRects()].map(r)) };
+});
+// The rows a line's words take, by where each run of them starts (the words for a screen reader
+// alone are not drawn), and the height of its words' box.
+const rows = (li) => li.evaluate((el) => {
+  const text = el.querySelector('.delegate-event-text');
+  const walk = document.createTreeWalker(text, NodeFilter.SHOW_TEXT,
+    { acceptNode: (n) => (n.parentElement.closest('.sr-only') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+  const range = document.createRange();
+  const tops = [];
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    range.selectNodeContents(n);
+    for (const r of range.getClientRects()) {
+      if (r.width && !tops.some((t) => Math.abs(t - r.top) < r.height / 2)) { tops.push(r.top); }
+    }
+  }
+  return { tops: tops.sort((a, b) => a - b), height: text.getBoundingClientRect().height };
+});
+// Each name's and "N more"'s boxes in a list, a name over two rows a box on each.
+const targets = (list) => list.evaluate((el) => [...el.querySelectorAll('.delegate-event .delegate-link')]
+  .flatMap((n) => [...n.getClientRects()].map((b) => ({ name: n.textContent, top: b.top, bottom: b.bottom, left: b.left, right: b.right }))));
+// A line whose rows are each a 44 line box: 44 from each row to the next, its words' box that
+// many rows high.
+const expectTapRows = (box) => {
+  for (let i = 1; i < box.tops.length; i++) {
+    expect(Math.abs(box.tops[i] - box.tops[i - 1] - 44)).toBeLessThanOrEqual(1);
+  }
+  expect(Math.abs(box.height - 44 * box.tops.length)).toBeLessThanOrEqual(1);
+};
+// A "N more" a whole 44 target in its own line, over no other name, its glyph by its first row.
+const expectMoreTarget = (box) => {
+  expect(box.more.right - box.more.left).toBeGreaterThanOrEqual(44);
+  expect(box.more.bottom - box.more.top).toBeGreaterThanOrEqual(44);
+  expect(box.more.top).toBeGreaterThanOrEqual(box.li.top);
+  expect(box.more.bottom).toBeLessThanOrEqual(box.li.bottom);
+  for (const n of box.names) {
+    expect(n.bottom <= box.more.top || n.top >= box.more.bottom || n.right <= box.more.left || n.left >= box.more.right).toBe(true);
+  }
+  expect(box.mark).toBeGreaterThanOrEqual(box.first.top);
+  expect(box.mark).toBeLessThanOrEqual(box.first.bottom);
+};
+// A capture of what is shown. The page's own CSP violations are checked first: WebKit reports the
+// style element the screenshot adds itself as inline, the harness's not the page's, so it is cleared after.
+const capture = async (page, locator) => {
+  expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
+  const png = await locator.screenshot({ animations: 'allow', caret: 'initial' });
+  await page.evaluate(() => { window.__cspViolations = []; });
+  return png;
+};
+// Five, each started well over a minute after the last, so none share a line.
+const RUN = [
+  { id: 'fold-a', name: 'Check the changelog', status: 'ended', outcome: 'done', startedAt: 13, endedAt: 12 },
+  { id: 'fold-b', name: 'Update screenshots', status: 'ended', outcome: 'done', startedAt: 11, endedAt: 9 },
+  { id: 'fold-c', name: 'Read the issue', status: 'ended', outcome: 'done', startedAt: 8, endedAt: 7 },
+  { id: 'fold-d', name: 'Draft the reply', status: 'ended', outcome: 'done', startedAt: 6, endedAt: 4 },
+  { id: 'fold-e', name: 'Try the fix', status: 'working', startedAt: 3 },
+];
+
 test.describe('where the inspector is not a pane of its own', () => {
   test('the delegates are a tab of their own, beside the conversation and the tools, and arrows walk all three', async ({ page }) => {
     await openDemo(page);
@@ -406,19 +495,12 @@ test.describe('where the inspector is not a pane of its own', () => {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test('a chip pressed for its delegate open behind another tab shows it, and pressed again lets it go', async ({ page }) => {
+  test('on a phone there is no chip row: the Delegates tab holds the delegates (owner, #629)', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
-    const chip = c.locator('.delegate-strip .strip-item[data-id="demo-agent-suite"]');
-    await chip.click();
-    await expect(pane(page)).toBeVisible();
-    await c.getByRole('tab', { name: 'Conversation' }).click();
-    await expect(pane(page)).toBeHidden();
-    await chip.click();
-    await expect(pane(page)).toBeVisible();
-    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
-    await chip.click();
-    await expect(pane(page)).toHaveCount(0);
+    await expect(c.locator('.delegate-strip')).toBeHidden();
+    await c.getByRole('tab', { name: 'Delegates' }).click();
+    await expect(c.locator('.delegates')).toBeVisible();
   });
 
   test('on a phone each delegate\'s row is a whole tap high', async ({ page }) => {
@@ -455,23 +537,132 @@ test.describe('on a phone', () => {
     for (const x of starts) { expect(x).toBeGreaterThan(2); }
   });
 
-  test('a chip row under the header lists the delegates, and a chip opens its delegate in place of the list', async ({ page }) => {
+  test('on a phone a fold\'s "still working" opens the earliest started still working on the Delegates tab, in view and focused', async ({ page }, testInfo) => {
     await openDemo(page);
     const c = card(page);
-    const strip = c.locator('.delegate-strip');
-    await expect(strip).toBeVisible();
-    await expect(strip.locator('.strip-item:not(.strip-fold)')).toHaveText([/^Read witness shell logic/, /^Run full test suite/]);
-    await strip.locator('.strip-item[data-id="demo-agent-suite"]').click();
+    await addRun(page, RUN);
+    const working = c.locator('.agent-block .delegate-events .delegate-fold-working');
+    await expect(working).toHaveText('3 still working');
+    await working.click();
+    // The witness started 17m ago, before the suite (16m) and the fold's own (3m).
     await expect(c.getByRole('tab', { name: 'Delegates' })).toHaveAttribute('aria-selected', 'true');
-    await expect(pane(page)).toBeVisible();
-    await expect(pane(page).locator('.delegate-title')).toHaveText('Run full test suite');
-    await expect(pane(page).locator('.delegate-title')).toBeFocused();
-    await expect(strip.locator('.strip-item[data-id="demo-agent-suite"]')).toHaveAttribute('aria-pressed', 'true');
-    // The chips scroll sideways inside their row; the page never does.
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-    for (const chip of await strip.locator('.strip-item').all()) {
-      expect((await chip.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-witness');
+    const title = pane(page).locator('.delegate-title');
+    await expect(title).toHaveText('Read witness shell logic');
+    await expect(title).toBeFocused();
+    await expect(title).toBeInViewport();
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await expect(title).toBeFocused();
+      await testInfo.attach(`delegate-fold-link-phone-${scheme}`, { body: await capture(page, c), contentType: 'image/png' });
     }
+    await page.emulateMedia({ colorScheme: 'light' });
+  });
+
+  test('on a phone a closed fold too long for one line keeps its icon on the summary\'s first line, and the link wraps under the summary\'s words, not the icon', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await addRun(page, [...RUN, { id: 'fold-g', name: 'Tidy the branch', status: 'ended', startedAt: 9.5, endedAt: 9 }]);
+    const line = c.locator('.agent-block .delegate-events .delegate-fold-line');
+    await expect(line.locator('.delegate-fold-toggle')).toHaveText('9 delegates · 4 reported back, 1 failed, 1 ended');
+    await expect(line.locator('.delegate-fold-working')).toHaveText('3 still working');
+    const box = await line.evaluate((el) => {
+      const rect = (e) => e.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(el.querySelector('.delegate-fold-label'));
+      const first = range.getClientRects()[0];
+      const mark = rect(el.querySelector('.delegate-event-mark'));
+      return { first: { top: first.top, bottom: first.bottom, left: first.left }, mark: mark.top + mark.height / 2, link: rect(el.querySelector('.delegate-fold-working')) };
+    });
+    // At 390 the link doesn't fit beside the summary: it starts a line of its own.
+    expect(box.link.top).toBeGreaterThanOrEqual(box.first.bottom);
+    expect(box.mark).toBeGreaterThanOrEqual(box.first.top);
+    expect(box.mark).toBeLessThanOrEqual(box.first.bottom);
+    expect(box.link.left).toBeGreaterThanOrEqual(box.first.left);
+  });
+
+  test('on a phone a line that wraps with its "N more" on a later row keeps its glyph by the first row, "N more" a 44 target over no name, and the meta line\'s leading', async ({ page }, testInfo) => {
+    await openDemo(page);
+    const events = card(page).locator('.agent-block .delegate-events');
+    const more = events.locator('.delegate-more');
+    await listOnly(page, THREE(['Read the witness logic end to end', 'Run the full suite on both engines', 'Check the docs']));
+    await expect(more).toHaveText('1 more');
+    const box = await moreBox(more);
+    // Too long for one row at 390: "1 more" falls on a later one.
+    expect(box.more.top).toBeGreaterThanOrEqual(box.first.bottom);
+    expectMoreTarget(box);
+    // With a pointer, no tap-high line boxes: each row is the meta line's 18 but the one with
+    // "N more", whose target makes it a tap high; a line on one row is one meta line.
+    const line = await rows(events.locator('li.delegate-event:has(.delegate-more)'));
+    expect(line.tops.length).toBeGreaterThan(1);
+    expect(Math.abs(line.height - (18 * (line.tops.length - 1) + 44))).toBeLessThanOrEqual(1);
+    const one = await rows(events.locator('li.delegate-event', { hasText: 'Draft' }));
+    expect(one.tops).toHaveLength(1);
+    expect(Math.abs(one.height - 18)).toBeLessThanOrEqual(1);
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await testInfo.attach(`delegate-more-wrapped-phone-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+    }
+  });
+
+  test.describe('with touch', () => {
+    test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+    test('the folded delegate lines stay one line in the conversation that fits its width, with touch targets', async ({ page }, testInfo) => {
+      await openDemo(page);
+      const c = card(page);
+      await addRun(page, RUN);
+      const events = c.locator('.agent-block .delegate-events');
+      await expect(events.locator('> li')).toHaveCount(1);
+      await expect(events.locator('.delegate-fold-toggle')).toBeVisible();
+      for (const target of [events.locator('.delegate-fold-toggle'), events.locator('.delegate-fold-working')]) {
+        expect((await target.boundingBox()).height).toBeGreaterThanOrEqual(44);
+      }
+      expect(await events.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+      for (const scheme of ['light', 'dark']) {
+        await page.emulateMedia({ colorScheme: scheme });
+        await testInfo.attach(`delegate-fold-phone-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+      }
+    });
+
+    test('every line\'s rows are 44 line boxes, each name and "N more" a 44 target over no other, and the lines further apart than a line\'s rows', async ({ page }, testInfo) => {
+      await openDemo(page);
+      const events = card(page).locator('.agent-block .delegate-events');
+      const more = events.locator('.delegate-more');
+      await listOnly(page, [
+        { id: 'early', kind: 'background', name: 'Docs', status: 'ended', outcome: 'done', startedAt: 9, endedAt: 8 },
+        ...THREE(['Read the witness logic end to end', 'Run the full suite on both engines', 'Check the docs']),
+      ]);
+      await expect(more).toHaveText('1 more');
+      const lines = events.locator('> li.delegate-event');
+      expect(await lines.count()).toBeGreaterThan(2);
+      const all = [];
+      for (const li of await lines.all()) { all.push(await rows(li)); }
+      // A mix: lines on one row and the one with "1 more" over more than one.
+      expect(all.some((r) => r.tops.length === 1)).toBe(true);
+      expect(all.some((r) => r.tops.length > 1)).toBe(true);
+      all.forEach(expectTapRows);
+      // From one line's last row to the next's first is the 44 rows' pitch and the 8 between
+      // lines: more than any line's own rows are apart.
+      for (let i = 1; i < all.length; i++) {
+        expect(Math.abs(all[i].tops[0] - all[i - 1].tops.at(-1) - 52)).toBeLessThanOrEqual(1);
+      }
+      // Every name and "N more" a whole 44 target, none over another.
+      const t = await targets(events);
+      expect(t.length).toBeGreaterThan(4);
+      for (const b of t) { expect(b.bottom - b.top).toBeGreaterThanOrEqual(44); }
+      for (let i = 0; i < t.length; i++) {
+        for (let j = i + 1; j < t.length; j++) {
+          const [a, b] = [t[i], t[j]];
+          expect(a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5 || a.right <= b.left || b.right <= a.left).toBe(true);
+        }
+      }
+      expectMoreTarget(await moreBox(more));
+      for (const scheme of ['light', 'dark']) {
+        await page.emulateMedia({ colorScheme: scheme });
+        await testInfo.attach(`delegate-more-wrapped-phone-touch-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+      }
+    });
   });
 });
 
@@ -586,12 +777,23 @@ test.describe('at three panes', () => {
     await expect(pane(page).locator('.delegate-tools .tool').first()).toHaveAttribute('data-kept', 'yes');
   });
 
-  test('the conversation says when the main agent\'s delegates started and reported back, and each name opens its delegate', async ({ page }) => {
+  test('the conversation says when the main agent\'s delegates started and reported back, one line each, and each name opens its delegate', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
     const events = c.locator('.agent-block .delegate-events > li');
-    // Starts each within a minute of the last are one line, as the app has it.
-    await expect(events).toHaveText([/^Started 3 delegates · 1[78]m$/, /^Delegate Lint the PWA failed · 1[45]m$/]);
+    // Starts each within a minute of the last share a line, naming them; one that reported back
+    // has its own line, its start and its report merged (D2). Each gives its time in the viewer's
+    // own zone, with no zone after it.
+    const at = await page.evaluate((id) => {
+      const time = (iso) => new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tokyo', hour: 'numeric', minute: '2-digit' }).format(Date.parse(iso)).replace(/\s/gu, ' ');
+      const a = Object.fromEntries(window.agentBridgeDemo.host.get(id).subagents.map((d) => [d.id, d]));
+      return { witness: time(a['demo-agent-witness'].startedAt), lintStart: time(a['demo-agent-lint'].startedAt), lintEnd: time(a['demo-agent-lint'].endedAt) };
+    }, SESSION);
+    await expect(events).toHaveText([
+      new RegExp(`^Started Read witness shell logic and Run full test suite · 1[78]m \\(Started ${at.witness}\\)$`),
+      new RegExp(`^Delegate Lint the PWA · ran 1m, failed · 1[45]m \\(Started ${at.lintStart}, failed ${at.lintEnd}\\)$`),
+    ]);
+    await expect(events.first()).toHaveAttribute('title', `Started ${at.witness}`);
     // After the main agent's words, before what it is running now.
     expect(await c.locator('.agent-block > :not([hidden])').evaluateAll((els) => els.map((e) => e.className))).toEqual(['speaker', 'reasoning', 'md response', 'delegate-events']);
     await events.nth(1).getByRole('button', { name: 'Lint the PWA' }).click();
@@ -751,7 +953,7 @@ test.describe('at three panes', () => {
   test('a name in the conversation\'s events keeps keyboard focus as the events are drawn again', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
-    const lint = c.locator('.delegate-events .delegate-event[data-kind="end"] .delegate-link');
+    const lint = c.locator('.delegate-events .delegate-event[data-kind="merged"] .delegate-link');
     await lint.focus();
     // A new delegate starting redraws the events.
     await page.evaluate(({ id, at }) => {
@@ -761,6 +963,19 @@ test.describe('at three panes', () => {
     }, { id: SESSION, at: later() });
     await expect(c.locator('.delegate-events > li')).toHaveCount(3);
     await expect(lint).toBeFocused();
+  });
+
+  test('a name focused in a shared start line keeps focus when its delegate reports back on a line of its own, not another name left there', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const shared = c.locator('.delegate-events .delegate-event[data-kind="shared"]');
+    await shared.locator('.delegate-link[data-id="demo-agent-suite"]').focus();
+    await change(page, 'demo-agent-suite', { status: 'ended', outcome: 'done', endedAt: later() });
+    const own = c.locator('.delegate-events .delegate-event[data-key="d|demo-agent-suite"] .delegate-link[data-id="demo-agent-suite"]');
+    await expect(own).toBeVisible();
+    await expect(own).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
   });
 
   test('while a delegate holds the inspector the session\'s Tools are not fetched, and they are once it lets go', async ({ page }) => {
@@ -804,12 +1019,163 @@ test.describe('at three panes', () => {
     await expect(pane(page)).toBeVisible();
   });
 
-  test('a delegate\'s start in the conversation is history: its glyph stands still', async ({ page }) => {
+  test('a delegate\'s line in the conversation is past tense: a start shows the delegate icon, never the working glyph, and its report the outcome\'s glyph in place', async ({ page }) => {
     await openDemo(page);
-    const orbit = card(page).locator('.delegate-events .delegate-event[data-kind="start"] .glyph-orbit');
-    await expect(orbit).toHaveCount(1);
-    expect(await orbit.evaluate((el) => getComputedStyle(el).animationName)).toBe('none');
+    const c = card(page);
+    const shared = c.locator('.delegate-events .delegate-event[data-kind="shared"]');
+    await expect(shared.locator('.delegate-event-mark [data-icon="delegate"]')).toHaveCount(1);
+    await expect(c.locator('.delegate-events .glyph[data-glyph="working"], .delegate-events .glyph[data-glyph="delegating"]')).toHaveCount(0);
+    await shared.evaluate((el) => { el.dataset.kept = 'yes'; });
+    // The suite reports back: it leaves the shared line for its own, and the witness keeps the line.
+    await change(page, 'demo-agent-suite', { status: 'ended', outcome: 'done', endedAt: later() });
+    await expect(c.locator('.delegate-events > li')).toHaveText([/^Started delegate Read witness shell logic · 1[78]m/, /^Delegate Run full test suite · ran 1[67]m, reported back · (?:\d+s|0m)/, /^Delegate Lint the PWA/]);
+    await expect(c.locator('.delegate-events > li').first()).toHaveAttribute('data-kept', 'yes');
+    await expect(c.locator('.delegate-events .delegate-event[data-key="d|demo-agent-suite"] .glyph')).toHaveAttribute('data-glyph', 'done');
   });
+
+  test('a delegate\'s start line stays the same line when a second starts within the minute and joins it', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const events = c.locator('.agent-block .delegate-events');
+    await addRun(page, [{ id: 'pair-a', name: 'Check the changelog', status: 'working', startedAt: 0.5 }]);
+    const line = events.locator('> li').last();
+    await expect(line).toHaveText(/^Started delegate Check the changelog · /);
+    await line.evaluate((el) => { el.dataset.kept = 'yes'; });
+    await addRun(page, [{ id: 'pair-b', name: 'Update screenshots', status: 'working', startedAt: 0.2 }]);
+    await expect(line).toHaveText(/^Started Check the changelog and Update screenshots · /);
+    await expect(events.locator('> li')).toHaveCount(3);
+    await expect(line).toHaveAttribute('data-kept', 'yes');
+  });
+
+  test('an idle delegate the host gave no end time keeps its start line, aged from its start, and says no outcome', async ({ page }, testInfo) => {
+    await openDemo(page);
+    const c = card(page);
+    const events = c.locator('.agent-block .delegate-events');
+    await addRun(page, [{ id: 'idle-a', name: 'Wait for review', status: 'idle', startedAt: 5 }]);
+    const line = events.locator('> li').last();
+    await expect(line).toHaveAttribute('data-kind', 'start');
+    await expect(line).toHaveText(/^Started delegate Wait for review · 5m/);
+    await expect(line).toHaveAttribute('title', /^Started /);
+    await expect(line.locator('.delegate-event-mark [data-icon="delegate"]')).toHaveCount(1);
+    await expect(line.locator('.glyph')).toHaveCount(0);
+    await expect(line).not.toContainText('reported back');
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await testInfo.attach(`delegate-idle-start-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+    }
+    await page.emulateMedia({ colorScheme: 'light' });
+  });
+
+  test('a run of five or more delegate lines folds into one summary that the keyboard opens and closes, and stays as it was left', async ({ page }, testInfo) => {
+    await openDemo(page);
+    const c = card(page);
+    // The run, and one the host saw end with no outcome, started between two of it.
+    await addRun(page, [...RUN, { id: 'fold-g', name: 'Tidy the branch', status: 'ended', startedAt: 9.5, endedAt: 9 }]);
+    const events = c.locator('.agent-block .delegate-events');
+    const fold = events.locator('.delegate-fold-toggle');
+    // One line, the whole summary its button's name and its state only in aria-expanded; failed
+    // and ended counted apart, after reported back, and the chevron inside the button, ending it.
+    await expect(events.locator('> li')).toHaveCount(1);
+    await expect(events.locator('> li.delegate-fold')).toHaveCount(1);
+    await expect(fold).toHaveAccessibleName('9 delegates · 4 reported back, 1 failed, 1 ended, 3 still working');
+    await expect(fold).toHaveText('9 delegates · 4 reported back, 1 failed, 1 ended');
+    await expect(fold.locator(':scope > :last-child')).toHaveClass('delegate-fold-chevron');
+    await expect(fold).toHaveAttribute('aria-expanded', 'false');
+    await expect(events.locator('.delegate-fold-lines')).toBeHidden();
+    // The still working link is a target of its own beside the button, and opens one.
+    const working = events.locator('.delegate-fold-working');
+    await expect(working).toHaveText('3 still working');
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await testInfo.attach(`delegate-fold-closed-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+    }
+    await working.click();
+    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-witness');
+    // Enter opens it and Space closes it, focus staying on the button.
+    await fold.focus();
+    await page.keyboard.press('Enter');
+    await expect(fold).toHaveAttribute('aria-expanded', 'true');
+    await expect(events.locator('.delegate-fold-lines > li')).toHaveCount(8);
+    await expect(events.locator('.delegate-fold-lines .glyph[data-glyph="failed"]')).toHaveCount(1);
+    await expect(events.locator('.delegate-fold-lines .glyph[data-glyph="ended"]')).toHaveCount(1);
+    await expect(fold).toBeFocused();
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await testInfo.attach(`delegate-fold-open-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+    }
+    await page.emulateMedia({ colorScheme: 'light' });
+    // Drawn again as another starts, it stays open, its new line among the rest.
+    await addRun(page, [{ id: 'fold-f', name: 'Write the notes', status: 'working', startedAt: 1 }]);
+    await expect(fold).toHaveAccessibleName('10 delegates · 4 reported back, 1 failed, 1 ended, 4 still working');
+    await expect(fold).toHaveAttribute('aria-expanded', 'true');
+    await expect(events.locator('.delegate-fold-lines > li')).toHaveCount(9);
+    await expect(events.locator('.delegate-fold-lines')).toBeVisible();
+    await page.keyboard.press('Space');
+    await expect(fold).toHaveAttribute('aria-expanded', 'false');
+    await expect(events.locator('.delegate-fold-lines')).toBeHidden();
+    await expect(fold).toBeFocused();
+  });
+
+  // Four reported back, a and b started together, and d still working when `working`: a and b
+  // waking share a line again, so three lines are left and the fold goes from under the keyboard.
+  const WAKING = (working) => [
+    { id: 'wake-a', kind: 'background', name: 'Check the changelog', status: 'ended', outcome: 'done', startedAt: 10, endedAt: 9 },
+    { id: 'wake-b', kind: 'background', name: 'Update screenshots', status: 'ended', outcome: 'done', startedAt: 9.9, endedAt: 8 },
+    { id: 'wake-c', kind: 'background', name: 'Read the issue', status: 'ended', outcome: 'done', startedAt: 7, endedAt: 6 },
+    working ? { id: 'wake-d', kind: 'background', name: 'Try the fix', status: 'working', startedAt: 5 }
+      : { id: 'wake-d', kind: 'background', name: 'Try the fix', status: 'ended', outcome: 'done', startedAt: 5, endedAt: 4 },
+  ];
+  // The demo session's delegates, all of them these, their times in minutes ago.
+  const wake =  (list) => list.map((a) => (a.id === 'wake-a' || a.id === 'wake-b' ? { ...a, status: 'working', outcome: undefined, endedAt: undefined } : a));
+
+  for (const [from, working, to, toName] of [
+    ['button', false, 'the first line\'s first name', 'wake-a'],
+    ['still working link', true, 'the working delegate\'s name', 'wake-d'],
+  ]) {
+    test(`a fold that goes as its run shrinks to three lines gives keyboard focus from its ${from} to ${to}, not the page`, async ({ page }, testInfo) => {
+      await openDemo(page);
+      const c = card(page);
+      const events = c.locator('.agent-block .delegate-events');
+      await listOnly(page, WAKING(working));
+      await expect(events.locator('> li.delegate-fold')).toHaveCount(1);
+      await events.locator(working ? '.delegate-fold-working' : '.delegate-fold-toggle').focus();
+      await listOnly(page, wake(WAKING(working)));
+      await expect(events.locator('> li')).toHaveCount(3);
+      await expect(events.locator('> li.delegate-fold')).toHaveCount(0);
+      const name = events.locator(`li.delegate-event .delegate-link[data-id="${toName}"]`);
+      await expect(name).toBeFocused();
+      for (const scheme of ['light', 'dark']) {
+        await page.emulateMedia({ colorScheme: scheme });
+        await testInfo.attach(`delegate-fold-gone-${working ? 'link' : 'button'}-${scheme}`, { body: await capture(page, events), contentType: 'image/png' });
+      }
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.keyboard.press('Enter');
+      await expect(pane(page)).toHaveAttribute('data-id', toName);
+    });
+  }
+
+  test('a fold that stays as its last working delegate finishes gives keyboard focus from its gone still working link to its button, not the page', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const events = c.locator('.agent-block .delegate-events');
+    await listOnly(page, WAKING(true));
+    const working = events.locator('.delegate-fold-working');
+    await expect(working).toHaveText('1 still working');
+    await working.focus();
+    await listOnly(page, WAKING(false));
+    await expect(events.locator('.delegate-fold-toggle')).toHaveAccessibleName('4 delegates · 4 reported back');
+    await expect(working).toBeHidden();
+    await expect(events.locator('.delegate-fold-toggle')).toBeFocused();
+  });
+
+  test('a line\'s "N more" is a whole touch target, 44 by 44, over no other line or name, its glyph by its words', async ({ page }) => {
+    await openDemo(page);
+    const more = card(page).locator('.agent-block .delegate-events .delegate-more');
+    await listOnly(page, THREE(['Read the logs', 'Run the suite', 'Check the docs']));
+    await expect(more).toHaveText('1 more');
+    expectMoreTarget(await moreBox(more));
+  });
+
 
   test('a delegate named as the main agent, or as an instruction, is shown as a delegate everywhere and never speaks in the reply', async ({ page }) => {
     await openDemo(page);
@@ -821,7 +1187,7 @@ test.describe('at three panes', () => {
     const impostor = 'Delegate \u201cMain agent\u201d';
     // The strip, the conversation's events and (two panes) the list: never plain "Main agent".
     await expect(c.locator('.strip-item[data-id="demo-agent-witness"] .strip-name')).toHaveText(impostor);
-    await expect(c.locator('.delegate-events .delegate-event[data-kind="end"]')).toHaveText(/^Delegate \u201cMAIN AGENT\u201d failed · 1[45]m$/);
+    await expect(c.locator('.delegate-events .delegate-event[data-kind="merged"]')).toHaveText(/^Delegate \u201cMAIN AGENT\u201d · ran 1m, failed · 1[45]m \(/);
     await expect(c.locator('.voice-label')).toHaveText('Main agent');
     await expect(c.getByText('Main agent', { exact: true })).toHaveCount(1);
     // The inspector says "Delegate" over the name, whatever the name.
@@ -851,8 +1217,8 @@ test.describe('at three panes', () => {
     const c = card(page);
     // Coptic letters no look-alike list has: the word Delegate is the guard.
     await change(page, 'demo-agent-lint', { name: '\u2c99\u2c81\u2c93\u2c9b agent' });
-    await expect(c.locator('.delegate-events .delegate-event[data-kind="end"]')).toHaveText(/^Delegate \u2c99\u2c81\u2c93\u2c9b agent failed · 1[45]m$/);
-    await expect(c.locator('.delegate-events .delegate-event[data-kind="end"] .delegate-link')).toHaveText('\u2c99\u2c81\u2c93\u2c9b agent');
+    await expect(c.locator('.delegate-events .delegate-event[data-kind="merged"]')).toHaveText(/^Delegate \u2c99\u2c81\u2c93\u2c9b agent · ran 1m, failed · 1[45]m \(/);
+    await expect(c.locator('.delegate-events .delegate-event[data-kind="merged"] .delegate-link')).toHaveText('\u2c99\u2c81\u2c93\u2c9b agent');
     // An id with a Cyrillic letter in it would go into the reply as it is, or cleaned into another
     // delegate's: neither, so there is no action at all.
     await page.evaluate(({ id, at }) => {
@@ -893,8 +1259,10 @@ test.describe('a pending approval as delegates come and go above it', () => {
   const THREE = [['d-one', 'Read the logs'], ['d-two', 'Run the suite'], ['d-three', 'Check the docs']];
   const CASES = [
     { title: 'the first delegate starting brings the strip and a "Started" line',
+      phone: 'the first delegate starting brings the Delegates tab count and a "Started" line',
       before: () => [], after: (now) => [running('d-new', 'Write the fix', now)] },
-    { title: 'a delegate listed with no start time brings the strip alone',
+    { title: 'a delegate listed with no start time brings the strip alone', stripOnly: true,
+      phone: 'a delegate listed with no start time changes the Delegates tab count alone',
       before: () => [], after: () => [running('d-new', 'Write the fix', null)] },
     { title: 'three delegates reporting back add three lines',
       before: (now, ago) => THREE.map(([id, name]) => running(id, name, ago)),
@@ -909,7 +1277,7 @@ test.describe('a pending approval as delegates come and go above it', () => {
 
   for (const size of [{ name: 'on a phone', width: 390, height: 844 }, { name: 'at three panes', width: 1440, height: 900 }]) {
     for (const k of CASES) {
-      test(`${size.name}, ${k.title}: a tap at Deny's old place sends nothing`, async ({ page }) => {
+      test(`${size.name}, ${(size.width < 760 && k.phone) || k.title}: a tap at Deny's old place sends nothing`, async ({ page }) => {
         await page.setViewportSize({ width: size.width, height: size.height });
         await openDemo(page);
         const c = card(page);
@@ -924,12 +1292,31 @@ test.describe('a pending approval as delegates come and go above it', () => {
         await expect(c.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
         await page.clock.install();
         await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+        // What could move Deny, so a failure says which of them did.
+        const layout = () => c.evaluate((card) => {
+          const v = card.closest('.session-view') ?? card.querySelector('.session-view');
+          const top = card.querySelector('.session-top');
+          const sc = card.querySelector('.stream-scroll');
+          const css = v ? getComputedStyle(v) : null;
+          return {
+            top: top?.offsetHeight, headH: css?.getPropertyValue('--head-h').trim(), ty: css?.getPropertyValue('--ty').trim(),
+            scrollTop: sc?.scrollTop, scrollH: sc?.scrollHeight, clientH: sc?.clientHeight, clientW: sc?.clientWidth,
+          };
+        });
         const was = await deny.boundingBox();
+        const wasLayout = await layout();
         const before = await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
         await asking(page, k.after(iso(70_000), iso(-20 * 60_000)), iso(70_000));
         await page.clock.runFor(20);
         const now = await deny.boundingBox();
-        expect(Math.abs(now.y - was.y) + Math.abs(now.x - was.x), 'the update moved Deny').toBeGreaterThan(1);
+        const moved = Math.abs(now.y - was.y) + Math.abs(now.x - was.x);
+        if (k.stripOnly && size.width < 760) {
+          // A phone has no strip (owner, #629): nothing above the question changes, so Deny stays put.
+          const detail = JSON.stringify({ deny: { was, now }, layout: { was: wasLayout, now: await layout() } });
+          expect(moved, `Deny stayed where it was: ${detail}`).toBeLessThanOrEqual(1);
+          return;
+        }
+        expect(moved, 'the update moved Deny').toBeGreaterThan(1);
         await page.mouse.click(was.x + was.width / 2, was.y + was.height / 2);
         await page.clock.runFor(50);
         expect(await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length)).toBe(before);

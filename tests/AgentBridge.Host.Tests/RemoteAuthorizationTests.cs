@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.SignIn;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
@@ -66,6 +67,36 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData("person", "app", true, true, false, true)]
+    [InlineData("person", "pwa", true, true, false, true)]
+    [InlineData("person", "app", false, true, false, false)]
+    [InlineData("person", "app", true, false, false, false)]
+    [InlineData("person", "app", true, true, true, false)]
+    [InlineData("service", "app", true, true, false, false)]
+    [InlineData("host", "app", true, true, false, false)]
+    [InlineData("person", "host", true, true, false, false)]
+    public async Task Phone_sign_in_requires_a_current_person_pin_read_and_write_not_the_claimed_kind(
+        string role, string kind, bool read, bool write, bool g5, bool allowed)
+    {
+        var peer = await PeerAsync(kind);
+        Pin(peer, role);
+        var accepted = new TaskCompletionSource<SecureChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.Hub.Accepted += ch => accepted.TrySetResult(ch);
+        await peer.Hub.OpenAsync(host.Id, Patience);
+        var channel = await accepted.Task.WaitAsync(Patience);
+        var authority = new PersonSignInAuthority(store, () => g5, _ => read, _ => write);
+        var grant = authority.Current(channel);
+        Assert.Equal(allowed, grant is not null);
+        if (allowed)
+        {
+            store.Revoke(peer.Key.Public);
+            Assert.Null(authority.Current(channel));
+            store.Put(peer.Key.Public, role, time.GetUtcNow().AddHours(1));
+            Assert.NotEqual(grant, authority.Current(channel));
+        }
+    }
+
+    [Theory]
     [InlineData("app")]
     [InlineData("pwa")]
     [InlineData("host")]
@@ -118,6 +149,8 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
             Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop, Ops.AttachmentStart, Ops.PushSubscribe,
             LaunchProtocol.Options, LaunchProtocol.Launch, TransferProtocol.Op, TrustProtocol.Answer,
             UsageProtocol.Get, UpdateProtocol.Install, "host.peers.reset", "future.operation",
+            // The HA connector's reads are the latest exchange; a session's history is a person's (#292).
+            HistoryProtocol.Op,
         })
         {
             await DeniedAsync(channel, op);
@@ -156,6 +189,35 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Assert.False(readerChannel.Events.TryRead(out _));
     }
 
+    // #780: machine.restore names the sessions a reboot took. A host peer, which may not read
+    // sessions, is not told them in hello either, nor told when they change.
+    [Fact]
+    public async Task A_host_peer_is_not_told_the_sessions_a_reboot_took_but_a_person_and_a_reader_are()
+    {
+        RestoreNotice? notice = new() { At = time.GetUtcNow(), Cause = RestoreCause.Reboot, Offered = [new RestoreSession { Id = SessionId, Agent = AgentKind.Copilot, Title = "Read without taking over" }] };
+        var watched = new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0")) { Drivers = drivers, Time = time, Restore = () => notice };
+        host.Hub.Handler = authorization.Handler(watched);
+        var other = await PeerAsync("app");
+        Pin(other, TrustedPeerStore.Host);
+        var person = await PeerAsync();
+        Pin(person, TrustedPeerStore.Person);
+        var reader = await PeerAsync();
+        Pin(reader);
+        var otherChannel = await other.Hub.OpenAsync(host.Id, Patience);
+        var personChannel = await person.Hub.OpenAsync(host.Id, Patience);
+        var readerChannel = await reader.Hub.OpenAsync(host.Id, Patience);
+        HelloResult Hello(JsonElement response) => Result(response).Deserialize<HelloResult>(ProtocolJson.Options)!;
+
+        Assert.Null(Hello(await otherChannel.RequestAsync(Ops.Hello, new { changes = true }, Patience)).Machine.Restore);
+        Assert.Equal(SessionId, Assert.Single(Hello(await personChannel.RequestAsync(Ops.Hello, new { changes = true }, Patience)).Machine.Restore!.Offered).Id);
+        Assert.NotNull(Hello(await readerChannel.RequestAsync(Ops.Hello, new { }, Patience)).Machine.Restore);
+
+        notice = null;
+        time.Advance(watched.HelloCheck);
+        Assert.Equal(Events.HelloChanged, (await personChannel.Events.ReadAsync().AsTask().WaitAsync(Patience)).Name);
+        await Task.Delay(200);
+        Assert.False(otherChannel.Events.TryRead(out _));
+    }
     [Theory]
     [InlineData(TrustedPeerStore.Host)]
     [InlineData(TrustedPeerStore.Person)]
@@ -164,14 +226,20 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var peer = await PeerAsync(role == TrustedPeerStore.Host ? "app" : "host");
         Pin(peer, role);
         var channel = await peer.Hub.OpenAsync(host.Id, Patience);
-        Result(await channel.RequestAsync(Ops.Hello, new { }, Patience));
+        var hello = Result(await channel.RequestAsync(Ops.Hello, new { }, Patience)).Deserialize<HelloResult>(ProtocolJson.Options)!;
         if (role == TrustedPeerStore.Person)
         {
             Result(await channel.RequestAsync(Ops.SessionsList, new { }, Patience));
             await DeniedAsync(channel, TransferProtocol.Op);
+            // A person's device pages back through a session's history (#292).
+            Assert.Contains(HistoryProtocol.Capability, hello.Capabilities);
+            var history = Result(await channel.RequestAsync(HistoryProtocol.Op, new { id = SessionId }, Patience)).Deserialize<HistoryResult>(ProtocolJson.Options)!;
+            Assert.Equal("go", history.Turns!.Single().Prompt!.Text);
         }
         else
         {
+            Assert.DoesNotContain(HistoryProtocol.Capability, hello.Capabilities);
+            await DeniedAsync(channel, HistoryProtocol.Op);
             await DeniedAsync(channel, Ops.SessionsList);
             await DeniedAsync(channel, UsageProtocol.Subscribe);
             await DeniedAsync(channel, LaunchProtocol.Launch);

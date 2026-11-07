@@ -21,13 +21,19 @@ export function contrastPairs(tokens) {
     const fills = roles.filter((r) => r.variant === 'fill')
       .flatMap((f) => bgs.map((b) => ({ name: `${f.role}.fill on ${b.name}`, colour: over(f[theme], b.colour) })));
     // A tint (inline code, a read-only field, a machine row, a badge) over the surfaces it sits
-    // on, measured only with the words color.contrast.tints lets on it.
+    // on, measured only with the words color.contrast.tints lets on it: a list of them, over
+    // tints.over, or { over, words, darkWords } for a tint drawn over other surfaces too, with
+    // words set on it in dark only (light's take another colour there).
     const tintRules = rules.tints ?? {};
     const tints = Object.keys(tintRules).filter((k) => k !== 'over' && !k.startsWith('$')).flatMap((name) => {
       const t = surfaces.find((x) => x.name === name);
       if (!t) { throw new Error(`color.contrast.tints names ${name}, which surface.windows lacks`); }
-      return bgs.filter((b) => tintRules.over.includes(b.name))
-        .map((b) => ({ name: `${name} on ${b.name}`, colour: over(t[theme], b.colour), allows: tintRules[name] }));
+      const rule = tintRules[name];
+      const [overs, words] = Array.isArray(rule) ? [tintRules.over, rule] : [rule.over, rule.words];
+      if (!Array.isArray(overs) || !Array.isArray(words)) { throw new Error(`color.contrast.tints.${name} needs the words on it, and the surfaces it is over`); }
+      const allows = theme === 'dark' && !Array.isArray(rule) ? [...words, ...(rule.darkWords ?? [])] : words;
+      return bgs.filter((b) => overs.includes(b.name))
+        .map((b) => ({ name: `${name} on ${b.name}`, colour: over(t[theme], b.colour), allows }));
     });
     const add = (fg, fgName, bg, bgName, kind) => out.push({
       theme, fg: fgName, bg: bgName, kind, min: rules[kind], ratio: contrast(fg, bg),

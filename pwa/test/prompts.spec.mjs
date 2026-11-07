@@ -5,7 +5,7 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { readFileSync } from 'node:fs';
-import { open, view } from './nav.mjs';
+import { motionsDone, open, view } from './nav.mjs';
 
 const tokens = JSON.parse(readFileSync(new URL('../../design/tokens.json', import.meta.url), 'utf8'));
 const CODEX = '019a1b2c-codex-example';
@@ -249,9 +249,14 @@ for (const colorScheme of ['light', 'dark']) {
     await openDemo(page);
     await upsert(page, CODEX, scheduled());
     const v = await open(page, CODEX);
-    const scan = async () => (await new AxeBuilder({ page }).include('.session-view:not([hidden]) .stream')
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22a', 'wcag22aa', 'best-practice']).analyze()).violations
-      .filter((x) => x.impact === 'serious' || x.impact === 'critical').map((x) => `${x.id}: ${x.nodes.map((n) => n.target.join(' ')).join(', ')}`);
+    // At rest, as axe.spec's scan is: the open prompt settles in from opacity 0 (prompt-settle),
+    // and read partway through that fade its text is paler than anyone reads it (#880).
+    const scan = async () => {
+      await motionsDone(page);
+      return (await new AxeBuilder({ page }).include('.session-view:not([hidden]) .stream')
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22a', 'wcag22aa', 'best-practice']).analyze()).violations
+        .filter((x) => x.impact === 'serious' || x.impact === 'critical').map((x) => `${x.id}: ${x.nodes.map((n) => n.target.join(' ')).join(', ')}`);
+    };
     expect(await scan()).toEqual([]);
     await v.locator('.prompt-toggle').click();
     expect(await scan()).toEqual([]);

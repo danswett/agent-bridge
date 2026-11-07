@@ -100,7 +100,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains(Capabilities.SessionsApprove, offered);
 
         probe.Reason = "agent-ha-bridge is running for this user";
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability], await CapabilitiesAsync(ch));
 
         probe.Reason = null;
         Assert.Contains(Capabilities.SessionsAnswer, await CapabilitiesAsync(ch));
@@ -138,7 +138,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Serve(new UnsupportedPlatformAnswerer());
         var ch = await OpenAsync();
 
-        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], await CapabilitiesAsync(ch));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus, HistoryProtocol.Capability], await CapabilitiesAsync(ch));
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal(("refused", true), (outcome, reason!.Contains("platform")));
 
@@ -181,6 +181,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("error", reason);
+        Assert.DoesNotContain("at the machine", reason);
     }
 
     [Fact]
@@ -192,6 +193,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("different answer", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         // A fresh question, which the session never answers.
         Fixture.Append(events, Ask("q2", second++));
@@ -200,6 +202,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         (outcome, reason) = await AnswerAsync(ch, new { pick = "a" }, question: "q2");
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("did not record an answer", reason);
+        Assert.DoesNotContain("at the machine", reason);
         Assert.Equal(2, injector.Plans.Count);
     }
 
@@ -215,6 +218,21 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Fixture.Append(events, Recorded("q1", new { pick = "a" }));
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal(("stale", "the question has already been answered"), (outcome, reason));
+        Assert.Empty(injector.Plans);
+    }
+
+    // Copilot on #837: a new CLI resumed the session after it asked. The host's view may still list the
+    // question, but keys typed for it would go to whatever the new CLI shows: refused as stale.
+    [Fact]
+    public async Task An_answer_to_a_question_asked_before_the_session_was_resumed_is_stale_and_types_nothing()
+    {
+        var ch = await OpenAsync();
+        Fixture.Append(events, Copilot.Event("session.resume", new { }, second++));
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("stale", outcome);
+        Assert.Contains("resumed in a new Copilot CLI", reason);
         Assert.Empty(injector.Plans);
     }
 
@@ -417,6 +435,25 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_yes_or_no_question_whose_default_is_text_is_refused_for_either_answer_and_nothing_is_typed(bool answer)
+    {
+        // Copilot opens it on its Other row with "yes" typed in: walked from there, Yes recorded No
+        // and No reopened Other (#768). The refusal says which field, and why (#812 review).
+        Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++),
+            Copilot.ToolStart("q2", "ask_user", new { message = "Go?", requestedSchema = new { properties = new { ok = new { type = "boolean", @default = "yes" } } } }, second++));
+        await source.RefreshAsync();
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { ok = answer }, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Equal("\"ok\" has a default that is not Yes or No (a text default opens it on its Other row); answer it at the machine", reason);
+        Assert.Empty(injector.Plans);
+    }
+
     [Fact]
     public async Task An_invalid_answer_or_a_request_without_a_uuid_is_refused_untyped()
     {
@@ -436,6 +473,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("console closed", reason);
+        Assert.DoesNotContain("at the machine", reason);
 
         // A different question, so the first attempt's outcome is not what comes back.
         Fixture.Append(events, Ask("q2", second++));

@@ -25,7 +25,8 @@ public class QuestionMappingTests
 
         Assert.Equal([FieldType.Number, FieldType.Text], q.Fields.Select(f => f.Type));
         Assert.All(q.Fields, f => Assert.Null(f.Options));
-        Assert.Null(q.AnswerAtMachine);
+        // The number box takes any number, and the host checks no list of them (review of #844).
+        Assert.True(q.AnswerAtMachine);
     }
 
     [Theory]
@@ -41,6 +42,23 @@ public class QuestionMappingTests
         var q = Ask($$"""{ "message": "m", "requestedSchema": { "properties": { "pick": {{field}} } } }""");
 
         Assert.True(q.AnswerAtMachine);
+    }
+
+    [Theory]
+    // A Yes / No field whose default is not Yes or No: a text default opens it on its Other row
+    // (#768), so the person is told up front.
+    [InlineData("""{ "type": "boolean", "default": "yes" }""", true)]
+    [InlineData("""{ "type": "boolean", "default": "" }""", true)]
+    [InlineData("""{ "type": "boolean", "default": 1 }""", true)]
+    [InlineData("""{ "type": "boolean", "default": true }""", false)]
+    [InlineData("""{ "type": "boolean", "default": false }""", false)]
+    [InlineData("""{ "type": "boolean", "default": null }""", false)]
+    [InlineData("""{ "type": "boolean" }""", false)]
+    public void A_yes_or_no_field_is_offered_only_when_its_default_is_yes_no_or_none(string field, bool atMachine)
+    {
+        var q = Ask($$"""{ "message": "m", "requestedSchema": { "properties": { "ok": {{field}} } } }""");
+
+        Assert.Equal(atMachine ? true : null, q.AnswerAtMachine);
     }
 
     [Theory]
@@ -174,6 +192,35 @@ public class QuestionMappingTests
         Assert.True(q.Truncated);
         Assert.Null(q.AnswerAtMachine);
         Assert.False(ApprovalShape.IsFencedCommand(q.Message));
+    }
+
+    // #958: the id binds the generation to what is shown, reads back strictly, and does not move
+    // when agent-ha-bridge's attempt holds the approval at the machine.
+    [Fact]
+    public void A_codex_approval_id_names_its_generation_and_what_it_shows_and_reads_back_strictly()
+    {
+        var q = QuestionMapper.CodexApproval("019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01", "Bash", "git push", false, "Needs approval: git push", Fixture.T0, atMachine: false);
+
+        // The id the protocol vectors carry (docs/protocol/vectors/sessions.json, "a-codex-approval").
+        Assert.Equal("019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01#e2c96713aea78522", q.Id);
+        Assert.Equal("Allow **Bash**?\n\n```\ngit push\n```", q.Message);
+        Assert.Equal(("019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01", "e2c96713aea78522"), CodexApprovalId.Parse(q.Id));
+        Assert.Equal(q.Id, QuestionMapper.CodexApproval("019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01", "Bash", "git push", false, "Needs approval: git push", Fixture.T0.AddDays(1), atMachine: true).Id);
+        foreach (var other in new[]
+        {
+            QuestionMapper.CodexApproval("019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01", "Bash", "git push --force", false, "Needs approval: git push", Fixture.T0, atMachine: false),
+            QuestionMapper.CodexApproval("019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01", "Bash", "git push", true, "Needs approval: git push", Fixture.T0, atMachine: false),
+            QuestionMapper.CodexApproval("019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01", "Shell", "git push", false, "Needs approval: git push", Fixture.T0, atMachine: false),
+            QuestionMapper.CodexApproval("019a2f4e-7c1b-7d20-9e3a-5b6c7d8e9f01", null, null, false, "Needs approval: git push", Fixture.T0, atMachine: false),
+        })
+        {
+            Assert.NotEqual(q.Id, other.Id);
+        }
+
+        foreach (var malformed in new[] { "019a2f4e", "node-1#", "#e2c96713aea78522", " #e2c96713aea78522", "node-1#C7C3FF2A2BDC4C41", "node-1#c7c3ff2a2bdc4c4", "node-1#c7c3ff2a2bdc4c411", "node-1#c7c3ff2a2bdc4c4g", "call7" })
+        {
+            Assert.Null(CodexApprovalId.Parse(malformed));
+        }
     }
 
     [Theory]

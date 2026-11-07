@@ -31,9 +31,13 @@ public sealed class PushStore
     readonly Action<string> log;
     readonly object gate = new();
     readonly Dictionary<string, PushSubscriber> byDevice = new(StringComparer.Ordinal);
+    // When each sign-in notice (PushNotice.SignInKey, which names no account) last went, so a host
+    // that restarts while sessions still need sign-in keeps to the hourly repeat: a machine stopped
+    // on a 401 reads idle, takes every update, and re-alerted every phone with each one.
+    readonly Dictionary<string, DateTimeOffset> signIns = new(StringComparer.Ordinal);
     string? account;
 
-    sealed record Saved(string? Account, List<PushSubscriber>? Subscribers);
+    sealed record Saved(string? Account, List<PushSubscriber>? Subscribers, Dictionary<string, DateTimeOffset>? SignIns = null);
 
     PushStore(string? path, string? account, Action<string>? log)
     {
@@ -60,6 +64,7 @@ public sealed class PushStore
             {
                 if (s is { Device: { Length: > 0 }, Endpoint: { Length: > 0 } }) { store.byDevice[s.Device] = s; }
             }
+            foreach (var (key, at) in saved.SignIns ?? []) { store.signIns[key] = at; }
         }
         else if (saved is not null)
         {
@@ -76,6 +81,19 @@ public sealed class PushStore
 
     public PushSubscriber? Get(string device) { lock (gate) { return byDevice.GetValueOrDefault(device); } }
 
+    public IReadOnlyDictionary<string, DateTimeOffset> SignIns { get { lock (gate) { return new Dictionary<string, DateTimeOffset>(signIns, StringComparer.Ordinal); } } }
+
+    // A sign-in notice made at this time, or (null) one whose sessions no longer need sign-in.
+    public void SignIn(string key, DateTimeOffset? at)
+    {
+        lock (gate)
+        {
+            if (at is { } t) { signIns[key] = t; }
+            else if (!signIns.Remove(key)) { return; }
+            Save();
+        }
+    }
+
     // The account the host is signed in as now. Subscriptions from any other are dropped:
     // returns how many.
     public int Bind(string accountId)
@@ -85,6 +103,7 @@ public sealed class PushStore
             if (account == accountId) { return 0; }
             var dropped = byDevice.Count;
             byDevice.Clear();
+            signIns.Clear();
             account = accountId;
             Save();
             return dropped;
@@ -137,7 +156,7 @@ public sealed class PushStore
         if (path is null) { return; }
         try
         {
-            var text = JsonSerializer.Serialize(new Saved(account, [.. byDevice.Values.OrderBy(s => s.Since)]), Json);
+            var text = JsonSerializer.Serialize(new Saved(account, [.. byDevice.Values.OrderBy(s => s.Since)], signIns.Count > 0 ? new(signIns, StringComparer.Ordinal) : null), Json);
             // Written whole and then moved into place, so a crash mid-write never leaves a
             // half file that would lose every subscription. Owner-only: an endpoint is a
             // capability to notify that phone.

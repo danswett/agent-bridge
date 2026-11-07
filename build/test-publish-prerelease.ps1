@@ -5,8 +5,8 @@
 #   pwsh build/test-publish-prerelease.ps1
 #
 # What it guards: a merge publishes exactly one pre-release of its own version, never a second
-# copy, never one older than what is out, never a dev build, and the pruning never reaches a full
-# release or a tag.
+# copy, never one older than what is out or from a commit behind it, never a dev build, and the
+# pruning never reaches a full release or a tag.
 #Requires -Version 7
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -17,6 +17,10 @@ $scratch = Join-Path $PSScriptRoot '..' 'out' 'test-publish-prerelease'
 $fixtures = Join-Path $PSScriptRoot '..' 'out' 'test-publish-prerelease-hosts'
 $repo = 'danswett/agent-bridge'
 $commit = '0123456789abcdef0123456789abcdef01234567'
+# Main's line around the commit being built, oldest first; a release's tag is on its ancestor
+# unless a test puts it elsewhere.
+$ancestor = 'fedcba9876543210fedcba9876543210fedcba98'
+$descendant = '89abcdef0123456789abcdef0123456789abcdef'
 $env:GH_TOKEN = 'stand-in-token'
 Remove-Item Env:GITHUB_STEP_SUMMARY, Env:GITHUB_RUN_ID, Env:GITHUB_ACTIONS, Env:GITHUB_OUTPUT -ErrorAction SilentlyContinue
 
@@ -81,6 +85,25 @@ function global:Get-AuthenticodeSignature {
     $certificate = $global:PpCertificates[$(if ($state -eq 'notimestamp') { 'ours' } else { $state })]
     [pscustomobject]@{ Status = 'Valid'; SignerCertificate = $certificate; TimeStamperCertificate = $(if ($state -ne 'notimestamp') { $global:PpCertificates.timestamp }) }
 }
+
+# GitHub failing calls (#907): the next N listings or DELETEs fail; a DELETE that "goes through"
+# deletes before it fails, as a 500 after the fact does.
+$global:PpListFailures = 0
+$global:PpListings = 0
+$global:PpFailListAfter = -1
+$global:PpDeleteFailures = 0
+$global:PpDeleteGoesThrough = $false
+$global:PpSleeps = [Collections.Generic.List[int]]::new()
+function global:Start-Sleep { [CmdletBinding()] param([int]$Seconds, [int]$Milliseconds) $global:PpSleeps.Add($Seconds) }
+
+$global:PpMain = @($ancestor, $commit, $descendant)
+$global:PpTagSha = @{}
+$global:PpTagType = 'commit'
+$global:PpTagRef = $null
+$global:PpAncestry = $null
+# What main's selector, at main's head, says of the commits after the one publishing: its JSON,
+# or 'fail' for a nonzero exit.
+$global:PpSelect = $null
 # What vpk names a channel's full package (build/app-channels.ps1): x64's `win` without a suffix.
 function global:Get-PpFull([string]$channel, [string]$version) {
     "AgentBridgeApp-$version$(if ($channel -ne 'win') { "-$channel" })-full.nupkg"
@@ -107,13 +130,22 @@ function global:gh {
     $global:PpCalls.Add("gh $($a -join ' ')")
     $global:LASTEXITCODE = 0
     if ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/releases?*") {
+        if ($global:PpListFailures -gt 0) { $global:PpListFailures--; $global:LASTEXITCODE = 1; return }
+        $global:PpListings++
+        if ($global:PpFailListAfter -ge 0 -and $global:PpListings -gt $global:PpFailListAfter) { $global:LASTEXITCODE = 1; return }
         foreach ($r in $global:PpReleases) { $r | ConvertTo-Json -Compress }
     } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/git/matching-refs/tags/*") {
         $prefix = 'refs/tags/' + $a[1].Substring("repos/$repo/git/matching-refs/tags/".Length)
         $global:PpTags | Where-Object { $_.StartsWith($prefix) }
     } elseif ($a[0] -eq 'api' -and $a[1] -eq '-X' -and $a[2] -eq 'DELETE') {
         $id = [long]($a[3] -split '/')[-1]
-        [void]$global:PpReleases.RemoveAll({ param($r) $r.id -eq $id })
+        if ($global:PpDeleteFailures -gt 0) {
+            $global:PpDeleteFailures--
+            if ($global:PpDeleteGoesThrough) { [void]$global:PpReleases.RemoveAll({ param($r) $r.id -eq $id }) }
+            $global:LASTEXITCODE = 1; return
+        }
+        # As GitHub answers a release that isn't there: 404.
+        if (-not $global:PpReleases.RemoveAll({ param($r) $r.id -eq $id })) { $global:LASTEXITCODE = 1 }
     } elseif ($a[0] -eq 'api' -and $a[1] -eq '-X' -and $a[2] -eq 'POST' -and $a[3] -eq "repos/$repo/releases/generate-notes") {
         if ($global:PpGeneratedNotes -eq 'fail') { $global:LASTEXITCODE = 1; return }
         @{ body = $global:PpGeneratedNotes } | ConvertTo-Json -Compress
@@ -139,6 +171,19 @@ function global:gh {
         }
     } elseif ($a[0] -eq 'release' -and $a[1] -eq 'list') {
         $global:PpReleases | Where-Object { -not $_.draft } | Select-Object -Last 1 | ForEach-Object tag_name
+    } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/git/ref/tags/*") {
+        # A published release's tag: the commit it is on, its tag's sha unless a test says.
+        $name = $a[1].Substring("repos/$repo/git/ref/tags/".Length)
+        if ($global:PpTagRef -eq 'fail' -or $global:PpTags -notcontains "refs/tags/$name") { $global:LASTEXITCODE = 1; return }
+        $global:PpTagType
+        if ($global:PpTagSha.ContainsKey($name)) { $global:PpTagSha[$name] } else { $global:PpMain[0] }
+    } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/compare/*" -and $a -contains '.status') {
+        # Where head is from base on main's line, as GitHub's compare says it.
+        if ($global:PpAncestry -eq 'fail') { $global:LASTEXITCODE = 1; return }
+        if ($global:PpAncestry) { return $global:PpAncestry }
+        $base, $head = $a[1].Substring("repos/$repo/compare/".Length) -split '\.\.\.'
+        $from = [array]::IndexOf($global:PpMain, $base); $to = [array]::IndexOf($global:PpMain, $head)
+        if ($from -lt 0 -or $to -lt 0) { 'diverged' } elseif ($to -gt $from) { 'ahead' } elseif ($to -eq $from) { 'identical' } else { 'behind' }
     } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/compare/*") {
         if ($global:PpCompare -eq 'fail') { $global:LASTEXITCODE = 1; return }
         $global:PpCompare
@@ -217,6 +262,11 @@ function global:vpk {
 function global:dotnet {
     $a = @($args)
     $global:LASTEXITCODE = 0
+    if ($a[0] -like '*agent-bridge-quality.dll') {
+        $global:PpCalls.Add("selector $($a[1..($a.Count - 1)] -join ' ')")
+        if ($global:PpSelect -eq 'fail') { $global:LASTEXITCODE = 1; return }
+        return $global:PpSelect
+    }
     $out = $a[[array]::IndexOf($a, '-o') + 1]
     $rid = $a[[array]::IndexOf($a, '-r') + 1]
     $global:PpPublishRids.Add($rid)
@@ -244,6 +294,9 @@ function Reset([int]$prereleases = 0) {
     $global:PpBuildsFor = $null; $global:PpFeedExtra = $null; $global:PpPackMakes = $false; $global:PpTamper = $null; $global:PpSign = @{}
     $global:PpGeneratedNotes = "## What's Changed`n* A change (#200)`n`n**Full Changelog**: https://github.com/$repo/compare/v0.1.503...v0.1.600"
     $global:PpPublishedBody = $null
+    $global:PpListFailures = 0; $global:PpListings = 0; $global:PpFailListAfter = -1; $global:PpDeleteFailures = 0; $global:PpDeleteGoesThrough = $false; $global:PpSleeps.Clear()
+    $global:PpMain = @($ancestor, $commit, $descendant); $global:PpTagSha = @{}; $global:PpTagType = 'commit'; $global:PpTagRef = $null; $global:PpAncestry = $null
+    $global:PpSelect = $null
     for ($i = 1; $i -le $prereleases; $i++) { New-PpRelease "v0.1.$(500 + $i)" }
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 }
@@ -257,7 +310,7 @@ function New-Package([string]$path, [string]$kind, [string]$machine) {
     $app = Join-Path $stage 'lib' 'app'
     New-Item -ItemType Directory -Force $app | Out-Null
     Copy-Item $global:PpHost[$kind] (Join-Path $app 'agent-bridge-host.dll')
-    foreach ($exe in 'AgentBridge.exe', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Squirrel.exe', 'Agent Bridge_ExecutionStub.exe', 'Microsoft.Runtime.dll') {
+    foreach ($exe in 'AgentBridge.exe', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Squirrel.exe', 'Slipgates_ExecutionStub.exe', 'Microsoft.Runtime.dll') {
         New-PpExe (Join-Path $app $exe) $machine
     }
     [IO.Compression.ZipFile]::CreateFromDirectory($stage, $path)
@@ -269,7 +322,7 @@ function New-PpPortable([string]$path, [string]$machine) {
     $stage = Join-Path $scratch 'stage'
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     New-Item -ItemType Directory -Force (Join-Path $stage 'current') | Out-Null
-    foreach ($exe in 'Update.exe', 'Agent Bridge.exe') { New-PpExe (Join-Path $stage $exe) $machine }
+    foreach ($exe in 'Update.exe', 'Slipgates.exe') { New-PpExe (Join-Path $stage $exe) $machine }
     foreach ($exe in 'AgentBridge.exe', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe') {
         New-PpExe (Join-Path $stage 'current' $exe) $machine
     }
@@ -310,13 +363,13 @@ function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @(),
 }
 
 # Both architectures' folders, as the publish job downloads them, unless -Only names one.
-function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string[]]$Only = @('win', 'win-arm64'), [hashtable]$Machine = @{}, [switch]$Plan, [switch]$Sign) {
+function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string[]]$Only = @('win', 'win-arm64'), [hashtable]$Machine = @{}, [switch]$Plan, [switch]$Sign, [string]$Head = $commit) {
     $dirs = @(foreach ($channel in $Only) { New-Folder $version -DeltaFrom $DeltaFrom -Skip $Skip -DevBuild:$DevBuild -Channel $channel -Machine $Machine[$channel] })
     # -Sign: as CI publishes once APP_SIGNING is on.
     $signing = if ($Sign) { @{ RequireSignature = $true; SignerEku = $global:PpEku } } else { @{} }
-    # -Plan: what it says it does, rather than nothing.
-    if ($Plan) { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -DryRun:$DryRun @signing 6>&1 | Out-String }
-    else { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -DryRun:$DryRun @signing 6>$null }
+    # -Plan: what it says it does, rather than nothing. -Head: main's head as publish reads it.
+    if ($Plan) { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $Head -MainRepo $scratch -DryRun:$DryRun @signing 6>&1 | Out-String }
+    else { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $Head -MainRepo $scratch -DryRun:$DryRun @signing 6>$null }
 }
 
 function Get-Asset([string]$channel = 'win') { @(Get-Content (Join-Path (Get-PpDir $channel) "assets.$channel.json") -Raw | ConvertFrom-Json) }
@@ -335,6 +388,24 @@ function Uploads { @($global:PpCalls | Where-Object { $_ -like 'vpk upload githu
 function Deletes { @($global:PpCalls | Where-Object { $_ -like 'gh api -X DELETE*' }) }
 function CallIndex([string]$like) { $global:PpCalls.FindIndex({ param($c) $c -like $like }) }
 
+. (Join-Path $PSScriptRoot 'validate-halt-list.ps1')
+foreach ($invalid in @(
+    @{ Name = 'A string schema version is refused'; Json = '{"v":"1","halted":[]}' },
+    @{ Name = 'A decimal schema version is refused'; Json = '{"v":1.0,"halted":[]}' },
+    @{ Name = 'An extra halt policy property is refused'; Json = '{"v":1,"halted":[],"extra":false}' },
+    @{ Name = 'A halted version with a trailing newline is refused'; Json = '{"v":1,"halted":["0.1.600\n"]}' },
+    @{ Name = 'A halted version above Int64 MaxValue is refused'; Json = '{"v":1,"halted":["0.1.9223372036854775808"]}' }
+)) {
+    Check $invalid.Name {
+        New-Item -ItemType Directory -Force $scratch | Out-Null
+        $file = Join-Path $scratch 'invalid-halts.json'
+        [IO.File]::WriteAllText($file, $invalid.Json)
+        $threw = $false
+        try { Assert-ReleaseHaltList $file } catch { $threw = $true }
+        Assert $threw 'publisher accepted a policy that the client rejects'
+    }
+}
+
 # --- Publishing.
 Check 'A new version goes up as a draft, then is published as a pre-release of the commit with assets.win.json beside it' {
     Reset 3
@@ -343,6 +414,8 @@ Check 'A new version goes up as a draft, then is published as a pre-release of t
     Assert ((Get-Delta) -eq 'delta 0.1.503->0.1.600') "delta: $(Get-Delta)"
     Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
     Assert ([bool]($global:PpCalls | Where-Object { $_ -like 'gh release upload v0.1.600 *assets.win.json*' })) 'assets.win.json was not uploaded'
+    $haltUpload = CallIndex 'gh release upload v0.1.600 *halts.json*'
+    Assert ($haltUpload -ge 0 -and $haltUpload -lt (CallIndex 'gh api -X PATCH*')) 'the shared halt policy must be uploaded before publication'
     $r = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
     Assert ($r -and -not $r.draft -and $r.prerelease) "release: $($r | ConvertTo-Json -Compress)"
     Assert ($global:PpPublishedBody.Contains($commit)) 'the notes do not name the commit'
@@ -444,6 +517,128 @@ Check 'A version older than a published release is not uploaded' {
     Assert (-not ($global:PpReleases | Where-Object tag_name -EQ 'v0.1.600')) 'an older release was created'
 }
 
+Check "A higher version built from an ancestor of the latest release's commit is not published: its run came later" {
+    # Reversed order: the descendant's run (0.1.503) published first; the ancestor's run, created
+    # after it, has the higher number. Under the lock, compare says which commit holds the other.
+    Reset 3
+    $global:PpTagSha['v0.1.503'] = $descendant
+    $plan = Invoke-Publish '0.1.600' -Plan
+    Assert ($global:PpCalls -contains "gh api repos/$repo/git/ref/tags/v0.1.503 --jq .object.type, .object.sha") "calls: $($global:PpCalls -join '; ')"
+    Assert ($global:PpCalls -contains "gh api repos/$repo/compare/$descendant...$commit --jq .status") "calls: $($global:PpCalls -join '; ')"
+    Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) "uploads: $(Uploads); deletes: $(Deletes)"
+    Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "writes: $($global:PpCalls -join '; ')"
+    Assert (-not ($global:PpReleases | Where-Object tag_name -EQ 'v0.1.600')) 'an ancestor was released over its descendant'
+    Assert ($plan -like "*$commit is behind v0.1.503's commit $descendant*") "plan: $plan"
+}
+
+Check "A version from the latest release's commit or a descendant of it is published" {
+    foreach ($tagged in $ancestor, $commit) {
+        Reset 3
+        $global:PpTagSha['v0.1.503'] = $tagged
+        Invoke-Publish '0.1.600'
+        Assert (@(Uploads).Count -eq 2) "tagged on $tagged; uploads: $(Uploads)"
+        $read = CallIndex "gh api repos/$repo/compare/$tagged...$commit*"
+        Assert ($read -ge 0 -and $read -lt (CallIndex 'vpk upload github*')) "ancestry wasn't read before uploading: $($global:PpCalls -join '; ')"
+    }
+}
+
+Check "A commit off the latest release's line, or a tag or comparison that can't be read, is not published" {
+    foreach ($case in @(
+        @{ Name = 'diverged'; Set = { $global:PpTagSha['v0.1.503'] = 'abababababababababababababababababababab' } },
+        @{ Name = 'an unknown comparison'; Set = { $global:PpAncestry = 'unknown' } },
+        @{ Name = 'an unreadable comparison'; Set = { $global:PpAncestry = 'fail' } },
+        @{ Name = 'an unreadable tag'; Set = { $global:PpTagRef = 'fail' } },
+        @{ Name = 'an annotated tag'; Set = { $global:PpTagType = 'tag' } },
+        @{ Name = 'a tag on no commit'; Set = { $global:PpTagSha['v0.1.503'] = '' } }
+    )) {
+        Reset 3
+        New-PpRelease 'v0.1.600' $true $true
+        & $case.Set
+        $threw = $false
+        try { Invoke-Publish '0.1.600' } catch { $threw = $true }
+        Assert $threw "$($case.Name) was published over"
+        Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) "$($case.Name): uploads: $(Uploads); deletes: $(Deletes)"
+        Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "$($case.Name): writes: $($global:PpCalls -join '; ')"
+    }
+}
+
+$appTail = '{"mode":"partial","jobs":{"ci.yml":{"app":["app-windows"],"product":["product"]}}}'
+Check "An ancestor whose run publishes first stands aside when main has changed the app since, and the descendant's lower version publishes both" {
+    # S -> A -> B: B's run was created first (0.1.600), A's after it (0.1.601). Were A out first,
+    # B's lower version would be refused and B's app changes never released (#938's review).
+    Reset 3
+    $global:PpSelect = $appTail
+    $plan = Invoke-Publish '0.1.601' -Head $descendant -Plan
+    Assert ($global:PpCalls -contains "gh api repos/$repo/compare/$commit...$descendant --jq .status") "calls: $($global:PpCalls -join '; ')"
+    Assert ($global:PpCalls -contains "selector select --repo $scratch --ring 1 --base $commit --head $descendant") "calls: $($global:PpCalls -join '; ')"
+    Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) "uploads: $(Uploads); deletes: $(Deletes)"
+    Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "writes: $($global:PpCalls -join '; ')"
+    Assert ($plan -like "*main has moved on to $descendant, which changes the app since $commit*") "plan: $plan"
+    # Then B's run, main's head, publishes its lower version over S's release.
+    Remove-Item (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Recurse -Force
+    $dirs = @(New-Folder '0.1.600'; New-Folder '0.1.600' -Channel 'win-arm64')
+    & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $descendant -MainHead $descendant -MainRepo $scratch 6>$null
+    Assert (@(Uploads).Count -eq 2 -and -not (Uploads | Where-Object { $_ -notlike "*--tag v0.1.600 --targetCommitish $descendant *" })) "uploads: $(Uploads)"
+    Assert (-not ($global:PpReleases | Where-Object tag_name -EQ 'v0.1.601')) 'the ancestor was released'
+}
+
+Check "A commit whose later commits on main leave the app alone, docs only say, still publishes" {
+    foreach ($select in '{"mode":"partial","jobs":{"ci.yml":{"light":["docs"]}}}', '{"mode":"docs-only","jobs":{}}') {
+        Reset 3
+        $global:PpSelect = $select
+        Invoke-Publish '0.1.600' -Head $descendant
+        Assert (@(Uploads).Count -eq 2) "$select; uploads: $(Uploads)"
+        $read = CallIndex 'selector select*'
+        Assert ($read -ge 0 -and $read -lt (CallIndex 'vpk upload github*')) "$select; main's head wasn't read before uploading: $($global:PpCalls -join '; ')"
+    }
+    # And main's head being the commit itself needs no selector.
+    Reset 3
+    $global:PpSelect = $appTail
+    Invoke-Publish '0.1.600'
+    Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
+    Assert (-not ($global:PpCalls | Where-Object { $_ -like 'selector*' -or $_ -like "gh api repos/$repo/compare/$commit...*" })) "calls: $($global:PpCalls -join '; ')"
+}
+
+Check "A main head that isn't after the commit, or a selector answer that can't be read, stops publishing" {
+    # With no release (0), only main's head is compared: the release ancestry check has nothing to read.
+    # A compare that can't be read is refused by Invoke-Gh, as gh's nonzero exit, naming that read.
+    $unreadable = "gh api repos/$repo/compare/$commit...$descendant failed (1)"
+    foreach ($case in @(
+        @{ Name = 'a diverged head'; Head = 'abababababababababababababababababababab'; Releases = 3; Selects = $false; Set = {} },
+        @{ Name = 'a head behind the commit'; Head = $ancestor; Releases = 3; Selects = $false; Set = {} },
+        @{ Name = 'an unknown head comparison'; Head = $descendant; Releases = 0; Selects = $false; Set = { $global:PpAncestry = 'unknown' } },
+        @{ Name = 'an unreadable head comparison'; Head = $descendant; Releases = 0; Selects = $false; Set = { $global:PpAncestry = 'fail' }; Says = $unreadable },
+        @{ Name = 'a failing selector'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = 'fail' } },
+        @{ Name = 'no selector output'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = $null } },
+        @{ Name = 'malformed selector output'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = '{"jobs":' } },
+        @{ Name = 'selector output without jobs'; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = '{"mode":"partial"}' } },
+        @{ Name = "selector output whose ci.yml jobs aren't a map"; Head = $descendant; Releases = 3; Selects = $true; Set = { $global:PpSelect = '{"jobs":{"ci.yml":["app"]}}' } }
+    )) {
+        Reset $case.Releases
+        $global:PpSelect = $appTail
+        & $case.Set
+        $said = $null
+        try { Invoke-Publish '0.1.600' -Head $case.Head } catch { $said = $_.Exception.Message }
+        $says = if ($case.Contains('Says')) { $case.Says } else { '*not publishing v0.1.600*' }
+        Assert ($said -clike $says) "$($case.Name) was published past (said: '$said')"
+        Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) "$($case.Name): uploads: $(Uploads); deletes: $(Deletes)"
+        Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "$($case.Name): writes: $($global:PpCalls -join '; ')"
+        Assert ($case.Selects -eq [bool]($global:PpCalls | Where-Object { $_ -like 'selector*' })) "$($case.Name): calls: $($global:PpCalls -join '; ')"
+    }
+}
+
+Check "Publishing without main's head, or with one that isn't a commit, is refused before anything is read" {
+    foreach ($case in @(@{ Name = 'no head'; Args = @{ MainRepo = $scratch } }, @{ Name = 'a branch name'; Args = @{ MainHead = 'main'; MainRepo = $scratch } }, @{ Name = 'no clone'; Args = @{ MainHead = $descendant } })) {
+        Reset 3
+        $dirs = @(New-Folder '0.1.600'; New-Folder '0.1.600' -Channel 'win-arm64')
+        $named = $case.Args
+        $threw = $false
+        try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit @named 6>$null } catch { $threw = $_.Exception.Message -like '*publishing needs -MainHead*' }
+        Assert $threw "$($case.Name) was not refused"
+        Assert ($global:PpCalls.Count -eq 0) "$($case.Name): calls: $($global:PpCalls -join '; ')"
+    }
+}
+
 Check "Only a run that uploads the release tells CI's attest job so, never a re-run or a dry run" {
     # attest signs the release's assets with this run's SBOMs; after a re-run rebuilt the app,
     # those would not describe what is out.
@@ -495,7 +690,7 @@ Check "A folder of another version's packages is refused" {
     Reset 3
     $threw = $false
     $dir = New-Folder '0.1.599'
-    try { & $publishScript -Version '0.1.600' -ReleasesDir $dir -Repository $repo -Commit $commit 6>$null } catch { $threw = $true }
+    try { & $publishScript -Version '0.1.600' -ReleasesDir $dir -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch 6>$null } catch { $threw = $true }
     Assert $threw 'a 0.1.599 folder was published as 0.1.600'
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
@@ -543,7 +738,7 @@ Check "An Arm64 delta is left out when the latest release has no Arm64 package, 
     New-Folder '0.1.600' -DeltaFrom '0.1.503' | Out-Null
     New-Folder '0.1.600' -Channel 'win-arm64' | Out-Null
     $global:PpDownload = 'fail'
-    & $publishScript -Version '0.1.600' -ReleasesDir (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Repository $repo -Commit $commit 6>$null
+    & $publishScript -Version '0.1.600' -ReleasesDir (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch 6>$null
     Assert ((Get-Delta) -eq 'delta 0.1.503->0.1.600') "x64 delta: $(Get-Delta)"
     Assert ($null -eq (Get-Delta 'win-arm64')) "arm64 delta: $(Get-Delta 'win-arm64')"
     Assert (-not (Get-Asset 'win-arm64' | Where-Object Type -EQ 'Delta')) 'assets.win-arm64.json lists a delta'
@@ -581,6 +776,69 @@ Check 'Only pre-releases beyond the newest twenty are deleted, never a full rele
     foreach ($kept in 'v0.1.504', 'v0.1.522', 'v0.1.600', 'v0.1.100', 'v0.1.400', 'nightly') { Assert ($kept -in $left) "$kept was deleted" }
     foreach ($t in $tagsBefore) { Assert ($t -in $global:PpTags) "the tag $t was deleted" }
     Assert (-not ($global:PpCalls | Where-Object { $_ -like '*git/refs*' })) 'a ref was changed'
+}
+
+# --- GitHub failing a call (#907): twice on 2026-11-05 that alone turned main red.
+Check 'A prune that GitHub fails once is tried again and the old pre-release is deleted' {
+    Reset 20
+    $global:PpDeleteFailures = 1
+    Invoke-Publish '0.1.600'
+    Assert ('v0.1.501' -notin @($global:PpReleases | ForEach-Object tag_name)) 'v0.1.501 was kept'
+    Assert (@(Deletes).Count -eq 2) "deletes: $(Deletes)"
+    Assert (@($global:PpSleeps) -join ',' -eq '2') "waits: $($global:PpSleeps -join ',')"
+}
+
+Check 'A prune DELETE that failed but went through counts as done' {
+    Reset 20
+    $global:PpDeleteFailures = 1; $global:PpDeleteGoesThrough = $true
+    Invoke-Publish '0.1.600'
+    Assert ('v0.1.501' -notin @($global:PpReleases | ForEach-Object tag_name)) 'v0.1.501 was kept'
+}
+
+Check 'A prune that keeps failing after a successful publish is a warning, not a failed publish' {
+    Reset 20
+    $global:PpDeleteFailures = 99
+    $plan = Invoke-Publish '0.1.600' -Plan
+    Assert ($global:LASTEXITCODE -eq 0) "the step would exit $global:LASTEXITCODE"
+    $r = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
+    Assert ($r -and -not $r.draft) 'v0.1.600 was not published'
+    Assert ('v0.1.501' -in @($global:PpReleases | ForEach-Object tag_name)) 'v0.1.501 is gone'
+    Assert ($plan -like '*v0.1.501 was not deleted*') "plan: $plan"
+    Assert ($plan -like '*1 left for the next publish*') "plan: $plan"
+}
+
+Check 'Listing releases to prune that keeps failing after a successful publish is a warning, not a failed publish' {
+    # How many listings a publish makes; the last is pruning's. Every one from that on fails.
+    Reset 21
+    Invoke-Publish '0.1.600'
+    $listings = @($global:PpCalls | Where-Object { $_ -like "gh api repos/$repo/releases?*" }).Count
+    Reset 21
+    $global:PpFailListAfter = $listings - 1
+    $plan = Invoke-Publish '0.1.600' -Plan
+    Assert ($global:LASTEXITCODE -eq 0) "the step would exit $global:LASTEXITCODE"
+    $r = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
+    Assert ($r -and -not $r.draft) 'v0.1.600 was not published'
+    Assert ($plan -like '*old pre-releases were not pruned*') "plan: $plan"
+    Assert (@(Deletes).Count -eq 0) "deletes: $(Deletes)"
+}
+
+Check 'A leftover draft whose DELETE failed but went through does not stop the version being published' {
+    Reset 3
+    New-PpRelease 'v0.1.600' $true $true
+    $global:PpDeleteFailures = 1; $global:PpDeleteGoesThrough = $true
+    Invoke-Publish '0.1.600'
+    Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
+    Assert (@($global:PpReleases | Where-Object tag_name -EQ 'v0.1.600').Count -eq 1) 'not exactly one v0.1.600'
+}
+
+Check 'A leftover draft that cannot be deleted still stops the publish before anything is uploaded' {
+    Reset 3
+    New-PpRelease 'v0.1.600' $true $true
+    $global:PpDeleteFailures = 99
+    $threw = $false
+    try { Invoke-Publish '0.1.600' } catch { $threw = $true }
+    Assert $threw 'the publish went on past a draft it could not delete'
+    Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
 
 Check 'A dry run uploads, publishes and deletes nothing, and has vpk read the folder' {
@@ -632,9 +890,9 @@ foreach ($case in @(
         @{ Name = 'an unsigned NativeAOT injector'; Sign = @{ 'agent-bridge-injector.exe' = 'unsigned' }; Says = '*agent-bridge-injector.exe: NotSigned*' }
         @{ Name = "Velopack's Update.exe signed by another publisher"; Sign = @{ 'Squirrel.exe' = 'other' }; Says = '*Squirrel.exe: signed by CN=Someone Else, not the pinned publisher*' }
         @{ Name = 'a Setup.exe without a timestamp'; Sign = @{ 'AgentBridgeApp-win-arm64-Setup.exe' = 'notimestamp' }; Says = '*AgentBridgeApp-win-arm64-Setup.exe: no timestamp*' }
-        @{ Name = 'a launcher stub whose certificate is not Public Trust'; Sign = @{ 'Agent Bridge_ExecutionStub.exe' = 'nopublictrust' }; Says = '*Agent Bridge_ExecutionStub.exe: the signer has no 1.3.6.1.4.1.311.97.1.0 EKU*' }
+        @{ Name = 'a launcher stub whose certificate is not Public Trust'; Sign = @{ 'Slipgates_ExecutionStub.exe' = 'nopublictrust' }; Says = '*Slipgates_ExecutionStub.exe: the signer has no 1.3.6.1.4.1.311.97.1.0 EKU*' }
         @{ Name = 'an unsigned runtime file'; Sign = @{ 'Microsoft.Runtime.dll' = 'unsigned' }; Says = '*Microsoft.Runtime.dll: NotSigned*' }
-        @{ Name = 'a portable launcher signed by another publisher'; Sign = @{ 'Agent Bridge.exe' = 'other' }; Says = '*Portable.zip Agent Bridge.exe: signed by CN=Someone Else*' }
+        @{ Name = 'a portable launcher signed by another publisher'; Sign = @{ 'Slipgates.exe' = 'other' }; Says = '*Portable.zip Slipgates.exe: signed by CN=Someone Else*' }
     )) {
     Check "A release with $($case.Name) uploads nothing when signing is required" {
         Reset 3
@@ -657,7 +915,7 @@ Check 'A package missing an executable is refused, not passed for having nothing
     $zip.GetEntry('lib/app/agent-bridge-host-hook.exe').Delete()
     $zip.Dispose()
     $threw = $false
-    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like "*has no lib$([IO.Path]::DirectorySeparatorChar)app$([IO.Path]::DirectorySeparatorChar)agent-bridge-host-hook.exe*" }
+    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like "*has no lib$([IO.Path]::DirectorySeparatorChar)app$([IO.Path]::DirectorySeparatorChar)agent-bridge-host-hook.exe*" }
     Assert $threw 'a package without the hook passed'
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
@@ -668,10 +926,10 @@ Check 'A portable zip without its launcher is refused' {
     $dirs = @(foreach ($channel in 'win', 'win-arm64') { New-Folder '0.1.600' -Channel $channel })
     $portable = Join-Path $dirs[1] 'AgentBridgeApp-win-arm64-Portable.zip'
     $zip = [IO.Compression.ZipFile]::Open($portable, 'Update')
-    $zip.GetEntry('Agent Bridge.exe').Delete()
+    $zip.GetEntry('Slipgates.exe').Delete()
     $zip.Dispose()
     $threw = $false
-    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like '*AgentBridgeApp-win-arm64-Portable.zip has no Agent Bridge.exe*' }
+    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like '*AgentBridgeApp-win-arm64-Portable.zip has no Slipgates.exe*' }
     Assert $threw 'a portable zip without its launcher passed'
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
@@ -679,7 +937,7 @@ Check 'A portable zip without its launcher is refused' {
 # What vpk 1.2.161 packs, exactly: a signed executable where it puts none is still refused.
 foreach ($case in @(
         @{ Name = 'a portable zip with another executable at its root'; File = 'AgentBridgeApp-win-arm64-Portable.zip'; Entry = 'Helper.exe'; Says = '*AgentBridgeApp-win-arm64-Portable.zip has Helper.exe at its root, which vpk does not pack*' }
-        @{ Name = 'a package with a second launcher stub'; File = 'AgentBridgeApp-0.1.600-win-arm64-full.nupkg'; Entry = 'lib/app/Other_ExecutionStub.exe'; Says = '*AgentBridgeApp-0.1.600-win-arm64-full.nupkg has a launcher stub Other_ExecutionStub.exe, not only Agent Bridge_ExecutionStub.exe*' }
+        @{ Name = 'a package with a second launcher stub'; File = 'AgentBridgeApp-0.1.600-win-arm64-full.nupkg'; Entry = 'lib/app/Other_ExecutionStub.exe'; Says = '*AgentBridgeApp-0.1.600-win-arm64-full.nupkg has a launcher stub Other_ExecutionStub.exe, not only Slipgates_ExecutionStub.exe*' }
     )) {
     Check "$($case.Name) is refused" {
         Reset 3
@@ -691,7 +949,7 @@ foreach ($case in @(
         [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $extra, $case.Entry)
         $zip.Dispose()
         $threw = $false
-        try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like $case.Says; if (-not $threw) { throw "message: $($_.Exception.Message)" } }
+        try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like $case.Says; if (-not $threw) { throw "message: $($_.Exception.Message)" } }
         Assert $threw 'it passed'
         Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
     }
@@ -704,11 +962,11 @@ Check 'A package whose launcher stub is not named after the pack title is refuse
     $extra = Join-Path $scratch 'extra.exe'
     New-PpExe $extra 'x64'
     $zip = [IO.Compression.ZipFile]::Open((Join-Path $dirs[0] 'AgentBridgeApp-0.1.600-full.nupkg'), 'Update')
-    $zip.GetEntry('lib/app/Agent Bridge_ExecutionStub.exe').Delete()
+    $zip.GetEntry('lib/app/Slipgates_ExecutionStub.exe').Delete()
     [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $extra, 'lib/app/AgentBridgeApp_ExecutionStub.exe')
     $zip.Dispose()
     $threw = $false
-    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like "*has a launcher stub AgentBridgeApp_ExecutionStub.exe*has no lib$([IO.Path]::DirectorySeparatorChar)app$([IO.Path]::DirectorySeparatorChar)Agent Bridge_ExecutionStub.exe*"; if (-not $threw) { throw "message: $($_.Exception.Message)" } }
+    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like "*has a launcher stub AgentBridgeApp_ExecutionStub.exe*has no lib$([IO.Path]::DirectorySeparatorChar)app$([IO.Path]::DirectorySeparatorChar)Slipgates_ExecutionStub.exe*"; if (-not $threw) { throw "message: $($_.Exception.Message)" } }
     Assert $threw 'a wrongly named stub passed'
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
 }
@@ -786,7 +1044,7 @@ Check 'Signing required with no publisher to pin refuses before reading the repo
         Reset 3
         $dirs = @(foreach ($channel in 'win', 'win-arm64') { New-Folder '0.1.600' -Channel $channel })
         $threw = $false
-        try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $eku 6>$null } catch { $threw = $_.Exception.Message -like '*not an Artifact Signing identity validation EKU*' }
+        try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -MainHead $commit -MainRepo $scratch -RequireSignature -SignerEku $eku 6>$null } catch { $threw = $_.Exception.Message -like '*not an Artifact Signing identity validation EKU*' }
         Assert $threw "EKU '$eku' was taken"
         Assert ($global:PpCalls.Count -eq 0) "calls: $($global:PpCalls -join '; ')"
     }

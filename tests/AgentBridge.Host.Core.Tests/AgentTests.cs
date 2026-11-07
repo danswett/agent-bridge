@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -391,7 +392,7 @@ public class CodexTests
 
         var s = Assert.Single(source.Snapshot());
         Assert.Equal(SessionStatus.Waiting, s.Status);
-        Assert.Equal(("node-1", $"Allow **Bash**?\n\n```\n{command}\n```"), (s.Question!.Id, s.Question.Message));
+        Assert.Equal(("node-1", $"Allow **Bash**?\n\n```\n{command}\n```"), (CodexApprovalId.Parse(s.Question!.Id)?.DecisionId, s.Question.Message));
         Assert.Equal(Fixture.T0.AddSeconds(10), s.Question.AskedAt);
         Assert.Equal("decision", Assert.Single(s.Question.Fields).Name);
         Assert.Equal(["approve", "deny"], s.Question.Fields[0].Options!.Select(o => o.Value));
@@ -434,7 +435,7 @@ public class CodexTests
         await source.RefreshAsync();
 
         var q = source.Get(Id)!.Question!;
-        Assert.Equal(("node-2", (bool?)null), (q.Id, q.AnswerAtMachine));
+        Assert.Equal(("node-2", (bool?)null), (CodexApprovalId.Parse(q.Id)?.DecisionId, q.AnswerAtMachine));
     }
 
     [Fact]
@@ -449,7 +450,7 @@ public class CodexTests
         await using var source = f.Source();
 
         await source.RefreshAsync();
-        Assert.Equal(("node-3", (bool?)true), (source.Get(Id)!.Question!.Id, source.Get(Id)!.Question!.AnswerAtMachine));
+        Assert.Equal(("node-3", (bool?)true), (CodexApprovalId.Parse(source.Get(Id)!.Question!.Id)?.DecisionId, source.Get(Id)!.Question!.AnswerAtMachine));
 
         // Its own sender refuses these as unreadable, so they are no approval to answer.
         foreach (var marker in new Action[]

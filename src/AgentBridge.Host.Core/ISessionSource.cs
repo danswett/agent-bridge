@@ -46,6 +46,15 @@ public interface ISessionSource : IAsyncDisposable
     // or has no sub-agent by that id, or from a source that lists none.
     Task<Subagent?> GetAgentAsync(string id, string agent, CancellationToken cancellationToken = default) => Task.FromResult<Subagent?>(null);
 
+    // Whether HistoryAsync reads anything: the sessions.history capability.
+    bool ServesHistory => false;
+
+    // session.history (docs/protocol/v1-history.md): a page of the session's turns before the
+    // cursor, newest of them last; HistoryResult.Gone once the session is not listed, StaleCursor
+    // for a before it cannot continue from, and NotAvailable when it keeps no history of it.
+    Task<HistoryResult> HistoryAsync(string id, string? before, int limit, CancellationToken cancellationToken = default) =>
+        Task.FromResult(HistoryResult.NotAvailable("this machine keeps no history"));
+
     // Where a live session's files are, for a host that types into it and then reads what
     // the agent recorded: its transcript and, for Claude and Codex, agent-ha-bridge's hook
     // registration. Null once it has gone, or from a source that does not know.
@@ -78,6 +87,10 @@ public interface ISessionSource : IAsyncDisposable
     // ending it failed. A session that has gone is removed as usual; a source that cannot
     // show it does nothing.
     Task SetEndingAsync(string id, bool ending) => Task.CompletedTask;
+
+    // Host-owned recovery state, conditional on the same auth failure. A new generation
+    // takes ownership; callbacks from an older flow cannot overwrite it or clear attention.
+    Task SetSignInRecoveryAsync(string id, DateTimeOffset errorAt, string generation, RecoveryState state, bool begin = false, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
     // Why the last discovery pass could not account for everything, and for which agents, or
     // null when it could. While an agent is held, its sessions are not removed for being

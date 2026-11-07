@@ -17,10 +17,14 @@ follow.
   "version": 1,
   "permissions": {
     "remoteApproval": true,
-    "trustedPeers": false
+    "trustedPeers": false,
+    "escapedApproval": "confirm",
+    "escapedApprovalDevices": null,
+    "phoneSignIn": false
   },
   "push": { "enabled": true },
   "delivery": { "readOnly": false },
+  "sessions": { "restoreOnStart": true },
   "launch": {
     "enabled": true,
     "workspaces": [
@@ -73,10 +77,15 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `version` | `1` | The schema. A file with a higher version, written by a newer Agent Bridge, is not guessed at: remote approval and launching are both off until the host is updated |
+| `version` | `1` | The schema. A file with a higher version, written by a newer Slipgates host, is not guessed at: remote approval and launching are both off until the host is updated |
 | `permissions.remoteApproval` | `true` | Copilot permission prompts may be approved or denied from another device ([host-answers.md](host-answers.md)) |
+| `permissions.escapedApproval` | `confirm` | How Approve is given for an approval holding characters the host shows as escapes (bidi controls, hidden characters, right-to-left letters; #803). `confirm`: a two-step confirmation from a person's phone, browser or Windows app this machine approved ([v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)). `machine`: only at the machine. Deny goes from anywhere either way. A value that is neither is read as `machine` and said in the log. Applies when the host restarts |
+| `permissions.escapedApprovalDevices` | absent | The devices, by device id, that may confirm one. Absent or `null`: the devices approved for folder trust (`launch.remoteFolderTrustDevices`, as the Windows app's Settings changes them), and only while `launch.remoteFolderTrust` is on, so a device approved there needs no second visit and turning folder trust off (for a lost phone, say) takes Approve from them too. A list, even an empty one, replaces that. Invalid ids are ignored with a problem; a value that is not a list approves none. At most 64. Applies when the host restarts |
+| `permissions.remoteManage` | `true` | A person's other device (a phone or browser, or the app on another machine; never this machine's app, an agent or Home Assistant) may restart this host and repair the hooks of an agent this installation set up, through the relay, each press signed by that device (#801). Restarts are capped at 2 in 6 hours and wait for the host to be quiet; a read-only host never offers it. Read when the host starts |
 | `permissions.trustedPeers` | `false` | Transitional full-key remote authorization floor (#402), for disposable-host evaluation only. Restart-only; requires explicitly seeded pins. See [trusted peers](#trusted-peers-disposable-host-foundation) |
+| `permissions.phoneSignIn` | `false` | Signing Copilot in again from a person's device (`sessions.signin`, #972): the host runs Copilot's own `copilot login --device-code` and shows the one-time code on that device only. While it runs, **the machine opens a browser and copies the code**. Only a device pinned as a person here is offered it, and only on Windows. A value that is not `true` or `false` turns everything off, as `remoteApproval`'s does. Applies when the host restarts. See [phone sign-in](#phone-sign-in) |
 | `delivery.readOnly` | `false` | A host that only shows sessions: it takes no answer, reply, stop, launch, permission approval or transfer from any device, whatever agent-ha-bridge is doing, and says so in `hello` (`machine.readOnly`, "this is a read-only comparison host"), refusing each with that reason. The shadow host beside agent-ha-bridge sets it ([host-shadow.md](host-shadow.md)), so a daemon restart never leaves it acting. Without it, a host is held only while agent-ha-bridge runs (design G5) |
+| `sessions.restoreOnStart` | `true` | After a reboot or a crash of the host, the sessions that died with it are restored, idle, through the resume path, one at a time, and what cannot be is offered to resume ([host-launch.md](host-launch.md#restoring-after-a-reboot-or-a-crash)). Nothing is ever typed into them. `false` restores nothing, only says what went, in `hello` and one notification, and keeps nothing waiting. A value that is not `true` or `false`, or a file that cannot be read, turns it off, but keeps what died offered (the person may have meant it on). Per machine
 | `push.enabled` | `true` | Notifications (Web Push) to the account's phones. `false` sends none and takes no subscription: `hello` leaves `push` out, and `push.subscribe` fails saying the machine doesn't send notifications. For a machine that should be seen but not heard from, as the shadow host beside agent-ha-bridge ([host-shadow.md](host-shadow.md#on-the-phone--relay)) |
 | `launch.enabled` | `true` | Launching from other devices at all. `false` leaves `sessions.launch` out of `hello` |
 | `launch.workspaces` | `[]` | **The approved folders.** A new session starts only in one of these, and a session is resumed only if it ran in one of these folders itself (or in a worktree this host or agent-ha-bridge made for an isolated one), as agent-ha-bridge has it: not in a folder below one. Each is a path, or `{ "path", "label", "isolate" }`. `path` is absolute (`~` is the home folder); `label` defaults to the folder's name, and is what a client names; `isolate: true` starts each new session in a git worktree of its own ([host-launch.md](host-launch.md#isolation)). A folder that does not exist, or a system folder (Windows, Program Files, ProgramData, temp, a drive root), is not offered. At most 64 |
@@ -106,7 +115,7 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `homeAssistant.machineName` | the computer's | The name the entities are keyed on (`agent_bridge_<slug>`). Only for a rehearsal posing as another machine on a disposable Home Assistant |
 | `homeAssistant.disposable` | `false` | Says `baseUrl` is a disposable Home Assistant. A development build writes to no other |
 | `homeAssistant.agentUserIds` | `[]` | Home Assistant user ids whose presses are an agent's, as agent-ha-bridge's own setting: an answer or reply they send makes the next turn agent-driven (the card's purple edge). A list of strings; `migrate` carries agent-ha-bridge's ([migration.md](migration.md)) |
-| `homeAssistant.agentTokenEnvVar` | none | Carried from agent-ha-bridge by `migrate`: the variable agents read their own Home Assistant token from. Recorded only; nothing reads it yet |
+| `homeAssistant.agentTokenEnvVar` | none | Legacy variable-name metadata carried by `migrate`. The native launcher does not resolve it or inject an HA token; ordinary inherited environment is not managed token propagation. Not the proposed native agent credential (#519); see [ha-connector.md](ha-connector.md#credentials-agent-attribution-and-notifications) |
 | `homeAssistant.notifications.enabled` | `false` | The pushes agent-ha-bridge's hooks sent (a question, a permission prompt, a blocked Claude, a finished turn), sent by the connector (stage 5b) |
 | `homeAssistant.notifications.service` | `notify.notify` | The notify-style service they go to (`notify.mobile_app_<phone>`, `ticker.notify`) |
 | `homeAssistant.notifications.tickerCategory` | `""` | The category a `ticker.*` service is given |
@@ -125,7 +134,7 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 
 How a file that is wrong is read: one that cannot be read or parsed turns remote approval,
 launching, notifications and agent usage off and makes the host read-only ("this host's config.json has a
-problem"); a `permissions.remoteApproval`, `push.enabled` or `delivery.readOnly` that is not
+problem"); a `permissions.remoteApproval`, `permissions.remoteManage`, `push.enabled` or `delivery.readOnly` that is not
 `true` or `false` does too. An unreadable, invalid or newer-schema file also enables
 trusted-peer enforcement rather than silently downgrading it; a malformed
 `permissions.trustedPeers` does the same. In `usage`, a `publish` that is not `true` or `false`, or a `usage` that is
@@ -231,6 +240,45 @@ cannot be detected from those rolled-back files alone. Restoring a backup requir
 owner-controlled reset and reapproval, not automatic old-grant activation. Signed
 account rosters, relay credentials/revocation anchors, HA key storage, recovery,
 enrollment and production enablement remain separately gated.
+
+## Phone sign-in
+
+`permissions.phoneSignIn` (#972) lets a person sign Copilot in again from their own device when
+its sessions on this machine need it, without going to the machine
+([v1-sessions.md](protocol/v1-sessions.md#phone-sign-in-800-slice-2-enabled-per-machine-by-972)).
+It is **off by default** and set on each machine separately. What it runs is Copilot's own
+`copilot login --device-code`, unpatched: the one-time code goes only to the device that asked,
+over its encrypted channel, and **this machine opens a browser and copies the code** while it
+runs (accepted by Engineering, #800); a browser the login started is closed when the flow ends. Nothing is typed into a session, and the code never reaches
+a log, a notification, Home Assistant or a transcript.
+
+It is offered to a device only when all of these hold:
+
+- `permissions.phoneSignIn` is `true`, and the host has restarted since;
+- the machine runs Windows, and when the host started it found Copilot as an `.exe` the way
+  launching does (`launch.agents.copilot.path`, else `PATH`; a `.cmd` shim is never run);
+- the device is **pinned as a person at this machine** ([trusted peers](#trusted-peers-disposable-host-foundation)),
+  with a current pin. Being signed in to the account is not enough. Pins are made only through the
+  app-only `host.peers.put`; the app has no screen for them yet;
+- the machine is not read-only (`delivery.readOnly`, or agent-ha-bridge running for this user).
+
+**To turn it on for one machine** (the owner, at that machine or over RDP; an agent session is
+refused, #67):
+
+1. Open the Slipgates app → **Settings**, and turn on **Let my devices sign Copilot in on this
+   machine**. Or, in a terminal that is not inside an agent session:
+   `agent-bridge-host config set permissions.phoneSignIn true`
+2. Restart the host: **Restart** in Settings (shown once a change needs it).
+3. Check the host log (Settings → the log, or `logs\host.log` in the profile folder) for
+   `sign-in from devices is on for Copilot (permissions.phoneSignIn)`. "is set ... but off" means
+   the host is not on Windows or did not find Copilot's `.exe`; "is off" means the setting did not take.
+4. On the phone, a session needing sign-in on that machine shows **Sign in** in its banner. Press it,
+   open `https://github.com/login/device` and enter the code shown. The session then reads "Signed in ·
+   waiting for the session to confirm" until its next reply clears it.
+
+**To turn it off:** the same switch off (or `config set permissions.phoneSignIn false`), then
+Restart. A value that is not `true` or `false` turns every permission off and is said in the log.
+Devices cannot change it yet; that waits for #801's settings path.
 
 ## Approving a workspace at the machine
 

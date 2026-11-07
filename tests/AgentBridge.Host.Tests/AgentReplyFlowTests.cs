@@ -22,6 +22,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     readonly Fixture f = new();
     readonly Probe probe = new();
     readonly Screen console = new();
+    readonly System.Collections.Concurrent.ConcurrentQueue<string> logged = new();
     // The reply's time: it moves on only while the reply waits between its looks, so its looks and
     // its timeouts do not race the wall clock (#486).
     readonly PollClock clock = new();
@@ -66,7 +67,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         SubmitPatience = submitPatience,
         ImageWait = TimeSpan.FromMilliseconds(500),
         Time = clock,
-    }, attachments: store);
+    }, logged.Enqueue, attachments: store);
 
     ReplyService? replier;
     // Left at the product's 15 s for the tests that press Enter again, which end on what the box
@@ -153,6 +154,25 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Equal(("Looks good. Ship it 🚀", true), (send.Text, send.Enter));
         // Typed only while the box still reads as it did: the rule, the empty row, the rule.
         Assert.Equal([(4, Rule), (5, ">"), (6, Rule)], send.Expect!.Select(r => (r.Row, r.Text)));
+    }
+
+    [Theory]
+    [InlineData("\u276F")]
+    [InlineData(">")]
+    public async Task A_Claude_reply_into_its_box_drawn_with_a_no_break_space_after_the_pointer_is_held_to_the_box_as_drawn(string pointer)
+    {
+        // Claude Code draws its prompt as the pointer, '❯' or '>' (2.1), and a no-break space
+        // (`[pointer,"\xA0"]`).
+        // The worker trims only the window's ASCII padding, so the box is held to the row with
+        // its no-break space; held without it, the worker read a changed box and every Claude
+        // reply was refused (#843 review).
+        console.Rows = [.. ClaudeIdle().Take(5), pointer + "\u00A0", .. ClaudeIdle().Skip(6)];
+        console.OnInject = plan => Fixture.Append(claude, ClaudePrompt(Typed(plan)));
+
+        var result = await ReplyAsync(ClaudeId, "Ship it");
+
+        Assert.Equal(new ReplyResult(AnswerOutcome.Delivered), result);
+        Assert.Equal((5, pointer + "\u00A0"), Assert.Single(Assert.Single(console.Plans).Plan.Sends).Expect![1] is var row ? (row.Row, row.Text) : default);
     }
 
     [Fact]
@@ -244,14 +264,20 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Empty(console.Typed);
     }
 
-    [Fact]
-    public async Task A_Claude_reply_whose_Enter_was_taken_as_part_of_the_paste_gets_Enter_again_held_to_the_box_holding_it()
+    [Theory]
+    // The box holding the reply, as drawn: plain, or with Claude Code's pointer and no-break
+    // space, and a no-break space at the row's end too. The Enter again is held to the rows as
+    // the worker reads them, which trims only the window's ASCII padding (#843 review, Copilot
+    // 5780796076).
+    [InlineData("> a long reply")]
+    [InlineData("\u276F\u00A0a long reply\u00A0")]
+    public async Task A_Claude_reply_whose_Enter_was_taken_as_part_of_the_paste_gets_Enter_again_held_to_the_box_holding_it(string drawn)
     {
         console.Rows = ClaudeIdle();
         console.OnInject = plan =>
         {
             if (plan.Sends is [{ Text: "", Enter: true }]) { Fixture.Append(claude, ClaudePrompt("a long reply")); }
-            else { console.Rows = ClaudeIdle("a long reply"); }
+            else { console.Rows = [.. ClaudeIdle().Take(5), drawn, .. ClaudeIdle().Skip(6)]; }
         };
 
         var result = await ReplyAsync(ClaudeId, "a long reply");
@@ -260,7 +286,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         Assert.Equal(2, console.Plans.Count);
         var enter = Assert.Single(console.Plans[1].Plan.Sends);
         Assert.Equal(("", true), (enter.Text, enter.Enter));
-        Assert.Equal((5, "> a long reply"), (enter.Expect![1].Row, enter.Expect[1].Text));
+        Assert.Equal((5, drawn), (enter.Expect![1].Row, enter.Expect[1].Text));
     }
 
     [Fact]
@@ -273,6 +299,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("did not record the reply", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
         Assert.Single(console.Plans);
     }
 
@@ -412,6 +439,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("has not read every file", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
     }
 
     // ---- Codex ----
@@ -536,6 +564,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("did not take an attachment as an image", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
         Assert.Single(console.Plans);
     }
 
@@ -549,6 +578,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("did not attach every image", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
     }
 
     [Fact]
@@ -568,8 +598,9 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
         var result = await ReplyAsync(CodexId, "see", Upload(Png(100)), Upload(Png(100)));
 
-        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
-        Assert.Contains("could not read Codex's screen part way", result.Reason);
+        // #995, #802: what went wrong is in the host's log, never in the reason.
+        Assert.Equal(new ReplyResult(AnswerOutcome.Unconfirmed, "the machine couldn't deliver it"), result);
+        Assert.Contains(logged, l => l.Contains("part way through a reply", StringComparison.Ordinal) && l.Contains("the console went away", StringComparison.Ordinal));
         Assert.Equal(2, Directory.GetFiles(Path.Combine(f.Root, "profile", "attachments")).Length);
         Assert.Equal(0, store.Count);
     }
@@ -635,7 +666,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
             BeforeInject?.Invoke();
             BeforeInject = null;
             var rows = Rows;
-            if (plan.Sends[0].Expect is { } expect && expect.Any(e => e.Row >= rows.Count || rows[e.Row].TrimEnd() != e.Text))
+            if (plan.Sends[0].Expect is { } expect && expect.Any(e => e.Row >= rows.Count || Worker.Read(rows[e.Row]) != Worker.Read(e.Text)))
             {
                 return Task.FromResult(new InjectionResult(InjectionStatus.NothingTyped, WorkerInjector.ScreenChanged));
             }
@@ -649,7 +680,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
             if (FailReads) { throw new IOException("the console went away"); }
             var rows = Rows;
             AfterRead?.Invoke(rows);
-            return Task.FromResult(new ConsoleScreen([.. rows], null));
+            return Task.FromResult(new ConsoleScreen([.. rows.Select(Worker.Read)], null));
         }
 
         // What the agent does once it has been looked at, with what was seen.

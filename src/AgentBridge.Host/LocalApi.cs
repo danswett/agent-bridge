@@ -27,6 +27,13 @@ public static class LocalApi
 
     public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null, RemoteAuthorization? authorization = null) => async (channel, op, data) =>
     {
+        // Managing a machine from another device (#801) is for the relay alone. Refused here for
+        // every caller, the app included, so nothing on this machine, an agent least of all, can
+        // reach it, and the #67 guard below stays exactly as it was.
+        if (ManageProtocol.IsOp(op))
+        {
+            throw Refuse(op, callers.Classify(channel), ManageService.ThroughTheRelay, log);
+        }
         if (op.StartsWith("host.", StringComparison.Ordinal))
         {
             if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller
@@ -44,6 +51,13 @@ public static class LocalApi
         if (Acts.Contains(op) && callers.Classify(channel) is { Kind: CallerKind.Agent } agent)
         {
             throw Refuse(op, agent, "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
+        }
+        // A whole past conversation of every session, words the person pasted into other sessions
+        // included, is more than an agent reading the latest exchange needs, until agents have a
+        // principal of their own (design §5.5, #45; docs/protocol/v1-history.md).
+        if (op == HistoryProtocol.Op && callers.Classify(channel) is { Kind: CallerKind.Agent } reader)
+        {
+            throw Refuse(op, reader, "reading a session's history is for the person, from the app or a phone", log);
         }
         // Shaped inside the service, so hello.changed compares what this caller is told (#651).
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch

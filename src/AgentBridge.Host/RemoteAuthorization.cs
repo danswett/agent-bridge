@@ -12,11 +12,17 @@ public sealed class RemoteAuthorization : IDisposable
     static readonly HashSet<string> PersonOperations =
     [
         .. Reads, Ops.SessionsFocus, Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop,
+        // A session's earlier turns: a person's devices only, never the HA connector's service role,
+        // whose connector-read profile is the latest exchange (docs/protocol/v1-history.md).
+        HistoryProtocol.Op,
         Ops.AttachmentStart, Ops.AttachmentChunk, Ops.AttachmentDiscard,
         Ops.PushSubscribe, Ops.PushUnsubscribe, Ops.PushList,
         LaunchProtocol.Options, LaunchProtocol.Launch, TrustProtocol.Answer,
         UsageProtocol.Get, UsageProtocol.Subscribe,
         UpdateProtocol.Get, UpdateProtocol.Subscribe, UpdateProtocol.Check, UpdateProtocol.Install,
+        AgentSignIn.Start, AgentSignIn.Cancel,
+        ManageProtocol.Get, ManageProtocol.Subscribe, ManageProtocol.Restart, ManageProtocol.HooksRepair,
+        ManageProtocol.Stop, ManageProtocol.ConfigGet, ManageProtocol.ConfigSet, ManageProtocol.HaTokenSet,
     ];
     static readonly HashSet<string> HostCapabilities =
         [UsageProtocol.Capability, UsageProtocol.SharedCapability, TransferProtocol.ServeCapability];
@@ -94,6 +100,8 @@ public sealed class RemoteAuthorization : IDisposable
         var role = Allows(channel) && leases.TryGetValue(channel, out var lease) ? lease.Role : null;
         return hello with
         {
+            // machine.restore names sessions (#780): only for a role that may read them.
+            Machine = role is TrustedPeerStore.Person or TrustedPeerStore.Service ? hello.Machine : hello.Machine with { Restore = null },
             Capabilities = [.. hello.Capabilities.Where(c => role switch
             {
                 TrustedPeerStore.Service => c == Capabilities.SessionsRead,

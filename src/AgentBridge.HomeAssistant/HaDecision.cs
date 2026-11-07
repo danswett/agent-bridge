@@ -90,7 +90,7 @@ public static partial class HaDecision
         // session reported it (Misleads): neutralising template braces adds a zero-width space,
         // which is the card's own. Who asks leads the card's Markdown as literal text, so it cannot
         // open a fence or a link around the prompt.
-        var asks = $"{HaPayloads.NeutraliseTemplates(MarkdownLiteral(Titled(question, session)))} asks:\n\n";
+        var asks = Queue(question) + $"{HaPayloads.NeutraliseTemplates(MarkdownLiteral(Titled(question, session)))} asks:\n\n";
         var held = Misleads(question, session) ? Misleading : HeldByHost(question) ?? Unshaped(question, session.Agent) ?? TooLongToShow(question, asks.Length);
         return Plan(question with { Message = asks + Shown(question, held, asks.Length) }, session.Agent, held) with { Agent = agent, AgentName = name, Asker = asker };
     }
@@ -125,8 +125,9 @@ public static partial class HaDecision
     // The host's question as the card should show it.
     public static DecisionPlan Plan(Question question, AgentKind agent)
     {
-        var held = Misleads(question) ? Misleading : HeldByHost(question) ?? Unshaped(question, agent) ?? TooLongToShow(question, 0);
-        return Plan(question with { Message = Shown(question, held, 0) }, agent, held);
+        var queue = Queue(question);
+        var held = Misleads(question) ? Misleading : HeldByHost(question) ?? Unshaped(question, agent) ?? TooLongToShow(question, queue.Length);
+        return Plan(question with { Message = queue + Shown(question, held, queue.Length) }, agent, held);
     }
 
     // An approval the host itself holds at the machine, or had to cut, is held here for the same
@@ -174,6 +175,12 @@ public static partial class HaDecision
     // What an approval's escapes stand for, in words above it (ui.md §6.4): Approve once is offered
     // for it, and an escape can be read past while its character still acts (PowerShell ends a `#`
     // comment at a bare CR, shown as \u000D on the comment's line).
+    // Copilot asked several permissions at once and shows them one at a time, this one first
+    // (#690): each is its own question, published and notified under its own id, so a tap meant
+    // for this one never answers the next.
+    static string Queue(Question question) =>
+        question.Kind == QuestionKind.Approval && question.Waiting is > 1 and var n ? $"_1 of {n} permissions waiting_\n\n" : "";
+
     static string Notes(Question question) =>
         question.Kind == QuestionKind.Approval && ShownText.Notes(question.Message) is { Count: > 0 } notes ? $"_{string.Join(" · ", notes)}_\n\n" : "";
 
@@ -233,6 +240,19 @@ public static partial class HaDecision
         if (question.Message.Length > QuestionMaxChars) { return Terminal(question, TooLong); }
         if (question.Kind == QuestionKind.Approval)
         {
+            // One the host escaped anything in is approved only by a two-step confirmation from a
+            // person's phone, browser or Windows app, or at the machine (#803): Home Assistant has no
+            // device key, and its users include agents (homeAssistant.agentUserIds). Deny goes as for
+            // any approval, and nothing on the card, a push or a notification's buttons offers more.
+            if (question.Escaped is not null)
+            {
+                // One the machine keeps for itself, or with too many escapes to mark, is approved
+                // nowhere else, so the card does not send the person to the app for it.
+                var note = question.Escaped.Approve == EscapedApproval.Confirm ? DenyOnlyNote : AtMachineNote;
+                var denyOnly = $"{question.Message}\n\n{note}";
+                if (denyOnly.Length > QuestionMaxChars) { return Terminal(question, TooLong); }
+                return new DecisionPlan(question.Id, denyOnly, ["Deny"], [], AnswerOnTap: true, TerminalOnly: false, TakesTypedAnswer: false);
+            }
             // A Codex approval: its own tap is the answer (Publish-DaemonSessionDecision).
             return new DecisionPlan(question.Id, question.Message, ["Approve", "Deny"], [], AnswerOnTap: true, TerminalOnly: false, TakesTypedAnswer: false);
         }
@@ -267,6 +287,11 @@ public static partial class HaDecision
     const string Misleading = "it holds characters that can be drawn other than as they run, so it is answered where it runs.";
     const string NotAsWritten = "it would not be drawn here as it is written, so it is answered where it runs.";
     const string NotWhole = "its command did not come whole in a block, so it may be cut short, and it is answered where it runs.";
+
+    // Under an approval the host escaped anything in, which the card offers Deny for only (#803).
+    public const string DenyOnlyNote = $"_Approve from the {Product.App} or at the machine._";
+    // Under one only the machine approves: its policy is machine, or it has too many escapes to mark.
+    public const string AtMachineNote = "_Approve at the machine._";
 
     // What a push says in place of such an approval.
     public const string MisleadingPush = "An approval is waiting at the machine. It holds characters that can be drawn other than as they run, so it is not shown here; answer it in the terminal.";

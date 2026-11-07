@@ -6,7 +6,8 @@ namespace AgentBridge.App.Core;
 // What an entry in Needs you offers (ui.md §6.1, #165): Approve once and Deny for an approval
 // this app can answer and whose whole prompt the entry shows; "Answer at the machine" and nothing
 // to press for a prompt no host can answer from here; otherwise its session is opened, where the
-// card says what it asks and why.
+// card says what it asks and why. A session that needs sign-in is never an entry: signing in is
+// its machine's banner's (SignInBanners, ui.md §6.13).
 public enum NeedsYouMode { Approve, Open, AtMachine }
 
 // One pending question in the Needs you lane, the session's own or a delegate's (pwa/js/needs-you.js

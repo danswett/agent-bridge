@@ -20,17 +20,50 @@ public sealed class QuestionView : StackPanel
     readonly Action<bool> editing;
     readonly List<Action> refreshers = [];
     readonly List<(INotifyPropertyChanged Source, PropertyChangedEventHandler Handler)> subscriptions = [];
+    // The answer's receipt (ui.md §6.4, §6.5, #600, #617): words only, for an exception or "You
+    // answered", a polite live region that hears every stage, in a row that keeps its place from
+    // Send to the outcome. The ring and the check are the button's own.
     readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
+    readonly Grid receipt = new();
+    // Drawn clear and unheard under the words: the room the longest outcome needs at this width
+    // (QuestionViewModel.Room), kept from Send so neither a stage nor the outcome moves what is below.
+    readonly TextBlock room = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0, IsHitTestVisible = false };
     readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     readonly Button resend = new() { Content = "Send again" };
+    readonly TextBlock waiting = new() { TextWrapping = TextWrapping.Wrap };
     Button? send;
 
     // heading: who asks (ui.md §6.4, "Main agent asks" or "<delegate> asks"), in place of the
     // question's own Waiting on you or Permission requested.
     readonly TextBlock head;
+    // The heading as where keyboard focus lands when the session is opened for its question (a
+    // toast, Needs you): the question read first, its answers a Tab away. On the first control
+    // instead, an approval's Approve once, the next Enter or Space answered it before the person
+    // had read the command (#484). A tab stop only while it has focus, so Tab and Shift+Tab pass
+    // over it otherwise; named, and a heading, for a screen reader.
+    readonly ContentControl headFocus;
 
     // Who asks, again: a delegate's name can arrive after its question (S1's subagents list).
-    public string Heading { get => head.Text; set => head.Text = value; }
+    public string Heading
+    {
+        get => head.Text;
+        set
+        {
+            head.Text = value;
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(headFocus, value);
+        }
+    }
+
+    // Keyboard focus on the question's heading (#484): never on one of its answers.
+    public bool FocusHeading(FocusState state)
+    {
+        headFocus.IsTabStop = true;
+        if (headFocus.Focus(state)) { return true; }
+        headFocus.IsTabStop = false;
+        return false;
+    }
+
+    internal Control HeadingTarget => headFocus;
 
     // acted: the person activated one of its controls (a click, a key, UI Automation), as the control
     // acts: what the question lays out next is theirs (SessionView's AnswerWatch.Own). Called as the
@@ -49,7 +82,14 @@ public sealed class QuestionView : StackPanel
         AutomationId(this, "Question");
 
         head = new TextBlock { Text = heading ?? vm.Heading, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsHead") };
-        Children.Add(head);
+        headFocus = new ContentControl { Content = head, IsTabStop = false, UseSystemFocusVisuals = true, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        AutomationProperties(headFocus, head.Text, "QuestionHeading");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHeadingLevel(headFocus, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level3);
+        headFocus.LostFocus += (_, _) => headFocus.IsTabStop = false;
+        Children.Add(headFocus);
+        waiting.Foreground = Ui.Brush("AbNeedsText");
+        AutomationId(waiting, "PermissionsWaiting");
+        Children.Add(waiting);
         // What its escapes stand for, above its text (ui.md §6.4): an escape can be read past while its
         // character still acts.
         foreach (var note in vm.Notes)
@@ -84,10 +124,16 @@ public sealed class QuestionView : StackPanel
             footer.Children.Add(resend);
             Children.Add(footer);
             Children.Add(error);
-            Children.Add(status);
+            room.Text = vm.StatusRoom;
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetAccessibilityView(room, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(status, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+            receipt.Children.Add(room);
+            receipt.Children.Add(status);
+            Children.Add(receipt);
         }
 
         Watch(vm, Refresh);
+        vm.EscapedConfirmRequested += OnEscapedConfirm;
         Refresh();
         drawn = true;
     }
@@ -100,12 +146,139 @@ public sealed class QuestionView : StackPanel
         return b;
     }
 
+    void OnEscapedConfirm() => _ = ConfirmEscapedAsync();
+
+    // The confirmation sheet for an approval the host escaped anything in (#803, ui.md §6.4,
+    // "Escaped approvals"): the escaped command in full, the warning, and the confirm at the end of
+    // the command, held a second after the end is first shown. Cancel is the default and the Escape
+    // action, and sends nothing.
+    async Task ConfirmEscapedAsync()
+    {
+        if (XamlRoot is null || vm.Question.Escaped is not { } escaped) { return; }
+        var marks = escaped.Marks;
+        var content = new StackPanel { Spacing = 8 };
+        var where = string.Join(" on ", new[] { vm.SessionTitle, vm.MachineName }.Where(s => !string.IsNullOrEmpty(s)));
+        if (where.Length > 0) { content.Children.Add(new TextBlock { Text = where, Style = Muted(), TextWrapping = TextWrapping.Wrap }); }
+        var warnings = EscapedApprovalView.Warnings(vm.Question.Message, marks);
+        var warning = new StackPanel { Spacing = 4, Padding = new Thickness(12), CornerRadius = new CornerRadius(4), BorderThickness = new Thickness(1), BorderBrush = Ui.Brush("AbNeeds") };
+        foreach (var line in warnings) { warning.Children.Add(Boxed(line, null)); }
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(warning, string.Join(" ", warnings));
+        content.Children.Add(warning);
+        var hint = new TextBlock { Text = EscapedApprovalView.ScrollHint, Style = Muted() };
+        content.Children.Add(hint);
+        var command = Boxed(vm.Question.Message, marks);
+        AutomationId(command, "EscapedCommand");
+        var confirm = new Button { Content = EscapedApprovalView.ConfirmLabel, IsEnabled = false, HorizontalAlignment = HorizontalAlignment.Stretch, MinHeight = 48, Margin = new Thickness(0, 16, 0, 0) };
+        AutomationProperties(confirm, EscapedApprovalView.ConfirmName, "ConfirmEscaped");
+        var announce = new TextBlock { Visibility = Visibility.Collapsed };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(announce, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+        var problem = new TextBlock { Foreground = Ui.Brush("AbDangerText"), TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
+        var inner = new StackPanel { Spacing = 4 };
+        inner.Children.Add(command);
+        inner.Children.Add(confirm);
+        inner.Children.Add(problem);
+        var scroll = new ScrollViewer { Content = inner, MaxHeight = 360, IsTabStop = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(scroll, "The command, escaped");
+        content.Children.Add(scroll);
+        content.Children.Add(announce);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = EscapedApprovalView.Title,
+            Content = content,
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        // The confirm waits until the end of the command has been shown, then a moment more.
+        Microsoft.UI.Dispatching.DispatcherQueueTimer? timer = null;
+        void Seen()
+        {
+            if (timer is not null) { return; }
+            hint.Visibility = Visibility.Collapsed;
+            timer = DispatcherQueue.CreateTimer();
+            timer.Interval = EscapedApprovalView.ConfirmDelay;
+            timer.IsRepeating = false;
+            timer.Tick += (_, _) =>
+            {
+                confirm.IsEnabled = true;
+                announce.Text = EscapedApprovalView.Available;
+                announce.Visibility = Visibility.Visible;
+                // A live region's new text is read only when the change is raised (#836 review), as
+                // LaunchView's Announce does, once the text is laid out.
+                DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(announce)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
+            };
+            timer.Start();
+        }
+        void Look() { if (scroll.ScrollableHeight <= 0 || scroll.VerticalOffset >= scroll.ScrollableHeight - 1) { Seen(); } }
+        scroll.ViewChanged += (_, _) => Look();
+        scroll.Loaded += (_, _) => Look();
+        Acting(confirm).Click += (_, _) =>
+        {
+            confirm.IsEnabled = false;
+            if (vm.ConfirmEscaped() is { } why)
+            {
+                problem.Text = why;
+                problem.Visibility = Visibility.Visible;
+                // Pressed again, it checks afresh: the Try again once the machine is back.
+                confirm.IsEnabled = true;
+                return;
+            }
+            dialog.Hide();
+        };
+        await dialog.ShowAsync();
+        timer?.Stop();
+    }
+
+    // Text with the host's own escapes boxed (marks), or, with no marks, every \uXXXX code in it
+    // boxed (the warning's own sentences): the code face, a 1 px outline in the Danger role, a 2 px
+    // radius, 2 px side padding, no fill. Left to right, read in the order it runs.
+    static RichTextBlock Boxed(string text, IReadOnlyList<IReadOnlyList<int>>? marks)
+    {
+        var block = new RichTextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FlowDirection = FlowDirection.LeftToRight, TextReadingOrder = TextReadingOrder.UseFlowDirection };
+        var mono = (Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["MonoFontFamily"];
+        if (marks is not null) { block.FontFamily = mono; }
+        var paragraph = new Microsoft.UI.Xaml.Documents.Paragraph();
+        IEnumerable<EscapedApprovalView.Piece> pieces = marks is not null ? EscapedApprovalView.Segments(text, marks) : Codes(text);
+        foreach (var piece in pieces)
+        {
+            if (!piece.Mark) { paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = piece.Text }); continue; }
+            foreach (var part in EscapedApprovalView.Pieces(piece.Text))
+            {
+                // Every character drawn: what in a mark is not an escape is plain text (#836 review).
+                if (!part.Token) { paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = part.Text }); continue; }
+                var token = part.Text;
+                var label = new TextBlock { Text = token, FontFamily = mono };
+                var box = new Border { Child = label, BorderThickness = new Thickness(1), BorderBrush = Ui.Brush("AbDanger"), CornerRadius = new CornerRadius(2), Padding = new Thickness(2, 0, 2, 0) };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, EscapedApprovalView.Describe(token));
+                paragraph.Inlines.Add(new Microsoft.UI.Xaml.Documents.InlineUIContainer { Child = box });
+            }
+        }
+        block.Blocks.Add(paragraph);
+        return block;
+    }
+
+    static IEnumerable<EscapedApprovalView.Piece> Codes(string text)
+    {
+        var at = 0;
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, @"\\u[0-9A-F]{4}"))
+        {
+            if (m.Index > at) { yield return new(text[at..m.Index], false); }
+            yield return new(m.Value, true);
+            at = m.Index + m.Length;
+        }
+        if (at < text.Length) { yield return new(text[at..], false); }
+    }
+
     // Past the first draw: what changes from here is news (an answer's outcome).
     bool drawn;
+    // What the receipt last told a screen reader.
+    string announced = "";
 
     // The card let go of this question; the view stops following it.
     public void Detach()
     {
+        vm.EscapedConfirmRequested -= OnEscapedConfirm;
         foreach (var (s, h) in subscriptions) { s.PropertyChanged -= h; }
         subscriptions.Clear();
     }
@@ -119,21 +292,36 @@ public sealed class QuestionView : StackPanel
 
     void Refresh()
     {
-        // An answer's outcome fades in on the card (ui.md §5.3, Send and Answer).
+        waiting.Text = vm.Queue ?? "";
+        waiting.Visibility = Ui.Show(vm.Queue is not null);
+        // Each change of its words fades in (ui.md §5.3, Send and Answer); under reduced motion
+        // Motion makes that the cross-fade alone.
         var fade = drawn && vm.StatusText.Length > 0 && vm.StatusText != status.Text;
         status.Text = vm.StatusText;
-        status.Foreground = Ui.ToneBrush(vm.StatusTone);
-        status.Visibility = Ui.Some(vm.StatusText);
+        ReceiptMarkView.SetTone(status, vm.StatusTone);
+        receipt.Visibility = Ui.Show(vm.StatusText.Length > 0 || vm.InFlight);
         if (fade) { Motion.Enter(status, "Acknowledge"); }
+        // Heard as it changes, not as the card is first drawn with what was said before.
+        if (vm.Announcement != announced)
+        {
+            announced = vm.Announcement;
+            if (drawn)
+            {
+                ReceiptMarkView.SetUrgent(status, vm.AnnouncementUrgent);
+                ReceiptMarkView.SetAnnouncement(status, announced);
+            }
+        }
         error.Text = vm.Error ?? "";
         error.Visibility = Ui.Show(vm.HasError);
         resend.Visibility = Ui.Show(vm.ShowResend);
         if (send is not null)
         {
             send.Visibility = Ui.Show(vm.ShowSend);
-            send.IsEnabled = vm.CanAnswer;
-            // The ring on Send, unless one of the options sent it.
-            Ring(send, vm.InFlight && !(vm.Tap && vm.Fields is [var tapped, ..] && tapped.Options.Any(o => o.Value == vm.SentValue)));
+            // The ring, then the check, on Send, unless one of the options sent it; Send keeps its
+            // look while it shows them (ui.md §6.5), and vm.Send does nothing unless CanAnswer.
+            var mine = !(vm.Tap && vm.Fields is [var tapped, ..] && tapped.Options.Any(o => o.Value == vm.SentValue));
+            send.IsEnabled = vm.CanAnswer || (mine && (vm.InFlight || vm.SendCheck));
+            Ring(send, mine && vm.InFlight, mine && vm.SendCheck, vm.StatusMark == ReceiptMark.Still);
         }
         foreach (var r in refreshers) { r(); }
     }
@@ -152,25 +340,55 @@ public sealed class QuestionView : StackPanel
     void Tap(FieldViewModel f)
     {
         var panel = new StackPanel { Spacing = 6 };
+        var escaped = vm.EscapedMode;
         foreach (var o in f.Options)
         {
-            var b = new Button { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
-            var label = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
-            b.Content = WithRing(label);
+            // Approve once on an approval the host escaped anything in opens the sheet, or is not
+            // offered here at all, its reason in its place (#803).
+            if (escaped is not null && o.Value == "approve" && escaped != "confirm") { continue; }
+            var opens = escaped == "confirm" && o.Value == "approve";
+            var shown = opens ? EscapedApprovalView.ApproveLabel : o.Label;
+            var b = new OptionButton { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            var label = new TextBlock { Text = shown, TextWrapping = TextWrapping.Wrap };
+            b.Content = WithRing(label, trailing: true);
             if (o.Recommended || (vm.Approval && o.Tone == "allow")) { b.Style = (Style)Application.Current.Resources["AccentButtonStyle"]; }
             if (vm.Approval && o.Tone == "deny") { b.Foreground = Ui.Brush("AbDangerText"); }
-            AutomationProperties(b, o.Label, $"Option:{o.Value}");
-            Acting(b).Click += (_, _) => vm.Choose(o);
+            AutomationProperties(b, shown, $"Option:{o.Value}");
+            // Choose changes the selection first, so only while the question can be answered.
+            Acting(b).Click += (_, _) => { if (vm.CanAnswer) { vm.Choose(o); } };
             refreshers.Add(() =>
             {
-                b.IsEnabled = vm.CanAnswer;
                 var sent = vm.SentValue == o.Value;
-                label.Text = sent ? $"✓ {o.Label}" : o.Label;
-                Ring(b, sent && vm.InFlight);
+                // Tap to answer (ui.md §6.5): the tapped option is the control that sent it, so it
+                // keeps full opacity, with its ring and then its check, while the others are disabled,
+                // and stays pressed after: a stale or unconfirmed answer may have been typed, and is the
+                // prompt's one attempt. Busy or refused typed nothing, so all are enabled again, none
+                // pressed (QuestionViewModel.CanAnswer, SentValue). A press on it does nothing (Click).
+                b.IsEnabled = vm.CanAnswer || sent;
+                // Heard as pressed, as it is drawn (OptionButton): an enabled button that does nothing otherwise.
+                b.Pressed = sent;
+                // Its ring and check say it goes; the ✓ marks which option went once they are done.
+                label.Text = sent && !vm.InFlight && !vm.SendCheck ? $"✓ {shown}" : shown;
+                Ring(b, sent && vm.InFlight, sent && vm.SendCheck, vm.StatusMark == ReceiptMark.Still);
             });
             panel.Children.Add(b);
         }
         Children.Add(panel);
+        if (vm.EscapedWhy is { } why)
+        {
+            var reason = new TextBlock { Text = why, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") };
+            AutomationId(reason, "EscapedWhy");
+            Children.Add(reason);
+            if (escaped == "device")
+            {
+                Children.Add(new Expander
+                {
+                    Header = "How to approve a device",
+                    Content = new TextBlock { Text = QuestionViewModel.EscapedHelp, TextWrapping = TextWrapping.Wrap },
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                });
+            }
+        }
         if (!f.AllowOther) { return; }
 
         var other = new ToggleButton { Content = "Other…", HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
@@ -298,22 +516,43 @@ public sealed class QuestionView : StackPanel
     }
 
     // A button's label with the platform's progress ring beside it, shown while the answer it sent
-    // is on its way (ui.md §5.3, Send and Answer; InFlightRing). Beside the label, never over it
-    // or fading it. A grid, not a horizontal stack: a stack measures the label at any width, and a
-    // long option would no longer wrap to the card.
-    static Grid WithRing(FrameworkElement label)
+    // is on its way (ui.md §5.3, Send and Answer; InFlightRing), and then the check for about a
+    // second once it is delivered (§6.5, CheckGlyph). Beside the label, never over it or fading
+    // it: before it on the answer's button, at a tapped option's trailing edge (§6.5, "Tap to
+    // answer"). A grid, not a horizontal stack: a stack measures the label at any width, and a
+    // long option would no longer wrap to the card. An option's indicator column keeps its room at
+    // rest: sized to what it held, it grew from nothing to 24 px as the ring came, and a tapped
+    // option's label re-wrapped and moved the options below it (#625, Copilot 4478422056). Send's
+    // stays sized to it: the button grows by the ring beside its one-line label, which moves nothing
+    // (Send again shows only once Send is at rest), where a gap kept at rest would set "Send" off
+    // centre in its most common state.
+    static Grid WithRing(FrameworkElement label, bool trailing = false)
     {
-        var ring = new InFlightRing { Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-        var grid = new Grid { ColumnDefinitions = { new ColumnDefinition { Width = GridLength.Auto }, new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) } } };
-        Grid.SetColumn(label, 1);
+        const double Indicator = 16, Gap = 8;
+        var margin = trailing ? new Thickness(Gap, 0, 0, 0) : new Thickness(0, 0, Gap, 0);
+        var ring = new InFlightRing { Margin = margin, VerticalAlignment = VerticalAlignment.Center };
+        var check = new CheckGlyph { Margin = margin, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
+        var grid = new Grid();
+        var auto = new ColumnDefinition { Width = trailing ? new GridLength(Indicator + Gap) : GridLength.Auto };
+        var rest = new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) };
+        grid.ColumnDefinitions.Add(trailing ? rest : auto);
+        grid.ColumnDefinitions.Add(trailing ? auto : rest);
+        Grid.SetColumn(label, trailing ? 0 : 1);
+        Grid.SetColumn(ring, trailing ? 1 : 0);
+        Grid.SetColumn(check, trailing ? 1 : 0);
         grid.Children.Add(ring);
+        grid.Children.Add(check);
         grid.Children.Add(label);
         return grid;
     }
 
-    static void Ring(Button b, bool on)
+    // still: the answer waits on this device for its machine, so the ring stands still (§6.5).
+    static void Ring(Button b, bool on, bool check, bool still)
     {
-        if (b.Content is Grid { Children: [InFlightRing ring, ..] }) { ring.Active = on; }
+        if (b.Content is not Grid { Children: [InFlightRing ring, CheckGlyph glyph, ..] }) { return; }
+        ring.Still = on && still;
+        ring.Active = on;
+        glyph.Visibility = Ui.Show(check && !on);
     }
 
     Button SendButton()

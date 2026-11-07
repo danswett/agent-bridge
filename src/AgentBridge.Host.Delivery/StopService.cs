@@ -105,21 +105,32 @@ public sealed class StopService : ISessionStopper
 
     sealed record Arm(string Token, int ProcessId, DateTimeOffset StartedAt, DateTimeOffset At);
 
-    public StopService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, IConsoleInjector injector,
+    // Test-only compatibility overload; production must pass the shared gate explicitly.
+    internal StopService(ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, IConsoleInjector injector,
         IProcessControl control, StopOptions options, Action<string>? log = null, DeliveryGate? gate = null)
+        : this(gate ?? new DeliveryGate(), source, processes, probe, injector, control, options, log) { }
+
+    public StopService(DeliveryGate gate, ISessionSource source, IProcessInspector processes, IAgentHaBridgeProbe probe, IConsoleInjector injector,
+        IProcessControl control, StopOptions options, Action<string>? log = null)
     {
         this.source = source;
         this.processes = processes;
         this.probe = probe;
-        this.injector = injector;
+        this.injector = new GateTrackedInjector(injector, gate);
         this.control = control;
         this.options = options;
         this.log = log ?? (_ => { });
-        this.gate = gate ?? new DeliveryGate();
-        requests = new OutcomeMemory<StopResult>(options.Time, options.RememberFor);
+        this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
+        requests = new OutcomeMemory<StopResult>(options.Time, options.RememberFor, this.gate, Busy);
     }
 
     public bool Available => options.PlatformSupported && probe.Recent() is null;
+
+    // Why a session this host started is not to be typed into yet (LaunchService.HeldForReply): its
+    // window has not been seen ready and may show a startup question, folder trust above all, which
+    // /exit's Enter would answer ("Yes, this session only"). Such a session is terminated untyped.
+    // Set once the launcher exists.
+    public Func<string, string?>? LaunchHeld { get; set; }
 
     public Task<StopResult> StopAsync(StopRequest request, CancellationToken cancellationToken = default)
     {
@@ -173,7 +184,8 @@ public sealed class StopService : ISessionStopper
         }
         catch (Exception e)
         {
-            return Refused($"the host could not end the session: {e.Message}");
+            log($"end of {Short(request.Id)} failed before it was tried: {e.Message}");
+            return Refused("the machine couldn't end the session");
         }
 
         if (!gate.TryClaim(session.Id, key)) { return Busy(); }
@@ -181,7 +193,11 @@ public sealed class StopService : ISessionStopper
         try
         {
             try { result = await EndProcessAsync(session, processId, startedAt, confirmed); }
-            catch (Exception e) { result = Failed($"the host could not finish ending the session ({e.Message}); check at the machine"); }
+            catch (Exception e)
+            {
+                log($"end of {Short(session.Id)} (pid {processId}) failed part way: {e.Message}");
+                result = Failed("the machine couldn't finish ending the session; check at the machine");
+            }
         }
         finally { gate.Release(session.Id, key); }
         // Removed as soon as it has gone, rather than at the next discovery pass; shown as it
@@ -231,8 +247,10 @@ public sealed class StopService : ISessionStopper
                 if (!confirmed && Doing(now) is { } doing) { return AskAgain(session.Id, pid, startedAt, doing, "the session is no longer idle"); }
                 await SetEndingAsync(session.Id, true);
                 // Typed words would answer a question, and Enter accept it: a session that is
-                // asking anything is terminated without them.
-                var asking = now.Question is not null || CopilotAsking(session);
+                // asking anything, or whose launch here has not seen its window ready, is
+                // terminated without them.
+                var notReady = LaunchHeld?.Invoke(session.Id);
+                var asking = now.Question is not null || notReady is not null || CopilotAsking(session);
                 if (!asking)
                 {
                     InjectionResult typing;
@@ -243,7 +261,9 @@ public sealed class StopService : ISessionStopper
                 }
                 else
                 {
-                    log($"{Short(session.Id)} (pid {pid}) is asking a question, so /exit is not typed");
+                    log(notReady is not null
+                        ? $"{Short(session.Id)} (pid {pid}) has not been seen ready since it was started here, so /exit is not typed"
+                        : $"{Short(session.Id)} (pid {pid}) is asking a question, so /exit is not typed");
                 }
             }
             finally { gate.DoneTyping(); }

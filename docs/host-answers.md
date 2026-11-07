@@ -14,13 +14,13 @@ how the host does it and what it refuses.
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
-| Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped, and still approved (#220, #253 decision 3) |
+| Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped (#220); such an approval carries `escaped`, and Approve on it takes the two-step confirmation from a person's device this machine approved, through the relay only, or is held at the machine by `permissions.escapedApproval` (#803, [v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)). Deny goes as for any approval. While other permission requests wait, such a character in the text Copilot was given for any of them, the listed one's own included, makes the listed one `answerAtMachine`, Deny included, unless it is only in a path request's access kind (#690, below) |
 | Copilot CLI | Other permission prompts (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read | Refused, `answerAtMachine` |
 | Claude Code | `AskUserQuestion`, one to four questions, each one option (`choice`) or several (`multi`, at least one, the first nine rows) | Yes |
 | Claude Code | Free text in `AskUserQuestion` ("Type something") | Refused: no field offers `allowOther` (below) |
 | Claude Code | More than four questions, a question without options, two questions with the same text | Refused, `answerAtMachine` |
 | Claude Code | Permission prompts | Refused, `answerAtMachine`: agent-ha-bridge's hook reports them and offers only its reply box, best effort |
-| Codex | An approval its `PermissionRequest` hook recorded (`<id>.approval.json`) | Yes: approve or deny, always `unconfirmed` (below). Its message is the whole command, fenced; a marker holding only the hook's 300-character preview (agent-ha-bridge's hook, an older host) or a command past 16,384 characters is `truncated`, and refused like any truncated question (#209). One whose `tool_input` holds anything but the command and its description (an MCP tool's `host`, a `workdir`), or a network approval (`description` `network-access <target>`), is answered at the machine (#338) |
+| Codex | An approval its `PermissionRequest` hook recorded (`<id>.approval.json`) | Yes: approve or deny, always `unconfirmed` (below). Its message is the whole command, fenced; a marker holding only the hook's 300-character preview (agent-ha-bridge's hook, an older host) or a command past 16,384 characters is `truncated`, and refused like any truncated question (#209). One whose `tool_input` holds anything but the command and its description (an MCP tool's `host`, a `workdir`), or a network approval (`description` `network-access <target>`), is answered at the machine (#338). One the host escaped anything in carries `escaped`, and Approve on it takes the same two-step confirmation as a Copilot permission prompt's, which names the approval's `<DecisionId>#<digest>` id (#803, #958) |
 | Codex | An approval seen only in the rollout, or one agent-ha-bridge has already typed into | Refused, `answerAtMachine` |
 
 These are what agent-ha-bridge answers, with two deliberate gaps and one deliberate
@@ -74,11 +74,49 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     only a string that is plainly a JSON number is read so. Seen in a real session for a number field; a text field is
     assumed to open the same way. Claude's and Codex's prompts take no typed field values, so
     have no such field.
+  * A field's schema constraints (#766): Copilot CLI 1.0.105 draws `ask_user`'s form with
+    `enforceSchemaConstraints` off, so it checks none of them and records whatever is typed.
+    The host checks the answer before any key, on what it would type (text with its line breaks
+    flattened, a number as the plain decimal typed), and refuses one outside them: a number's
+    `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` and `integer`
+    type, compared exactly; text's `minLength` and `maxLength` in UTF-16 units, `pattern` as
+    JavaScript reads it and `format` `email`, `uri`, `date` and
+    `date-time` with the CLI's own checks (`date-time`'s offset `Z`, `z`, `+HH:MM` or `+HHMM`; dates as real dates, where the CLI's Date.parse rolls `2026-02-30` over); a checkbox list's `minItems` and `maxItems`. A
+    field whose constraints cannot be checked exactly (a bound JavaScript holds as another
+    number, a pattern .NET would read differently, which includes lookbehinds, named groups,
+    back-references, `\b` and `\B`, `^` or `$` followed by a quantifier (no JavaScript pattern at
+    all), a quantified lookahead, a class escape beside a class's hyphen other than one first or last in the class and letter escapes such
+    as `\a`), whose pre-filled default breaks them, or that carries any keyword beyond annotations and those
+    checked for the input the CLI draws (an allow-list: `enum`, `oneOf`, `anyOf`, `allOf`, `not`, `const`,
+    `if`, `dependent*` or an unknown keyword on a number, text or Yes/No field; on a list of choices,
+    or a checkbox list's items, anything but its options, each of their own `type`; on the form, anything
+    but its fields, `required` and `additionalProperties`), is answered at the machine. The CLI draws a
+    number with an `enum` as a box taking any number, and a string with only `anyOf` as a text box. `\d`, `\w`
+    and `\s` are written out as JavaScript's sets, ASCII digits and word characters and Unicode
+    white space. All of one question's patterns share 250 ms, building and matching them alike, so an
+    agent's many slow patterns cannot hold up the reading of every session: once it is spent,
+    every pattern left counts as one that cannot be checked, and the question is answered at the
+    machine (or the answer refused so). Text is checked both as typed and as trimmed
+    (JavaScript's `trim`), and refused if either form breaks a limit: the form passes it on as
+    typed, but a trim where it is recorded is not ruled out, and "  ab" is 4 typed and 2 trimmed.
+    Text of only spaces, tabs or no-break spaces is checked so too, and an empty or blank answer
+    to a required text field is refused, since it records no answer or might. Blank there counts
+    control characters too: the host types them as spaces (`InjectableText.Collapse`), so
+    `"\u0085"` would go as a space that `trim()` empties (`FieldConstraints.BlankOnceTyped`, which
+    the PWA mirrors). A required text field whose default is blank so is therefore answered at
+    the machine: that default is the one answer it can be given from another device, and it is
+    blank. An empty default opens nothing and stays answerable. Whether Copilot trims a text box's words before recording them
+    is not settled: its form passes them on as typed (`Fxn`, and `Uxn`'s accept step), but the
+    native layer after it was not traced, which is why both forms are checked.
   * An option list whose `default` is present but is not one of its options, `null` included,
     opens on its Other box (`Dxn` in 1.0.105), where the walk from the top row ends a row off;
     it is refused, and shown to be answered at the machine. So are a checkbox list with no
     options (no `items` object, or one naming none) and one whose default does not name its
     options.
+  * A Yes / No field whose `default` is not `true`, `false` or `null` (#768): ask_user's form
+    is drawn without schema constraints, which gives its Yes / No list (`Oxn`) a third row,
+    Other, and a text default opens on it. Walked from there, Yes recorded No and No reopened
+    Other. It is refused, and shown to be answered at the machine.
   * Every field is read as Copilot CLI draws it, which is by its `type` alone (`cli-main.js`
     `tle` in 1.0.105): a `number` or `integer` is a number box even with an `enum` (whose Up
     and Down add or take one, so walking it as a list recorded a different number), and a
@@ -104,7 +142,7 @@ words half-typed into a text field) is in no transcript, so the keys add to it: 
 `b` after `a` was ticked locally submits both. The caret position is normalized (above);
 ticks and typed text cannot be, short of reading the screen. Such an answer is never
 reported as delivered: the structured record differs, so the outcome is `unconfirmed`
-and the client says to check at the machine. agent-ha-bridge has the same exposure.
+and the client says to check the conversation. agent-ha-bridge has the same exposure.
 
 The keys are planned from the tool call's own arguments in the transcript, not from the
 `Question` the client saw, because they depend on things a `Question` does not carry
@@ -146,10 +184,58 @@ option, so Enter is never pressed and no option is found by position:
 Bound to the request. The question's id is `<requestId>#<digest>`, the digest a hash of
 the message the client was shown. Immediately before typing, the transcript must show
 that `permission.requested` with no `permission.completed` (and no session abort or
-shutdown) after it, reading exactly as shown (`stale` otherwise), and no other permission
-request or `ask_user` waiting, since the screen shows one prompt at a time and could be
-showing the other (`refused`). The transcript is checked so before the screen is read and
-again after, so what the screen showed was this request while it was still waiting. A
+shutdown) after it, reading exactly as shown (`stale` otherwise), and no `ask_user`
+waiting (`refused`). A `permission.requested` written again for a request already waiting,
+with what it asks now, replaces that request's question: the one it revises is no longer
+listed or counted, and the request counts as asked again, after the others waiting, both in
+the listing and in the transcript read just before typing. Copilot can have several permission requests waiting at once, one for
+each of a batch of parallel tool calls, and draws one at a time; the session lists the
+earliest, saying how many wait (#690). While others wait, the screen, not the order
+asked, says which is drawn, and it is identified positively, never by a probe (agent-written
+text, which another request's command can end in or its diff hold). The key goes only if:
+* no waiting request holds a line-drawing character (U+2500-U+257F), a tab or a character
+  drawn other than as it runs (`ShownText.Misleads`), in any value or any property name at any
+  depth (an MCP or custom tool's dialog can draw an argument's name), so nothing the agent wrote
+  can draw a part of Copilot's frame or hide what it draws;
+* the options are inside one round frame whose top edge is on screen;
+* every row in it above the options is this request's dialog as Copilot CLI 1.0.105 draws
+  it (`CopilotDialog`): the title, a rule, each part of the body a blank row apart (a box's
+  lines one to a row, exactly as given, so a wrapped line is never taken for two), and the
+  question, with nothing else. Only the shell prompt (the intention, the command in a box,
+  "Do you want to run this command?") and the path prompt ("Allow path access", the paths
+  and any read-only directories in boxes, "Do you want to allow this?") are known so;
+* every other waiting request has something drawn to check the screen against (a read naming
+  no path has nothing), and none would be drawn the same (its title, body and question alike
+  once all white space is gone: a box wraps a long line hard at its width, so one line on two
+  rows reads like two lines, and trailing white space is not drawn);
+* and this request is the earliest still waiting.
+
+A listed prompt the host cannot tell from the others so is `answerAtMachine` while that holds:
+another waiting request is drawn ahead of it (below), its kind's dialog is not one the host
+knows, its own text has a run of spaces that can wrap onto a blank row, any waiting request's
+text (its own included) could draw part of the frame or hide what is drawn, another waiting
+request has nothing drawn to check, or one would be drawn the same
+(`CopilotDialogs.Identifiable`, which mirrors the checks above). So an approval with `escaped`
+listed while others wait is `answerAtMachine` (an escape is such text), unless its only escapes
+are in a path request's access kind, which its dialog never draws as written: no confirmation is
+offered, and Approve and Deny are both refused, until it waits alone. Being held so is not in the digest, so it is
+answerable again under the same id once it can be told apart. Otherwise it is `refused` ("the machine is showing a different permission (path access,
+request ed05e9d7)" when another's dialog is the one drawn, or why the screen cannot say),
+and never typed for the request on screen instead: answer it at the machine. The key is
+held from the frame's top edge. The transcript is checked so before the screen is read and
+again after, so what the screen showed was this request while it was still waiting, and no
+request that arrived meanwhile is drawn in its place. Each transcript check reconstructs the
+pending requests and their order before formatting and hashing only those still waiting;
+completed edits are not described again. Text parts of the dialog compare with all whitespace
+removed on both sides, so a hard-wrapped URL or token still matches, but any changed non-whitespace
+character does not. Boxed lines keep their exact, row-by-row comparison.
+Copilot 1.0.105 keeps a queue for each
+sort of prompt, in the order asked, and draws a waiting shell or other request (edit, read,
+MCP, tool) first, then a hook's, then a path request, then a URL request, whichever was asked
+first (`cli-main.js`: `GCn`'s queues, drawn in `cxo`'s order; `CopilotDialogs.DrawOrder`). So
+the earliest waiting request is listed as answerable only when nothing waiting draws ahead of
+it: a path request asked before a shell, edit, read or MCP one is `answerAtMachine` until that
+is answered, and one asked before a URL request is not. A
 request to run outside the sandbox, a kind not listed
 above, or one whose details cannot be read is `answerAtMachine`.
 
@@ -209,18 +295,36 @@ or nothing within 15 s is `unconfirmed`.
 
 agent-ha-bridge's `Invoke-PendingCodexApprovals`: `y` to approve or `n` to deny, then
 Enter 300 ms later, as a reply is typed. The approval is the one agent-ha-bridge's
-`PermissionRequest` hook recorded in `<id>.approval.json`, and its `DecisionId` is the
-question's id: the generation. Immediately before typing the host reads the marker again
-and types nothing unless it names this session, holds the same generation, and records no
-attempt of agent-ha-bridge's own (`DeliveryAttempted`). Missing is `stale`; unreadable,
-or anything else its own sender would reject, is `refused`. The host only reads the
+`PermissionRequest` hook recorded in `<id>.approval.json`. The question's id is
+`<DecisionId>#<digest>`: the marker's generation, and a digest of what the person is shown
+(the tool, the whole command, whether it was cut, the hook's preview line, the message, and
+whether it is truncated or answered at the machine), built the way a Copilot permission
+prompt's is. The generation alone does not bind the command: Codex can list the same
+`DecisionId` again with another command, plain, cut or escaped, and an Approve keyed by the
+generation alone was typed into a command the person never saw (#958). An answer naming any
+other id, a bare `DecisionId` included, is `stale`; a listed id that does not parse strictly
+is refused. Immediately before
+typing the host reads the marker again, rebuilds the question from that fresh read, never
+from the cached listing, and types nothing unless it names this session, holds the same
+generation, rebuilds to exactly the id answered, and records no attempt of
+agent-ha-bridge's own (`DeliveryAttempted`). Missing, another generation or another
+content is `stale`; unreadable, or anything else its own sender would reject, is
+`refused`. The host only reads the
 marker: it never writes, renames or removes it, so its attempt is recorded in its own
-ledger (below), not in agent-ha-bridge's file.
+ledger (below), not in agent-ha-bridge's file. That attempt is keyed by the generation, not
+the whole id, so a generation is typed into once whatever it reads as later.
+
+An Approve on an approval carrying `escaped` also carries its confirmation (#803,
+[v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)), signed for the whole id. The host
+checks it when the answer is taken, and again at the typing slot only once the fresh marker has
+rebuilt to exactly that id, so it is checked against what the person confirmed and never
+against the cached listing; what that second check can still catch is the confirmation's own
+standing (its device taken off the list, its lifetime passed).
 
 Codex records nothing that says how an approval was answered: the hook removes the marker
 on the next event however it was answered, and the rollout does not name the approval. So
 a typed approval is always `unconfirmed`, as agent-ha-bridge logs it ("native approval is
-not confirmed"), and the client says to check at the machine.
+not confirmed"), and the client says to check the conversation.
 
 Codex sessions are known to this host through agent-ha-bridge's hook registrations, or,
 for a Codex run with `--no-daemon` (every launch from this host), from the terminal that
@@ -277,7 +381,10 @@ In order, for every answer:
    `User responded: …`. A form, even of one field, needs the structured record: its
    rendering trims, renders `a=x, b=y` (equally `a="x, b=y"`), and cannot tell options
    `x`, `x ` and `pick=x` apart. A different record, an error, a skip, the session
-   ending, or nothing is `unconfirmed` with the reason. Claude and Codex as above.
+   ending, or nothing is `unconfirmed` with the reason. Claude and Codex as above. An
+   `unconfirmed` reason states only the fact (a refusal may say "answer at the machine"), and
+   an exception's text goes to the host's log only, as for replies
+   ([host-replies.md](host-replies.md), "What a reason says").
 
 Progress and timings work as for replies ([host-replies.md](host-replies.md#progress-and-timings)):
 `received` before step 1, `typed` (never `working`: a question holds the session) once step

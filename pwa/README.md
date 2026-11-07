@@ -1,4 +1,4 @@
-# Agent Bridge PWA
+# The Slipgates web app (PWA)
 
 The phone client: your machines and their live agent sessions, end-to-end encrypted
 through the relay. Plain ES modules and CSS, no framework, no build step, nothing from a
@@ -19,6 +19,12 @@ once, and shows each machine's updates with Check, Install and Check all, per
 [v1-update.md](../docs/protocol/v1-update.md).
 Larger files come next.
 
+The app was called Agent Bridge before it became Slipgates (#538). The app shows the new name
+as soon as it updates, and an installed app takes the new name and icon too, except that an
+installed iPhone/iPad app keeps its old icon until you choose to reinstall it, with the name
+Agent Bridge under it. Apple gives a Home Screen app no way to change either, and reinstalling
+makes it a new device, signed in and approved again, so keeping it is fine.
+
 | Light | Dark | Answering | A permission request | All machines | Needs you |
 |---|---|---|---|---|---|
 | ![Demo mode, light](docs/demo-light.png) | ![Demo mode, dark](docs/demo-dark.png) | ![Answering the worked example's question](docs/answer.png) | ![An approval, answered with a tap](docs/approval.png) | ![Every machine's sessions at once, each row naming its machine](docs/all-machines.png) | ![Needs you: every pending question above the list, an approval answered in place](docs/needs-you-light.png) |
@@ -28,11 +34,11 @@ Larger files come next.
 | File | What it does |
 |---|---|
 | `js/main.js` | Boot and wiring: demo or live, sign-in, the views |
-| `js/brand.js` | The product's name (`BRAND.name`, and `BRAND.shortName` for under a home-screen icon) and the sentences that say it, the one source for every place the app shows it (#538). Storage keys, IndexedDB and cache names, the worker's scope and messages, push subscriptions and the relay protocol are identifiers, not the brand, and never come from it (#541) |
+| `js/brand.js` | The product's name (`BRAND.name`, and `BRAND.shortName` for under a home-screen icon) and the sentences that say it, the one source for every place the app shows it (#538). The name is the brand token, re-exported from `design/brand.js`, which `tools/design-gen` generates from `design/tokens.json` `brand` ([brand.md](../docs/design/brand.md)). Storage keys, IndexedDB and cache names, the worker's scope and messages, push subscriptions and the relay protocol are identifiers, not the brand, and never come from it (#541) |
 | `js/identity.js` | This device's P-256 key, generated non-extractable and kept in IndexedDB; its device id |
 | `js/signin.js` | GitHub device flow through the relay; the stored account |
 | `js/relay.js` | One relay WebSocket: hello, key proof, presence (with the account's offline machines, `known`), routed frames, `forget`. A send on a dead socket throws |
-| `js/connection.js` | The relay over time: reconnect with jittered backoff (`js/backoff.js`, tested in `test/unit/backoff.test.mjs`), at once on `visibilitychange`/`pageshow`/`online`; stop on a refused sign-in or a takeover by another window |
+| `js/connection.js` | The relay over time: reconnect with jittered backoff (`js/backoff.js`, tested in `test/unit/backoff.test.mjs`), at once on `visibilitychange`/`pageshow`/`online`; stop on a refused sign-in or a takeover by another window. Out of sight for 15 s (`QUIET_AFTER_MS`), it rests (#610): the socket closes, and with it every channel, subscription and look, and Web Push says what needs the person meanwhile; never while an answer, reply, stop, launch, request or blob is on its way. Back in sight it connects at once, and each machine shown is subscribed again and held as confirming until its list is whole (#427), as after a drop. Unlike a drop, a rest is not trouble: each machine whose list was current shows as confirming, not reconnecting, and its questions stay in the app badge, though not in the lane, until its list is whole, its channel fails or the relay does not come back (`js/host-session.js` `rested`) |
 | `js/channels.js` | Noise_XX_P256 channels to hosts, as the initiator, with the peer's key checked against its id |
 | `js/noise-p256.js` | Vendored copy of `spikes/s2-noise-interop/web/noise-p256.js` |
 | `js/protocol.js` | Op and event names, and the tolerant reader: unknown fields dropped, unknown enum values read as the C# reader reads them |
@@ -46,7 +52,9 @@ Larger files come next.
 | `js/prompt-origin.js` | A prompt the person didn't type (#489, [ui.md](../docs/design/ui.md) §6.4): who sent it (`activity.userMessageFrom`: a schedule, an agent, or other; absent is the person), its label line's words and spoken name, its label cleaned and cut to 64 bytes, its hidden characters as escapes, and `PromptMemory`, which folds a schedule's repeat ("same as last time") and dates a prompt by its turn. Pure, and tested in `test/unit/prompt-origin.test.mjs` |
 | `js/needs-you.js` | The Needs you lane (#165): one entry per pending question across the machines shown, oldest first; what each says (title, machine, agent, age, first line or an approval's whole prompt, a delegate by name) and offers (Approve once and Deny, open the session, or answer at the machine); and the app badge with its count |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
-| `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
+| `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect; how far each has got where the machine says (`sessions.progress`: received, typed, queued) |
+| `js/ui/receipt.js` | The receipt of a reply or an answer (#600, #617): its words at each stage, the quiet window, the dwell, the stalls and what a screen reader hears. The timing is tested on a mocked clock in `test/unit/receipt.test.mjs` |
+| `js/timing.js` | Timing marks for each answer and reply (#600), kept on this device only: tap, each send, each progress stage and the outcome as `performance` marks and measures, with the machine's own `timings` beside them |
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
 | `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session, its files sent first |
 | `js/attachments.js` | A file or image for a reply: named, size-checked (a large image is redrawn smaller), hashed, and sent in chunks from where the machine has got to |
@@ -54,9 +62,10 @@ Larger files come next.
 | `js/launch.js` | Launching: the tolerant readers of `launch.options` and a launch's result (an unknown outcome is `unconfirmed`), and `checkLaunch`, which mirrors the C# `LaunchProtocol.Check` with its wording; folder-trust questions and their answers (`launch.trust`) |
 | `js/transfer.js` | Signed commands: bringing a session from another machine (the account's other machines' sessions, `sessions.transfer.serve`, and the command this device signs for the one a session is on, [v1-transfer.md](../docs/protocol/v1-transfer.md)), and answering a folder-trust question (`launch.trust:trust` or `:quit`, for the machine asking it), held to the host's by shared test vectors |
 | `js/launch-service.js` | Starting sessions: `answer-service.js` with `session.launch`, one launch on its way per machine, resent with the same request until it has an outcome |
+| `js/launch-follow.js` | A launch followed after its outcome, as the app's `LaunchViewModel` does (#891, #896): a busy machine listed again once its busy can have ended (its question's two minutes and a second, or 2 min 1 s with none named) or when a session registers on it, one listing at a time; and a launch the machine could not confirm said to have started when its session registers, by the host's rule (not a Copilot's, which registers before it is ready), or when its folder-trust question is trusted here. One whose outcome named no session (a Codex's) is not followed, as which session is its own can't be told here, until the host names it (#983) |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
-| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`), usage and updates: each machine shown on its own channel (`usage.subscribe`, `update.subscribe`), every other online machine by a short channel (`hello`, `usage.get`, `update.get`) once a minute while the app is in front, every ten seconds while an update there is under way; `call` sends a press to a machine on whichever |
+| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`), usage and updates: each machine shown on its own channel (`usage.subscribe`, `update.subscribe`), every other online machine by a short channel (`hello`, `usage.get`, `update.get`) every five minutes while the app is in front (#610; it was every minute), every ten seconds while an update there is under way; a machine shown asked for its hello again on its channel when it says it changed (`hello.changed`), else every minute; `call` sends a press to a machine on whichever |
 | `js/update.js` | A machine's updates ([v1-update.md](../docs/protocol/v1-update.md), #51): the tolerant reader, the row's words (what the machine's app is doing, how the last update ended), and `UpdateControl`, Check and Install with a request of their own each, a refusal shown on the row, and Check all |
 | `js/forget.js` | Forgetting an offline machine ([roster.md](../docs/protocol/roster.md)): two presses, the first arming for 5 seconds; an arm goes with a machine that comes back; the relay's refusals in words |
 | `sw.js` | The service worker: each release in a cache of its own, filled whole when its worker installs and served from there without asking the network, so a warm start waits on nothing and works offline (#609); anything else (the demo's chunk) stale-while-revalidate; and showing pushes (`push`) and opening the app at them (`notificationclick`). A release changes only as a whole: the browser checks `sw.js` on each start and the app on each return to the front, a new worker fills its own cache before it takes over, and the app then offers Reload, so old and new modules never mix (#26). The release before is kept for a page still open on it |
@@ -64,18 +73,22 @@ Larger files come next.
 | `js/platform.js` | The platform layer (#168, [ui.md](../docs/design/ui.md) §7): `windows`, `macos`, `ios`, `ipados`, `android`, `chromeos`, `linux` or `unknown`, from Chromium's client hints or else the user agent (a Mac with a touch screen is an iPad), and whether the app is installed (`display-mode: standalone`, or iOS's `navigator.standalone`), set once on `<html data-platform data-standalone>`. The hints (⌘↩ and ⌘K on Apple's, Ctrl+Enter and Ctrl+K elsewhere; either modifier works everywhere), the safe areas (`viewport-fit=cover` kept only when installed on iOS or iPadOS, where the app bar, the bottom navigation or rail and the reply box keep clear of the notch and the home indicator; elsewhere the browser keeps the page out of them), no double-tap wait there, and its edge swipe back. `unknown` is Windows; nothing depends on detection being right |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/hidden-text.js` | Text not on screen as it runs (#165, #220): the hidden and right-to-left characters the Needs you lane refuses, and the `\uXXXX` escapes code and approvals draw them as (the app's `HiddenText`) |
+| `js/auth-state.js` | An agent that needs sign-in, whose turn ended on an error, or that has stopped answering (#800): every protocol name for them in one place (`Session.attention`, `hello.machine.signIn`, `sessions.signin` and its `signin.*` ops and events, as Connection's contract on #800 has them), the github.com allowlist, the user code's shape, and agent text cut short and refused when token-shaped (the app's `AuthState`) |
+| `js/ui/sign-in-view.js` | The sign-in banners (#800): one per machine, agent and account, naming the sessions held up as links in its line, with Sign in, and focused from a sign-in push's link (#969); and the sheet that press opens, with the code from this device's own `signin.code`, Copy and Open |
 | `js/ui/needs-you-view.js` | Needs you on screen, above the list and apart from it, its entries kept in place across redraws |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each session's answers, replies, files, End session and the launch panel to the machine it is for; which session is chosen (from the address, kept across a resize) and which panes show; the heading, count, empty state and a line per machine that can't be reached |
 | `js/ui/delegates-view.js` | A session's delegates (ui.md §6.3): the strip under the header at three panes and a phone's chip row (an item per delegate the main agent started, "N finished" folded); the Delegates tab's list (a row per delegate under its parent: glyph, name, how long or finished, its latest line); and the delegate opened from any of them, in the inspector or pushed in the tab: Status, Model, Kind and ID, its Task, Latest and Reasoning, its Tools, the delegates it started, and "Ask main agent to stop it", which fills the reply box and sends nothing. Its own words come from `session.get` with `agent`, while it is on screen. Nothing in it replies to or stops a delegate |
-| `js/ui/glyph.js` | The status glyphs at 12, 14, 16, 20 and 24 px and the design icons, drawn from the generated sprite with `<use>`: the role colour from `data-glyph`, the driven diamond over it, and the moving part (`glyph-spin`, `glyph-orbit`) its own group, which `app.css` turns and reduced motion stops |
+| `js/ui/glyph.js` | The status glyphs at 12, 14, 16, 20 and 24 px and the design icons, drawn from the generated sprite with `<use>`: the role colour from `data-glyph`, the driven diamond over it, and the moving part (`glyph-spin`, `glyph-orbit`) in an HTML box of its own, which `app.css` turns on the compositor (#610, #505: an SVG child turned on the main thread, a style recalculation and a layout every frame) and reduced motion stops. Each glyph is a `<span>` of layers, each an `<svg>` of the 16 grid |
+| `js/ui/ticker.js` | The clocks ("2m ago", "last seen") tick only while the page is in sight, and catch up once as it comes back (#610) |
 | `js/ui/motion.js` | Motion ([ui.md](../docs/design/ui.md) §5.3, #232): the catalogue's motions that answer a change (push and pop, the inspector, a tab, a disclosure, a row arriving or leaving, a glyph changing, the activity dot, the selection pill, a menu, an acknowledgement, a banner, a reorder, the Needs you lane's mark and outcome, watched from outside the lane), each timed by its generated `--ab-motion-*` token, which reduced motion makes instant or a short cross-fade. Nothing is made untappable while it moves. What leaves is a copy, built node by node (text stays text, every HTML element a plain div or span, no id, class, link, control or script) and drawn with only the computed properties that draw it, clipped to what showed of it, in a closed shadow root that nothing can find or tap. `app.css` draws the rest: a press's release (only while `data-press="released"`), and the disclosure chevron |
+| `js/ui/collapse-header.js` | A phone's session header collapsing on scroll ([ui.md](../docs/design/ui.md) §6.2, #631), below 760 px only (from there up it holds no listener and leaves no style behind). `Fold` is the pure state machine (the 32 px down and 64 px up hysteresis with its restart on a change of direction, the header riding the scroll one for one near the top, overscroll clamped; `test/unit/collapse-header.test.mjs`). `CollapsingHeader` reads only the person's scrolling (a scroll the app makes to a question, or content growing below, leaves the header as it was), sets `--ty`, `--covered` and `--head-h` on the view, expands the header for focus coming into it and keeps focused content clear of it after a resize or rotation. The `collapse` motion is timed by its generated `--ab-motion-collapse-*` tokens, a cross-fade under reduced motion |
 | `js/ui/shell.js` | The shell ([ui.md](../docs/design/ui.md) §7, #179): the 56 px web app bar (mark and name, search, machines online, account) and a rail on a desktop; the page's title row and a bottom navigation bar with a Bridge indicator on a phone. Each page is a route in the hash (`#/sessions`, `#/machines`, `#/launch`, `#/usage`, `#/settings`), so a reload stays on it and the browser's back goes between them. Ctrl/Cmd+K focuses search, which narrows the sessions list |
 | `js/ui/*` | The sessions page's panes (#179, ui.md §5.2): each session's two-line row and its view (header, conversation, reply box, and the inspector's Details and Tools; `session-card.js`), facts joined by separators that never start a line and paths cut in the middle (`meta.js`), the row menu (Move up, Move down, Pin), the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget, each row two lines: name and state, then at most two facts; #213), the machine tabs over the sessions, the usage page, relative times |
 | `js/demo.js` | `?demo=1`, and loaded only then (a dynamic import, so a chunk of its own the live app never fetches): a simulated host speaking the real protocol to the real client, answering, replying, ending and launching sessions and usage included; `?machines=2` adds a second machine, Laptop, and `?machines=3` a read-only shadow, DEV-VM1 (shadow), behind a simulated relay (`DemoConnection`); `?updates=1` a machine whose app found a release, and installs it when asked (`?updateStep=<ms>` per step); `?delegates=1` a session whose delegates are working, the main agent's words apart from theirs |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, the scripts bundled and minified by esbuild into `bundle/` (an entry and the chunks it imports, named by their content's hash; the page preloads the chunks), the bundle listed in `sw.js` for the worker to keep, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload). `js/` is copied beside the bundle as it is, the source layout the tests import modules from; the page never loads it. Needs `npm ci` (esbuild). It refuses to build a site that lacks any file `sw.js` keeps, since no release could install from it. Pages runs it without install scripts (`npm ci --ignore-scripts`) in a job that holds no token to publish with; a second job deploys what it made |
-| `tools/brand.mjs` | Writes `js/brand.js`'s name into what can't import it: the page's title, home-screen title, app-bar and navigation labels and each `<span data-brand>`, the manifest's `name` and `short_name`, and `sw.js`'s title for a push without one. `--check` (run by `test/unit/brand.test.mjs`) fails while any of them differs, so renaming is an edit to `js/brand.js` and a run of `node tools/brand.mjs` |
+| `tools/brand.mjs` | Writes `js/brand.js`'s name into what can't import it: the page's title, home-screen title, app-bar and navigation labels and each `<span data-brand>`, the manifest's `name` and `short_name`, and `sw.js`'s title for a push without one. `--check` (run by `test/unit/brand.test.mjs`) fails while any of them differs, so renaming is an edit to `design/tokens.json` `brand`, a run of `node tools/design-gen/generate.mjs`, then `node tools/brand.mjs` |
 | `design/tokens.css`, `design/sprite.svg` | Generated by `tools/design-gen` from `/design` ([design/README.md](../design/README.md)); never edit them. The colour roles and surfaces as `--ab-*` custom properties (light, dark and forced colours), the glyphs and icons as symbols, and `@font-face` for Slipgates Sans and Slipgates Mono, whose WOFF2s and licences (licensed separately under SIL OFL 1.1, not this project's AGPL) `tools/build-site.mjs` copies from `/design/fonts` into the site's `design/fonts/`. `app.css` takes every colour from them |
-| `icon.svg`, `icons/*.png` | The app icon (ui.md §7), generated by `tools/design-gen` too: the favicon and the manifest's `any` icons (the Windows tile), its maskable icons at 192 and 512, and the 180 px `apple-touch-icon`. The offline shell holds them all, and notifications show `icons/icon-192.png` |
+| `icon.svg`, `icons/*.png` | The app icon (ui.md §7, [brand.md](../docs/design/brand.md) §6), generated by `tools/design-gen` too: the favicon and the manifest's `any` icons (the Windows tile), its maskable icons at 192 and 512, its `monochrome` icons at 192 and 512 (the maskable icon's mark alone, white on transparency, for Android's themed icons), and the 180 px `apple-touch-icon`. The offline shell holds them all. Notifications show `icons/icon-192.png`, with `icons/badge-96.png` as the badge Android draws in the status bar (the native 24 px mark, as the Android client's `ic_stat_slipgates`) |
 
 ### Connecting a host
 
@@ -105,7 +118,11 @@ A machine that does not take launches now (read-only, agent-ha-bridge) still sho
 question, read-only. It is asked for one again when it reconnects, and on updates at most every
 30 seconds. With every machine shown it is offered only when no machine takes launches, and then
 its panel stays while it offers others. An answer that may have been typed is never offered again from here, and a
-resend the machine refuses (its command expired) reads as not confirmed.
+resend the machine refuses (its command expired) reads as not confirmed. A launch not confirmed whose
+session then registers (or whose question is trusted here) reads as started, its first message cleared
+if unchanged and its card opened only while Launch shows that machine. One whose outcome named no session
+is not followed (#983), and a start whose session isn't known says to open it from the list. A busy
+machine is listed again once its busy can have ended, or when a session registers there (#896).
 `test/e2e/fixture-host.mjs` is a working example in about 150 lines.
 
 The client resubscribes when `seq` skips, repeats or goes backwards, and replaces its
@@ -167,7 +184,7 @@ app bar says how many machines are online ("3 machines").
   given up at once, and the host told), each machine retried on its own after
   a failure (5 s, doubling to a minute) and reopened a second after its channel closes. A
   relay drop keeps every machine's cards and reopens them all when it is back. Machines not
-  shown are looked at by `fleet.js`'s short once-a-minute channel, as before; with All there
+  shown are looked at by `fleet.js`'s short channel every five minutes; with All there
   are none. Ten machines are ten channels, well inside the relay's per-account bounds (32
   devices, 200 frames a second a socket).
 * **Starting a session.** With All, the launch panel asks which machine to launch on,
@@ -225,7 +242,51 @@ Before anything is sent the form is checked as the host will check it: `required
 values, Other not empty, 4 KiB of UTF-8 per free text (counted in bytes; a counter appears
 near the limit) and 16 KiB per request. A problem is named and focus goes to its field.
 
-While an answer is on its way the controls are disabled and it says so. If the response is
+While an answer is on its way the controls are disabled. Where it has got is the receipt
+(`js/ui/receipt.js`; ui.md §5.3, §6.5 and §9 as the owner decided them on #617, "quiet unless
+something's wrong"). A machine whose `hello` lists `sessions.progress` is asked for it
+(`"progress": true`, [v1-sessions.md](../docs/protocol/v1-sessions.md); left off a request that
+fits its limit only without it), and says how far it has got: sent once it has it, passed to
+the agent once the keys have gone, up next for a reply into a working session. A stage only
+moves forward, across resends. The normal path shows nothing but the ring on the control that
+sent (Send, the option tapped, or Approve once or Deny in Needs you); its stages are heard, not
+seen ("Sending reply", "Reply sent", "Reply passed to the agent", "Reply up next, after the
+agent's current step"). Delivered, that ring turns to the `check` icon for about a second
+(`sendCheckHoldMs`) and back to the control's own glyph, and a confirmed answer's card resolves
+to "You answered · *value*" in text2: a tap's option, free text's first line with its runs of
+white space as one, cut at a word break within 40 characters, or nothing for a form of several
+fields. A machine from before progress is heard as sending until its outcome, and never as sent.
+The ring and the check sit in a slot each control keeps for them at rest, so they never cover a
+label or a badge and the control never resizes. A host takes a question away as it types the
+answer, before its result: the question stays, its ring on the option that went, until the
+outcome; delivered, it shows the check and then resolves; not confirmed, stale or failed, it stays
+as it went (that option pressed at full opacity, the rest disabled, the line saying why), since a
+host types into a prompt once; busy or refused resolve to the receipt at once.
+
+A line of words appears only for an exception: "Still sending…" after 3 s with nothing heard
+(and for a resend), "Sent · still waiting on *machine*" after 5 s, "Passed to the agent · not
+picked up yet" after 10 s (Up next never stalls), "· still being delivered" after the stage a
+resend met the first copy at, "Waiting for *machine* · it goes when *machine* is back" (the ring
+still, in Send's ink at full opacity), and any outcome but delivered, in today's words. It goes when the next stage or the
+outcome makes it untrue. Nothing is shown or heard for the first 400 ms; after that a screen
+reader hears the furthest stage reached, prefixed "Reply" or "Answer", at most one a second (the
+later of two), and the outcome at once; a failure (refused, failed) is said assertively, on the
+page's alert line and only there (ui.md §9.1 A6), and a file being read is said once as it starts. The thresholds are `ReceiptTiming`. All of it is kept
+by request, so the form, Needs you and the card's receipt after the question has gone share one
+timing and say each change once between them, in a view of the request that is on screen, or
+else on the page's own live line (a session's card while another is open, a receipt gone with
+its question, a reply box moved on to the next reply), never lost and never on a line showing
+another request. A request still on its way when every view of it goes (its session ended, its
+card taken away) is followed to its outcome on the page's line, at its own pace and for 10 minutes
+at most (past the 9-minute give-up); a sign-out takes everything still to be said with it, so
+nothing is spoken on the sign-in screen. In the view that sent it, a delivered answer's line stays
+empty while its check holds, then reads You answered. A Needs you entry whose question the machine clears before
+confirming its answer stays, ring on and nothing to press, apart from the count, until the
+outcome has shown: a check for its second, any other outcome for 5 s, and never past 9 minutes.
+With Other… open, an option tapped instead has the ring and Send answer none. From Send the line keeps the room the longest outcome needs (two lines in a
+box under 640 px wide, one above), empty unless it has something to say, until the box is typed
+in again, so nothing moves the box; a Needs you entry keeps its line's room (two lines on a
+phone) in every state. If the response is
 lost (a timeout, the channel or relay dropping) it is resent with the same `request` on
 the next channel to that machine, so the host returns the first outcome and never types it
 twice; after 9 minutes without an outcome (hosts remember requests for 10) it is reported
@@ -233,8 +294,8 @@ as unconfirmed rather than sent again. Outcomes:
 
 | Outcome | Shown | Then |
 |---|---|---|
-| `delivered` | Delivered. The session has your answer. | The host's upsert takes the question away; the card keeps the line |
-| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check at the machine. | Final; nothing offers to send it again |
+| `delivered` | The check on the control that sent it for about a second, then You answered · *value* | The host's upsert takes the question away; the card keeps the line |
+| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again |
 | `stale` | Already answered or gone | Final |
 | `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request |
 | `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request |
@@ -260,13 +321,15 @@ While the session is asking a question the box is disabled and says to answer fi
 words would answer it. Anything typed stays.
 
 One reply per session is on its way at a time, resent with the same `request` like an
-answer. The words stay in the box until the session has them: a delivered reply takes out
+answer, and shows how far it has got like one (Sent, Passed to the agent, Up next) where the
+machine says.
+The words stay in the box until the session has them: a delivered reply takes out
 what was sent (anything typed meanwhile stays), and every other outcome keeps them.
 
 | Outcome | Shown | Then |
 |---|---|---|
-| `delivered` | Delivered. The session has your reply. | The session's upsert shows it as your last message |
-| `unconfirmed`, or unknown | Sent, but not confirmed. Check at the machine before sending it again. | The words stay; sending them again is a new reply |
+| `delivered` | Send's check for about a second; no line | The session's upsert shows it as your last message |
+| `unconfirmed`, or unknown | Sent, but not confirmed. Check the conversation before sending it again. | The words stay; sending them again is a new reply |
 | `stale` | Not sent: the session has ended. | |
 | `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s |
 | `refused` | The machine refused this reply: *reason* (a question pending, an agent it can't reply to yet) | |
@@ -274,6 +337,22 @@ what was sent (anything typed meanwhile stays), and every other outcome keeps th
 A host waits up to a minute for a working session to take a reply, so the request waits
 90 s for its response before it counts as lost. Demo mode replies as a host would
 (`window.agentBridgeDemo.scriptReplies(…)`), only to Copilot sessions.
+
+### Timing marks
+
+Each answer and reply keeps marks on this device (`js/timing.js`, #600), so where the time
+went can be read without a debugger: the tap, each send once the channel has taken it (a resend
+is `sent 2`; one the channel refused is none), each progress
+stage and the outcome, as `performance` measures from the tap named
+`agent-bridge reply 1a2b3c4d typed` (the request's first 8 hex digits, as the host's log
+names it), with the machine's own `timings` from the result (ms since it received the request:
+`typed`, `recorded`, `confirmed`). The last 50 are in `agentBridge.timings()` (in the demo,
+`agentBridgeDemo.timings()`), and each outcome has a line on the console's verbose level.
+None of it is ever sent anywhere.
+
+Demo mode plays a machine with progress: `?progress=0` one from before it,
+`?confirmDelay=<ms>` the wait between typing and the outcome (to see Passed to the agent), and
+`host.holdBefore('typing' | 'result')` with `releaseBefore` hold a delivery at a stage for a test.
 
 ### Attachments
 
@@ -365,11 +444,15 @@ without the worker); `sw.js` shows the same fields elsewhere:
 | Notice | Shown | Tap |
 |---|---|---|
 | `question` | The session's title; "*machine* · waiting on you" and the question. Alerts | Opens that machine and session, scrolled to it, with focus on the question's first control: once that machine's list is current (#269), only if the session still asks that same question and nothing has been pressed, typed or focused since |
-| `finished` | "*machine* · finished" and the start of the response. Alerts | Opens the session |
-| `resolved` | "*machine* · no longer waiting", silently, in place of the question | Opens the session |
+| `finished` | "*machine* · finished" and the start of the response. Alerts, unless the push's class is `done` (below) | Opens the session |
+| `resolved` | "*machine* · no longer waiting": shown silently in place of the question, then closed, so nothing of the session's is left in the tray | Opens the session |
 
 All notices about one session share its tag (`<machine id>:<session id>`), so each
-replaces the last. A tap opens the app at `?host=&session=&question=`, which it takes out
+replaces the last. A push may carry the host's notification class in `data.class` (#913),
+which the worker follows over its own rules: `needsYou` alerts as a question does; `done`
+is always silent and never alerts again, whatever the push's own `silent` says; `fyi`
+shows nothing that stays (shown silently, then closed, since a push that shows nothing
+costs an iOS subscription). An absent or unknown class is as before. A tap opens the app at `?host=&session=&question=`, which it takes out
 of the address once read; an app already open is focused and told where to go instead,
 keeping its connection. The app also closes notifications itself: those for a question it
 answered, and question notifications for questions its machine no longer asks. iOS shows
@@ -460,13 +543,25 @@ running another checkout's tests at the same time. CI splits the run over severa
 (quality/README.md §4.7): Chromium, three WebKit shards (`--shard`), and `test/e2e` alone in
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
 
+**Renders for design review** (`test/renders/*.render.mjs`, `playwright.renders.config.mjs`):
+captures, not checks, of the demo in the states a change wants Design to sign off, each in dark,
+light and forced colours at 390 and 1440 px, saved as `renders/<state>-<theme>-<width>.png`
+(`test/renders/shoot.mjs`). CI's Chromium leg of pwa-ui draws them after its tests and keeps
+`renders/` as the `pwa-renders` artifact for 14 days, whatever the tests did; a render that
+fails never fails the job. They are drawn in CI rather than on anyone's machine, and Chromium
+alone emulates forced colours. `test/renders/demo.render.mjs` draws the sessions list, so the
+route is seen to work before a feature adds its own states.
+
 * `test/answer.spec.mjs`, in demo mode at a phone's size: answering every field type and
-  kind, defaults, required fields, the byte limit, every outcome, a resend after a lost
+  kind, defaults, required fields, the byte limit, every outcome, Sent then Passed to the agent
+  then "You answered · value" from a machine with `sessions.progress`, a resend after a lost
   response (typed once), a question changing or going while being answered, a card moving
   while in use, 44 px targets, and the keyboard.
 * `test/reply.spec.mjs`, in demo mode: a reply delivered as one line and taken out of the
   box (keeping what was typed meanwhile), every outcome keeping the words, a resend after a
-  lost response (typed once), the box held while a question is pending, the checks before
+  lost response (typed once), its stages heard and not seen from a machine with
+  `sessions.progress` with the timing marks kept, Send's ring and check, the line's room and a
+  stall's words, forced colours, heard as sending alone from one without it, the box held while a question is pending, the checks before
   sending, 44 px targets, Ctrl/Cmd+Enter, and no box for a machine without `sessions.reply`.
 * `test/attach.spec.mjs`, in demo mode: a picked file and a pasted screenshot shown as
   chips and typed as `@` mentions ahead of the words, files alone, removing one, the size
@@ -578,6 +673,12 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   view and change ui.md §5.3's catalogue animates is walked through, and no element runs an
   animation or a transition but an opacity cross-fade no longer than the tokens' `crossFade`; with motion
   allowed the same walk finds the glyphs, the progress ring and the usage bars moving.
+* `test/collapsing-header.spec.mjs`, in demo mode (#631), on a 390 px touch phone in light and dark,
+  and at 760 px and up: the header at rest, riding the scroll near the top, the 64 px up and 32 px
+  down hysteresis, the bar's title, a scroll the app makes leaving it, one heading, tab order, focus
+  holding it open (and kept in sight after a rotation or a larger text size), `scroll-padding-top`,
+  Home, End, Page Up and Page Down, reduced motion and forced colours (Chromium), and nothing
+  changed from 760 px up. The light and dark captures are attached to each run.
 * `test/e2e/e2e.spec.mjs`, through the spike dev stack's real relay with a fake GitHub:
   sign-in, key proof, presence, a Noise channel to a Node fixture host, the snapshot, live
   upserts and removes, `session.get`, recovery after the socket drops (a session that
@@ -599,6 +700,7 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   1.6 Mbps (DevTools' throttling), written to the job's summary; and a warm start asking the
   network for none of the release's files.
 * `test/unit/release-watch.test.mjs`, and in `test/ui.spec.mjs` with the worker installed: releases that keep failing to install, said once there have been three in a row, cleared by one that installs, and never counted for one that installed and was later replaced.
+* `test/unit/connection.test.mjs` and `test/unit/ticker.test.mjs`: out of sight for 15 s the relay connection rests and comes back at once in sight, a quick look away keeps it, something on its way keeps it until done (a press on a machine not shown included: `test/unit/fleet.test.mjs`; and Launch's lookup of the other machines' sessions: `test/unit/transfer.test.mjs`), and an attempt the relay hasn't admitted yet is let go, so coming back connects afresh; the clocks stop out of sight (#610). `test/unit/host-session.test.mjs` and `test/needs-you.spec.mjs` (the badge): a rest leaves the badge as it was and the rows confirming, while a dropped relay still clears the badge and says reconnecting. `test/glyphs.spec.mjs`, Chromium: turning glyphs cost no style recalculation or layout from frame to frame (DevTools' counts, written to the job's summary).
 * `test/unit/sw.test.mjs` and `test/unit/push.test.mjs`: the worker's caching (a release's
   files from its cache with no request, the rest stale-while-revalidate, the release before
   kept for a page still open on it and older ones dropped) and its handlers in every

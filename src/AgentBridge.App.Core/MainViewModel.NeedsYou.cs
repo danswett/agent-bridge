@@ -14,8 +14,9 @@ public sealed partial class MainViewModel
     public string NeedsYouHeader => $"Needs you · {NeedsYou.Count}";
     public int Waiting => NeedsYou.Count;
 
-    // The tray icon's tooltip, from the start (nothing waiting yet) and on every tick after.
-    public static string TrayTip(int waiting) => waiting > 0 ? $"{Product.Name}: {waiting} waiting on you" : Product.Name;
+    // The tray icon's tooltip, from the start (nothing waiting yet) and on every tick after: the same
+    // words as Needs you's count (brand.md §3.1, ui.md §7), which a screen reader reads as written.
+    public static string TrayTip(int waiting) => waiting > 0 ? $"{Product.Name} · {waiting} need you" : Product.Name;
 
     // The lane from the cards as they are: an entry per question, kept while its question and what
     // it offers stay the same, so a button with focus is not replaced under it.
@@ -26,6 +27,8 @@ public sealed partial class MainViewModel
         // Only questions that can be answered now: another machine's kept while it is away, or not
         // yet confirmed by its snapshot, may be gone, and are not counted as waiting on you (#269).
         var want = byId
+            // Questions and approvals only (ui.md §6.13, owner decision 6675817525): a session that
+            // needs sign-in is its machine's banner's (SignInBanners), not an entry here nor counted.
             .Where(p => p.Value.Session.Question is not null && owner.TryGetValue(p.Value, out var m) && m.Current)
             .Select(p => (Key: p.Key, Card: p.Value, Machine: owner[p.Value]))
             .OrderBy(e => e.Card.Session.Question!.AskedAt)
@@ -38,8 +41,8 @@ public sealed partial class MainViewModel
         var entries = new List<NeedsYouEntry>();
         foreach (var (key, card, m) in want)
         {
-            var q = card.Session.Question!;
             current.TryGetValue(key, out var existing);
+            var q = card.Session.Question!;
             // Mid-update, between one question and the next, the card has no question model for a
             // moment (SessionCardViewModel.Sync): the entry stays as it is until the new one is in,
             // so the next question arrives once, as itself, rather than as a rebuild of a stand-in.
@@ -90,6 +93,8 @@ public sealed partial class MainViewModel
             Raise(nameof(NeedsYouHeader));
             Raise(nameof(Waiting));
         }
+        // The banners name the same sessions, and go with the machine's rows (#800).
+        SyncSignIns();
     }
 
     // "3m" moves on with the clock.

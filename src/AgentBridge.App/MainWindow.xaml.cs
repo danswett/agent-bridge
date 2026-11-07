@@ -98,7 +98,22 @@ public sealed partial class MainWindow : Window
         SessionsView.NewRequested += () => ShowPage("launch");
         Nav.SelectedItem = SessionsItem;
         viewModel.OpenRequested += Reveal;
+        FollowAppUpdate();
+        viewModel.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.AppUpdate)) { FollowAppUpdate(); } };
     }
+
+    // The update bar is a polite live region (ui.md §9.1 A6): its words changing (ready,
+    // restarting, failed) are said once, after the binding has put them in.
+    AppUpdateViewModel? announcing;
+    void FollowAppUpdate()
+    {
+        if (announcing is not null) { announcing.Announced -= AnnounceUpdate; }
+        announcing = ViewModel.AppUpdate;
+        announcing.Announced += AnnounceUpdate;
+    }
+
+    void AnnounceUpdate() =>
+        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(UpdateReady)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
 
     public MainViewModel ViewModel { get; }
     public LaunchViewModel Launch { get; }
@@ -111,6 +126,7 @@ public sealed partial class MainWindow : Window
     public bool IsInFront => active && AppWindow.IsVisible;
 
     internal SessionsPage Sessions => SessionsView;
+    internal SettingsView SettingsPage => SettingsPane;
     internal FrameworkElement RootElement => Root;
     internal NavigationView Rail => Nav;
     internal TitleBar Bar => AppTitleBar;
@@ -208,6 +224,16 @@ public sealed partial class MainWindow : Window
     void OnHeldClosed(InfoBar sender, InfoBarClosedEventArgs args)
     {
         if (sender.Tag is HeldNotice notice) { ViewModel.Dismiss(notice); }
+    }
+
+    // The banner's Restart to update (#516): warned, just before the host stops, when a session here is busy.
+    async void OnRestartToUpdate(object sender, RoutedEventArgs e)
+    {
+        var update = ViewModel.AppUpdate;
+        if (!update.CanRestart) { return; }
+        // async void: an escape would end the app, the very thing this must never do unasked.
+        try { await update.RestartAsync(RestartDialog.For(Content.XamlRoot)); }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidOperationException) { AppLog.Write($"update: Restart to update: {ex.Message}"); }
     }
 
     // A window brought back from behind another (not minimised, so still on screen) shows its
@@ -317,14 +343,15 @@ public sealed partial class MainWindow : Window
 
     double Scale => GetDpiForWindow(Handle) is var dpi and > 0 ? dpi / 96.0 : 1;
 
-    // The smallest window ui.md allows, at the scale of the display the window is on now.
+    // The smallest window ui.md allows, at the scale of the display the window is on now. Asked at
+    // every step of a live resize (#765), it sets the presenter's minimums only when they change.
     void KeepSmallest()
     {
         if (AppWindow.Presenter is not OverlappedPresenter p) { return; }
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
         var (w, h) = area is null ? WindowPlacement.Smallest(Scale) : WindowPlacement.Smallest(new Display(new PixelRect(area.WorkArea.X, area.WorkArea.Y, area.WorkArea.Width, area.WorkArea.Height), Scale));
-        p.PreferredMinimumWidth = w;
-        p.PreferredMinimumHeight = h;
+        if (p.PreferredMinimumWidth != w) { p.PreferredMinimumWidth = w; }
+        if (p.PreferredMinimumHeight != h) { p.PreferredMinimumHeight = h; }
     }
 
     void Place()
