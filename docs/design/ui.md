@@ -903,7 +903,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **What the host sends, per axis:** the current value; the allowed values, each with `value`,
     display `label`, cost `tier` and `isDefault`; `applies` (`live`, `nextTurn`, `launch` or
     `resume`); any `pending` change (`value`, `by`, `at`); and a refusal's reason. The UI
-    offers nothing the host didn't list.
+    offers nothing the host didn't list. The host builds those lists by interrogating the
+    agent live, never from remembered or cached values, so the UI offers only what the agent
+    reported as supported now.
   - **Rows:** a value shows its `label` in the text face (§4.2), and the raw value only when there
     is no label. A value the host didn't send is left out, as for any row; one the agent can't
     report reads "Not reported", never a guess. These rows never appear on a session row
