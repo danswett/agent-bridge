@@ -107,7 +107,7 @@ public sealed class LaunchTests : IAsyncLifetime
         ui.Post(launch.Launch);
 
         await Wait.UntilAsync(() => launch.State == "busy", "busy");
-        Assert.Equal("Waiting for Test PC · it resumes once discovery finishes", launch.StatusText);
+        Assert.Equal("Test PC is still finding its sessions. Try Launch again in a moment.", launch.StatusText);
         Assert.Equal(Tone.Progress, launch.StatusTone);
     }
 

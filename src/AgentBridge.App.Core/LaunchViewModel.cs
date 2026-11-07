@@ -817,7 +817,7 @@ public sealed partial class LaunchViewModel : Observable
             "unconfirmed" => ($"Not confirmed whether the session started{(e.Reason is { } r ? $": {Sentence(r)}" : ".")} Check at the machine before launching again.", Tone.Warn),
             // A resume the host holds back while its discovery is held (#1064): the waiting form, not a refusal.
             "busy" when e.Payload is LaunchRequest { Resume: not null } && e.Reason is { } w && w.StartsWith("Held:", StringComparison.Ordinal)
-                => ($"Waiting for {(string.IsNullOrEmpty(machineName) ? "the machine" : machineName)} · it resumes once discovery finishes", Tone.Progress),
+                => ($"{(string.IsNullOrEmpty(machineName) ? "The machine" : machineName)} is still finding its sessions. Try Launch again in a moment.", Tone.Progress),
             "busy" => ($"Not launched: {Sentence(e.Reason ?? "the machine is busy with another launch")} Try again in a moment.", Tone.Warn),
             "refused" => ($"Not launched: {Sentence(e.Reason ?? "the machine refused it")}", Tone.Bad),
             _ => ($"Couldn't launch{(e.Reason is { } f ? $": {Sentence(f)}" : ". Check at the machine.")}{Again(e, machineName)}", Tone.Bad),

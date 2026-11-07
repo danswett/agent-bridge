@@ -68,7 +68,7 @@ static partial class SelfTest
         window.ShowPage("launch");
         launch.SelectedMachine = launch.Machines.FirstOrDefault(m => m.Value == DemoHost.RemoteId);
         await Until(() => launch.Title.EndsWith(remote.MachineName, StringComparison.Ordinal) && launch.Resumes.Count > 1, TimeSpan.FromSeconds(10));
-        var wanted = $"Waiting for {remote.MachineName} · it resumes once discovery finishes";
+        var wanted = $"{remote.MachineName} is still finding its sessions. Try Launch again in a moment.";
         remote.ResumeHeldReason = "an unrecognised copilot process (pid 4120)";
         try
         {

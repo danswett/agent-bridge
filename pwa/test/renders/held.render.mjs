@@ -25,7 +25,7 @@ eachLook(test, 'a resume held back while discovery is held', async ({ page, them
   await page.locator('#launch [name="resume"]').selectOption('7d3c1a2e-5b6f-4c8d-9e0a-1b2c3d4e5f60');
   await page.evaluate((reason) => window.agentBridgeDemo.scriptLaunches({ outcome: 'busy', reason }), HELD);
   await page.locator('#launch').getByRole('button', { name: 'Launch' }).click();
-  await page.locator('#launch .launch-status', { hasText: 'it resumes once discovery finishes' }).evaluate(async (el) => {
+  await page.locator('#launch .launch-status', { hasText: 'is still finding its sessions' }).evaluate(async (el) => {
     await new Promise((r) => setTimeout(r, 300));
     for (let p = el.parentElement; p; p = p.parentElement) { p.scrollTop = p.scrollHeight; }
     window.scrollTo(0, document.documentElement.scrollHeight);

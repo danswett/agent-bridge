@@ -157,7 +157,7 @@ test('what a launch says matches its outcome, and a started session says where i
 test('a resume the machine holds back while its discovery is held shows the waiting form, and another busy launch does not', () => {
   const held = 'Held: session discovery is waiting on an unrecognised copilot process (pid 4120), so whether that session is still running cannot be told yet. Try again in a minute or two.';
   const done = (answer, reason) => ({ state: 'done', outcome: 'busy', answer, reason });
-  assert.deepEqual(describeLaunch(done({ resume: 's1' }, held), { machineName: 'Desk' }), { text: 'Waiting for Desk · it resumes once discovery finishes', tone: 'progress' });
+  assert.deepEqual(describeLaunch(done({ resume: 's1' }, held), { machineName: 'Desk' }), { text: 'Desk is still finding its sessions. Try Launch again in a moment.', tone: 'progress' });
   assert.match(describeLaunch(done({ workspace: 'B' }, held), { machineName: 'Desk' }).text, /^Not launched: Held:/);
   assert.match(describeLaunch(done({ resume: 's1' }, 'another launch is running'), { machineName: 'Desk' }).text, /^Not launched: another launch/);
 });
