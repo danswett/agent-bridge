@@ -97,11 +97,16 @@ function shell(q, idBase, answerable, asker = null) {
     class: `question${answerable ? ' answerable' : ''}`, 'aria-labelledby': `${idBase}-h`,
     dataset: { kind: q.kind, question: q.id, answerable: answerable ? 'true' : 'false' },
   }, h('h4', { class: 'question-head', id: `${idBase}-h` }, heading));
+  const approval = q.kind === 'approval';
+  // Copilot asked several at once and shows them one at a time, this one first (#690): each is
+  // its own question, so an answer to this one never reaches the next.
+  if (approval && q.waiting > 1) {
+    section.append(h('p', { class: 'note queue', role: 'note' }, `1 of ${q.waiting} permissions waiting`));
+  }
   // An approval's message, all of it, is drawn exactly as written, fence markers included, in the
   // code face and left to right, with its hidden characters and right-to-left letters as escapes;
   // nothing in it is read as Markdown (#220, #415, ui.md §6.4): Approve once allows what runs.
   // Other questions draw as Markdown.
-  const approval = q.kind === 'approval';
   const message = h('div', { class: `md question-message${approval ? ' md-approval' : ''}`, id: `${idBase}-m`, dir: approval ? 'ltr' : null });
   message.append(renderMarkdown(q.message, document, { approval }));
   section.append(message);

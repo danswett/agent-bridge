@@ -1,3 +1,5 @@
+using Stopwatch = System.Diagnostics.Stopwatch;
+
 // The time a service that polls sees: it moves on only while the service waits, and then by
 // exactly what it waits for, so each look is PollInterval after the last however slow the
 // machine is. On the wall clock, a test host stalled under load ran AnswerService's 2 s
@@ -19,13 +21,32 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
     long now;
     long order;
     Action? onNextWait;
+    bool frozen;
+    // Once a frozen clock has been let run: its time moves, but a budget only after a quiet moment.
+    bool afterFrozen;
+    long lastActive = Stopwatch.GetTimestamp();
+    static readonly TimeSpan Quiet = TimeSpan.FromMilliseconds(200);
+    // The longest wait a frozen clock still fires: a service's look-again interval, not its budget.
+    static readonly long SteadyTicks = TimeSpan.FromMilliseconds(100).Ticks;
 
     // start: where its time begins. A fixed date unless the code reads it against something on the
     // wall clock, as a migration does against the files and spool names it writes.
-    public PollClock(DateTimeOffset? start = null)
+    // frozen: time stands still, so a budget (a wait for a session to register, a window to look
+    // ready) cannot run out however slow the machine or the test is; only short waits fire, each
+    // at the time it was armed. Run() lets time move on, for a test that is about a budget
+    // running out (#421: a launch test's 5 s budget ran out under load before the host's first
+    // look at the window, so its trust question was never seen).
+    public PollClock(DateTimeOffset? start = null, bool frozen = false)
     {
         epoch = start ?? new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        this.frozen = frozen;
         driving = Task.Run(DriveAsync);
+    }
+
+    public void Run()
+    {
+        lock (gate) { afterFrozen = frozen; frozen = false; lastActive = Stopwatch.GetTimestamp(); }
+        armed.Release();
     }
 
     public override DateTimeOffset GetUtcNow() => epoch.AddTicks(Interlocked.Read(ref now));
@@ -53,22 +74,40 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
         while (!stop.IsCancellationRequested)
         {
             Wait? due;
+            bool still, settling, gated = false;
             lock (gate)
             {
+                (still, settling) = (frozen, afterFrozen);
                 due = waits.Count == 0 ? null : waits.MinBy(w => (w.DueAt, w.Order));
+                if ((still || settling) && due is not null && due.DueAt - now > SteadyTicks)
+                {
+                    // A budget is jumped to only once nothing has armed or fired for a while: it
+                    // is the soonest wait only because the service is between two looks, and
+                    // jumping then ran it out before its first look (a 400 ms wait, before the
+                    // session it waited for was even seen).
+                    if (still || Stopwatch.GetElapsedTime(lastActive) < Quiet) { due = null; gated = !still; }
+                }
                 if (due is not null)
                 {
-                    if (due.DueAt > now) { Interlocked.Exchange(ref now, due.DueAt); }
+                    if (!still && due.DueAt > now) { Interlocked.Exchange(ref now, due.DueAt); }
                     waits.Remove(due);
                     if (due.Period is { } every) { due.Arm(now + every); }
+                    lastActive = Stopwatch.GetTimestamp();
                 }
             }
             if (due is not null)
             {
                 due.Callback(due.State);
+                // Time hardly moves, so a look-again wait fires at once: not faster than the
+                // thread pool and the files it reads can keep up with.
+                if (still || settling) { await Task.Delay(1); }
                 continue;
             }
-            try { await armed.WaitAsync(stop.Token); }
+            try
+            {
+                if (gated) { await armed.WaitAsync(TimeSpan.FromMilliseconds(20), stop.Token); }
+                else { await armed.WaitAsync(stop.Token); }
+            }
             catch (OperationCanceledException) { return; }
         }
     }
@@ -92,6 +131,7 @@ sealed class PollClock : TimeProvider, IAsyncDisposable
         {
             DueAt = at;
             Order = clock.order++;
+            clock.lastActive = Stopwatch.GetTimestamp();
             clock.waits.Add(this);
         }
 

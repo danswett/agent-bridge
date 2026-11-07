@@ -681,10 +681,15 @@ drawn where it runs is a visible escape (`\u202E`, or `\u{E0041}` past the first
 characters such as bidi controls and zero-width spaces and joiners, controls other than newline
 and tab, private-use and unassigned code points, unpaired surrogates, U+2028 and U+2029, and
 every default-ignorable code point; so is every right-to-left letter (`\u05D0`), which reorders
-what is drawn around it without any control. Approve once is still offered for such a prompt:
-the owner's "escape and allow" rule (#253, decision 3). The digest stays over the original text
+what is drawn around it without any control. Approve is still offered for such a prompt, as the
+owner's "escape and allow" rule has it (#253, decision 3), now only through the escaped-command
+confirmation ([Escaped approvals](#escaped-approvals), #803), and not while other permission
+requests wait, when the listed one is `answerAtMachine` (below, #690). The digest stays over the original text
 (and over a tool's name as written, where it held such a character or right-to-left letters, and
-over whether the prompt is answered at the machine at all), so a prompt holding a real U+202E and
+over whether the prompt is held at the machine for a reason the request itself gives: a kind no
+host drives, details that cannot be read, or a request to run outside the sandbox). It is not over
+`answerAtMachine` set for any other reason, `permissions.remoteApproval` off or another request
+waiting that it cannot be told from (#690), which can clear under the same `id`. So a prompt holding a real U+202E and
 one holding the six characters `\u202E` never share an id. An ordinary prompt's digest is a hash of
 `<kind>\n<message>`; one with more to it, or with a NUL in its message, is hashed in a
 length-prefixed form starting with a NUL, so no message can spell another prompt's identity (a
@@ -726,10 +731,36 @@ not go on to try something else unattended. The session is then idle, and a repl
 it what to do instead. A deny takes no text, so nothing can be typed into the prompt's
 message box.
 
-Immediately before typing, the host checks the transcript (that request still waiting and
-reading as shown, and no other prompt waiting that the screen could be showing instead),
-then reads the session's screen and finds the option by its label, never by its position,
-under rows showing what the prompt is for, and checks the transcript again. The key goes
+Copilot can have several permission requests waiting at once, one for each of a batch of
+parallel tool calls, and draws one of them at a time. The host lists the earliest still
+waiting, with `waiting` saying how many there are, and the next as a new question once it is
+answered. Immediately before typing, the host checks the transcript (that request still
+waiting and reading as shown, and no `ask_user` waiting beside it), then reads the session's
+screen and finds the option by its label, never by its position, under rows showing what the
+prompt is for, and checks the transcript again. While others wait, the screen, not the order
+asked, says which request is shown, identified positively as Copilot CLI 1.0.105 draws it:
+no waiting request holds a line-drawing character, a tab or a character drawn other than as
+it runs, in a value or a property name (an argument's name included); the options are inside one round frame whose top edge is on screen; every row in it
+above the options is this request's dialog (its title, the rule, each part of its body, a
+box's lines one to a row exactly as given, and its question) and nothing else; and the
+request is the earliest still waiting, with no other waiting request that would be drawn the
+same once all white space is gone. Only shell and path prompts are identified so. Copilot
+draws a waiting shell or other request first, then a hook's, then a path request, then a URL
+request, each in the order asked, so the earliest is drawn only when nothing waiting draws
+ahead of it: a path request asked before a shell one is `answerAtMachine` until the shell one
+is answered. A listed prompt that cannot be told apart so is `answerAtMachine` while that holds:
+another waiting request is drawn ahead of it, its kind is not shell or path, its own text has a
+run of spaces that can wrap onto a blank row, any waiting request's text (its own included)
+holds a line-drawing character, a tab, or a character a host shows escaped or a reference to
+one (`&#x202E;`), another waiting
+request has nothing drawn to check the screen against (a read naming no path), or another
+would be drawn the same. So an approval listed with `escaped` while others wait is
+`answerAtMachine`, Deny included, until it waits alone (unless its only escapes are in a path
+request's access kind, which its dialog never draws as written): the confirmation below is not
+offered for it. It is answerable again under the same `id` once it can be told apart. Otherwise
+the answer is `refused`, naming the other where its dialog is the one drawn ("the machine is
+showing a different permission (path access, request ed05e9d7)"), and the key is held from
+the frame's top edge. It is never retargeted to the request on screen. The key goes
 only if those rows and the options, and which is highlighted, still read the same at the
 moment it is typed.
 `permissions.remoteApproval` in the host's own settings turns this off on a machine
@@ -741,6 +772,13 @@ An approval holding a character a host shows as an escape (a bidi control, a zer
 hidden character, a control but newline and tab, a right-to-left letter; #220) carries
 `escaped`, set by the host from what it actually escaped (#803). Clients never infer it from
 `\u` text, which an agent can write itself.
+
+A Copilot permission prompt listed with `escaped` while other permission requests wait is
+`answerAtMachine` until it waits alone, since the host cannot tell such text apart on the
+session's screen, unless its only escapes are in a path request's access kind
+([Copilot permission prompts](#copilot-permission-prompts), #690): everything
+below gives way to that, so no client offers the confirmation or Deny for it, Home Assistant's
+Deny included, and a `session.answer` for it is `refused`.
 
 ```json
 "escaped": { "shown": "<64 hex>", "marks": [[12, 6], [40, 6]], "approve": "confirm" }
@@ -1585,29 +1623,48 @@ running (`working`); the main agent idle with background agents or commands stil
 and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
 was.
 
-### Disabled phone sign-in framework (#800 slice 2)
+### Phone sign-in (#800 slice 2, enabled per machine by #972)
 
-`sessions.signin` is **not advertised**. Neither production sign-in entrypoint nor
-credential-status adapter is registered. Direct `signin.start` and `signin.cancel`
-requests return `refused`. The internal, fake-tested framework is gated off by default;
-enabling a fake backend in a test does not enable deployed hosts.
+`sessions.signin` is **off by default** and turned on **per machine**, by the machine's own
+`config.json`: `permissions.phoneSignIn: true` ([host-config.md](../host-config.md#phone-sign-in)),
+set from the Windows app's Settings ("Let my devices sign Copilot in on this machine", a
+`host.settings` change over the local pipe, which an agent session may not make) or by
+`agent-bridge-host config set permissions.phoneSignIn true` at the machine. It is read when the host
+starts. A host advertises `sessions.signin`, and says `signIn: "phone"` on a session's
+`signInNeeded` attention, only while it is on **and** the host has an adapter that can run for
+that agent: today Copilot alone, on Windows alone, with Copilot's `.exe` found when the host
+started. Off, or for another agent, `signin.start` and
+`signin.cancel` return `refused` and no attention says `phone`. Devices cannot change the setting
+yet; that waits for #801's settings path. The capability is offered only to a channel the
+person authority below accepts: a device **pinned as a person** at this machine.
 
-The eventual agent-owned entrypoint is subject to captured-output/privacy admission.
-Engineering approved unpatched `copilot login --device-code` conditionally: **the machine
-opens a browser and copies the code**. No production runner is included here, no live
-sign-in was attempted, and there is no replacement OAuth client or installed-CLI patch.
-An approved adapter must suppress CLI debug logging with a supported option, preserve
-the CLI's persistence/organization-policy checks, and keep both output streams private.
-The prepared, unexecuted launch contract uses
-`copilot login --device-code --host https://github.com --log-level none`,
-with host-resolved absolute executable/home, private redirected streams, no shell,
-and inherited token variables removed by name without examining their values.
-The installed CLI declares `none` as a supported level and forwards it into login.
-This launch specification is not a process factory; the output adapter still needs
-the routed, redacted capture. Upstream follow-up:
+Copilot's adapter (`CopilotSignInAdapter`) runs the CLI's own `copilot login --device-code`,
+unpatched, under Engineering's conditional approval (#800 6648319937): **the machine opens a
+browser and copies the code**. There is no replacement OAuth client and no installed-CLI patch.
+It runs `copilot login --device-code --host https://github.com --log-level none` (the CLI's
+supported option, so login never writes its default debug log), with the host-resolved absolute
+`.exe` (never a `.cmd` shim, which would need a shell), `COPILOT_HOME` set to the host's own
+Copilot home, standard input closed (so the CLI's plaintext-storage question is answered no and
+its keychain persistence and organization-policy checks stand), inherited token variables and
+`COPILOT_DEBUG*` overrides removed by name without examining their values, and the process and
+anything it starts in a Windows job that ends them together (a browser the login started fresh
+closes when the flow ends). Both output streams stay in the
+host process: standard error is drained and discarded by the runner, and standard output is
+read only by the adapter, which turns the CLI's own lines into the private runner's frames:
+
+| CLI line (1.0.105), in this order and nothing else | Frame |
+|---|---|
+| `To authenticate, visit <verificationUri> and enter code <userCode>` | `code`, with the URL and code checked as below |
+| `Waiting for authorization...` | none |
+| `Signed in successfully as <account>.` (printed only once the credential is stored and the organization policy allows it) | `done`, `persisted` and `policyAllowed` true; the account text is discarded |
+
+Any other line, a line out of order or one over the runner's limits ends the flow `refused`,
+without saying what it was; a nonzero exit is `failed`. The CLI prints no expiry, so the code's
+`expiresAt` is the host's own 10-minute flow deadline, shorter than GitHub's 15-minute device
+codes. Upstream follow-up for a no-browser, no-clipboard mode:
 [github/copilot-cli#5358](https://github.com/github/copilot-cli/issues/5358).
 
-The framework's request/event contract (not yet offered to clients) is:
+The request/event contract is:
 
 `account`, `signIn` and `recovery` are structured host metadata, never copied or inferred
 from CLI prose, messages or displayed account strings. An account with no structured
@@ -1654,10 +1711,10 @@ The private runner accepts **adapter frames, not guessed Copilot console fixture
 one strict JSON line with exactly `kind: "code"`, `userCode`, `verificationUri`,
 `expiresAt`, then a `done` line with exactly `kind`, `outcome: "signedIn"`,
 `persisted: true`, `policyAllowed: true`, and successful process exit. Duplicate,
-unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. Native
-expiry metadata is required and capped by the host deadline. Stdout/stderr never enter
-the generic command runner or a logger; errors expose only constant outcomes. There
-is deliberately no concrete process factory until the entrypoint gate passes.
+unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. The
+adapter supplies `expiresAt` (above) and the runner caps it at the host deadline.
+Stdout/stderr never enter the generic command runner or a logger; errors expose only
+constant outcomes. The only concrete process factory is Copilot's adapter above.
 
 `signin.done signedIn` sets **pending**, not recovered: `signInNeeded` remains until
 the existing parser sees real main-agent model output after the latest auth failure.
@@ -1670,10 +1727,9 @@ credential scope. There is no status provider, credential-file inspection or aut
 probe. Even proof from another matching session only makes this session pending:
 its own real main-model reply is required to clear its attention.
 Dead-session resume/reload is an interface dependency on **#780 Host B**; the supplied
-stub starts/types nothing and claims no resumed session ids. No signed-in push is
-emitted by this framework.
-Advertising also waits for perf-A's follow-up to suppress ordinary "finished" pushes
-on auth failure (review 4476391166); that notification fix is not part of this slice.
+stub starts/types nothing and claims no resumed session ids, so `signin.done` lists none in
+`resumed` or `continue` yet. No signed-in push is emitted. Ordinary "finished" pushes on an
+auth failure are already suppressed (#845, with #841).
 
 ### Attention
 
@@ -1775,9 +1831,9 @@ that turn's error, or "Copilot stopped with an error." when no error was read be
 turn. Clients, HA and a `finished` push therefore never carry any of the agent's error text.
 
 Claude Code and Codex send none yet: their records are read only once a real, redacted sample of
-each has been captured. `account`, `signIn`, `recovery`, the per-machine
-roll-up in `hello`, the `signIn` and `signedIn` notices and the `sessions.signin` capability
-(relaying the agent's own device-code sign-in to a person's device) follow in later slices of
+each has been captured. `recovery`, `signIn` (`phone`, [above](#phone-sign-in-800-slice-2-enabled-per-machine-by-972)),
+the `signIn` notice and the `sessions.signin` capability are in place for Copilot; `account`, the
+per-machine roll-up in `hello` and the `signedIn` notice follow in later slices of
 #800; their shape is in [#800](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6646501884),
 and this section grows with each.
 ### Driver
@@ -1902,9 +1958,10 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `fields` | Field[] | In order. Empty for a plain message |
 | `askedAt` | time | |
 | `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
-| `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once. It still has its fields, so a client can say what it asks, but a client shows no controls for it, says to answer it at the machine ("Waiting on you · answer at the machine", ui.md §2.2), and a `session.answer` for it is `refused` |
-| `escaped` | object? | An approval the host showed any character of as an escape: `shown`, `marks` and `approve` ([Escaped approvals](#escaped-approvals)). Approve on it takes the escaped-command confirmation; Deny does not. Absent when nothing was escaped |
+| `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once, or a Copilot permission request listed while others wait that the host cannot tell from them on the session's screen ([Copilot permission prompts](#copilot-permission-prompts)). That last can clear under the same `id` once it can be told apart, so a client reads the flag afresh on every update rather than once per question. It still has its fields, so a client can say what it asks, but a client shows no controls for it, says to answer it at the machine ("Waiting on you · answer at the machine", ui.md §2.2), and a `session.answer` for it is `refused` |
+| `escaped` | object? | An approval the host showed any character of as an escape: `shown`, `marks` and `approve` ([Escaped approvals](#escaped-approvals)). Approve on it takes the escaped-command confirmation; Deny does not. Neither goes when it is also `answerAtMachine`, as one listed while other Copilot permissions wait usually is ([Copilot permission prompts](#copilot-permission-prompts), #690). Absent when nothing was escaped |
 | `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land. And while a permission prompt or a sub-agent's question waits beside it, the session's own Copilot `ask_user` is `answerAtMachine` too, since the CLI may be showing the other one; a host also checks the transcript for a pending permission prompt just before typing an answer |
+| `waiting` | int? | How many permission prompts the session has waiting, this one included, when more than one is (#690). Copilot asks one for each of a batch of parallel tool calls and shows them one at a time; the host lists the earliest still waiting, so this is always the first of them. A client says so ("1 of 4 permissions waiting"). The next comes as a new question with its own `id` once this one is answered, so an answer to this one never reaches it. Absent with one |
 
 ### Field
 

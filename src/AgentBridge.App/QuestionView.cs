@@ -30,6 +30,7 @@ public sealed class QuestionView : StackPanel
     readonly TextBlock room = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0, IsHitTestVisible = false };
     readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     readonly Button resend = new() { Content = "Send again" };
+    readonly TextBlock waiting = new() { TextWrapping = TextWrapping.Wrap };
     Button? send;
 
     // heading: who asks (ui.md §6.4, "Main agent asks" or "<delegate> asks"), in place of the
@@ -86,6 +87,9 @@ public sealed class QuestionView : StackPanel
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetHeadingLevel(headFocus, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level3);
         headFocus.LostFocus += (_, _) => headFocus.IsTabStop = false;
         Children.Add(headFocus);
+        waiting.Foreground = Ui.Brush("AbNeedsText");
+        AutomationId(waiting, "PermissionsWaiting");
+        Children.Add(waiting);
         // What its escapes stand for, above its text (ui.md §6.4): an escape can be read past while its
         // character still acts.
         foreach (var note in vm.Notes)
@@ -288,6 +292,8 @@ public sealed class QuestionView : StackPanel
 
     void Refresh()
     {
+        waiting.Text = vm.Queue ?? "";
+        waiting.Visibility = Ui.Show(vm.Queue is not null);
         // Each change of its words fades in (ui.md §5.3, Send and Answer); under reduced motion
         // Motion makes that the cross-fade alone.
         var fade = drawn && vm.StatusText.Length > 0 && vm.StatusText != status.Text;

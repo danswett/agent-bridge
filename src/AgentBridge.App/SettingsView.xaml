@@ -219,6 +219,14 @@
                     Style="{StaticResource AbSecondaryText}"
                     Text="Off: Copilot's Approve once and Deny are answered only in the agent's own window. Questions are still answered anywhere. A change applies when the host restarts." />
                 <ToggleSwitch
+                    Header="Let my devices sign Copilot in on this machine"
+                    AutomationProperties.AutomationId="PhoneSignIn"
+                    IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}"
+                    IsOn="{x:Bind ViewModel.PhoneSignIn, Mode=TwoWay}" />
+                <TextBlock
+                    Style="{StaticResource AbSecondaryText}"
+                    Text="When Copilot needs signing in again, a device pinned as yours here can start Copilot's own sign-in and is shown the one-time code to enter at github.com/login/device. While it runs, this machine opens a browser and copies the code. Off by default. A change applies when the host restarts." />
+                <ToggleSwitch
                     Header="Answer folder-trust questions from my devices"
                     AutomationProperties.AutomationId="RemoteFolderTrust"
                     IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}"
