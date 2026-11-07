@@ -10,6 +10,9 @@ import { deviceIdOf } from './identity.js';
 
 export const KIND = Object.freeze({ msg1: 1, msg2: 2, msg3: 3, transport: 4, close: 5, ik1: 6, ik2: 7 });
 export const HEADER = 9;
+// Why a channel failed when its relay connection went: a request on it fails with this as its
+// reason (HostError.reason), and is worth trying again on the next.
+export const CONNECTION_CHANGED = 'the relay connection changed';
 const EMPTY = new Uint8Array(0);
 
 // Per-message deflate, as src/AgentBridge.Transport/MessageDeflate.cs (#603): a message's
@@ -111,6 +114,7 @@ export class Channel {
       // would end the channel. Before deflate it was larger than a relay frame may be.
       if (plain.length > MAX_MESSAGE) { throw new Error(`a ${plain.length}-byte message does not fit one channel message (at most ${MAX_MESSAGE} bytes)`); }
       this.frame(KIND.transport, await this.hs.send.encryptWithAd(EMPTY, this.peerInflates ? await pack(plain) : plain));
+      try { this.set.onSent?.(); } catch (e) { console.error(e); }
     });
     this.#sendChain = p.catch(() => {});
     return p;
@@ -137,6 +141,8 @@ export class ChannelSet {
   channels = new Map();
   relay = null;
   onLog = null;
+  // () => void, after each message goes out on a channel: BridgeConnection watches for an answer.
+  onSent = null;
   // Hosts that said they take IK: peer id -> { static, early }, the key their XX proved and the
   // ops they answer from IK's first message. Kept across relay connections, so a channel reopened
   // after the PWA comes back opens in one round trip with its hello answered (#603).
@@ -151,7 +157,7 @@ export class ChannelSet {
   // A new relay connection: channels on the old one cannot continue (Noise state is per
   // channel, and the host has seen this device leave), so they all fail.
   attach(relay) {
-    this.failAll(new Error('the relay connection changed'));
+    this.failAll(new Error(CONNECTION_CHANGED));
     this.relay = relay;
     if (relay) { relay.onData = (from, payload) => this.#onData(from, payload); }
   }

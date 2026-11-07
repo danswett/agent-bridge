@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BridgeConnection, QUIET_AFTER_MS } from '../../js/connection.js';
+import { BridgeConnection, PROBE_AFTER_MS, PROBE_TIMEOUT_MS, QUIET_AFTER_MS } from '../../js/connection.js';
+import { CONNECTION_CHANGED } from '../../js/channels.js';
+import { AnswerService } from '../../js/answer-service.js';
 
 const flush = async () => { for (let i = 0; i < 5; i++) { await Promise.resolve(); } };
 
@@ -148,5 +150,143 @@ test('put away while the relay is still admitting it, the attempt is let go, and
   await flush();
   assert.equal(relays.length, 2, 'a new attempt, not the one left waiting');
   assert.equal(conn.state, 'connected');
+  conn.stop();
+});
+
+// Relays that can be probed (#1128): each probe is noted, and answers only when the test says,
+// or says no once its deadline passes.
+function probed() {
+  const { win } = page();
+  const relays = [];
+  const makeRelay = () => {
+    const r = {
+      open: false,
+      closed: null,
+      onClose: null,
+      onReceive: null,
+      lastReceivedAt: 0,
+      probes: [],
+      async connect() { this.open = true; return this; },
+      close(code, reason) { this.open = false; this.closed = { code, reason }; this.onClose?.({ code, reason }); },
+      probe(ms) {
+        return new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(false), ms);
+          this.probes.push({ ms, answer: () => { clearTimeout(timer); resolve(true); } });
+        });
+      },
+    };
+    relays.push(r);
+    return r;
+  };
+  const conn = new BridgeConnection({ base: 'http://relay.invalid', key: {}, deviceId: 'me', name: 'phone', account: { token: 't' }, win, makeRelay });
+  const logs = [];
+  conn.on('log', (line) => logs.push(line));
+  return { conn, relays, logs };
+}
+
+test('a message unanswered for 5 s has the relay probed, and an answer keeps the connection', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { conn, relays } = probed();
+  await conn.start();
+
+  conn.channels.onSent();
+  t.mock.timers.tick(PROBE_AFTER_MS - 1);
+  assert.equal(relays[0].probes.length, 0, 'not before 5 s');
+  t.mock.timers.tick(1);
+  await flush();
+  assert.deepEqual(relays[0].probes.map((p) => p.ms), [PROBE_TIMEOUT_MS]);
+
+  relays[0].probes[0].answer();
+  await flush();
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(relays.length, 1);
+  assert.equal(relays[0].closed, null);
+  assert.equal(conn.state, 'connected');
+  conn.stop();
+});
+
+test('a probe unanswered within its deadline gives the socket up and connects again at once, saying why', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { conn, relays, logs } = probed();
+  await conn.start();
+
+  conn.channels.onSent();
+  t.mock.timers.tick(PROBE_AFTER_MS);
+  await flush();
+  t.mock.timers.tick(PROBE_TIMEOUT_MS);
+  await flush();
+  assert.deepEqual(relays[0].closed, { code: 1000, reason: 'unresponsive' });
+  assert.equal(conn.state, 'reconnecting');
+  assert.ok(logs.some((l) => l.startsWith('relay connection lost (1000 unresponsive), ')), logs.join('\n'));
+
+  t.mock.timers.tick(1);
+  await flush();
+  assert.equal(relays.length, 2, 'with no backoff');
+  assert.equal(conn.state, 'connected');
+  conn.stop();
+});
+
+test('a message answered within 5 s has nothing probed', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { conn, relays } = probed();
+  await conn.start();
+
+  conn.channels.onSent();
+  t.mock.timers.tick(1000);
+  relays[0].onReceive();
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(relays[0].probes.length, 0);
+  assert.equal(relays[0].closed, null);
+  conn.stop();
+});
+
+test('an answer on a socket given up for silence goes again once, with its same request, on the next connection', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { conn, relays } = probed();
+  await conn.start();
+  const sends = [];
+  let client = null;
+  // A channel to the machine per connection: the first never hears back, the next answers at once.
+  const open = (answers) => {
+    const c = {
+      closed: false,
+      reject: null,
+      answer(data) {
+        sends.push({ client: c, request: data.request });
+        conn.channels.onSent();
+        return answers ? Promise.resolve({ outcome: 'delivered', reason: null }) : new Promise((_, reject) => { c.reject = reject; });
+      },
+    };
+    client = c;
+    return c;
+  };
+  let n = 0;
+  const service = new AnswerService({ current: () => (client ? { client, hostId: 'h' } : null), uuid: () => `req-${++n}` });
+  open(false);
+  conn.on('lost', () => {
+    client.closed = true;
+    client.reject?.(Object.assign(new Error(`session.answer: ${CONNECTION_CHANGED}`), { reason: CONNECTION_CHANGED }));
+  });
+  conn.on('ready', () => { open(true); service.ready('h'); });
+
+  service.submit({ hostId: 'h', sessionId: 's', questionId: 'q', answer: { text: 'yes' } });
+  await flush();
+  t.mock.timers.tick(PROBE_AFTER_MS);
+  await flush();
+  t.mock.timers.tick(PROBE_TIMEOUT_MS);
+  await flush();
+  t.mock.timers.tick(1);
+  await flush();
+  relays[1].onReceive();
+  t.mock.timers.tick(10 * 60 * 1000);
+  await flush();
+
+  assert.equal(relays.length, 2);
+  assert.equal(sends.length, 2, 'once on each connection, never twice on either');
+  assert.notEqual(sends[0].client, sends[1].client);
+  assert.equal(sends[0].request, sends[1].request, 'the same request, which the machine carries out once');
+  assert.equal(service.get('h', 's', 'q').outcome, 'delivered');
   conn.stop();
 });
