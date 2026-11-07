@@ -682,6 +682,21 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         Assert.Equal(delivered ? 1 : 0, injector.Plans.Count);
     }
 
+    [Fact]
+    public async Task A_frame_character_in_an_argument_named_kind_holds_a_concurrent_permission_at_the_machine()
+    {
+        var tool = Copilot.Prompts["mcp"].DeepClone().AsObject();
+        tool["args"] = new JsonObject { ["kind"] = "\u256D" };
+        var question = await Asking(Command("npm test"), tool);
+        injector.Screen = CopilotScreen.Shell("Run it", "npm test");
+        Completes("approved");
+
+        var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, AtMachine), result);
+        Assert.Empty(injector.Plans);
+    }
+
     // Copilot can write permission.requested again for a request still waiting, with what it asks
     // now (CopilotParser.Permission). The listing and delivery's own read of the transcript both
     // take it as asked again, after the other one waiting, so that one is listed first; an answer
