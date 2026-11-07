@@ -246,6 +246,13 @@ Rules:
   * The **diagnostic id** (`diagnosticId`, section 3.11.3) is random, minted for one failed attempt,
     and is set here only once an automatic event for that attempt has actually been sent. It is
     `null` otherwise, as in the sample, and always while diagnostics are off.
+* **Identifiers in the local record.** The record holds **no install id**, ever. It holds no
+  identifiers beyond the local send id and the per-machine hashed session id, except that once an
+  automatic event for an attempt has actually been sent, that attempt's record also holds that one
+  attempt's diagnostic id. **The record never uploads by itself.** It leaves the machine only inside
+  a report the tester sends after seeing it in the exact preview of "Report this" or Send feedback
+  (PR #1139: the local record "holds no install id and no diagnostic id (a diagnostic id exists only
+  once an event is sent), and it never uploads").
 * Session ids are hashed per machine. **Session names and titles are never written to the record.**
   The Diagnostics page shows a session's name by reading it live from the running session list when
   the page is open; the record holds only the hashed id, so no saved, exported or sent copy has it.
@@ -452,6 +459,8 @@ posted at 04:37 PT; the same amendment is on #741 and #732). Two channels, kept 
   * Continued use is never taken as agreement, and consent is never bundled into the beta terms.
   * Turning it off in Settings deletes unsent events. Turning it back on uploads nothing from the
     time it was off.
+  * Withdrawal does not erase events already received: they are kept until they expire at 30 days,
+    and the notice says so (PR #1139).
 * **The owner's five decisions still hold** (section 10.1). Decision 1, "default off now", is now
   the only design. Turning the default on would need a new Product and Compliance decision, and
   this design does not plan for one.
@@ -473,6 +482,12 @@ into a public issue.
 
 The full per-attempt record (section 3.2) and the redacted screen outlines (section 3.4) stay on the
 machine. The phone's send ring (section 3.6) stays on the phone.
+
+* **No install id** in the local record, ever. No identifiers beyond the local send id (and the
+  per-machine hashed session id); a diagnostic id only for an attempt whose automatic event was
+  actually sent, and then only that attempt's id.
+* **It never uploads by itself.** It leaves the machine only in a report the tester sends from the
+  exact preview of "Report this" or Send feedback (section 3.11.2).
 
 * **Built from an allow-list.** The record is built from a versioned schema, `delivery-record/v1`.
   A serializer writes only named, typed and bounded fields, and anything not on the list is never
@@ -544,6 +559,8 @@ approve enabling uploads.
   * per-table and total retention;
   * exports, support copies and derived copies;
   * the SDK's metadata suppression;
+  * **no client IP or geolocation stored.** Application Insights stores both by default, so they must
+    be disabled or masked at ingestion, and SRE proves this at the upload gate (PR #1139);
   * access, and deletion.
 
   Microsoft documents that a nominal 30-day Log Analytics workspace can keep data for 31 days unless
@@ -723,7 +740,7 @@ attorney-only questions are consolidated on #744.
 | --- | --- | --- | --- |
 | 1 | **Gate (b).** Lawful basis and notice for the opt-in tier. Compliance treats the events as personal data under EEA and UK GDPR, and treats prior consent as the defensible rule. Open for counsel: EEA ePrivacy Article 5(3) by country; UK PECR regulation 6 and Schedule A1 (changed 5 February 2026); controller, processors and transfers. Nothing here is a region shortcut: the tier is opt-in everywhere. | **human/legal**: counsel chosen by the owner (#744) | open, **gate** |
 | 2 | **Gate (c).** `docs/design.md` section 5.10 amended for this pseudonymous tier: PR #1139 (Feedback), reviewed and merged | Feedback Team + reviewers of #1139 | open, **gate** |
-| 3 | IP address exposure at the endpoint: what does Application Insights (and anything in front of it) log or derive from the sender's IP? Is IP masking and location-off configured and verified? | SRE + #732 review | open |
+| 3 | IP address exposure at the endpoint: what does Application Insights (and anything in front of it) log or derive from the sender's IP? Is IP masking and location-off configured and verified? No client IP or geolocation may be stored (PR #1139); SRE proves it at the upload gate (d). | SRE + #732 review | open, part of **gate (d)** |
 | 4 | Linkability over time: is the install id created only after opt-in, replaced at least every 30 days and on reset or fresh consent, never derived from a device or account id, never inside the diagnostic id, and kept with no old-to-new mapping? Is there a test that a support join cannot defeat rotation or retention? | #732 review | open |
 | 5 | Linking to reports: a report that carries a diagnostic id ties a pseudonymous event to a signed-in tester's report. The notice and the exact preview say so, and nothing claims the ids are "joined to nothing else". | #732 review + owner (#733 UX) | open |
 | 6 | **Gate (a).** The #732 independent security review by two model families: schema leakage, the install id, retention and linking (items 3–5 and 7 feed it). Every field is an enumeration or a bucket; the error vocabulary is finite, with no exception types, frames or text; the adversarial redaction tests pass for both schemas; the SDK's auto-collection is off; the pipeline rejects unknown fields. | Engineering staffs it | open, **gate** |
@@ -985,7 +1002,7 @@ its re-read and retry, and slice 7 on its white-space-free matching.
 | 0 | This design | no | part of #1132 |
 | **1** | **The local record**, starting from #1137's `answer-attempt v=1` line and `FormCheck` names: allow-listed per-attempt record, reason keys, redacted outlines, ring buffer, the phone's and app's send ring, send id, triage recipe and tool, offer keys and counts, local health view (sections 3.1–3.10, 3.11.1). It can split into: 1a host record and keys (extends #1137's line to approvals, replies, Claude and Codex; reason keys use #1137's check names); 1b outlines; 1c client ring and send id (protocol); 1d health view. | yes (1a, 1b, 1c) | closes #1023; gives #998–#1014 their counts; part of #1128 |
 | **2** | **"Report this" bundle**: "Report this" on failed cards attaches that attempt's record and outline after the preview (section 3.11.2). Until slice 3's events are actually sent, there is no diagnostic id box: slice 2 never shows or attaches a diagnostic id. | yes (client and host) | part of #733, #738 |
-| **3** | **The opt-in automatic event**, `delivery-failure/v1` (section 3.11.3). Opt-in worldwide, default off. **Buildable now; uploads enabled only after gates (a)–(e).** Kill switch. Install id created only after opt-in. No collection, queue or network call while off; off deletes unsent events; re-enabling uploads nothing from the off period, all tested. Compliance's first-run and Settings wording. Finite error vocabulary. **A build/config flag hides the consent UI and blocks the transport until gates (b) and (e) close.** | **yes**: the #732 two-family review of schema, install id, retention and linking | part of #741. **Gates before enabling uploads:** (a) the #732 two-family security review (Engineering); (b) lawful basis and notice from counsel (#744); (c) the `docs/design.md` section 5.10 amendment, PR #1139; (d) SRE's proof of retention, exports and deletion, including the 31-day Log Analytics behaviour; (e) the owner's approval of #733's UX and the notice (#762). |
+| **3** | **The opt-in automatic event**, `delivery-failure/v1` (section 3.11.3). Opt-in worldwide, default off. **Buildable now; uploads enabled only after gates (a)–(e).** Kill switch. Install id created only after opt-in. No collection, queue or network call while off; off deletes unsent events; re-enabling uploads nothing from the off period, all tested. Compliance's first-run and Settings wording. Finite error vocabulary. **A build/config flag hides the consent UI and blocks the transport until gates (b) and (e) close.** | **yes**: the #732 two-family review of schema, install id, retention and linking | part of #741. **Gates before enabling uploads:** (a) the #732 two-family security review (Engineering); (b) lawful basis and notice from counsel (#744); (c) the `docs/design.md` section 5.10 amendment, PR #1139; (d) SRE's proof of retention, exports and deletion, including the 31-day Log Analytics behaviour, and that no client IP or geolocation is stored; (e) the owner's approval of #733's UX and the notice (#762). |
 | 4 | Failing-first tests: the three-field choice, text, choice form (#1101's ask), output streaming during a form (#1123), narrow window (#910), mid-word wrap (#848), tall form, markdown message. #1137 already adds the hyphen and mid-word wraps (04:21), wrapped hints (#910), a mid-redraw read, a retry after a scroll, and a six-field form whose tab bar hides titles, refused as `bar-window` with nothing typed; slice 4 adds the rest. | no (tests) | groundwork for #1123, #910, #848 |
 | 5 | Real-screen corpus and replay test, seeded first from #1137's test screens, then #510 and slice 1's outlines (section 6) | no | part of #1132 |
 | 6 | Hold keys to the form's frame, and settle on the frame (sections 5.1–5.2), building on #1137's re-read and retry. **Approved by the owner (2026-11-07); ships only once Trust agrees** that the frame plus "nothing below it" is enough identity | **yes** (injector; Trust's agreement before merge) | with slice 8, closes #1123 and #1012 |
