@@ -36,9 +36,10 @@ export function detailRows(s, { status = null, machine = null, away = false, now
   const b = s.activity.background;
   const turns = s.activity.turnCount;
   add('Status', status ?? (state.rule === 12 ? state.facts[0] : state.text), 'status');
-  // How long in the session's own status, which an offline machine does not change: an idle session
-  // says nothing, whether or not its machine is away.
-  add('In this state', state.view === 'idle' ? null : `for ${duration(s.statusSince, now)}`, 'since');
+  // How long in the session's own status: nothing when idle, and nothing while the machine is away,
+  // where it would count up for a session nobody can see (§6.2). The offline words' "last seen" is
+  // the only time in the state group then.
+  add('In this state', away || state.view === 'idle' ? null : `for ${duration(s.statusSince, now)}`, 'since');
   add('Message', s.attention?.message, 'attention');
   add('Not responding since', away ? null : clockTime(silentSince(s)), 'silent');
   add('Driven by', state.driven && !away ? (s.driverPrincipal || 'an agent') : null, 'driver');

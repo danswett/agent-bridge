@@ -119,7 +119,7 @@
       ]
     },
     {
-      "name": "its machine away while it works: the machine's words for Status, no Driven by or Not responding since",
+      "name": "its machine away while it works: the machine's words for Status, and no In this state, Driven by or Not responding since",
       "machine": "Studio PC",
       "away": { "since": "2026-11-06T12:15:00Z" },
       "session": {
@@ -141,7 +141,6 @@
       },
       "rows": [
         { "row": "Status", "value": "Offline \u00b7 last seen 5m ago" },
-        { "row": "In this state", "value": "for 12m" },
         { "row": "Message", "value": "The agent has not answered for 20 minutes." },
         { "row": "Agent", "value": "Copilot" },
         { "row": "Model", "value": "claude-opus-5.5" },
@@ -152,7 +151,7 @@
       ]
     },
     {
-      "name": "its machine away while it is idle: no In this state, as when it is not away",
+      "name": "its machine away while it is idle: no In this state either",
       "machine": "Studio PC",
       "away": { "since": "2026-11-06T12:15:00Z" },
       "session": {
