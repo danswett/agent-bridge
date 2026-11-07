@@ -149,6 +149,8 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
             Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop, Ops.AttachmentStart, Ops.PushSubscribe,
             LaunchProtocol.Options, LaunchProtocol.Launch, TransferProtocol.Op, TrustProtocol.Answer,
             UsageProtocol.Get, UpdateProtocol.Install, "host.peers.reset", "future.operation",
+            // The HA connector's reads are the latest exchange; a session's history is a person's (#292).
+            HistoryProtocol.Op,
         })
         {
             await DeniedAsync(channel, op);
@@ -224,14 +226,20 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var peer = await PeerAsync(role == TrustedPeerStore.Host ? "app" : "host");
         Pin(peer, role);
         var channel = await peer.Hub.OpenAsync(host.Id, Patience);
-        Result(await channel.RequestAsync(Ops.Hello, new { }, Patience));
+        var hello = Result(await channel.RequestAsync(Ops.Hello, new { }, Patience)).Deserialize<HelloResult>(ProtocolJson.Options)!;
         if (role == TrustedPeerStore.Person)
         {
             Result(await channel.RequestAsync(Ops.SessionsList, new { }, Patience));
             await DeniedAsync(channel, TransferProtocol.Op);
+            // A person's device pages back through a session's history (#292).
+            Assert.Contains(HistoryProtocol.Capability, hello.Capabilities);
+            var history = Result(await channel.RequestAsync(HistoryProtocol.Op, new { id = SessionId }, Patience)).Deserialize<HistoryResult>(ProtocolJson.Options)!;
+            Assert.Equal("go", history.Turns!.Single().Prompt!.Text);
         }
         else
         {
+            Assert.DoesNotContain(HistoryProtocol.Capability, hello.Capabilities);
+            await DeniedAsync(channel, HistoryProtocol.Op);
             await DeniedAsync(channel, Ops.SessionsList);
             await DeniedAsync(channel, UsageProtocol.Subscribe);
             await DeniedAsync(channel, LaunchProtocol.Launch);

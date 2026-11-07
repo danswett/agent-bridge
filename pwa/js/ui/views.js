@@ -507,12 +507,13 @@ export class SessionListView {
 // keys, Home and End move between them, choosing as they go, as a SelectorBar does.
 const tabsDrawnAs = new WeakMap();
 
-export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null, away = [] }) {
+export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null, away = [], quiet = false }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
   const awayIds = away.filter((id) => id !== me && !hosts.some((d) => d.id === id));
   const kept = all ? awayIds : [];
-  const awayTab = (id) => ({ id, name: nameOf(id) ?? 'This machine', label: nameOf(id) ?? 'This machine', away: true });
+  // Quiet (the return grace): an away machine's tab keeps the look it had, not yet marked offline.
+  const awayTab = (id) => ({ id, name: nameOf(id) ?? 'This machine', label: nameOf(id) ?? 'This machine', away: !quiet });
   const tabs = [
     // A machine chosen while it is away counts too, so All stays offered to go back to (#269).
     ...(hosts.length + awayIds.length > 1 ? [{ id: ALL, name: 'All', label: 'All machines' }] : []),

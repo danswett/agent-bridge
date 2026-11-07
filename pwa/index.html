@@ -111,7 +111,11 @@
           <div id="list-pane" class="list-pane">
             <div class="sessions-head">
               <h2 id="sessions-h" class="page-title">Sessions</h2>
-              <span id="session-count" class="count"></span>
+              <div class="count-row">
+                <span id="session-count" class="count"></span>
+                <span id="return-slot" class="return-slot"></span>
+              </div>
+              <p id="connection-strip" class="connection-strip" role="status" aria-live="polite" hidden></p>
               <select id="session-sort" class="sort" aria-label="Sort sessions" title="Sort sessions"></select>
               <div class="head-actions">
                 <button type="button" class="icon-button search-open" aria-label="Search sessions" title="Search sessions">

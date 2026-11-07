@@ -38,6 +38,22 @@ finish; that row keeps its removal and offers **Set up** through a fresh check. 
 Copilot CLI's hooks (the host sets them up as Copilot's), so what a setup or removal on either row
 left counts for both rows; the row that ran it keeps its words.
 
+**An agent installed after the bridge (#231, slice 1).** A card at the top of Settings, "*Agent*
+*version* is installed · Set it up to see its sessions in Slipgates", with **Set up** and **Not
+now**, and a grey dot (no count) on the rail's Settings item, named "Settings, new agent found"
+(the Agents item the spec names doesn't exist on today's one-page Settings). It comes from the host's
+typed evidence alone, never its Detail text: the CLI installed, `hookSetup` `notSetUp`, and a
+version read, for Copilot CLI, Claude Code and Codex (Agency shares Copilot CLI's hooks and has no
+card). It is never offered on a read-only host or beside agent-ha-bridge, never a toast, a push or a
+count, and not Needs you. While it shows it holds the agent's only Set up (the row draws none), and
+its **Set up** runs the row's own confirmation and `SetUpAgentAsync`, so there is one writer. **Not
+now**, or removing the agent's connection, hides the card and the dot for that agent at that version
+(`AgentOffersDismissed` in the app's preferences, by agent id, so it survives restarts); a different
+version is offered again, and the row's Set up returns. An agent whose version couldn't be read
+gets no card, and its row keeps its Set up: nothing invents a version. The card never takes focus,
+is raised once as a polite live region while Settings is open, and after Not now focus goes to
+the next card or to **Check agents again**.
+
 A row the app can't act on has its own words and no verb, in the neutral secondary text with no
 status colour, never Ready, Not set up or Needs repair, and nothing on it is a button that can't
 work (Creative's rulings on #784 and #705):
@@ -943,7 +959,6 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   it, as everywhere else for now.
 * **Cancelling a large attachment** part way. The PWA has a Cancel while a file uploads; the
   app has none yet, over the pipe or through the blob store.
-* Agent hook registration for a fresh install (#54).
 * **Migrate and Roll back on the Settings page** (WinUI slice 2). Both exist in the host
   (`agent-bridge-host migrate` / `rollback`, [migration.md](migration.md)); the page needs
   to show the dry run's report, confirm, and show the result, and it cannot be reached through

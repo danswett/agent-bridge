@@ -8,6 +8,7 @@
 // answer it would refuse for its shape; ../answer-service.js sends it and resends it, with
 // the same request, until there is an outcome.
 import { h } from './dom.js';
+import { UPDATING, holdKey, holdOf } from './hold.js';
 import { renderMarkdown } from '../markdown.js';
 import { ReceiptClock, answeredValue, describeInFlight, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import { openConfirmSheet } from './escaped-sheet.js';
@@ -221,6 +222,9 @@ export class QuestionPanel {
   #unwatch = null;
   #busyTimer = null;
   #held = null;
+  #holdKey = '';
+  // A quiet hold while the app catches up after a return (hold.js), or null.
+  #quiet = null;
   #receipt = null;
 
   // answering: { service, hostId, sessionId }. state: what a previous panel for the same
@@ -258,14 +262,26 @@ export class QuestionPanel {
 
   // Why nothing can be sent now (its machine offline, #269), or null: everything entered stays,
   // and the controls take nothing until it is null again.
-  setHeld(text) {
-    const held = text || null;
-    if (held === this.#held) { return; }
-    this.#held = held;
-    this.els.held.textContent = held ?? '';
-    this.els.held.hidden = !held;
-    this.element.dataset.held = held ? 'true' : 'false';
+  setHeld(held) {
+    const hold = holdOf(held);
+    const key = holdKey(hold);
+    if (key === this.#holdKey) { return; }
+    this.#holdKey = key;
+    const text = hold.text || null;
+    this.#held = text;
+    this.#quiet = hold.updating ? hold : null;
+    const e = this.els;
+    // The offline line takes the place of the actions; focus on one of them moves to the line (rule 8).
+    const focused = hold.offline && this.element.contains(this.element.ownerDocument.activeElement) && (e.actions.contains(this.element.ownerDocument.activeElement) || e.controls.contains(this.element.ownerDocument.activeElement));
+    e.held.textContent = text ?? '';
+    e.held.hidden = !text;
+    if (hold.offline) { e.held.tabIndex = -1; } else { e.held.removeAttribute('tabindex'); }
+    e.actions.hidden = hold.offline;
+    if (!hold.updating) { e.updating.hidden = true; e.updating.textContent = ''; }
+    this.element.dataset.held = text ? 'true' : 'false';
+    this.element.dataset.hold = hold.updating ? (hold.drawn ? 'drawn' : 'quiet') : 'none';
     this.#show(this.entry);
+    if (focused) { e.held.focus(); }
   }
 
   get entry() { const { service, hostId, sessionId } = this.answering; return service.get(hostId, sessionId, this.q.id); }
@@ -310,7 +326,8 @@ export class QuestionPanel {
     // what a busy region says until it is done.
     e.status = h('p', { class: 'answer-status' });
     e.live = receiptLive();
-    e.form.append(e.held, e.error, e.actions, e.status);
+    e.updating = h('p', { class: 'note answer-updating', hidden: true });
+    e.form.append(e.held, e.error, e.actions, e.updating, e.status);
     // A tap question has no Send until Other is opened.
     e.send.hidden = this.tap && !this.otherOpen;
     this.element.append(e.form, e.live);
@@ -395,6 +412,7 @@ export class QuestionPanel {
   // The sheet, and Approve once only from its own button: signed for the answer's request when it is
   // pressed, then sent as any answer is, so a resend carries the same confirmation.
   #confirmEscaped() {
+    if (this.#quiet) { this.#updating(); return; }
     if (this.#held || this.#sheetOpen) { return; }
     const entry = this.entry;
     if (entry && (entry.state === 'sending' || entry.state === 'waiting')) { return; }
@@ -411,11 +429,14 @@ export class QuestionPanel {
         const stale = () => Date.now() - pressed >= COMMAND_LIFETIME_S * 1000;
         const expired = () => new Error(`Not sent: this confirmation is more than ${COMMAND_LIFETIME_S / 60} minutes old. Press again`);
         if (stale()) { throw expired(); }
+        // A return's hold that began while the sheet was open: nothing is signed or sent until it lifts (#950).
+        if (this.#quiet) { throw new Error(`${UPDATING} Press again in a moment`); }
         const request = globalThis.crypto.randomUUID();
         const confirm = await this.escaped.sign({ session: sessionId, question: q.id, shown, request, now: pressed });
         // Closed while it was signed: the confirmation is dropped, and nothing is sent (#836 review).
         if (cancelled()) { return false; }
         if (stale()) { throw expired(); }
+        if (this.#quiet) { throw new Error(`${UPDATING} Press again in a moment`); }
         // The machine's route gone while it was signed (#269's gate): nothing is queued, so the sheet
         // must not close as if it went. It stays open saying so, its button the Try again, which
         // signs afresh once the machine is back (#836 review 5780082443).
@@ -563,7 +584,14 @@ export class QuestionPanel {
     target?.focus();
   }
 
+  // A press while the app catches up: said under the controls, in text2; never a toast.
+  #updating() {
+    this.els.updating.textContent = UPDATING;
+    this.els.updating.hidden = false;
+  }
+
   #send({ tapped = null } = {}) {
+    if (this.#quiet) { this.#updating(); return; }
     if (this.#held) { return; }
     const entry = this.entry;
     if (entry && (entry.state === 'sending' || entry.state === 'waiting')) { return; }
@@ -577,6 +605,7 @@ export class QuestionPanel {
   }
 
   #resend() {
+    if (this.#quiet) { this.#updating(); return; }
     if (this.#held) { return; }
     const { service, hostId, sessionId } = this.answering;
     service.resend(hostId, sessionId, this.q.id);
@@ -597,6 +626,11 @@ export class QuestionPanel {
     e.form.classList.toggle('still', entry?.state === 'waiting' && entry.reason === 'not connected');
     e.controls.disabled = !again || pause || held;
     e.send.disabled = !again || pause || held;
+    // A quiet hold: aria-disabled at once, so focus stays; a press does nothing but say why.
+    for (const b of [e.send, ...this.element.querySelectorAll('.choice')]) {
+      if (this.#quiet && again && !pause) { b.setAttribute('aria-disabled', 'true'); } else { b.removeAttribute('aria-disabled'); }
+    }
+    if (!this.#quiet) { e.updating.hidden = true; e.updating.textContent = ''; }
     e.resend.hidden = entry?.state !== 'failed';
     e.resend.disabled = held;
     if (pause) { this.#busyTimer = setTimeout(() => { e.controls.disabled = !!this.#held; e.send.disabled = !!this.#held; }, BUSY_PAUSE_MS); }

@@ -87,17 +87,25 @@ internal sealed class ClaudeSubagents
         JsonElement meta;
         try
         {
-            using var doc = JsonDocument.Parse(ReadShared(file, MaxMetaBytes));
+            // Half a surrogate pair is read as the replacement character (Json.Repaired): reading
+            // it threw out of the session's update, which then never listed the session (found in
+            // review of #292).
+            using var doc = JsonDocument.Parse(Json.Repaired(ReadShared(file, MaxMetaBytes)));
             meta = doc.RootElement.Clone();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
-        if (meta.ValueKind != JsonValueKind.Object || Json.Str(meta, "parentAgentId") is not { } parent || !IsId(parent)) { return true; }
-        // A transcript there but unreadable (locked, say) is tried again with the record.
-        if (Head(Path.Combine(dir, Prefix + id + ".jsonl"), id) is not { } head) { return false; }
-        var (startedAt, prompt) = head;
-        record = new Record(id, parent, Json.Int(meta, "spawnDepth") ?? 2, Json.Str(meta, "description"), Json.Str(meta, "agentType"),
-            Json.Str(meta, "toolUseId"), Json.Str(meta, "requestShape") == "background", startedAt, prompt);
-        return true;
+        try
+        {
+            if (meta.ValueKind != JsonValueKind.Object || Json.Str(meta, "parentAgentId") is not { } parent || !IsId(parent)) { return true; }
+            // A transcript there but unreadable (locked, say) is tried again with the record.
+            if (Head(Path.Combine(dir, Prefix + id + ".jsonl"), id) is not { } head) { return false; }
+            var (startedAt, prompt) = head;
+            record = new Record(id, parent, Json.Int(meta, "spawnDepth") ?? 2, Json.Str(meta, "description"), Json.Str(meta, "agentType"),
+                Json.Str(meta, "toolUseId"), Json.Str(meta, "requestShape") == "background", startedAt, prompt);
+            return true;
+        }
+        // A backstop: text that still can't be read makes this no nested agent's record.
+        catch (InvalidOperationException) { return true; }
     }
 
     // When the agent started and what it was asked: its transcript's first entry, the prompt,
@@ -125,14 +133,14 @@ internal sealed class ClaudeSubagents
         }
         try
         {
-            using var doc = JsonDocument.Parse(bytes.AsMemory(0, newline));
+            using var doc = JsonDocument.Parse(Json.Repaired(bytes.AsMemory(0, newline)));
             var e = doc.RootElement;
             if (e.ValueKind != JsonValueKind.Object || Json.Str(e, "agentId") != id) { return (null, null); }
             var message = Json.Obj(e, "message");
             var prompt = message is { } m && Json.Get(m, "content") is { ValueKind: JsonValueKind.String } c ? c.GetString() : null;
             return (Json.Time(e, "timestamp"), prompt);
         }
-        catch (JsonException) { return (null, null); }
+        catch (Exception x) when (x is JsonException or InvalidOperationException) { return (null, null); }
     }
 
     // A first entry too long to read whole: its own timestamp, read as far as it goes. Claude
@@ -140,7 +148,7 @@ internal sealed class ClaudeSubagents
     // has them; none is taken unless the entry says it is this agent's.
     static DateTimeOffset? Started(byte[] bytes, string id)
     {
-        var reader = new Utf8JsonReader(bytes, isFinalBlock: false, state: default);
+        var reader = new Utf8JsonReader(Json.Repaired(bytes).Span, isFinalBlock: false, state: default);
         (DateTimeOffset? at, bool mine) = (null, false);
         try
         {
@@ -156,7 +164,7 @@ internal sealed class ClaudeSubagents
                 if (at is not null && mine) { return at; }
             }
         }
-        catch (JsonException) { }
+        catch (Exception x) when (x is JsonException or InvalidOperationException) { }
         return null;
     }
 

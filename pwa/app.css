@@ -1404,6 +1404,32 @@ summary {
 }
 .end-button .icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
 .end-button:disabled, .end-button[aria-disabled="true"] { opacity: .55; cursor: default; }
+/* Coming back to the app (#950): a control held for it is aria-disabled at once and drawn as it was
+   until the hold has lasted 600 ms (data-hold="drawn"). The words a press brings sit under it, in text2. */
+[data-hold="quiet"] :is(.button, .end-button, .choice)[aria-disabled="true"] { opacity: 1; cursor: inherit; }
+[data-hold="drawn"] .choice[aria-disabled="true"] { opacity: .6; cursor: default; }
+.answer-updating, .reply-updating, .stop-updating, .needs-updating { color: var(--ab-text2); }
+/* The title row's slot (#950): a fixed track beside the title that nothing around it moves for, and
+   the connection strip, which takes the title row's place at its height. Neither is announced as the
+   slot fills; the strip is, once, as the polite status it is. */
+.count-row { grid-area: count; display: flex; gap: var(--ab-space-2); min-width: 0; min-height: var(--type-meta-line); }
+/* In the list pane the cue is too wide beside the count: it takes a second line, which is kept (the
+   row sits beside New, as tall) so that it appearing moves nothing. */
+@media (min-width: 760px) {
+  .count-row { flex-wrap: wrap; align-content: flex-start; row-gap: 0; min-height: calc(2 * var(--type-meta-line)); }
+  .count-row .return-slot { flex: 1 1 100%; }
+}
+.count-row .count { flex: none; }
+.return-slot {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line);
+}
+.sessions-head .connection-strip {
+  grid-column: 1 / -1; grid-row: 1 / -1; align-self: stretch; display: flex; align-items: center;
+  margin: 0; padding: 0; color: var(--ab-text2); font-size: var(--type-meta);
+}
+.sessions-head .connection-strip[hidden] { display: none; }
+.sessions-head[data-strip="true"] > :not(.connection-strip) { visibility: hidden; }
 .end-session[data-stop="confirm"] .end-button { color: var(--ab-danger-text); font-weight: 600; }
 .end-session .stop-status { margin: 0 0 6px; }
 .end-session .resend { margin-bottom: 6px; }

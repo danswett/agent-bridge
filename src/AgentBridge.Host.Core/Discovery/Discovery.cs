@@ -632,7 +632,7 @@ internal static class CodexRollout
     {
         try
         {
-            using var doc = JsonDocument.Parse(line);
+            using var doc = JsonDocument.Parse(Json.Repaired(line));
             var e = doc.RootElement;
             if (Json.Str(e, "type") != "session_meta" || Json.Obj(e, "payload") is not { } p) { return CodexThread.Unknown; }
             if (!string.Equals(Json.Str(p, "id"), id, StringComparison.OrdinalIgnoreCase)) { return CodexThread.Other; }
@@ -640,7 +640,7 @@ internal static class CodexRollout
             if (Json.Get(p, "thread_source") is { } thread && !(thread.ValueKind == JsonValueKind.String && thread.GetString() == "user")) { return CodexThread.Other; }
             return Json.Get(p, "source") is not { } source || source.ValueKind == JsonValueKind.String ? CodexThread.TopLevel : CodexThread.Other;
         }
-        catch (JsonException) { return CodexThread.Unknown; }
+        catch (Exception x) when (x is JsonException or InvalidOperationException) { return CodexThread.Unknown; }
     }
 
     static byte[]? FirstLine(FileStream stream)
@@ -713,10 +713,10 @@ internal static class CodexRollout
         read = stream.ReadAtLeast(line, line.Length, throwOnEndOfStream: false);
         try
         {
-            using var doc = JsonDocument.Parse(line.AsMemory(0, read));
+            using var doc = JsonDocument.Parse(Json.Repaired(line.AsMemory(0, read)));
             return Json.Time(doc.RootElement, "timestamp");
         }
-        catch (JsonException) { return null; }
+        catch (Exception x) when (x is JsonException or InvalidOperationException) { return null; }
     }
 }
 internal static class RegistrationDiscovery

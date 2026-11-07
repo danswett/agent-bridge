@@ -304,7 +304,8 @@ public sealed partial record FieldConstraints
 // 250 ms for each match was about 100 s for one ask_user of 200 slow patterns with defaults, on
 // the thread that refreshes every session (#844 review). Building a pattern counts too. Once the
 // budget is spent, a pattern is one that cannot be checked, and its field is answered at the
-// machine. Not thread-safe: one per question or answer being read.
+// machine. Not thread-safe: one per question or answer being read, or per history request, which
+// reads many questions (HistoryContext.Patterns).
 public sealed class PatternBudget(TimeSpan total)
 {
     public static readonly TimeSpan Total = TimeSpan.FromMilliseconds(250);

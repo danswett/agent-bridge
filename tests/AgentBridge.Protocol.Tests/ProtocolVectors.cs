@@ -52,6 +52,7 @@ public static class ProtocolVectors
         Update(catalog.File("update.json", "v1-update.md", "A machine's updates, seen and asked for from another device."));
         Manage(catalog.File("manage.json", "v1-sessions.md", "Restarting a machine and repairing its hooks from a person's other device (#801)."));
         Usage(catalog.File("usage.json", "v1-usage.md", "How much of each agent's allowance is gone."));
+        History(catalog.File("history.json", "v1-history.md", "A session's earlier turns, a page at a time, for the conversation pane."));
         foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
         return catalog.Build();
     }
@@ -119,7 +120,7 @@ public static class ProtocolVectors
     static readonly Activity FullActivity = new()
     {
         Response = "All **47** tests pass.", ResponseTruncated = true, Reasoning = "The suite is green; summarize.", CurrentTool = Running, History = [Finished],
-        UserMessage = "Run the tests", TurnCount = 4, Compactions = 1, Background = new Background { Agents = 1, Shells = 2 },
+        UserMessage = "Run the tests", Turn = "w8Vb3l0V7lH2eQ3c", ResponseTurn = "w8Vb3l0V7lH2eQ3c", TurnCount = 4, Compactions = 1, Background = new Background { Agents = 1, Shells = 2 },
         Source = new ActivitySource { Reasoning = "agent-1" }, Own = new OwnActivity { Reasoning = "Waiting on the delegate.", At = T0 },
     };
 
@@ -793,6 +794,110 @@ public static class ProtocolVectors
             .Valid("repaired", new ManageResult { Request = Request, Outcome = ManageOutcome.Done, Detail = "Copilot's hooks are set up", RestartRequired = false })
             .Valid("held-until-the-roster", new ManageResult { Outcome = ManageOutcome.Refused, Reason = ManageReason.NeedsRoster })
             .Reads("an-unknown-outcome-reads-as-failed", """{"outcome":"rolledBack"}""");
+    }
+    // ---- history ----
+
+    const string TurnA = "w8Vb3l0V7lH2eQ3c";
+    const string TurnB = "Zp1Lr0aH2cQ8sV3n";
+    const string Cursor = "h1.AQAAAAAAABI0AAIUeA";
+
+    static readonly HistoryPart Said = new() { Id = TurnB + ".0", Kind = HistoryPartKind.Response, At = T1, Text = "All **47** tests pass." };
+    static readonly HistoryPart Thought = new() { Id = "Hq2Nf7Ka0Lw4Xe1R.0", Kind = HistoryPartKind.Reasoning, At = T0, Text = "The suite is in tests/." };
+    static readonly HistoryPart Ran = new() { Id = "Hq2Nf7Ka0Lw4Xe1R.1", Kind = HistoryPartKind.Tool, At = T0, Tool = Finished };
+    static readonly HistoryPart Started = new()
+    {
+        Id = "Bd4Qe8Wm1Rt5Yu9I.0", Kind = HistoryPartKind.Delegate, At = T0,
+        Delegate = new DelegateEvent { Agent = "agent-1", Event = DelegateEventKind.Started, Name = "Run the suite", Kind = SubagentKind.Background },
+    };
+    static readonly HistoryPart Reported = new()
+    {
+        Id = "Cf5Rg9Xn2Sy6Zv0J.0", Kind = HistoryPartKind.Delegate, At = T1,
+        Delegate = new DelegateEvent { Agent = "agent-1", Event = DelegateEventKind.Reported, Name = "Run the suite", Outcome = SubagentOutcome.Failed },
+    };
+    static readonly HistoryPart Answered = new()
+    {
+        Id = "Dg6Sh0Yo3Tz7Aw1K.0", Kind = HistoryPartKind.Question, At = T0, Question = Form, Outcome = QuestionOutcome.Answered,
+        Answer = "spike: s6\nconfirm: true", AnsweredAt = T0.AddSeconds(40),
+    };
+    static readonly HistoryPart Approved = new() { Id = "Eh7Ti1Zp4Ua8Bx2L.0", Kind = HistoryPartKind.Question, At = T0, Question = Approval, Outcome = QuestionOutcome.Approved, AnsweredAt = T0.AddSeconds(5) };
+    static readonly HistoryTurn Whole = new() { Id = TurnA, At = T0, Prompt = new HistoryPrompt { Text = "Run the tests" }, Parts = [Thought, Ran, Started, Approved, Reported, Said] };
+    static readonly HistoryTurn Scheduled = new()
+    {
+        Id = TurnB, At = T1, Prompt = new HistoryPrompt { Text = "[Scheduled prompt #4] Check CI and report.", From = UserMessageFrom.Schedule, Label = "4" }, Parts = [Said],
+    };
+
+    static void History(VectorFileBuilder f)
+    {
+        f.Record<HistoryRequest>(Client, VectorChecks.History)
+            .Valid("the-newest-page", new HistoryRequest { Id = SessionId })
+            .Valid("an-earlier-page", new HistoryRequest { Id = SessionId, Before = Cursor, Limit = 20 })
+            .Valid("the-most-a-page-holds", new HistoryRequest { Id = SessionId, Limit = HistoryLimits.MaxTurns })
+            .Refused("no-turns", new HistoryRequest { Id = SessionId, Limit = 0 })
+            .Refused("more-than-a-page-holds", new HistoryRequest { Id = SessionId, Limit = HistoryLimits.MaxTurns + 1 })
+            .Refused("a-blank-session", new HistoryRequest { Id = " " })
+            .Refused("an-empty-cursor", new HistoryRequest { Id = SessionId, Before = "" })
+            .Refused("a-cursor-over-256-bytes", new HistoryRequest { Id = SessionId, Before = "h1." + Repeat('A', 254) })
+            .Refused("a-limit-that-is-not-a-number", """{"id":"4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b","limit":true}""");
+        f.Record<HistoryPrompt>(Host)
+            .Valid("the-persons", new HistoryPrompt { Text = "Run the tests" })
+            .Valid("a-scheduled-prompt", Scheduled.Prompt!)
+            .Valid("one-an-agent-sent", new HistoryPrompt { Text = "Carry on with the next step.", From = UserMessageFrom.Agent })
+            .Valid("cut-short", new HistoryPrompt { Text = Repeat('a', HistoryLimits.Prompt), Truncated = true })
+            .Reads("an-unknown-sender-reads-as-other-never-the-person", """{"text":"Carry on.","from":"robot"}""")
+            .Refused("a-sender-that-is-not-text", """{"text":"Carry on.","from":4}""");
+        f.Record<DelegateEvent>(Host)
+            .Valid("started", Started.Delegate!)
+            .Valid("reported-back", Reported.Delegate!)
+            .Valid("reported-back-unnamed", new DelegateEvent { Agent = "agent-2", Event = DelegateEventKind.Reported, Outcome = SubagentOutcome.Done })
+            .Reads("an-unknown-event-reads-as-unknown", """{"agent":"agent-1","event":"paused"}""")
+            .Refused("an-agent-that-is-not-text", """{"agent":1,"event":"started"}""");
+        f.Record<HistoryPart>(Host)
+            .Valid("a-response", Said)
+            .Valid("reasoning", Thought)
+            .Valid("a-response-cut-short", Said with { Text = "…the end of a long reply.", Truncated = true })
+            .Valid("a-tool", Ran)
+            .Valid("a-delegate-starting", Started)
+            .Valid("a-delegate-reporting-back", Reported)
+            .Valid("a-question-answered", Answered)
+            .Valid("an-approval-approved", Approved)
+            .Valid("an-approval-denied", Approved with { Outcome = QuestionOutcome.Denied })
+            .Valid("a-delegates-approval", Approved with { Question = Approval with { Agent = "agent-1" } })
+            .Valid("a-question-left-unanswered", Answered with { Outcome = QuestionOutcome.Cancelled, Answer = null })
+            .Valid("a-question-still-waiting", Answered with { Outcome = QuestionOutcome.Unknown, Answer = null, AnsweredAt = null })
+            .Reads("an-unknown-kind-reads-as-unknown", """{"id":"x.0","kind":"poll","at":"2026-10-28T04:22:43.182Z"}""")
+            .Reads("an-unknown-outcome-reads-as-unknown-never-approved", Broken(Approved, j => j["outcome"] = "maybe"))
+            // A question nobody can read is dropped, and a client skips the part.
+            .Reads("a-question-that-cannot-be-read", Broken(Approved, j => j["question"]!["message"] = 7))
+            .Refused("an-outcome-that-is-not-text", Broken(Approved, j => j["outcome"] = true));
+        f.Record<HistoryTurn>(Host)
+            .Valid("whole", Whole)
+            .Valid("a-scheduled-prompt", Scheduled)
+            .Valid("just-asked", new HistoryTurn { Id = TurnB, At = T1, Prompt = new HistoryPrompt { Text = "And the docs?" } })
+            .Valid("cut-short", Whole with { Parts = [Said], PartsMore = 5, Truncated = true })
+            .Valid("unreadable", new HistoryTurn { Id = TurnB, At = T1, Unreadable = true })
+            // Entries of parts that cannot be read are left out, and the turn kept.
+            .Reads("a-part-that-cannot-be-read", Broken(Scheduled, j => j["parts"]!.AsArray().Add(new JsonObject { ["kind"] = "response", ["at"] = "2026-10-28T04:25:43.182Z" })))
+            // Read as the person's, a schedule's or an agent's prompt would be shown as their own words.
+            .Refused("a-prompt-whose-sender-is-not-text", Broken(Scheduled, j => j["prompt"]!["from"] = 4))
+            .Refused("an-id-that-is-not-text", Broken(Scheduled, j => j["id"] = 7));
+        f.Record<HistoryStart>(Host)
+            .Valid("the-start-of-the-session", new HistoryStart { At = T0 })
+            .Valid("as-far-as-the-host-serves", new HistoryStart { Limited = true });
+        f.Record<HistoryResult>(Host)
+            .Valid("a-page-with-more-before-it", new HistoryResult { Turns = [Whole, Scheduled], Before = Cursor })
+            .Valid("the-start-of-the-session", new HistoryResult { Turns = [Whole], Start = new HistoryStart { At = T0 } })
+            .Valid("the-most-a-host-serves", new HistoryResult { Turns = [Whole], Start = new HistoryStart { Limited = true } })
+            .Valid("no-messages-yet", new HistoryResult { Turns = [], Start = new HistoryStart { At = T0 } })
+            .Valid("partial", new HistoryResult { Turns = [new HistoryTurn { Id = TurnA, At = T0, Unreadable = true }, Scheduled], Before = Cursor, Partial = true })
+            .Valid("missing", HistoryResult.Gone)
+            .Valid("stale", HistoryResult.StaleCursor)
+            .Valid("cursor-aged-out-of-history-window", HistoryResult.StaleCursor)
+            .Valid("unavailable", HistoryResult.NotAvailable("this session's transcript can't be found"))
+            // A turn whose prompt's sender cannot be read is left out, and the page kept.
+            .Reads("a-turn-that-cannot-be-read", Broken(new HistoryResult { Turns = [Whole, Scheduled], Before = Cursor }, j => j["turns"]![1]!["prompt"]!["from"] = 4))
+            // Read as absent, a page with more before it would read as the start of history.
+            .Refused("a-cursor-that-is-not-text", Broken(new HistoryResult { Turns = [Whole], Before = Cursor }, j => j["before"] = 7))
+            .Refused("a-start-that-is-not-a-record", Broken(new HistoryResult { Turns = [Whole], Start = new HistoryStart { At = T0 } }, j => j["start"] = "session"));
     }
 
     // ---- usage ----

@@ -13,7 +13,9 @@ param manageEnvironment = bool(readEnvironmentVariable('RELAY_MANAGE_ENVIRONMENT
 param registryName = 'abrelaywus2'
 // The "Agent Bridge (dev)" GitHub App, device flow. A client id is public.
 param githubClientId = 'Iv23liXL0Mvqs2dckn5U'
-param allowedOrigins = ['https://danswett.github.io']
+// app.slipgates.com is the PWA's new address (#393). The github.io origin stays listed so the
+// move can be rolled back and the old address keeps working until it is retired.
+param allowedOrigins = ['https://danswett.github.io', 'https://app.slipgates.com']
 
 param production = {
   name: 'agent-bridge-relay'

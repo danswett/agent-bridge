@@ -104,9 +104,11 @@ export class HostSession {
     connection, me = null, storage = globalThis.localStorage,
     makeClient = (ch, store) => new HostClient(ch, { store }), makeStore = () => new SessionsStore(),
     maxOpening = 3, retryMs = 5000, reopenMs = 1000, maxRetryMs = 60000,
-    keepOfflineMs = OFFLINE_KEEP_MS, now = () => Date.now(),
+    keepOfflineMs = OFFLINE_KEEP_MS, now = () => Date.now(), grace = null,
   }) {
-    Object.assign(this, { connection, me, storage, makeClient, makeStore, maxOpening, retryMs, reopenMs, maxRetryMs, keepOfflineMs, now });
+    Object.assign(this, { connection, me, storage, makeClient, makeStore, maxOpening, retryMs, reopenMs, maxRetryMs, keepOfflineMs, now, grace });
+    // The grace on a return (return-grace.js): what it hides or shows moves on with it.
+    grace?.onChange(() => this.#emit());
     connection.on('ready', () => this.#pump());
     connection.on('presence', () => this.#onPresence());
     connection.on('lost', (e) => this.#detachAll(e?.resting ? RESTING : DROPPED, e?.resting === true));
@@ -161,8 +163,15 @@ export class HostSession {
   // has no sessions to give; not tried again. 'reconnecting': in presence, and no channel to it
   // is open. 'confirming': open, and its snapshot (a new channel's first, or the one a gap asked
   // for again) has not finished, or the app rested and nothing has gone wrong since (rested: true,
-  // whatever its channel's phase).
+  // whatever its channel's phase). While the grace on a return is on (#950), the same, with grace:
+  // true, and drawn: whether a control held for it is drawn disabled yet: the screens show it as it
+  // was last seen, and the sends stay held all the same.
   staleOf(id) {
+    const stale = this.#staleOf(id);
+    return stale && this.grace?.active ? { ...stale, grace: true, drawn: this.grace.drawn } : stale;
+  }
+
+  #staleOf(id) {
     const link = this.#links.get(id);
     if (!link || this.route(id)) { return null; }
     if (link.offlineSince === null) {
