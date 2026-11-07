@@ -1151,6 +1151,27 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_cards_Set_up_is_disabled_while_a_setup_runs_so_a_second_press_cannot_start_another()
+    {
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true));
+        host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
+        Assert.True(settings.AgentOffers.Single().CanSetUp);
+        // What the card would be drawn with each time the page is told its offers changed mid-setup.
+        var drawn = new List<bool>();
+        settings.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(SettingsViewModel.AgentOffers) && settings.Busy && settings.AgentOffers.FirstOrDefault() is { } offer) { drawn.Add(offer.CanSetUp); }
+        };
+
+        await settings.SetUpAgentAsync("claude");
+
+        Assert.NotEmpty(drawn);
+        Assert.All(drawn, canSetUp => Assert.False(canSetUp));
+        Assert.True(settings.AgentOffers.Single().CanSetUp);
+    }
+
+    [Fact]
     public async Task Removing_Agencys_connection_does_not_offer_back_Copilot_CLIs_card_whose_hooks_it_shares()
     {
         await WithAgents([Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), Agent("agency", "Agency", ReadinessState.Unknown, hooksDetail: RecordIntakeOn)]);

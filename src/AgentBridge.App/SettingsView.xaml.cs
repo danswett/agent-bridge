@@ -56,10 +56,13 @@ public sealed partial class SettingsView : UserControl
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             OfferList.UpdateLayout();
+            var cards = Descendants(OfferList).OfType<AgentOfferGroup>().Select(g => (Group: g, Name: AutomationProperties.GetName(g))).ToList();
+            // A card that is gone is forgotten, so one that returns at the same version (after a failed
+            // setup, say) is said again.
+            offersSaid.IntersectWith(cards.Select(c => c.Name));
             if (Visibility != Visibility.Visible) { return; }
-            foreach (var group in Descendants(OfferList).OfType<AgentOfferGroup>())
+            foreach (var (group, name) in cards)
             {
-                var name = AutomationProperties.GetName(group);
                 if (name.Length == 0 || !offersSaid.Add(name)) { continue; }
                 if ((FrameworkElementAutomationPeer.FromElement(group) ?? FrameworkElementAutomationPeer.CreatePeerForElement(group)) is { } peer)
                 {

@@ -545,8 +545,10 @@ public sealed class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); Raise(nameof(UpdateStatus)); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); } }
     }
+    // The card's Set up follows what the row's would (CanManageAgents), so it is drawn again wherever the rows are.
+    void RaiseOffers() { Raise(nameof(AgentOffers)); Raise(nameof(HasAgentOffers)); Raise(nameof(AgentsNavName)); }
     public string UpdateStatus
     {
         // A release the app downloaded in the background is said here whenever Settings itself is
@@ -875,6 +877,7 @@ public sealed class SettingsViewModel : Observable
         agentNotes[agent] = note;
         if (note.Tone != Tone.Progress) { hookResults[AgentReadinessRow.HooksOf(agent)] = note; }
         Raise(nameof(Agents));
+        RaiseOffers();
     }
 
     public Task CheckForUpdatesAsync() => RunUpdateAsync(async () =>
