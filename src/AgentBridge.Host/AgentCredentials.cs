@@ -57,10 +57,13 @@ public sealed class AgentCredentials
 
     sealed record Record(string Hash, AgentCredential Credential);
     sealed record Saved(int Version, Record[] Records);
+    readonly Func<int, DateTimeOffset, bool> rootAlive;
+
     sealed record Connection(string CredentialId, string Principal);
 
-    public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null)
+    public AgentCredentials(string folder, string machine, TimeProvider? time = null, Action<string>? log = null, Func<int, DateTimeOffset, bool>? rootAlive = null)
     {
+        this.rootAlive = rootAlive ?? ((_, _) => true);
         path = Path.Combine(folder, FileName);
         this.machine = machine;
         this.time = time ?? TimeProvider.System;
@@ -127,7 +130,24 @@ public sealed class AgentCredentials
         {
             return Outside(match, "the process with the session's id is not the one that started it");
         }
+        // The ancestry was read when the pipe connected; the session may have ended since.
+        if (!rootAlive(match.RootPid, match.RootStartUtc))
+        {
+            lock (gate) { Remove(r => r.Credential.Id == match.Id, "its session's process ended"); }
+            return Outside(match, "the session's process has ended");
+        }
         return new AgentHelloDecision(match, null);
+    }
+
+    // Whether the process with this id is still the one that started at that time.
+    public static bool SameProcessAlive(int pid, DateTimeOffset startedUtc)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById(pid);
+            return !p.HasExited && (new DateTimeOffset(p.StartTime.ToUniversalTime()) - startedUtc).Duration() <= StartSlack;
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
     }
 
     AgentHelloDecision Outside(AgentCredential credential, string why)
@@ -151,7 +171,14 @@ public sealed class AgentCredentials
     {
         if (!connections.TryGetValue(channel, out var c)) { return null; }
         var now = time.GetUtcNow();
-        lock (gate) { return records.Select(r => r.Credential).FirstOrDefault(x => x.Id == c.CredentialId && x.ExpiresAt > now); }
+        AgentCredential? found;
+        lock (gate) { found = records.Select(r => r.Credential).FirstOrDefault(x => x.Id == c.CredentialId && x.ExpiresAt > now); }
+        if (found is not null && !rootAlive(found.RootPid, found.RootStartUtc))
+        {
+            lock (gate) { Remove(r => r.Credential.Id == found.Id, "its session's process ended"); }
+            return null;
+        }
+        return found;
     }
 
     public bool RevokeSession(string session, string why)

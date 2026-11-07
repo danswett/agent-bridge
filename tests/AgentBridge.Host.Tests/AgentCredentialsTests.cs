@@ -1,5 +1,6 @@
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 using Xunit;
 
 namespace AgentBridge.Host.Tests;
@@ -48,6 +49,21 @@ public sealed class AgentCredentialsTests : IDisposable
         Assert.Null(store.Check(token, Inside(complete: false)).Accepted);
         Assert.Null(store.Check(token, Inside(started: Started.AddHours(3))).Accepted);
         Assert.Null(store.Check(token, new ProcessAncestry([new PeerProcess(100, null, "agent.exe")], true)).Accepted);
+    }
+
+    [Fact]
+    public void A_root_that_exited_after_the_pipe_connected_is_refused_and_an_open_connection_loses_its_agent()
+    {
+        var alive = true;
+        var store = new AgentCredentials(root, "machine1", rootAlive: (_, _) => alive);
+        var token = store.Mint("sess-1", "launch-1", 100, Started, AgentProtocol.ScopeRead);
+        var channel = new FakeChannel();
+        store.Accept(channel, store.Check(token, Inside()).Accepted!);
+        Assert.NotNull(store.Of(channel));
+        alive = false;
+        Assert.Null(store.Of(channel));
+        Assert.Null(store.Check(token, Inside()).Accepted);
+        Assert.Equal(0, store.Count);
     }
 
     [Fact]
@@ -106,5 +122,16 @@ public sealed class AgentCredentialsTests : IDisposable
     {
         public DateTimeOffset Now { get; set; } = now;
         public override DateTimeOffset GetUtcNow() => Now;
+    }
+
+    sealed class FakeChannel : IProtocolChannel
+    {
+        public string PeerId => "fixture";
+        public string PeerName => "fixture";
+        public string PeerKind => "fixture";
+        public bool IsOpen => true;
+        public Task Closed => Task.Delay(Timeout.Infinite);
+        public void Close() { }
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
     }
 }
