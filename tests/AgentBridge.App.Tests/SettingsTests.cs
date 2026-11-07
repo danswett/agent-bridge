@@ -614,6 +614,9 @@ public sealed class SettingsTests : IAsyncLifetime
         AgentReadinessRow Row(AgentReadiness a) => new(a, canManage: true, canInstall: true, installOffered: true);
         string Mark(IReadOnlyList<SetupStep> s, string id) => s.Single(x => x.Id == id).Mark;
 
+        var down = SetupGuide.Steps(false, [], false);
+        Assert.Equal(("Next", "Later"), (Mark(down, "bridge"), Mark(down, "install")));
+
         var fresh = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.NeedsAction, installation: ReadinessState.Missing))], false);
         Assert.Equal(("Done", "Next", "Later"), (Mark(fresh, "bridge"), Mark(fresh, "install"), Mark(fresh, "hooks")));
         Assert.Contains("Install CLI on Claude Code", fresh.Single(x => x.Id == "install").Detail);

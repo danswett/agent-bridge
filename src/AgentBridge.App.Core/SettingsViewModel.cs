@@ -150,7 +150,8 @@ public sealed class SettingsViewModel : Observable
         }
     }
     // "Get started": none while the host can't report agents, so it never guesses.
-    public IReadOnlyList<SetupStep> SetupSteps => Agents is { Count: > 0 } rows ? SetupGuide.Steps(HostRunning, rows, Status?.Account is not null) : [];
+    public IReadOnlyList<SetupStep> SetupSteps => !HostRunning ? SetupGuide.Steps(false, [], false)
+        : Agents is { Count: > 0 } rows ? SetupGuide.Steps(true, rows, Status?.Account is not null) : [];
     public bool ShowSetupSteps => SetupSteps.Count > 0;
     // Where the app's log is (AppLog in the app).
     public Action<string> LogTo { get; init; } = _ => { };
