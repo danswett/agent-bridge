@@ -1,14 +1,15 @@
 # Agent CLI compatibility test plan
 
 Status: plan. Part of #1138 (lab), under #1132 (host answer delivery). Builds on the clean-VM
-runner of #736 and the design in `docs/design/host-answer-delivery.md` (#1135).
+runner of #736 and the design in #1135 (pending; not yet on main).
 
 ## 1. Purpose, cadence, owners
 
 The host drives each agent CLI by reading its screen and typing keys. A new CLI build can
 redraw a form in a way the host does not recognise (1.0.105, #1123, #1137) and break delivery
-for every user at once. Sessions the host launches are pinned to the last Copilot CLI version
-that passed this plan. This plan is how the pin moves forward, quickly and safely.
+for every user at once. The intended end state (decision 5 in #1135; not built yet, see section
+6) is that sessions the host launches are pinned to the last Copilot CLI version that passed this
+plan. This plan is how that pin will move forward, quickly and safely.
 
 | When | What runs |
 |---|---|
@@ -107,8 +108,16 @@ output does not break the form read (steady-screen rule); answered, `out of date
 **L-08 CLI banners and update prompts.** Capture first launch, an update-available banner, a
 what's-new screen, a trust-this-folder prompt, a rate-limit or model notice. Expected: none is
 taken for a form or an idle prompt, nothing is typed into them, and the person is told the
-session needs the machine. The CLI must not self-update mid-session; if it does, report it.
-`[Manual | A, B]` CC CX
+session needs the machine. `[Manual | A, B]` CC CX
+
+**L-10 No self-update.** Before the run, turn off or lock the CLI's own updates on the lab VM
+(its auto-update setting or environment switch, or block its update endpoint at the VM firewall;
+record which in the report), and install the candidate explicitly by version. Read the version
+before the first case and after the last. Expected: identical both times, the same on every
+cell, and no update banner or restart prompt appeared. A changed version invalidates the whole
+run (rerun it) and is reported. The same lock is the target for pinned sessions: the host's
+launch of a pinned CLI must start it with updates off, so the CLI cannot drift past the pin. Until
+the host does, record in the report that pinned sessions can still self-update. `[Auto | B]` CC CX
 
 **L-09 Auth and token expiry (#915).** Lab account only: expire or revoke the token, continue a
 session. Expected: the host shows needs-sign-in, types nothing into the sign-in screen, and
@@ -335,6 +344,8 @@ refusal of hosted launch where decided, and the person's own terminal is never t
   per run, no real Home Assistant, no real folders.
 * **No production relay deploys.** The lab has its own relay. Any production relay change needs
   the owner's approval and is outside this plan.
+* **Updates locked.** CLI auto-update is off on every lab VM (L-10); versions change only by an
+  explicit install by the runner.
 * **Made-up content.** No real data in prompts, answers or captures.
 * **Cost cap.** Detect is free; the plan runs only for a new version. SRE sets a monthly cap on VM
   hours and model use with the owner. At the cap the run stops, reports `not run`, and the pin
