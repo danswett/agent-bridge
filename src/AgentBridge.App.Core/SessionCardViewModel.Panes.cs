@@ -102,8 +102,11 @@ public sealed partial class SessionCardViewModel
         var invariant = System.Globalization.CultureInfo.InvariantCulture;
         // The rows and their order are docs/design/session-details.json's, which a test reads too (#1087):
         // a row with no value is left out, never drawn empty.
-        var rows = new List<DetailRow> { new("Status", StatusText) };
-        if (View != "idle") { rows.Add(new("In this state", $"for {Words.Duration(session.StatusSince, now)}")); }
+        // The status words alone: Not responding's time is Not responding since's (§6.2).
+        var rows = new List<DetailRow> { new("Status", Line.Rule == StatusRules.NotResponding ? Line.FirstFact : StatusText) };
+        // How long in the session's own status, which an offline machine does not change: an idle
+        // session says nothing, whether or not its machine is away.
+        if (StatusRules.For(session).View != "idle") { rows.Add(new("In this state", $"for {Words.Duration(session.StatusSince, now)}")); }
         // What the agent said went wrong (#800): plain text, revealed and cut short by AuthState,
         // never a link, and only here, never on its row.
         // The host's sentence for what is wrong (6649775484), as it is: never the agent's own text.

@@ -1,5 +1,5 @@
 {
-  "about": "The rows of a session's Details, in order (docs/design/ui.md §6.2, #1087). The one definition: the PWA's test (pwa/test/unit/details-rows.test.mjs) and the Windows app's (tests/AgentBridge.App.Tests/DetailsTableTests.cs) each draw every scenario's session and check the rows they get against it. A row with no value is left out. A value is exact (value) or a pattern (match) where the viewer's clock and locale decide the words. mono marks the rows set in the mono face. The End session action follows the last row.",
+  "about": "The rows of a session's Details, in order (docs/design/ui.md §6.2, #1087). The one definition: the PWA's test (pwa/test/unit/details-rows.test.mjs) and the Windows app's (tests/AgentBridge.App.Tests/DetailsTableTests.cs) each draw every scenario's session and check the rows they get against it. A row with no value is left out. A value is exact (value) or a pattern (match) where the viewer's clock and locale decide the words. away: the session's machine is offline since then, which both tests set as a client does. mono marks the rows set in the mono face. The End session action follows the last row.",
   "rows": [
     { "row": "Status" },
     { "row": "In this state" },
@@ -50,7 +50,7 @@
         }
       },
       "rows": [
-        { "row": "Status", "match": "^Not responding \u00b7 since \\d{1,2}[:.]\\d{2}" },
+        { "row": "Status", "value": "Not responding" },
         { "row": "In this state", "value": "for 12m" },
         { "row": "Message", "value": "The agent has not answered for 21 minutes." },
         { "row": "Not responding since", "match": "^\\d{1,2}[:.]\\d{2}" },
@@ -116,6 +116,59 @@
         { "row": "Background", "value": "1 background command" },
         { "row": "Turns", "value": "1 turn" },
         { "row": "ID", "value": "c3f9a210-codex-singular" }
+      ]
+    },
+    {
+      "name": "its machine away while it works: the machine's words for Status, no Driven by or Not responding since",
+      "machine": "Studio PC",
+      "away": { "since": "2026-11-06T12:15:00Z" },
+      "session": {
+        "id": "e8b2d4f6-copilot-away",
+        "agent": "copilot",
+        "model": "claude-opus-5.5",
+        "status": "working",
+        "statusSince": "2026-11-06T12:08:00Z",
+        "updatedAt": "2026-11-06T12:14:00Z",
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:demo",
+        "activity": { "turnCount": 4 },
+        "attention": {
+          "kind": "notResponding",
+          "since": "2026-11-06T12:00:00Z",
+          "lastEventAt": "2026-11-06T12:00:00Z",
+          "message": "The agent has not answered for 20 minutes."
+        }
+      },
+      "rows": [
+        { "row": "Status", "value": "Offline \u00b7 last seen 5m ago" },
+        { "row": "In this state", "value": "for 12m" },
+        { "row": "Message", "value": "The agent has not answered for 20 minutes." },
+        { "row": "Agent", "value": "Copilot" },
+        { "row": "Model", "value": "claude-opus-5.5" },
+        { "row": "Machine", "value": "Studio PC" },
+        { "row": "Updated", "value": "6m ago" },
+        { "row": "Turns", "value": "4 turns" },
+        { "row": "ID", "value": "e8b2d4f6-copilot-away" }
+      ]
+    },
+    {
+      "name": "its machine away while it is idle: no In this state, as when it is not away",
+      "machine": "Studio PC",
+      "away": { "since": "2026-11-06T12:15:00Z" },
+      "session": {
+        "id": "0a9c3e71-claude-away-idle",
+        "agent": "claude",
+        "status": "idle",
+        "statusSince": "2026-11-06T11:00:00Z",
+        "updatedAt": "2026-11-06T12:14:00Z",
+        "activity": {}
+      },
+      "rows": [
+        { "row": "Status", "value": "Offline \u00b7 last seen 5m ago" },
+        { "row": "Agent", "value": "Claude" },
+        { "row": "Machine", "value": "Studio PC" },
+        { "row": "Updated", "value": "6m ago" },
+        { "row": "ID", "value": "0a9c3e71-claude-away-idle" }
       ]
     }
   ]

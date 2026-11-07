@@ -748,7 +748,7 @@ export class SessionCard {
     }
     const away = stale?.join(' \u00b7 ');
     const words = stale ? { ...state, glyph: 'failed', driven: false, facts: stale, text: away, tone: 'muted', spoken: away.charAt(0).toLowerCase() + away.slice(1) } : state;
-    this.#detailsStatus = words.text;
+    this.#detailsStatus = stale ? words.text : null;
     this.#detailsAway = !!stale;
 
     // The row.
@@ -838,7 +838,7 @@ export class SessionCard {
 
     // The rows, as the shared table sets them. What moves with the clock is drawn again by the
     // tick, in place, so only the rest, and which rows there are, decide a redraw.
-    const rows = detailRows(s, { status: words.text, machine: this.machineName || null, away: !!stale });
+    const rows = detailRows(s, { status: stale ? words.text : null, machine: this.machineName || null, away: !!stale });
     if (this.#changed('facts', rows.map((r) => (CLOCK_ROWS.has(r.kind) ? [r.kind] : [r.kind, r.text])))) {
       this.#renderFacts(rows);
     }

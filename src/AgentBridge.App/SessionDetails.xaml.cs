@@ -27,6 +27,11 @@ public sealed partial class SessionDetails : UserControl
     public static Style ValueStyle(bool mono) => (Style)Application.Current.Resources[mono ? "InlineMonoRow" : "AbTypeRow"];
     public static string ValueId(string label) => $"Detail:{label}";
 
+    // A value wraps rather than being cut off (ui.md §6.2): the Message sentence says what is wrong,
+    // and a status or a count that ended in an ellipsis lost words. Only a folder shortens, by its
+    // middle (OnValueSized), so it stays on one line.
+    public static TextWrapping Wrap(bool path) => path ? TextWrapping.NoWrap : TextWrapping.Wrap;
+
     void Changed()
     {
         if (IsLoaded) { Bindings.Update(); }

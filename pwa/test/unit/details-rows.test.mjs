@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readSession } from '../../js/protocol.js';
-import { sessionStatus } from '../../js/status.js';
+import { ago } from '../../js/ui/time.js';
 import { detailRows } from '../../js/details-rows.js';
 
 const here = (p) => path.join(path.dirname(fileURLToPath(import.meta.url)), p);
@@ -18,7 +18,9 @@ const order = table.rows.map((r) => r.row);
 for (const scenario of table.scenarios) {
   test(`Details shows the table's rows for a session with ${scenario.name}, in its order and words`, () => {
     const s = readSession(scenario.session);
-    const rows = detailRows(s, { status: sessionStatus(s).text, machine: scenario.machine, now });
+    // As the card says it for a machine that is away: "Offline · last seen 5m ago".
+    const away = scenario.away ? { status: `Offline \u00b7 last seen ${ago(scenario.away.since, now)}`, away: true } : {};
+    const rows = detailRows(s, { machine: scenario.machine, now, ...away });
     assert.deepEqual(rows.map((r) => r.term), scenario.rows.map((r) => r.row));
     scenario.rows.forEach((want, i) => {
       const got = rows[i];
@@ -32,12 +34,3 @@ for (const scenario of table.scenarios) {
     assert.ok(at.every((n, i) => n >= 0 && (i === 0 || n > at[i - 1])), at.join(','));
   });
 }
-
-test('Details leaves out Driven by while the machine is away, as the Windows app does, and keeps In this state for an idle session', () => {
-  const s = readSession(table.scenarios[0].session);
-  assert.ok(detailRows(s, { now }).some((r) => r.term === 'Driven by'));
-  assert.ok(!detailRows(s, { away: true, now }).some((r) => r.term === 'Driven by'));
-  const idle = readSession(table.scenarios[1].session);
-  assert.ok(!detailRows(idle, { now }).some((r) => r.term === 'In this state'));
-  assert.ok(detailRows(idle, { away: true, now }).some((r) => r.term === 'In this state'));
-});

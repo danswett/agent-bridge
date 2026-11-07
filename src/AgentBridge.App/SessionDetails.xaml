@@ -26,7 +26,7 @@
                         <TextBlock
                             Grid.Column="1"
                             Style="{x:Bind local:SessionDetails.ValueStyle(Mono)}"
-                            TextTrimming="CharacterEllipsis"
+                            TextWrapping="{x:Bind local:SessionDetails.Wrap(Path)}"
                             IsTextSelectionEnabled="True"
                             ToolTipService.ToolTip="{x:Bind Tip}"
                             SizeChanged="OnValueSized"

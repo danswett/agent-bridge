@@ -54,6 +54,7 @@ public sealed class DetailsTableTests : IAsyncLifetime
         var raw = scenario.GetProperty("session");
         var session = AuthState.Attach(JsonSerializer.Deserialize<Session>(raw.GetRawText(), ProtocolJson.Options)!, raw);
         var machine = scenario.GetProperty("machine").GetString();
+        DateTimeOffset? awaySince = scenario.TryGetProperty("away", out var away) ? DateTimeOffset.Parse(away.GetProperty("since").GetString()!, CultureInfo.InvariantCulture) : null;
         return new SessionCardViewModel(session, new CardContext
         {
             Deliveries = deliveries,
@@ -62,6 +63,7 @@ public sealed class DetailsTableTests : IAsyncLifetime
             MachineName = () => machine,
             Host = connection,
             Time = clock,
+            Away = now => awaySince is { } since ? StatusRules.Offline(since, now) : null,
         });
     }
 

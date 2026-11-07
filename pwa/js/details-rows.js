@@ -22,9 +22,10 @@ export function startedText(iso, now = Date.now()) {
   return at.toLocaleString([], { ...date, ...time });
 }
 
-// status: the words the header shows (an offline machine's, when it is away); machine: its name,
-// or null while unknown; away: its machine is offline, so nothing says an agent still drives it.
-// Each row: { term, text, kind, mono } with kind for how it is drawn.
+// status: the words an offline machine's session shows in their place; null otherwise. Only the
+// status words, never Not responding's time, which Not responding since carries (§6.2). machine: its
+// name, or null while unknown; away: its machine is offline, so nothing says an agent still drives
+// it and no silence is known. Each row: { term, text, kind, mono } with kind for how it is drawn.
 export function detailRows(s, { status = null, machine = null, away = false, now = Date.now() } = {}) {
   const state = sessionStatus(s);
   const rows = [];
@@ -34,10 +35,12 @@ export function detailRows(s, { status = null, machine = null, away = false, now
   };
   const b = s.activity.background;
   const turns = s.activity.turnCount;
-  add('Status', status ?? state.text, 'status');
-  add('In this state', away || state.view !== 'idle' ? `for ${duration(s.statusSince, now)}` : null, 'since');
+  add('Status', status ?? (state.rule === 12 ? state.facts[0] : state.text), 'status');
+  // How long in the session's own status, which an offline machine does not change: an idle session
+  // says nothing, whether or not its machine is away.
+  add('In this state', state.view === 'idle' ? null : `for ${duration(s.statusSince, now)}`, 'since');
   add('Message', s.attention?.message, 'attention');
-  add('Not responding since', clockTime(silentSince(s)), 'silent');
+  add('Not responding since', away ? null : clockTime(silentSince(s)), 'silent');
   add('Driven by', state.driven && !away ? (s.driverPrincipal || 'an agent') : null, 'driver');
   add('Agent', { copilot: 'Copilot', claude: 'Claude', codex: 'Codex' }[s.agent] ?? 'Agent', 'agent');
   add('Model', s.model, 'model');

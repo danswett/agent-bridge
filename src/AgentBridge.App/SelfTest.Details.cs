@@ -63,6 +63,34 @@ static partial class SelfTest
         ["message"] = "The agent has not answered for 12 minutes.",
     };
 
+    // The words that wrap: a Status of several facts and a Message of a sentence or two, which a row
+    // never trims (§6.2). Needs sign-in is the Status with the most to say.
+    static JsonObject DetailsLongAttention(DateTimeOffset now, AgentKind agent) => new()
+    {
+        ["kind"] = AuthState.SignInNeeded,
+        ["since"] = now.AddMinutes(-12).ToString("O"),
+        ["agent"] = AuthState.WireName(agent),
+        ["account"] = "a-collaborator-with-a-long-account-name",
+        ["message"] = "The agent could not reach its provider because the sign-in it was using has expired, so it stopped before it could finish the change you asked it to make. Sign it in again and it carries on from where it was.",
+    };
+
+    // The shared table: docs/design/session-details.json, found from the repo the app runs from.
+    // Its rows in order, those of the scenario with every row, and of the one with only what a
+    // session always has.
+    static (List<string> All, List<string> Full, List<string> Sparse)? DetailsTable()
+    {
+        for (var dir = AppContext.BaseDirectory; dir is not null; dir = Path.GetDirectoryName(dir))
+        {
+            var file = Path.Combine(dir, "docs", "design", "session-details.json");
+            if (!File.Exists(file)) { continue; }
+            var table = JsonNode.Parse(File.ReadAllText(file))!;
+            List<string> Labels(JsonNode? rows) => [.. rows!.AsArray().Select(r => r!["row"]!.GetValue<string>())];
+            var scenarios = table["scenarios"]!.AsArray();
+            return (Labels(table["rows"]), Labels(scenarios[0]!["rows"]), Labels(scenarios[1]!["rows"]));
+        }
+        return null;
+    }
+
     static bool Visible(FrameworkElement? e)
     {
         for (DependencyObject? at = e; at is not null; at = VisualTreeHelper.GetParent(at))
@@ -77,23 +105,26 @@ static partial class SelfTest
         .FirstOrDefault(c => c is not null) ?? default;
 
     // The session as a host would send it next, chosen, and its Details drawn in the inspector.
-    static async Task<(SessionCardViewModel Card, FrameworkElement Pane)?> ShowDetails(MainWindow window, MainViewModel main, DemoHost demo, Session original, bool full)
+    // kind: full (every row), long (a long Status and Message) or sparse (what a session always has).
+    static async Task<(SessionCardViewModel Card, FrameworkElement Pane)?> ShowDetails(MainWindow window, MainViewModel main, DemoHost demo, Session original, string kind)
     {
         var now = DateTimeOffset.UtcNow;
-        await demo.Upsert(full ? DetailsFull(original, now) : DetailsSparse(original, now), full ? DetailsAttention(now, original.Agent) : null);
+        var sparse = kind == "sparse";
+        await demo.Upsert(sparse ? DetailsSparse(original, now) : DetailsFull(original, now), sparse ? null : kind == "long" ? DetailsLongAttention(now, original.Agent) : DetailsAttention(now, original.Agent));
         if (await Choose(window, main, DetailsId, "ToggleInspector") is not { Card: { } card }) { return null; }
-        var shown = await Until(() => card.Details.Any(d => d.Label == "Message") == full && card.Details.Any(d => d.Label == "Model") == full
+        var shown = await Until(() => card.Details.Any(d => d.Label == "Message") == !sparse && card.Details.Any(d => d.Label == "Model") == !sparse
+            && card.Details.FirstOrDefault(d => d.Label == "Status")?.Value.StartsWith(kind == "long" ? "Needs sign-in" : "", StringComparison.Ordinal) == true
             && ById<FrameworkElement>(window.Sessions, "InspectorDetails") is { } pane && Visible(pane) && ById<TextBlock>(pane, "Detail:ID") is { } id && Visible(id), TimeSpan.FromSeconds(10));
         await Task.Delay(500);
         return shown ? (card, ById<FrameworkElement>(window.Sessions, "InspectorDetails")!) : null;
     }
 
     // What is drawn: each row's value by its label, from the top down, and End session after them.
-    static string DrawnRows(FrameworkElement pane, SessionCardViewModel card, out List<string> labels)
+    static string DrawnRows(FrameworkElement pane, SessionCardViewModel card, string kind, out List<string> labels)
     {
         var drawn = Find<TextBlock>(pane)
             .Where(t => AutomationProperties.GetAutomationId(t).StartsWith("Detail:", StringComparison.Ordinal) && Visible(t))
-            .Select(t => (Label: AutomationProperties.GetAutomationId(t)["Detail:".Length..], Text: t.Text, Top: t.TransformToVisual(pane).TransformPoint(default).Y))
+            .Select(t => (Label: AutomationProperties.GetAutomationId(t)["Detail:".Length..], Text: t.Text, Top: t.TransformToVisual(pane).TransformPoint(default).Y, Block: t))
             .OrderBy(t => t.Top).ToList();
         labels = [.. drawn.Select(d => d.Label)];
         var problems = new List<string>();
@@ -104,9 +135,18 @@ static partial class SelfTest
             foreach (var (row, got) in want.Zip(drawn))
             {
                 if (!row.Path && got.Text != row.Value) { problems.Add($"{row.Label} says \"{got.Text}\", not \"{row.Value}\""); }
+                // Only a path is shortened, by its middle; every other value wraps to as many lines as it needs.
+                if (!row.Path && (got.Block.IsTextTrimmed || got.Block.TextWrapping != TextWrapping.Wrap)) { problems.Add($"{row.Label} is cut off, not wrapped"); }
             }
         }
         if (drawn.Zip(drawn.Skip(1)).Any(p => p.Second.Top <= p.First.Top)) { problems.Add("rows not one under another"); }
+        if (kind == "long" && drawn.FirstOrDefault(d => d.Label == "Agent").Block is { } line)
+        {
+            foreach (var label in new[] { "Status", "Message" })
+            {
+                if (drawn.FirstOrDefault(d => d.Label == label).Block is not { } block || block.ActualHeight < line.ActualHeight * 2) { problems.Add($"{label} not drawn over more than one line"); }
+            }
+        }
         var end = ById<Button>(pane, "EndSession");
         if (end is null || !Visible(end) || drawn.Count == 0 || end.TransformToVisual(pane).TransformPoint(default).Y <= drawn[^1].Top) { problems.Add("End session not drawn after the last row"); }
         return string.Join("; ", problems);
@@ -122,17 +162,25 @@ static partial class SelfTest
         {
             Resize(window, 1440, 1000);
             await Until(() => layout.Mode == PaneMode.Three, TimeSpan.FromSeconds(10));
-            foreach (var full in new[] { true, false })
+            if (DetailsTable() is not var (all, full, sparse))
             {
-                var name = full ? "full" : "sparse";
-                if (await ShowDetails(window, main, demo, original, full) is not var (card, pane)) { check(false, $"draws the {name} session's Details"); continue; }
-                var problems = DrawnRows(pane, card, out var labels);
-                var needed = full ? new[] { "Status", "In this state", "Message", "Not responding since", "Driven by", "Agent", "Model", "Machine", "Repository", "Branch", "Folder", "Started", "Updated", "Background", "Turns", "Compactions", "Process", "ID" } : new[] { "Status", "Agent", "Updated", "ID" };
-                var missing = needed.Where(n => !labels.Contains(n)).ToList();
-                var extra = full ? [] : labels.Except(["Status", "Agent", "Machine", "Updated", "ID"]).ToList();
-                if (missing.Count > 0) { problems += $"{(problems.Length > 0 ? "; " : "")}no {string.Join(", ", missing)}"; }
-                if (extra.Count > 0) { problems += $"{(problems.Length > 0 ? "; " : "")}drawn with no value: {string.Join(", ", extra)}"; }
-                check(problems.Length == 0, $"draws the {name} session's Details as the table's rows, each once and in its order, one under another, then End session{(problems.Length > 0 ? $": {problems}" : "")}");
+                check(false, "finds docs/design/session-details.json from the app, for the Details check");
+                return;
+            }
+            // What the drawn pane must hold, from the table: every row for the full session, all but
+            // the silence for a Needs sign-in, and the always-present rows (and the machine's) for the sparse.
+            var expected = new Dictionary<string, List<string>>
+            {
+                ["full"] = full,
+                ["long"] = [.. full.Where(l => l != "Not responding since")],
+                ["sparse"] = [.. all.Where(l => sparse.Contains(l) || l == "Machine")],
+            };
+            foreach (var name in new[] { "full", "long", "sparse" })
+            {
+                if (await ShowDetails(window, main, demo, original, name) is not var (card, pane)) { check(false, $"draws the {name} session's Details"); continue; }
+                var problems = DrawnRows(pane, card, name, out var labels);
+                if (!labels.SequenceEqual(expected[name])) { problems += $"{(problems.Length > 0 ? "; " : "")}drawn [{string.Join(", ", labels)}], not the table's [{string.Join(", ", expected[name])}]"; }
+                check(problems.Length == 0, $"draws the {name} session's Details as the table's rows, each once and in its order, one under another, none cut off, then End session{(problems.Length > 0 ? $": {problems}" : "")}");
                 foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
                 {
                     window.RootElement.RequestedTheme = theme;
@@ -162,16 +210,15 @@ static partial class SelfTest
             var originalAttention = demo.AttentionOf(DetailsId);
             try
             {
-                foreach (var full in new[] { true, false })
+                foreach (var name in new[] { "full", "long", "sparse" })
                 {
-                    if (await ShowDetails(window, main, demo, original, full) is not var (_, pane)) { continue; }
-                    var name = full ? "full" : "sparse";
+                    if (await ShowDetails(window, main, demo, original, name) is not var (_, pane)) { continue; }
                     await Picture(pane, Path.ChangeExtension(outFile, $".details.{name}.highcontrast.png"), ShellColor("HighContrast"));
                     taken.Add(name);
                 }
             }
             finally { await demo.Upsert(original, originalAttention); }
         }
-        check(taken.Count == 2, $"pictures Details in high contrast, with every row and with only the rows a session always has ({(taken.Count > 0 ? string.Join(", ", taken) : "none")})");
+        check(taken.Count == 3, $"pictures Details in high contrast, with every row, with a long Status and Message, and with only the rows a session always has ({(taken.Count > 0 ? string.Join(", ", taken) : "none")})");
     }
 }
