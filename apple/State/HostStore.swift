@@ -398,7 +398,7 @@ final class HostStore: Identifiable {
                 isLive = false
                 isConnecting = false
                 onDisconnected?()
-                status = Task.isCancelled ? "Disconnected" : "\(BridgeShownError.sentence(for: error)) Reconnecting…"
+                status = Task.isCancelled ? "Disconnected" : BridgeShownError.reconnectingStatus(for: error)
                 connectionID = UUID()
             }
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }

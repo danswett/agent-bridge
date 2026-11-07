@@ -41,7 +41,7 @@ public enum RelayError: LocalizedError, Sendable, Equatable {
         case .disconnected: "The relay connection ended."
         case .timeout: "The connection did not respond in time."
         case .overflow: "Too many updates arrived. Reconnect to synchronize again."
-        case .hostRefused: "The host refused the request."
+        case .hostRefused: "The machine refused the request."
         case let .refused(reason): reason.text
         }
     }

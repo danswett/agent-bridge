@@ -3,7 +3,9 @@ import Foundation
 import Testing
 
 private struct RawError: LocalizedError {
-    var errorDescription: String? { "token=ghp_FIXTURESECRET0123456789 /Users/fixture/.ssh" }
+    var errorDescription: String? {
+        "token=ghp_FIXTURESECRET0123456789 /Users/fixture/.ssh"
+    }
 }
 
 @Test func shownErrorsNeverCarryRawText() {
@@ -29,6 +31,11 @@ private struct RawError: LocalizedError {
     #expect(BridgeShownError.sentence(for: RelayError.refused("The relay refused this request.")) == "The relay refused this request.")
     #expect(BridgeShownError.sentence(for: RelayError.refused("Keychain access failed. Unlock this device and try again.")) != BridgeShownError.refused)
     #expect(BridgeShownError.signInSentence(for: RelayError.refused("The code expired. Start sign-in again.")) == "The code expired. Start sign-in again.")
+}
+
+@Test func reconnectStatusSaysConnectionLostInsteadOfTheUnknownFallback() {
+    #expect(BridgeShownError.reconnectingStatus(for: RawError()) == "Connection lost. Reconnecting…")
+    #expect(BridgeShownError.reconnectingStatus(for: RelayError.hostRefused) == "The machine refused the request. Reconnecting…")
 }
 
 @Test func hostBusyTextNeverReachesTheShownLaunchError() throws {

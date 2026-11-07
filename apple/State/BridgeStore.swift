@@ -389,7 +389,7 @@ final class BridgeStore {
                     guard token == generation else { return }
                     relay = nil
                     hosts.filter { !$0.isLocal }.forEach { $0.stop() }
-                    remoteStatus = "\(BridgeShownError.sentence(for: error)) Reconnecting…"
+                    remoteStatus = BridgeShownError.reconnectingStatus(for: error)
                 }
                 do { try await Task.sleep(for: .seconds(delay)) } catch { return }
                 delay = min(delay * 2, 30)

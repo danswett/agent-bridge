@@ -9,8 +9,9 @@ public protocol BridgeFixedSentenceError: Error {
 /// machine, the relay or the system is never shown, verbatim or trimmed; it can carry a
 /// secret. A case with no host sentence reads as one fixed, neutral sentence.
 public enum BridgeShownError {
-    public static let refused = "The host refused the request."
+    public static let refused = "The machine refused the request."
     public static let unknown = "Something went wrong. Try again."
+    public static let connectionLost = "Connection lost."
     public static let signInFailed = "Sign-in failed."
     public static let signInRefused = "Sign-in refused."
 
@@ -24,6 +25,12 @@ public enum BridgeShownError {
         case let error as any BridgeFixedSentenceError: error.sentence
         default: unknown
         }
+    }
+
+    /// The reconnect status: the unknown fallback would read "Something went wrong. Try again. Reconnecting…".
+    public static func reconnectingStatus(for error: any Error) -> String {
+        let shown = sentence(for: error)
+        return "\(shown == unknown ? connectionLost : shown) Reconnecting…"
     }
 
     /// Sign-in has its own words: a host refusal carries no reason, and `signin.done` carries none.
