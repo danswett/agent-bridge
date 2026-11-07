@@ -207,7 +207,7 @@ public sealed class ServeTests : IAsyncLifetime
             ch.RequestAsync(Ops.SessionsSubscribe, new { }),
             ch.RequestAsync(Ops.SessionsSubscribe, new { }));
         Assert.All(both, r => Result(r));
-        await Wait.UntilAsync(() => service.Subscribers == 1, "one subscription");
+        await HostWait.UntilAsync(() => service.Subscribers == 1, "one subscription");
 
         // Drain both snapshots (the first may be cut short by its replacement), then one
         // change must arrive exactly once.
@@ -240,7 +240,7 @@ public sealed class ServeTests : IAsyncLifetime
 
         // Every replaced feed is collectable while the channel stays open; only the current
         // one is still held.
-        await Wait.UntilAsync(() =>
+        await HostWait.UntilAsync(() =>
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
@@ -260,7 +260,7 @@ public sealed class ServeTests : IAsyncLifetime
 
         await client.DisposeAsync();
 
-        await Wait.UntilAsync(() => service.Subscribers == 0, "the subscription to end with its channel", Patience);
+        await HostWait.UntilAsync(() => service.Subscribers == 0, "the subscription to end with its channel", Patience);
     }
 
     [Fact]
@@ -383,7 +383,7 @@ public sealed class ServeTests : IAsyncLifetime
         var before = source.Revision;
         Fixture.Append(otherEvents, Copilot.Assistant("second", 5));
         await source.RefreshAsync();
-        await Wait.UntilAsync(() => feed!.Held == 1, "the quiet session's next change held", Patience);
+        await HostWait.UntilAsync(() => feed!.Held == 1, "the quiet session's next change held", Patience);
         return (ch, time, feed!, before);
     }
 
@@ -457,7 +457,7 @@ public sealed class ServeTests : IAsyncLifetime
         // releasing the other session or advancing the watermark past that session's floor.
         var held = before with { Title = "A held title" };
         Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, held, source.Revision + 2)));
-        await Wait.UntilAsync(() => feed.Held == 2, "both quiet sessions' changes held", Patience);
+        await HostWait.UntilAsync(() => feed.Held == 2, "both quiet sessions' changes held", Patience);
         var after = change(held);
         Assert.True(feed.Subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, after, source.Revision + 3)));
 
@@ -535,7 +535,7 @@ public sealed class ServeTests : IAsyncLifetime
         }
         Fixture.Append(otherEvents, Copilot.Assistant("held", 6));
         await source.RefreshAsync();
-        await Wait.UntilAsync(() => feed!.Held == 1, "the quiet session's third change held", Patience);
+        await HostWait.UntilAsync(() => feed!.Held == 1, "the quiet session's third change held", Patience);
 
         await ChangeAsync("not sent since the resume", 7);
         Assert.Equal(Id, Received.Read<SessionPatch>((await NextAsync(ch)).Data).Id);

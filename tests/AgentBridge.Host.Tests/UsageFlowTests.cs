@@ -157,7 +157,7 @@ public sealed class UsageFlowTests : IAsyncLifetime
 
         await client.DisposeAsync();
 
-        await Wait.UntilAsync(() => usage.Subscribers == 0, "the usage subscription to end with its channel", Patience);
+        await HostWait.UntilAsync(() => usage.Subscribers == 0, "the usage subscription to end with its channel", Patience);
     }
 
     [Fact]

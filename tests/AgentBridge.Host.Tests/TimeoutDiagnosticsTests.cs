@@ -9,7 +9,7 @@ public sealed class TimeoutDiagnosticsTests
     public async Task A_timed_out_Host_poll_and_outer_task_wait_report_running_collections_and_thread_counts()
     {
         var poll = await Assert.ThrowsAsync<TimeoutException>(() =>
-            Wait.UntilAsync(() => false, "diagnostic condition", TimeSpan.Zero));
+            HostWait.UntilAsync(() => false, "diagnostic condition", TimeSpan.Zero));
         Assert.StartsWith("timed out waiting for diagnostic condition (", poll.Message);
         AssertSnapshot(poll.Message);
 
