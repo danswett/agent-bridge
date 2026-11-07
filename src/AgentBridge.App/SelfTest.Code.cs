@@ -118,9 +118,10 @@ static partial class SelfTest
         try
         {
             var held = Clipboard.GetContent();
-            if (held.AvailableFormats.Count > 0 && !held.Contains(StandardDataFormats.Text))
+            if (held.AvailableFormats.Any(f => f != StandardDataFormats.Text))
             {
-                check(true, "leaves a clipboard that holds something other than text alone (no real-clipboard Copy check)");
+                // Only the text can be put back; any other format the person copied would be lost.
+                check(true, "skipped the real-clipboard Copy check: the clipboard holds formats the test can't restore");
                 return;
             }
             before = held.Contains(StandardDataFormats.Text) ? await held.GetTextAsync() : null;
@@ -155,12 +156,9 @@ static partial class SelfTest
             try
             {
                 if (before is null) { Clipboard.Clear(); }
-                else
-                {
-                    var data = new DataPackage();
-                    data.SetText(before);
-                    Clipboard.SetContent(data);
-                }
+                // Through Put, which flushes: the app exits when the self-test ends, and a restored
+                // clipboard still owned by it would be gone.
+                else { ClipboardText.Put(before); }
             }
             catch (Exception e) when (e is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { }
         }
