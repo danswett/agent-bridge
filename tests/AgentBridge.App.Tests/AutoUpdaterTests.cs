@@ -1274,9 +1274,11 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             time.Advance(AutoUpdater.SettleFor);
             await Wait.UntilAsync(() => prefs.UpdateFailures == failures, $"failure {failures}", TimeSpan.FromSeconds(10));
             wait = prefs.UpdateRetryAt!.Value - time.GetUtcNow();
-            Assert.Equal(UpdateBackoff.After(failures), wait);
+            // The failure may be stamped before or after the settle advance above, so the time left is
+            // the backoff less at most that settle.
+            Assert.InRange(wait, UpdateBackoff.After(failures) - AutoUpdater.SettleFor, UpdateBackoff.After(failures));
         }
-        Assert.Equal(UpdateBackoff.Cap, wait);
+        Assert.InRange(wait, UpdateBackoff.Cap - AutoUpdater.SettleFor, UpdateBackoff.Cap);
         Assert.Empty(host.Sent(HostOps.Stop));
 
         preflight = null;
