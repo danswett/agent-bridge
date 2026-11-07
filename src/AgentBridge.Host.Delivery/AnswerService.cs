@@ -652,17 +652,21 @@ public sealed class AnswerService : ISessionAnswerer
         // went gets only what follows them, once it shows exactly what they left in it. Then, if
         // it cannot be, the form is reset: one Esc, held to rows that show this very form, its
         // "esc cancel" hint among them, and nothing else (not even that) when the screen shows
-        // anything else. Cancelled, the session may ask the same question again: if it does within
-        // ResetWait, its schema exactly the one answered, the answer is typed into it afresh, once,
-        // every check made again from its first field, for this same card; a different question,
-        // or none, retires the card as out of date, with nothing typed.
+        // anything else. Cancelled, the old call positively closed, the session may ask the same
+        // question again: if it does within ResetWait, its arguments identical to the ones
+        // answered in order and in every detail, the answer is typed into it afresh, once, every
+        // check made again from its first field, for this same card; a different question, or
+        // none, retires the card as out of date, with nothing typed. A form not seen to close is
+        // left unconfirmed, for the person at the machine.
         async Task<Recovered> RecoverAsync(InjectionResult typedFirst, string? heldFirst)
         {
             var (went, stop) = (typedFirst, heldFirst);
             var started = options.Time.GetTimestamp();
             var resumes = 0;
-            while (went.Status == InjectionStatus.Typed && progress.Resumable && progress.Taken < form.Fields.Count
-                && resumes < MaxResumes && options.Time.GetElapsedTime(started) < options.ResumeWait)
+            // The whole wait is held whatever the first pass left: a form cut short (Interrupted),
+            // or a field with nothing to verify it by, is not resumed, but is still given the wait
+            // before the Esc, for the person to finish it at the machine or the session to close it.
+            while (resumes < MaxResumes && options.Time.GetElapsedTime(started) < options.ResumeWait)
             {
                 await Task.Delay(options.ResumePoll, options.Time);
                 await gate.WaitToTypeAsync();
@@ -676,6 +680,7 @@ public sealed class AnswerService : ISessionAnswerer
                         trace.Resume(CopilotAnswerTrace.ResumeGone);
                         return new(went, why, null, false);
                     }
+                    if (went.Status != InjectionStatus.Typed || !progress.Resumable || progress.Taken >= form.Fields.Count) { continue; }
                     // Only a screen showing this form at that field is resumed into; any other
                     // waits for the next read.
                     if (await ReadRowsAsync(pid) is not { } rows || CopilotFormScreen.Showing(rows, form, Math.Min(progress.Taken, form.Fields.Count - 1)) is not null) { continue; }
@@ -726,15 +731,17 @@ public sealed class AnswerService : ISessionAnswerer
                 trace.Resume(CopilotAnswerTrace.ResumeHeld);
                 return new(went, stop ?? "the screen changed before it could be reset", null, false);
             }
-            // The session asking again: the same question, by its schema exactly, takes the answer
-            // afresh; anything else retires this card.
+            // The session asking again, once the cancelled call is positively closed in its
+            // transcript (Closed): the same question, its arguments identical to the ones answered
+            // in order and in every detail (Identical), takes the answer afresh; anything else
+            // retires this card.
             var since = options.Time.GetTimestamp();
             while (options.Time.GetElapsedTime(since) < options.ResetWait)
             {
                 await Task.Delay(options.PollInterval, options.Time);
-                if (source.Get(session.Id)?.Question is not { } listed || listed.Id == question.Id) { continue; }
+                if (source.Get(session.Id)?.Question is not { } listed || listed.Id == question.Id || !Closed()) { continue; }
                 if (listed.Kind == question.Kind && CopilotTranscript.Find(transcript, listed.Id).Arguments is { } reasked
-                    && System.Text.Json.JsonElement.DeepEquals(reasked, original))
+                    && Identical(reasked, original))
                 {
                     log($"the session {Short(session.Id)} asked the reset question again; the answer is typed into it afresh");
                     var redone = await CopilotFormAsync(session, listed, request, timeline, trace, redo: true);
@@ -744,14 +751,36 @@ public sealed class AnswerService : ISessionAnswerer
                 trace.Resume(CopilotAnswerTrace.ResumeReplaced);
                 return new(went, null, Stale(Retired("the session has asked something else since")), false);
             }
-            // Still asked: the Esc did not cancel it, and it is left for the person.
-            if (StillAsked() is null)
+            // Out of date only once the form is positively gone; a form still asked, or one a
+            // permission prompt is drawn over, or one the host cannot tell closed, was not
+            // cancelled, and is left for the person.
+            if (!Closed())
             {
                 trace.Resume(CopilotAnswerTrace.ResumeUncancelled);
-                return new(went, null, Unconfirmed($"the answer was typed into the prompt but not submitted whole: {progress.Said(form)}; the host pressed Esc to cancel it and it is still there, so nothing more is pressed; finish it at the machine"), false);
+                return new(went, null, Unconfirmed($"the answer was typed into the prompt but not submitted whole: {progress.Said(form)}; the host pressed Esc to cancel it and it was not seen to close, so nothing more is pressed; finish it at the machine"), false);
             }
             trace.Resume(CopilotAnswerTrace.ResumeStale);
             return new(went, null, Stale(Retired("the session did not ask it again")), false);
+        }
+
+        // Whether the transcript positively says this question's call is over: answered, the
+        // session ended, or the call closed. False whenever it cannot be read, or was replaced.
+        bool Closed()
+        {
+            try
+            {
+                if (asked is null) { return false; }
+                var call = asked.Read();
+                if (!call.Readable) { return false; }
+                if (call.Answer is not null || call.SessionEnded) { return true; }
+                var prompts = waiting.Read();
+                return prompts.Readable && !prompts.Replaced && !prompts.Asks!.Contains(question.Id);
+            }
+            catch (Exception e)
+            {
+                log($"the check of {Short(session.Id)} for its reset form failed: {e.GetType().Name}: {e.Message}");
+                return false;
+            }
         }
     }
 
@@ -770,6 +799,33 @@ public sealed class AnswerService : ISessionAnswerer
 
     static string Retired(string why) =>
         $"this question is out of date: the answer was left part answered at the machine, so the host cancelled the form there, and {why}";
+
+    // Whether two question arguments are the same in every detail and in order (#1123 review):
+    // an object's properties are its form's fields, in the order the form asks them, so a re-ask
+    // with the same fields reordered is a different form (JsonElement.DeepEquals ignores order).
+    // Strings compare ordinally, numbers by their exact text.
+    internal static bool Identical(System.Text.Json.JsonElement a, System.Text.Json.JsonElement b)
+    {
+        if (a.ValueKind != b.ValueKind) { return false; }
+        switch (a.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.Object:
+                var left = a.EnumerateObject().ToList();
+                var right = b.EnumerateObject().ToList();
+                return left.Count == right.Count
+                    && left.Zip(right).All(p => string.Equals(p.First.Name, p.Second.Name, StringComparison.Ordinal) && Identical(p.First.Value, p.Second.Value));
+            case System.Text.Json.JsonValueKind.Array:
+                var these = a.EnumerateArray().ToList();
+                var those = b.EnumerateArray().ToList();
+                return these.Count == those.Count && these.Zip(those).All(p => Identical(p.First, p.Second));
+            case System.Text.Json.JsonValueKind.String:
+                return string.Equals(a.GetString(), b.GetString(), StringComparison.Ordinal);
+            case System.Text.Json.JsonValueKind.Number:
+                return string.Equals(a.GetRawText(), b.GetRawText(), StringComparison.Ordinal);
+            default:
+                return true;
+        }
+    }
 
     // The Copilot plan as typed (#467). Words with an Enter after them are typed on their own,
     // and the Enter goes only once the session's screen shows them, which proves the CLI has
@@ -825,18 +881,18 @@ public sealed class AnswerService : ISessionAnswerer
         public bool Partway;
         // What the field after Taken was left showing, for a resume to find on screen before its
         // Enter goes (#1123): its input as drawn once a walk through its options had settled
-        // (Walked), or the end of the words typed into it and how often that showed there before
-        // them (Words, Before). Unknown once a write may have gone in part, or a walk went and
-        // the screen did not settle from it: that field can then only be reset, never resumed.
+        // (Walked), or that words were typed into it (Words), which then must show there whole,
+        // exactly as typed (CopilotFormScreen.Holds, read from the plan, never kept apart from it).
+        // Unknown once a write may have gone in part, or a walk went and the screen did not settle
+        // from it: that field can then only be reset, never resumed.
         public IReadOnlyList<string>? Walked;
-        public string? Words;
-        public int Before;
+        public bool Words;
         public bool Unknown;
 
         // Partway, and nothing on record to verify it by.
-        public bool Resumable => !Unknown && (!Partway || Walked is not null || Words is not null);
+        public bool Resumable => !Unknown && (!Partway || Walked is not null || Words);
 
-        public void Committed(int taken) => (Taken, Partway, Walked, Words, Before) = (taken, false, null, null, 0);
+        public void Committed(int taken) => (Taken, Partway, Walked, Words) = (taken, false, null, false);
 
         public string Said(CopilotForm form)
         {
@@ -1071,9 +1127,9 @@ public sealed class AnswerService : ISessionAnswerer
                 // left, and none of it is typed again. Words already typed get their Enter only once
                 // they show in it; a walk, only once the field is drawn exactly as it left it.
                 resuming = false;
-                if (progress.Words is not null)
+                if (progress.Words)
                 {
-                    if (progress.Words != tail || before <= progress.Before) { return Stop("the words typed into the field the form was left at do not show in it"); }
+                    if (!CopilotFormScreen.Holds(field, form, Field(), send.Text)) { return Stop("the field the form was left at does not show exactly the words typed into it"); }
                     showing = field;
                 }
                 else if (progress.Walked is not { } left || CopilotFormScreen.Input(field, form, Field()) is not { } now || !now.SequenceEqual(left))
@@ -1103,7 +1159,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (showing is null)
             {
                 if (await WriteAsync([send with { Enter = false, EnterDelayMs = 0, PauseAfterMs = 0 }], false, field) is { } held) { return held; }
-                (progress.Walked, progress.Words, progress.Before) = (null, tail, before);
+                (progress.Walked, progress.Words) = (null, true);
                 if (await AwaitOnScreenAsync(pid, Shows(tail), before) is not { } shown)
                 {
                     log($"the words typed into {Short(sessionId)} (pid {pid}) did not show on its screen within {options.WordsWait.TotalSeconds:0.#} s; their Enter is not pressed");

@@ -215,8 +215,13 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     check made as for a first pass: no field is typed twice. A field whose keys went but not
     its Enter gets only the Enter, and only once the screen shows exactly what those keys left
     there: an option list drawn as its walk left it, the same row highlighted, or the words
-    typed showing in its input. A field whose keys may have gone in part, or whose walk went
-    and never settled, has nothing to check that by, and is not resumed. A permission prompt
+    typed showing in its input whole and exactly as typed, every character compared
+    (`CopilotFormScreen.Holds`; only a row-wrap break read as the question's are, never just
+    their last characters, so words edited at the machine to another answer that ends the
+    same get no Enter). Words the input cannot be read whole in (scrolled or clipped) are not
+    entered: the form is reset instead. A field whose keys may have gone in part, or whose
+    walk went and never settled, or a pass whose keys were cut short, has nothing to check
+    that by, and is not resumed, but is still given the whole wait before any Esc. A permission prompt
     over the form is waited out; the question no longer asked ends it. What a resume checks is
     kept in memory for that delivery only, never the answer's words on disk: after a host
     restart, a resent answer finds the prompt in the attempt ledger and types nothing.
@@ -224,14 +229,17 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     is reset: one Esc (the form's own `esc cancel`), held to rows that show this very form at
     one of its fields; a screen showing anything else gets nothing, not even the Esc, and the
     answer stays part answered as above. Cancelled, the session may ask the same question
-    again: if it does within 60 s (`ResetWait`), its arguments exactly the ones answered (the
-    whole `ask_user` call compared, so any change to the message, a title, an option or the
-    order fails it), the same answer is typed into it afresh, once, for the same card and
-    request, every check made again from its first field; that one is never reset again. A
-    different question, or none within 60 s, retires the card: `stale`, "this question is out
-    of date: ...", with nothing typed into whatever the session shows next. An Esc that did
-    not cancel the form (the question still asked after 60 s) leaves it `unconfirmed`, for the
-    person to finish at the machine. `ResumeWait` zero turns all of this off.
+    again: only once the transcript positively shows the old call closed, if it does within
+    60 s (`ResetWait`), its arguments exactly the ones answered (the whole `ask_user` call
+    compared in order, property by property, so any change to the message, a title, an
+    option, a constraint or the order of the fields fails it), the same answer is typed into
+    it afresh, once, for the same card and request, every check made again from its first
+    field; that one is never reset again. A different question retires the card, and so does
+    none within 60 s once the old call is positively closed: `stale`, "this question is out
+    of date: ...", with nothing typed into whatever the session shows next. A form not seen
+    to close (still asked after 60 s, a permission prompt drawn over it, or a transcript that
+    cannot say) leaves it `unconfirmed` (`resume=uncancelled`), for the person to finish at
+    the machine. `ResumeWait` zero turns all of this off.
   * Every answer to a Copilot form logs one line (`CopilotAnswerTrace`), whatever it ended
     in, with no word of the question, the screen or the answer: `answer-attempt v=1
     request=<8> session=<8> cli=<version> fields=<n> shape=<kind[options]+...>
