@@ -149,9 +149,11 @@ public sealed class DecisionContractTests
             // answer the prompt refuses comes back as not sent.
             Assert.Equal(name == "manyMulti" || e.AllowsEmpty, a.AllowsEmpty);
         }
-        // "Other" is offered only where the host can deliver words: a lone choice. The daemon
-        // offered it beside a lone Yes/No too, where nothing types the words in.
-        Assert.Equal(name == "single", plan.TakesTypedAnswer);
+        // "Other" is offered only where the host can deliver words. A lone choice's goes into a
+        // box a live Copilot session draws apart from the form, which the host cannot type into
+        // yet (#510; #908 restores it), so none is offered for now. The daemon offered it beside a
+        // lone Yes/No too, where nothing types the words in.
+        Assert.False(plan.TakesTypedAnswer);
         Assert.Equal(q["takesTypedAnswer"]!.GetValue<bool>(), name is "single" or "boolean");
     }
 
@@ -245,6 +247,27 @@ public sealed class DecisionContractTests
         Assert.True(plan.AnswerOnTap);
         Assert.StartsWith($"_{ShownText.HiddenNote}_\n\n", plan.Question, StringComparison.Ordinal);
         Assert.Equal(approval.Message, Source(plan.Question));
+    }
+
+    // Copilot asks a permission for each of a batch of parallel tool calls and shows them one at a
+    // time (#690): the card says how many wait above the one it shows, and answers only that one.
+    [Fact]
+    public void A_permission_shown_while_others_wait_says_how_many_above_it_and_is_still_answered_on_a_tap()
+    {
+        var approval = new Question
+        {
+            Id = "r1#d", Kind = QuestionKind.Approval, Message = "Allow **read**?\n\n```\nC:\\notes\\a.md\n```", AskedAt = DateTimeOffset.UnixEpoch, Waiting = 3,
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+
+        var plan = HaDecision.Plan(approval, AgentKind.Copilot);
+        var alone = HaDecision.Plan(approval with { Waiting = null }, AgentKind.Copilot);
+
+        Assert.True(plan.AnswerOnTap);
+        Assert.Equal("r1#d", plan.QuestionId);
+        Assert.StartsWith("_1 of 3 permissions waiting_\n\n", plan.Question, StringComparison.Ordinal);
+        Assert.Equal(approval.Message, Source(plan.Question));
+        Assert.DoesNotContain("permissions waiting", alone.Question, StringComparison.Ordinal);
     }
 
     // The agent's own words, before a host escapes them (#212), drawn as Markdown: a line of backticks

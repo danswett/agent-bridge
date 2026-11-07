@@ -43,7 +43,7 @@ public sealed class FleetTests : IAsyncLifetime
         remoteHost.Start();
         link.Endpoints["remote-id"] = remoteHost.Endpoint;
         local = localHost.Connect(ui);
-        main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock, new UsageCache(cacheFile, clock)));
+        main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock, new UsageCache(cacheFile, clock))) { Time = clock };
         fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100), RefusedRetryDelay = refusedRetryDelay }), clock);
         return Task.CompletedTask;
     }
@@ -129,33 +129,39 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal(1, main.Waiting);
     }
 
-    // #293: each machine's Discovery held banner is its own, and dismissing one hides only it.
+    // #1064: a hold is not a banner. It reaches the machine's row only once it has lasted two
+    // minutes, counted per hold, and clears at once.
     [Fact]
-    public async Task Dismissing_one_machines_discovery_held_banner_leaves_every_other_machines_banner_shown()
+    public async Task A_machines_discovery_hold_reaches_its_row_only_after_two_minutes_and_a_returning_hold_counts_again()
     {
         await BothMachinesAsync();
-        string[] Held() => TestUi.Read<string[]>(() => [.. main.HeldNotices.Select(n => n.Text)]);
-        await localHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude])));
-        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot])));
-        await Wait.UntilAsync(() => Held().Length == 2, "both machines' banners");
-        Assert.StartsWith("Test PC: Discovery held: the claude processes", Held()[0]);
-        Assert.StartsWith("Build server: Discovery held: an unrecognised copilot process", Held()[1]);
-        Assert.Equal("Dismiss Discovery held on Build server", TestUi.Read(() => main.HeldNotices[1].DismissName));
+        var held = new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
+        string? Facts() => Rows().Single(r => r.Name == "Build server").Facts;
+        void Ticks() => TestUi.Read(() => { for (var i = 0; i < 5; i++) { main.Tick(); } return true; });
 
-        TestUi.Read(() => { main.Dismiss(main.HeldNotices.Single(n => n.Machine == "remote-id")); return true; });
-        Assert.StartsWith("Test PC: Discovery held:", Assert.Single(Held()));
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(held));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineOf("remote-id")!.Host.Sessions.Held) is not null, "the hold");
+        clock.Advance(TimeSpan.FromSeconds(119));
+        Ticks();
+        Assert.Equal("1 session", Facts());
 
-        // The other machine's hold changing brings neither back but its own.
-        await localHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("a claude registration changed while it was read", [AgentKind.Claude])));
-        await Wait.UntilAsync(() => Held().SingleOrDefault()?.Contains("a claude registration", StringComparison.Ordinal) == true, "this machine's new hold");
-        Assert.Single(Held());
+        // Gone and back: its two minutes start over.
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineOf("remote-id")!.Host.Sessions.Held) is null, "the hold to clear");
+        Ticks();
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(held));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineOf("remote-id")!.Host.Sessions.Held) is not null, "the hold again");
+        clock.Advance(TimeSpan.FromSeconds(119));
+        Ticks();
+        Assert.Equal("1 session", Facts());
 
-        // Dismissing this machine's hides it too, and leaves the other's dismissal as it was.
-        TestUi.Read(() => { main.Dismiss(main.HeldNotices.Single()); return true; });
-        Assert.Empty(Held());
-        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld("an unrecognised copilot process (pid 5120)", [AgentKind.Copilot])));
-        await Wait.UntilAsync(() => Held().Length == 1, "the other machine's banner back for its new hold");
-        Assert.StartsWith("Build server: Discovery held: an unrecognised copilot process (pid 5120)", Held()[0]);
+        clock.Advance(TimeSpan.FromSeconds(2));
+        Ticks();
+        Assert.Equal("1 session · Discovery held", Facts());
+        Assert.Equal($"Discovery held: {held.Reason}", Rows().Single(r => r.Name == "Build server").FactsWhy);
+
+        await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged());
+        await Wait.UntilAsync(() => !Rows().Single(r => r.Name == "Build server").Held, "the row to clear at once");
     }
     // a refusal of the sessions the app asks for next. Asked again every 5 s for hours (#602).
     async Task RefusedAsync()
@@ -1276,15 +1282,14 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.False(Rows().Single(r => r.Name == "Test PC").ViewOnly);
     }
 
-    // #788: the row says so from the host's hold itself, whatever the banner shows, as ui.md §6.6
-    // and the PWA's machine row do.
+    // #788, #1064: the row says so from the host's hold itself, once it has lasted two minutes.
     [Fact]
     public async Task A_held_machines_row_says_discovery_held_with_the_hosts_reason_for_its_tooltip_until_the_hold_clears()
     {
         await BothMachinesAsync();
         const string reason = "an unrecognised copilot process (pid 4120)";
         await remoteHost.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(new DiscoveryHeld(reason, [AgentKind.Copilot])));
-        await Wait.UntilAsync(() => Rows().Single(r => r.Name == "Build server").Held, "the held machine's row");
+        await HeldRowAsync();
 
         var row = Rows().Single(r => r.Name == "Build server");
         Assert.Equal("1 session · Discovery held", row.Facts);
@@ -1305,11 +1310,20 @@ public sealed class FleetTests : IAsyncLifetime
         remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0", ReadOnly: why, Instance: "run-7"), [Capabilities.SessionsRead]));
         remoteHost.Held = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]);
         await BothMachinesAsync();
-        await Wait.UntilAsync(() => Rows().Any(r => r.Name == "Build server" && r.ViewOnly && r.Held), "the held read-only machine's row");
+        await HeldRowAsync();
 
         var row = Rows().Single(r => r.Name == "Build server");
         Assert.Equal("1 session · Discovery held", row.Facts);
         Assert.Equal($"View only: {why} · Discovery held: the claude processes could not be listed", row.FactsWhy);
+    }
+
+    // Past the two minutes a hold must last, drawn on the Tick.
+    async Task HeldRowAsync()
+    {
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineOf("remote-id")!.Host.Sessions.Held) is not null, "the hold");
+        clock.Advance(TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(1));
+        TestUi.Read(() => { for (var i = 0; i < 5; i++) { main.Tick(); } return true; });
+        await Wait.UntilAsync(() => Rows().Single(r => r.Name == "Build server").Held, "the held machine's row");
     }
 
     [Fact]

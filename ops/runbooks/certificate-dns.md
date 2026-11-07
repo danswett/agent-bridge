@@ -3,6 +3,8 @@
 **Alerts:** A-CERT and A-DNS (the daily `ops-probe.yml` opens an `area:ops` issue), or A-AVAIL
 failing while the probe shows the app's own name (`-Url https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io`) healthy.
 
+`relay.slipgates.com` is served too (same app, own certificate, same DNS-only CNAME and `asuid` rules; see docs/relay-deploy.md). Check both with `relay-probe.ps1 -Target production` and `-Target production-slipgates`.
+
 `relay.bad-duck.com` is a Cloudflare CNAME, **DNS only (grey cloud)**, to the production app,
 plus a TXT record `asuid.relay` holding the environment's verification id. The certificate is
 Azure-managed: free, six months, renewed by the platform about 30 days ahead, and **only while

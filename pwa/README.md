@@ -5,7 +5,10 @@ through the relay. Plain ES modules and CSS, no framework, no build step, nothin
 CDN: the page's Content-Security-Policy allows scripts and styles from this site only,
 and network access to the relay only.
 
-Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`.
+Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`. It moves to
+<https://app.slipgates.com/> (#393) when the repository variable `PAGES_APP_AT_ROOT` is `true`: the app is then the
+site's root, and `/app/` redirects to it. The tests serve the app at `/`, as it will be there.
+The move, for people who installed the old address, and its rollback: [docs/app-domain.md](../docs/app-domain.md).
 Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
 
 It shows sessions, their activity and their pending questions, answers those questions
@@ -65,8 +68,9 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/launch-follow.js` | A launch followed after its outcome, as the app's `LaunchViewModel` does (#891, #896): a busy machine listed again once its busy can have ended (its question's two minutes and a second, or 2 min 1 s with none named) or when a session registers on it, one listing at a time; and a launch the machine could not confirm said to have started when its session registers, by the host's rule (not a Copilot's, which registers before it is ready), or when its folder-trust question is trusted here. One whose outcome named no session (a Codex's) is not followed, as which session is its own can't be told here, until the host names it (#983) |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
-| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`), usage and updates: each machine shown on its own channel (`usage.subscribe`, `update.subscribe`), every other online machine by a short channel (`hello`, `usage.get`, `update.get`) every five minutes while the app is in front (#610; it was every minute), every ten seconds while an update there is under way; a machine shown asked for its hello again on its channel when it says it changed (`hello.changed`), else every minute; `call` sends a press to a machine on whichever |
+| `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`), usage, updates and who can sign Copilot in there (`signin.devices`, where offered): each machine shown on its own channel (`usage.subscribe`, `update.subscribe`), every other online machine by a short channel (`hello`, `usage.get`, `update.get`) every five minutes while the app is in front (#610; it was every minute), every ten seconds while an update there is under way; a machine shown asked for its hello again on its channel when it says it changed (`hello.changed`), else every minute; `call` sends a press to a machine on whichever |
 | `js/update.js` | A machine's updates ([v1-update.md](../docs/protocol/v1-update.md), #51): the tolerant reader, the row's words (what the machine's app is doing, how the last update ended), and `UpdateControl`, Check and Install with a request of their own each, a refusal shown on the row, and Check all |
+| `js/signin-devices.js` | Who can sign Copilot in on a machine (#972, ui.md §6.6): the tolerant reader of `signin.devices` (only a roster read lists anyone; a kind not a person's is dropped) and the row's words, in Creative's, with this device named and more than three folded. Read-only: nothing here adds or removes a device |
 | `js/forget.js` | Forgetting an offline machine ([roster.md](../docs/protocol/roster.md)): two presses, the first arming for 5 seconds; an arm goes with a machine that comes back; the relay's refusals in words |
 | `sw.js` | The service worker: each release in a cache of its own, filled whole when its worker installs and served from there without asking the network, so a warm start waits on nothing and works offline (#609); anything else (the demo's chunk) stale-while-revalidate; and showing pushes (`push`) and opening the app at them (`notificationclick`). A release changes only as a whole: the browser checks `sw.js` on each start and the app on each return to the front, a new worker fills its own cache before it takes over, and the app then offers Reload, so old and new modules never mix (#26). The release before is kept for a page still open on it |
 | `js/release-watch.js` | New releases that keep failing to install (#650): a release installs whole or not at all, so one file missing from a deploy leaves the app on the release it has, and the browser tries again quietly at every start. After three failures in a row (counted in `localStorage` under the release in control, from the worker's record, so a release that installs with no page open clears them too), an app running a release it has says so, with Try again (a reload, the browser's next try); a release that installs clears it |
@@ -215,6 +219,10 @@ sessions and never moves their rows. An entry leaves when its question does.
 * **A form**, or a question this machine won't take from the phone, opens its session (the
   title), where the card says what it asks.
 * **A prompt marked `answerAtMachine`** says "Answer at the machine", with nothing to press.
+  Only `answerAtMachineReason: "shape"` adds "This kind of question can only be answered at
+  the machine." after "Answer at the machine · *machine*", in Needs you's text colour.
+  Both lines are accessible text, not a live region. Missing or unknown reasons retain the
+  current single line. Row status and attention do not change.
 
 The lane's count is the app's badge on the Home Screen or taskbar, where the browser has the
 Badging API (`navigator.setAppBadge`), and nothing where it hasn't.
@@ -296,6 +304,8 @@ as unconfirmed rather than sent again. Outcomes:
 |---|---|---|
 | `delivered` | The check on the control that sent it for about a second, then You answered · *value* | The host's upsert takes the question away; the card keeps the line |
 | `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again |
+| `unconfirmed`, stage `typed` | Typed into the prompt, but not confirmed as submitted. Check the conversation. | The same, but on a reconnect the same request is sent once more, which the host answers from the session's record without typing: delivered if it was submitted since (#467) |
+| `unconfirmed`, stage `recorded` | The session recorded something for this question, but not confirmed as this answer. Check the conversation. The reason says what it recorded, or the error. | As `typed` |
 | `stale` | Already answered or gone | Final |
 | `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request |
 | `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request |
@@ -474,7 +484,7 @@ account, so it outlives its machine going offline (#172); signing out deletes it
 Each machine on the **Machines** page is a row of two lines (#213): its name, with its icon and
 its state ("Viewing", "Online", "Offline") on that first line; then at most two facts, how many
 sessions it has and its version (with `(dev)` for a build from a working copy), or in the
-version's place "View only" or "Discovery held", the host's own reason in the line's tooltip
+version's place "View only" or, once a hold has lasted two minutes (#1064), "Discovery held", the host's own reason in the line's tooltip
 and said to a screen reader. Its updates and Forget sit inside the row, in its text column, as
 small secondary buttons, and Check for updates under the rows in the same column. Demo mode has usage too (`window.agentBridgeDemo.usage(report)`
 sends a new one; `?usage=0` plays a host without it; `?keep=1` keeps readings between visits,
@@ -497,9 +507,10 @@ destinations) at two sizes, and fail one whose time grows faster than its length
 Code blocks wrap rather than scroll sideways (`pre-wrap`, breaking even a long base64
 token), keeping indentation, and each has a Copy button in its top-right corner that copies
 exactly what the block draws, whatever the wrapping. The button is made by `toDom`, never by
-the parser, so no reply text can produce a `<button>`. It uses the Clipboard API and falls
-back to a hidden text area and `execCommand('copy')` where that API is missing or refuses
-(older WebViews, some iOS Home Screen apps). Inline code has no button.
+the parser, so no reply text can produce a `<button>`. It copies through a hidden text area and
+`execCommand('copy')` first, inside the tap, and uses the Clipboard API where that is refused:
+WebKit's Clipboard API resolved with nothing on the clipboard, so its answer was no proof the text
+got there (#1090). It says Copy failed when neither wrote. Inline code has no button.
 
 What is drawn is what runs (#415, ui.md §6.4, the app's #296): every code block and code span
 reads strictly left to right (`dir="ltr"`, `unicode-bidi: isolate`), with bidi controls,

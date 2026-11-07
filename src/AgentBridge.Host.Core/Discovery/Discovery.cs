@@ -41,7 +41,7 @@ internal sealed record Registration(
 // hook's activity line, the command cut to 300 characters and unfenced; Command is the whole
 // command as this host's hook records it (cut only past CommandMax, saying so in CommandCut),
 // absent from a marker agent-ha-bridge's hook or an older host wrote (#209).
-internal sealed record ApprovalMarker(string DecisionId, string Question, DateTimeOffset? Created, bool Attempted, string? Tool = null, string? Command = null, bool CommandCut = false);
+internal sealed record ApprovalMarker(string DecisionId, string Question, DateTimeOffset? Created, bool Attempted, string? Tool = null, string? Command = null, bool CommandCut = false, string? Lossy = null);
 
 public enum ApprovalMarkerState { Absent, Unreadable, Present }
 
@@ -50,7 +50,7 @@ public enum ApprovalMarkerState { Absent, Unreadable, Present }
 // generation (DecisionId), and an attempt it records is a boolean true. Anything else is
 // Unreadable, which a caller must treat as "something may be pending", never as absent.
 public sealed record ApprovalMarkerRead(ApprovalMarkerState State, string? DecisionId = null, string? Question = null, DateTimeOffset? Created = null, bool Attempted = false,
-    string? Tool = null, string? Command = null, bool CommandCut = false)
+    string? Tool = null, string? Command = null, bool CommandCut = false, string? Lossy = null)
 {
     public static string PathFor(string registrationPath, string sessionId) =>
         Path.Combine(Path.GetDirectoryName(registrationPath)!, RegistrationDiscovery.SafeKey(sessionId) + ".approval.json");
@@ -65,11 +65,11 @@ public sealed record ApprovalMarkerRead(ApprovalMarkerState State, string? Decis
             using var doc = JsonDocument.Parse(stream);
             var e = doc.RootElement;
             if (e.ValueKind != JsonValueKind.Object) { return new(ApprovalMarkerState.Unreadable); }
-            if (!e.TryGetProperty("SessionId", out var owner) || owner.ValueKind != JsonValueKind.String || !string.Equals(owner.GetString(), sessionId, StringComparison.Ordinal))
+            if (!e.TryGetProperty("SessionId", out var owner) || owner.ValueKind != JsonValueKind.String || !string.Equals(Json.Text(owner), sessionId, StringComparison.Ordinal))
             {
                 return new(ApprovalMarkerState.Unreadable);
             }
-            if (!e.TryGetProperty("DecisionId", out var decision) || decision.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(decision.GetString()))
+            if (!e.TryGetProperty("DecisionId", out var decision) || decision.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(Json.Text(decision)))
             {
                 return new(ApprovalMarkerState.Unreadable);
             }
@@ -79,8 +79,10 @@ public sealed record ApprovalMarkerRead(ApprovalMarkerState State, string? Decis
                 if (tried.ValueKind != JsonValueKind.True) { return new(ApprovalMarkerState.Unreadable); }
                 attempted = true;
             }
-            return new(ApprovalMarkerState.Present, decision.GetString(), Json.Str(e, "Question") ?? "", Json.Time(e, "Created"), attempted,
-                Json.Str(e, "Tool"), Json.Str(e, "Command"), Json.Bool(e, "CommandCut") == true);
+            return new(ApprovalMarkerState.Present, Json.Text(decision), Json.Str(e, "Question") ?? "", Json.Time(e, "Created"), attempted,
+                Json.Str(e, "Tool"), Json.Str(e, "Command"), Json.Bool(e, "CommandCut") == true,
+                // Text the tolerant read rewrote: what identifies this approval is then the marker as written.
+                Lossy: Json.IsLossy(e) ? e.GetRawText() : null);
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return new(ApprovalMarkerState.Absent); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException) { return new(ApprovalMarkerState.Unreadable); }
@@ -632,15 +634,15 @@ internal static class CodexRollout
     {
         try
         {
-            using var doc = JsonDocument.Parse(line);
+            using var doc = JsonDocument.Parse(Json.Repaired(line));
             var e = doc.RootElement;
             if (Json.Str(e, "type") != "session_meta" || Json.Obj(e, "payload") is not { } p) { return CodexThread.Unknown; }
             if (!string.Equals(Json.Str(p, "id"), id, StringComparison.OrdinalIgnoreCase)) { return CodexThread.Other; }
-            if (Json.Get(p, "session_id") is { } session && !(session.ValueKind == JsonValueKind.String && string.Equals(session.GetString(), id, StringComparison.OrdinalIgnoreCase))) { return CodexThread.Other; }
-            if (Json.Get(p, "thread_source") is { } thread && !(thread.ValueKind == JsonValueKind.String && thread.GetString() == "user")) { return CodexThread.Other; }
+            if (Json.Get(p, "session_id") is { } session && !(session.ValueKind == JsonValueKind.String && string.Equals(Json.Text(session), id, StringComparison.OrdinalIgnoreCase))) { return CodexThread.Other; }
+            if (Json.Get(p, "thread_source") is { } thread && !(thread.ValueKind == JsonValueKind.String && Json.Text(thread) == "user")) { return CodexThread.Other; }
             return Json.Get(p, "source") is not { } source || source.ValueKind == JsonValueKind.String ? CodexThread.TopLevel : CodexThread.Other;
         }
-        catch (JsonException) { return CodexThread.Unknown; }
+        catch (Exception x) when (x is JsonException or InvalidOperationException) { return CodexThread.Unknown; }
     }
 
     static byte[]? FirstLine(FileStream stream)
@@ -713,10 +715,10 @@ internal static class CodexRollout
         read = stream.ReadAtLeast(line, line.Length, throwOnEndOfStream: false);
         try
         {
-            using var doc = JsonDocument.Parse(line.AsMemory(0, read));
+            using var doc = JsonDocument.Parse(Json.Repaired(line.AsMemory(0, read)));
             return Json.Time(doc.RootElement, "timestamp");
         }
-        catch (JsonException) { return null; }
+        catch (Exception x) when (x is JsonException or InvalidOperationException) { return null; }
     }
 }
 internal static class RegistrationDiscovery
@@ -853,7 +855,7 @@ internal static class RegistrationDiscovery
         if (agent == AgentKind.Codex
             && ApprovalMarkerRead.Read(path, id) is { State: ApprovalMarkerState.Present } marker)
         {
-            approval = new ApprovalMarker(marker.DecisionId!, marker.Question ?? "", marker.Created, marker.Attempted, marker.Tool, marker.Command, marker.CommandCut);
+            approval = new ApprovalMarker(marker.DecisionId!, marker.Question ?? "", marker.Created, marker.Attempted,             marker.Tool, marker.Command, marker.CommandCut, marker.Lossy);
         }
         return new Registration(
             id,

@@ -34,8 +34,6 @@ public sealed partial class MainWindow : Window
     // The UI thread's, taken while on it: the change arrives on another.
     readonly DispatcherQueue ui = DispatcherQueue.GetForCurrentThread();
     bool closed;
-    // The window has drawn once: a banner arriving after that comes in with motion.
-    bool drawn;
 
     internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest, string? placementFile = null)
     {
@@ -70,7 +68,6 @@ public sealed partial class MainWindow : Window
         KeepSmallest();
         Root.Loaded += (_, _) =>
         {
-            drawn = true;
             if (Root.XamlRoot is { } x) { x.Changed += (_, _) => KeepSmallest(); }
         };
         Root.SizeChanged += (_, e) => FitSearch(e.NewSize.Width);
@@ -92,7 +89,14 @@ public sealed partial class MainWindow : Window
         };
         UsagePane.ViewModel = viewModel.Usage;
         LaunchPane.ViewModel = launch;
-        if (viewModel.Settings is { } s) { SettingsPane.ViewModel = s; }
+        if (viewModel.Settings is { } s)
+        {
+            SettingsPane.ViewModel = s;
+            s.PropertyChanged += (_, _) => DrawSettingsDot(s);
+            DrawSettingsDot(s);
+            // The first launch with no agent set up opens on Get started (#384).
+            s.GuideWanted += () => DispatcherQueue.TryEnqueue(() => ShowPage("settings"));
+        }
         SessionsView.ViewModel = viewModel;
         SessionsView.Launch = launch;
         SessionsView.NewRequested += () => ShowPage("launch");
@@ -100,6 +104,15 @@ public sealed partial class MainWindow : Window
         viewModel.OpenRequested += Reveal;
         FollowAppUpdate();
         viewModel.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.AppUpdate)) { FollowAppUpdate(); } };
+    }
+
+    // The grey dot on the Settings item follows the card for an agent installed later (#231): shown
+    // and named while one waits, and gone when Not now, Set up or a host that can't be set up
+    // takes the card away.
+    void DrawSettingsDot(SettingsViewModel settings)
+    {
+        SettingsDot.Visibility = Ui.Show(settings.HasAgentOffers);
+        AutomationProperties.SetName(SettingsItem, settings.AgentsNavName);
     }
 
     // The update bar is a polite live region (ui.md §9.1 A6): its words changing (ready,
@@ -183,48 +196,6 @@ public sealed partial class MainWindow : Window
     void OnCheckMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Check();
     void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
     void OnForgetMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Offline?.Press();
-
-    // A machine's Discovery held banner (#293). Its close button is the InfoBar's own, named here
-    // for what it closes; and, as Motion.Banner, it comes in from above, but not as the window
-    // first draws.
-    void OnHeldLoaded(object sender, RoutedEventArgs e)
-    {
-        if (sender is not InfoBar { Tag: HeldNotice notice } bar) { return; }
-        if (CloseButtonOf(bar) is { } close)
-        {
-            AutomationProperties.SetName(close, notice.DismissName);
-            AutomationProperties.SetAutomationId(close, notice.DismissId);
-            ToolTipService.SetToolTip(close, "Dismiss");
-        }
-        if (drawn) { Motion.Enter(bar, "Toast", new Vector2(0, -1)); }
-    }
-
-    internal static Button? CloseButtonOf(InfoBar bar) => Descendants(bar).OfType<Button>().FirstOrDefault(b => b.Name == "CloseButton");
-
-    static IEnumerable<DependencyObject> Descendants(DependencyObject root)
-    {
-        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
-        {
-            var child = VisualTreeHelper.GetChild(root, i);
-            yield return child;
-            foreach (var below in Descendants(child)) { yield return below; }
-        }
-    }
-
-    // Focus on the closing banner would go with it, to the window (ui.md §9.1 A4): it moves first
-    // to what Tab reaches next, the next banner's close button or the page under them.
-    void OnHeldClosing(InfoBar sender, InfoBarClosingEventArgs args)
-    {
-        if (FocusManager.GetFocusedElement(sender.XamlRoot) is not DependencyObject focused || !Motion.Within(focused, sender)) { return; }
-        var next = FocusManager.FindNextElement(FocusNavigationDirection.Next, new FindNextElementOptions { SearchRoot = sender.XamlRoot.Content });
-        if (next is not null && !Motion.Within(next, sender)) { _ = FocusManager.TryFocusAsync(next, FocusState.Programmatic); }
-    }
-
-    // Only how it is shown: nothing goes to the host, whose hold stands.
-    void OnHeldClosed(InfoBar sender, InfoBarClosedEventArgs args)
-    {
-        if (sender.Tag is HeldNotice notice) { ViewModel.Dismiss(notice); }
-    }
 
     // The banner's Restart to update (#516): warned, just before the host stops, when a session here is busy.
     async void OnRestartToUpdate(object sender, RoutedEventArgs e)

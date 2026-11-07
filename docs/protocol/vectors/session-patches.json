@@ -72,7 +72,8 @@
               "status": "working",
               "updatedAt": "2026-10-28T04:00:01.148Z",
               "activity": {
-                "userMessage": "Run the suite and check the witness logic, both in the background."
+                "userMessage": "Run the suite and check the witness logic, both in the background.",
+                "turn": "EgcIE-yd9yFdELDX"
               }
             }
           },
@@ -91,6 +92,7 @@
             "processId": 100,
             "activity": {
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0
             },
@@ -127,6 +129,7 @@
             "activity": {
               "reasoning": "Two independent jobs: delegate both to background agents.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0
             },
@@ -192,6 +195,7 @@
                 "startedAt": "2026-10-28T04:00:03.259Z"
               },
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -255,6 +259,7 @@
                 "startedAt": "2026-10-28T04:00:04.481Z"
               },
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -334,6 +339,7 @@
                 "startedAt": "2026-10-28T04:00:04.481Z"
               },
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -396,6 +402,7 @@
             "activity": {
               "reasoning": "Two independent jobs: delegate both to background agents.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -494,6 +501,7 @@
                 "startedAt": "2026-10-28T04:00:07.851Z"
               },
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -552,6 +560,7 @@
               "updatedAt": "2026-10-28T04:00:08.962Z",
               "activity": {
                 "response": "Started 2 background agents: run-suite and witness-logic.",
+                "responseTurn": "EgcIE-yd9yFdELDX",
                 "own": {
                   "at": "2026-10-28T04:00:08.962Z"
                 },
@@ -585,6 +594,8 @@
               "response": "Started 2 background agents: run-suite and witness-logic.",
               "reasoning": "Start the suite in the background and watch it.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -658,6 +669,8 @@
               "response": "Started 2 background agents: run-suite and witness-logic.",
               "reasoning": "Start the suite in the background and watch it.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -747,6 +760,8 @@
               "response": "Started 2 background agents: run-suite and witness-logic.",
               "reasoning": "Read ShadowWitness first.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -831,6 +846,8 @@
               "response": "Started 2 background agents: run-suite and witness-logic.",
               "reasoning": "Read ShadowWitness first.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -921,6 +938,8 @@
               "response": "Started 2 background agents: run-suite and witness-logic.",
               "reasoning": "Wait for the suite.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1034,6 +1053,8 @@
               "response": "Started 2 background agents: run-suite and witness-logic.",
               "reasoning": "Ask a reviewer to check the change.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1149,6 +1170,8 @@
               "response": "Started 2 background agents: run-suite and witness-logic.",
               "reasoning": "Diff the file.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1259,6 +1282,8 @@
               "response": "Started 2 background agents: run-suite and witness-logic.",
               "reasoning": "Diff the file.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1379,6 +1404,8 @@
               "response": "No regressions: the flag now follows the latest reply.",
               "reasoning": "Diff the file.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1486,6 +1513,8 @@
               "response": "No regressions: the flag now follows the latest reply.",
               "reasoning": "Diff the file.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1587,6 +1616,8 @@
               "response": "No regressions: the flag now follows the latest reply.",
               "reasoning": "Diff the file.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1692,6 +1723,8 @@
               "response": "HEAD: 1 failing test, RestartAfterResume (timing).",
               "reasoning": "Diff the file.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -1784,6 +1817,8 @@
               "response": "HEAD: 1 failing test, RestartAfterResume (timing).",
               "reasoning": "Diff the file.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -1887,6 +1922,8 @@
                 "startedAt": "2026-10-28T04:00:51.294Z"
               },
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -1977,6 +2014,8 @@
               "response": "HEAD: 1 failing test, RestartAfterResume (timing).",
               "reasoning": "Diff the file.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2088,6 +2127,8 @@
                 "startedAt": "2026-10-28T04:00:54.405Z"
               },
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2194,6 +2235,8 @@
               "response": "HEAD: 1 failing test, RestartAfterResume (timing).",
               "reasoning": "Have it bisect.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2315,6 +2358,8 @@
                 "startedAt": "2026-10-28T04:00:56.590Z"
               },
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2421,6 +2466,8 @@
               "response": "Asked run-suite to bisect; witness-logic is still reading.",
               "reasoning": "Bisect over the last 10 commits.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -2532,6 +2579,8 @@
               "response": "Asked run-suite to bisect; witness-logic is still reading.",
               "reasoning": "Check CI before saying so.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -2668,6 +2717,8 @@
               "response": "Asked run-suite to bisect; witness-logic is still reading.",
               "reasoning": "Check CI before saying so.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -2806,6 +2857,8 @@
               "response": "Asked run-suite to bisect; witness-logic is still reading.",
               "reasoning": "Check CI before saying so.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -2911,6 +2964,8 @@
               "response": "Asked run-suite to bisect; witness-logic is still reading.",
               "reasoning": "Check CI before saying so.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -3024,6 +3079,8 @@
               "response": "Witness logic is right; all checks pass.",
               "reasoning": "Check CI before saying so.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -3126,6 +3183,8 @@
               "response": "Witness logic is right; all checks pass.",
               "reasoning": "Check CI before saying so.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -3231,6 +3290,8 @@
               "response": "First bad commit: abc1234 (Retry the resume twice).",
               "reasoning": "Check CI before saying so.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "source": {
@@ -3328,6 +3389,8 @@
               "response": "First bad commit: abc1234 (Retry the resume twice).",
               "reasoning": "Check CI before saying so.",
               "userMessage": "Run the suite and check the witness logic, both in the background.",
+              "turn": "EgcIE-yd9yFdELDX",
+              "responseTurn": "EgcIE-yd9yFdELDX",
               "turnCount": 1,
               "compactions": 0,
               "source": {
@@ -3421,6 +3484,7 @@
               "updatedAt": "2026-10-28T04:00:01.004Z",
               "activity": {
                 "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+                "turn": "vVPp6iICyk4Dsv2Y",
                 "turnCount": 0,
                 "compactions": 0
               }
@@ -3439,6 +3503,7 @@
             "processId": 900,
             "activity": {
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 0,
               "compactions": 0
             },
@@ -3475,6 +3540,7 @@
             "activity": {
               "reasoning": "I will start the two delegates and the background command.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 0,
               "compactions": 0
             },
@@ -3525,6 +3591,7 @@
             "activity": {
               "reasoning": "I will start the two delegates and the background command.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -3589,6 +3656,7 @@
                 "startedAt": "2026-10-28T04:00:04.992Z"
               },
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -3673,6 +3741,7 @@
                 "startedAt": "2026-10-28T04:00:05.233Z"
               },
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -3762,6 +3831,7 @@
                 "startedAt": "2026-10-28T04:00:05.233Z"
               },
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -3835,6 +3905,7 @@
             "activity": {
               "reasoning": "I will start the two delegates and the background command.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -3907,6 +3978,7 @@
             "activity": {
               "reasoning": "Waiting for the delegates.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -3958,7 +4030,8 @@
             "revision": 10,
             "set": {
               "activity": {
-                "response": "Started both delegates and the background command; I will summarise when they finish."
+                "response": "Started both delegates and the background command; I will summarise when they finish.",
+                "responseTurn": "vVPp6iICyk4Dsv2Y"
               },
               "class": "done"
             }
@@ -3979,6 +4052,8 @@
               "response": "Started both delegates and the background command; I will summarise when they finish.",
               "reasoning": "Waiting for the delegates.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4064,6 +4139,8 @@
             "activity": {
               "response": "Started both delegates and the background command; I will summarise when they finish.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4157,6 +4234,8 @@
               "response": "Started both delegates and the background command; I will summarise when they finish.",
               "reasoning": "The first delegate finished.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4232,6 +4311,8 @@
               "response": "The first delegate listed two files.",
               "reasoning": "The first delegate finished.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4321,6 +4402,8 @@
             "activity": {
               "response": "The first delegate listed two files.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4400,6 +4483,8 @@
               "response": "The first delegate listed two files.",
               "reasoning": "The nested one finished.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4477,6 +4562,8 @@
               "response": "The nested delegate reported the latest commit.",
               "reasoning": "The nested one finished.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0,
               "background": {
@@ -4556,6 +4643,8 @@
             "activity": {
               "response": "The nested delegate reported the latest commit.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4630,6 +4719,8 @@
             "activity": {
               "response": "Both delegates finished: two files, and one commit.\nThe background command finished too.",
               "userMessage": "Start two delegates in parallel, one of which starts its own, and run a command in the background; summarise when they finish.",
+              "turn": "vVPp6iICyk4Dsv2Y",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4684,7 +4775,8 @@
             "set": {
               "status": "working",
               "activity": {
-                "userMessage": "Ask me to pick one of alpha, beta or gamma."
+                "userMessage": "Ask me to pick one of alpha, beta or gamma.",
+                "turn": "R89XN4O1WwEWPHOW"
               },
               "class": "fyi"
             }
@@ -4704,6 +4796,8 @@
             "activity": {
               "response": "Both delegates finished: two files, and one commit.\nThe background command finished too.",
               "userMessage": "Ask me to pick one of alpha, beta or gamma.",
+              "turn": "R89XN4O1WwEWPHOW",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4802,6 +4896,8 @@
             "activity": {
               "response": "Both delegates finished: two files, and one commit.\nThe background command finished too.",
               "userMessage": "Ask me to pick one of alpha, beta or gamma.",
+              "turn": "R89XN4O1WwEWPHOW",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4901,6 +4997,8 @@
             "activity": {
               "response": "Both delegates finished: two files, and one commit.\nThe background command finished too.",
               "userMessage": "Ask me to pick one of alpha, beta or gamma.",
+              "turn": "R89XN4O1WwEWPHOW",
+              "responseTurn": "vVPp6iICyk4Dsv2Y",
               "turnCount": 1,
               "compactions": 0
             },
@@ -4956,6 +5054,7 @@
               "status": "idle",
               "activity": {
                 "response": "You picked beta.",
+                "responseTurn": "R89XN4O1WwEWPHOW",
                 "turnCount": 2
               },
               "class": "done"
@@ -4976,6 +5075,8 @@
             "activity": {
               "response": "You picked beta.",
               "userMessage": "Ask me to pick one of alpha, beta or gamma.",
+              "turn": "R89XN4O1WwEWPHOW",
+              "responseTurn": "R89XN4O1WwEWPHOW",
               "turnCount": 2,
               "compactions": 0
             },
@@ -5119,7 +5220,8 @@
               "title": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
               "updatedAt": "2026-10-28T04:00:04.065Z",
               "activity": {
-                "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line."
+                "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+                "turn": "iGVW87LiK1hYfY3B"
               }
             }
           },
@@ -5137,6 +5239,7 @@
             "processId": 950,
             "activity": {
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5186,6 +5289,7 @@
                 "startedAt": "2026-10-28T04:00:07.853Z"
               },
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5221,6 +5325,7 @@
             "activity": {
               "reasoning": "**Delegating**",
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5253,6 +5358,7 @@
             "activity": {
               "reasoning": "**Delegating**",
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5269,7 +5375,8 @@
             "set": {
               "updatedAt": "2026-10-28T04:00:12.723Z",
               "activity": {
-                "response": "Working on it."
+                "response": "Working on it.",
+                "responseTurn": "iGVW87LiK1hYfY3B"
               }
             }
           },
@@ -5289,6 +5396,8 @@
               "response": "Working on it.",
               "reasoning": "**Delegating**",
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
+              "responseTurn": "iGVW87LiK1hYfY3B",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5338,6 +5447,8 @@
                 "startedAt": "2026-10-28T04:00:12.944Z"
               },
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
+              "responseTurn": "iGVW87LiK1hYfY3B",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5390,6 +5501,8 @@
               "response": "Working on it.",
               "reasoning": "**Delegating**",
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
+              "responseTurn": "iGVW87LiK1hYfY3B",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -5455,6 +5568,8 @@
                 "startedAt": "2026-10-28T04:00:15.478Z"
               },
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
+              "responseTurn": "iGVW87LiK1hYfY3B",
               "turnCount": 0,
               "compactions": 0,
               "background": {
@@ -5519,6 +5634,8 @@
               "response": "Working on it.",
               "reasoning": "**Delegating**",
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
+              "responseTurn": "iGVW87LiK1hYfY3B",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5570,6 +5687,8 @@
               "response": "0a1b2c3 First commit",
               "reasoning": "**Delegating**",
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
+              "responseTurn": "iGVW87LiK1hYfY3B",
               "turnCount": 0,
               "compactions": 0
             },
@@ -5625,6 +5744,8 @@
               "response": "0a1b2c3 First commit",
               "reasoning": "**Delegating**",
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
+              "responseTurn": "iGVW87LiK1hYfY3B",
               "turnCount": 1,
               "compactions": 0
             },
@@ -5679,6 +5800,8 @@
             "activity": {
               "response": "0a1b2c3 First commit",
               "userMessage": "Start one delegate to show the latest commit, wait for it, then reply with its answer in one line.",
+              "turn": "iGVW87LiK1hYfY3B",
+              "responseTurn": "iGVW87LiK1hYfY3B",
               "turnCount": 1,
               "compactions": 0
             },
@@ -5710,7 +5833,8 @@
             "set": {
               "updatedAt": "2026-10-28T04:01:13.997Z",
               "activity": {
-                "userMessage": "Say ok and nothing else."
+                "userMessage": "Say ok and nothing else.",
+                "turn": "lQsY1wedVqMU8mF1"
               }
             }
           },
@@ -5729,6 +5853,8 @@
             "activity": {
               "response": "0a1b2c3 First commit",
               "userMessage": "Say ok and nothing else.",
+              "turn": "lQsY1wedVqMU8mF1",
+              "responseTurn": "iGVW87LiK1hYfY3B",
               "turnCount": 1,
               "compactions": 0
             },
@@ -5760,7 +5886,8 @@
             "set": {
               "updatedAt": "2026-10-28T04:01:15.380Z",
               "activity": {
-                "response": "ok"
+                "response": "ok",
+                "responseTurn": "lQsY1wedVqMU8mF1"
               }
             }
           },
@@ -5779,6 +5906,8 @@
             "activity": {
               "response": "ok",
               "userMessage": "Say ok and nothing else.",
+              "turn": "lQsY1wedVqMU8mF1",
+              "responseTurn": "lQsY1wedVqMU8mF1",
               "turnCount": 1,
               "compactions": 0
             },
@@ -5833,6 +5962,8 @@
             "activity": {
               "response": "ok",
               "userMessage": "Say ok and nothing else.",
+              "turn": "lQsY1wedVqMU8mF1",
+              "responseTurn": "lQsY1wedVqMU8mF1",
               "turnCount": 2,
               "compactions": 0
             },

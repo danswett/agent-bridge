@@ -8,12 +8,13 @@
 // answer it would refuse for its shape; ../answer-service.js sends it and resends it, with
 // the same request, until there is an outcome.
 import { h } from './dom.js';
+import { UPDATING, holdKey, holdOf } from './hold.js';
 import { renderMarkdown } from '../markdown.js';
 import { ReceiptClock, answeredValue, describeInFlight, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import { openConfirmSheet } from './escaped-sheet.js';
 import { COMMAND_LIFETIME_S } from '../transfer.js';
 import {
-  Limits, draftText, initialState, isRecommended, optionTone, orderOptions, prepareAnswer,
+  AnswerReasons, Limits, NOT_SENT, draftText, initialState, isRecommended, optionTone, orderOptions, prepareAnswer,
   tapToAnswer, utf8Bytes,
 } from '../answers.js';
 
@@ -96,11 +97,16 @@ function shell(q, idBase, answerable, asker = null) {
     class: `question${answerable ? ' answerable' : ''}`, 'aria-labelledby': `${idBase}-h`,
     dataset: { kind: q.kind, question: q.id, answerable: answerable ? 'true' : 'false' },
   }, h('h4', { class: 'question-head', id: `${idBase}-h` }, heading));
+  const approval = q.kind === 'approval';
+  // Copilot asked several at once and shows them one at a time, this one first (#690): each is
+  // its own question, so an answer to this one never reaches the next.
+  if (approval && q.waiting > 1) {
+    section.append(h('p', { class: 'note queue', role: 'note' }, `1 of ${q.waiting} permissions waiting`));
+  }
   // An approval's message, all of it, is drawn exactly as written, fence markers included, in the
   // code face and left to right, with its hidden characters and right-to-left letters as escapes;
   // nothing in it is read as Markdown (#220, #415, ui.md §6.4): Approve once allows what runs.
   // Other questions draw as Markdown.
-  const approval = q.kind === 'approval';
   const message = h('div', { class: `md question-message${approval ? ' md-approval' : ''}`, id: `${idBase}-m`, dir: approval ? 'ltr' : null });
   message.append(renderMarkdown(q.message, document, { approval }));
   section.append(message);
@@ -120,6 +126,7 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
     section.append(h('ol', { class: 'fields' }, q.fields.map((f, k) => readOnlyField(f, `${idBase}-f${k}`))));
   }
   const at = where(machineName);
+  const shape = why === 'atMachine' && q.answerAtMachineReason === 'shape';
   // A prompt only the machine could answer anyway still says why the machine is read-only.
   if (readOnly && why !== 'machine') {
     section.append(h('p', { class: 'note warn read-only-machine', role: 'note' },
@@ -133,13 +140,17 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
         `Approving permission prompts from the phone is turned off on this machine. Answer at the machine${at}.`)
       : why === 'atMachine'
         ? h('p', { class: 'note warn read-only-why', role: 'note' },
-          `This prompt can only be answered at the machine${at}.`)
+          shape ? `Answer at the machine${machineName ? ` · ${machineName}` : ''}` : `This prompt can only be answered at the machine${at}.`)
         : readOnly
           // The machine said why (agent-ha-bridge runs there): its words say where to answer.
           ? h('p', { class: 'note warn read-only-why', role: 'note' },
             `This machine is read-only from the phone: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`)
           : h('p', { class: 'note read-only-why', role: 'note' },
             `This machine doesn't take answers from the phone yet. Answer at the machine${at}.`));
+  if (shape) {
+    section.append(h('p', { class: 'note warn at-machine-explanation' },
+      'This kind of question can only be answered at the machine.'));
+  }
   return section;
 }
 
@@ -152,6 +163,11 @@ const OUTCOME_TEXT = {
   stale: () => 'Already answered or gone: the session is no longer asking this.',
   busy: () => 'Another answer to this session is being delivered. Try again in a moment.',
   refused: () => 'The machine refused this answer.',
+};
+
+const UNCONFIRMED_STAGE_TEXT = {
+  typed: () => 'Typed into the prompt, but not confirmed as submitted. Check the conversation.',
+  recorded: () => 'The session recorded something for this question, but not confirmed as this answer. Check the conversation.',
 };
 
 // What an answer's progress or outcome says, for the form, the Needs you lane and the card once
@@ -181,6 +197,10 @@ export function describeAnswer(entry, machineName, { question = null, stalled = 
       }
       let text = OUTCOME_TEXT[outcome]();
       if (outcome === 'refused' && entry.reason) { text = `The machine refused this answer: ${entry.reason}.`; }
+      // A reason with fixed words of its own, the same in every client (#908).
+      if (outcome === 'refused' && AnswerReasons[entry.detail?.code]) { text = NOT_SENT + AnswerReasons[entry.detail.code]; }
+      // How far the host knows it got (#467): typed into the prompt, or recorded differently.
+      if (outcome === 'unconfirmed' && UNCONFIRMED_STAGE_TEXT[entry.detail?.stage]) { text = UNCONFIRMED_STAGE_TEXT[entry.detail.stage](); }
       if (outcome === 'unconfirmed' && entry.reason) { text += ` (${entry.reason})`; }
       return { key: outcome, text, more: null, tone: outcome === 'refused' ? 'bad' : 'warn', line: true, speech: `Answer: ${text}` };
     }
@@ -216,6 +236,9 @@ export class QuestionPanel {
   #unwatch = null;
   #busyTimer = null;
   #held = null;
+  #holdKey = '';
+  // A quiet hold while the app catches up after a return (hold.js), or null.
+  #quiet = null;
   #receipt = null;
 
   // answering: { service, hostId, sessionId }. state: what a previous panel for the same
@@ -253,14 +276,26 @@ export class QuestionPanel {
 
   // Why nothing can be sent now (its machine offline, #269), or null: everything entered stays,
   // and the controls take nothing until it is null again.
-  setHeld(text) {
-    const held = text || null;
-    if (held === this.#held) { return; }
-    this.#held = held;
-    this.els.held.textContent = held ?? '';
-    this.els.held.hidden = !held;
-    this.element.dataset.held = held ? 'true' : 'false';
+  setHeld(held) {
+    const hold = holdOf(held);
+    const key = holdKey(hold);
+    if (key === this.#holdKey) { return; }
+    this.#holdKey = key;
+    const text = hold.text || null;
+    this.#held = text;
+    this.#quiet = hold.updating ? hold : null;
+    const e = this.els;
+    // The offline line takes the place of the actions; focus on one of them moves to the line (rule 8).
+    const focused = hold.offline && this.element.contains(this.element.ownerDocument.activeElement) && (e.actions.contains(this.element.ownerDocument.activeElement) || e.controls.contains(this.element.ownerDocument.activeElement));
+    e.held.textContent = text ?? '';
+    e.held.hidden = !text;
+    if (hold.offline) { e.held.tabIndex = -1; } else { e.held.removeAttribute('tabindex'); }
+    e.actions.hidden = hold.offline;
+    if (!hold.updating) { e.updating.hidden = true; e.updating.textContent = ''; }
+    this.element.dataset.held = text ? 'true' : 'false';
+    this.element.dataset.hold = hold.updating ? (hold.drawn ? 'drawn' : 'quiet') : 'none';
     this.#show(this.entry);
+    if (focused) { e.held.focus(); }
   }
 
   get entry() { const { service, hostId, sessionId } = this.answering; return service.get(hostId, sessionId, this.q.id); }
@@ -305,7 +340,8 @@ export class QuestionPanel {
     // what a busy region says until it is done.
     e.status = h('p', { class: 'answer-status' });
     e.live = receiptLive();
-    e.form.append(e.held, e.error, e.actions, e.status);
+    e.updating = h('p', { class: 'note answer-updating', hidden: true });
+    e.form.append(e.held, e.error, e.actions, e.updating, e.status);
     // A tap question has no Send until Other is opened.
     e.send.hidden = this.tap && !this.otherOpen;
     this.element.append(e.form, e.live);
@@ -320,7 +356,11 @@ export class QuestionPanel {
     // the agent gave the field a title of its own.
     const headed = !approval || field.title !== null;
     const titleId = headed ? `${id}-f0-t` : `${id}-h`;
-    const group = h('div', { class: `choices${approval ? ' approval' : ''}`, role: 'group', 'aria-labelledby': titleId });
+    // Other the agent offers and the machine cannot send yet (#908): its reason describes the
+    // choices, read with the group and with the disabled Other, and is said under them.
+    const unavailable = AnswerReasons[field.otherUnavailable] ?? null;
+    const noteId = unavailable ? `${id}-other-unavailable` : null;
+    const group = h('div', { class: `choices${approval ? ' approval' : ''}`, role: 'group', 'aria-labelledby': titleId, 'aria-describedby': noteId });
     const escaped = approval ? this.escaped : null;
     for (const o of orderOptions(field.options)) {
       const tone = approval ? optionTone(o) : 'neutral';
@@ -353,7 +393,11 @@ export class QuestionPanel {
     if (field.description) { parts.push(h('p', { class: 'field-desc' }, field.description)); }
     parts.push(group);
     if (escaped && escaped.mode !== 'confirm') { parts.push(this.#escapedWhy(escaped.mode)); }
-    if (field.allowOther) {
+    if (unavailable) {
+      // Shown as the agent offers it, its label unchanged, and never pressable.
+      group.append(h('button', { type: 'button', class: 'choice other-toggle other-unavailable', disabled: true, 'aria-describedby': noteId }, h('span', { class: 'label' }, 'Other…')));
+      parts.push(h('p', { id: noteId, class: 'field-desc other-unavailable-note' }, unavailable));
+    } else if (field.allowOther) {
       const boxId = `${id}-other`;
       e.otherToggle = h('button', {
         type: 'button', class: 'choice other-toggle', 'aria-expanded': this.otherOpen ? 'true' : 'false', 'aria-controls': boxId,
@@ -390,6 +434,7 @@ export class QuestionPanel {
   // The sheet, and Approve once only from its own button: signed for the answer's request when it is
   // pressed, then sent as any answer is, so a resend carries the same confirmation.
   #confirmEscaped() {
+    if (this.#quiet) { this.#updating(); return; }
     if (this.#held || this.#sheetOpen) { return; }
     const entry = this.entry;
     if (entry && (entry.state === 'sending' || entry.state === 'waiting')) { return; }
@@ -406,11 +451,14 @@ export class QuestionPanel {
         const stale = () => Date.now() - pressed >= COMMAND_LIFETIME_S * 1000;
         const expired = () => new Error(`Not sent: this confirmation is more than ${COMMAND_LIFETIME_S / 60} minutes old. Press again`);
         if (stale()) { throw expired(); }
+        // A return's hold that began while the sheet was open: nothing is signed or sent until it lifts (#950).
+        if (this.#quiet) { throw new Error(`${UPDATING} Press again in a moment`); }
         const request = globalThis.crypto.randomUUID();
         const confirm = await this.escaped.sign({ session: sessionId, question: q.id, shown, request, now: pressed });
         // Closed while it was signed: the confirmation is dropped, and nothing is sent (#836 review).
         if (cancelled()) { return false; }
         if (stale()) { throw expired(); }
+        if (this.#quiet) { throw new Error(`${UPDATING} Press again in a moment`); }
         // The machine's route gone while it was signed (#269's gate): nothing is queued, so the sheet
         // must not close as if it went. It stays open saying so, its button the Try again, which
         // signs afresh once the machine is back (#836 review 5780082443).
@@ -558,7 +606,14 @@ export class QuestionPanel {
     target?.focus();
   }
 
+  // A press while the app catches up: said under the controls, in text2; never a toast.
+  #updating() {
+    this.els.updating.textContent = UPDATING;
+    this.els.updating.hidden = false;
+  }
+
   #send({ tapped = null } = {}) {
+    if (this.#quiet) { this.#updating(); return; }
     if (this.#held) { return; }
     const entry = this.entry;
     if (entry && (entry.state === 'sending' || entry.state === 'waiting')) { return; }
@@ -572,6 +627,7 @@ export class QuestionPanel {
   }
 
   #resend() {
+    if (this.#quiet) { this.#updating(); return; }
     if (this.#held) { return; }
     const { service, hostId, sessionId } = this.answering;
     service.resend(hostId, sessionId, this.q.id);
@@ -592,6 +648,11 @@ export class QuestionPanel {
     e.form.classList.toggle('still', entry?.state === 'waiting' && entry.reason === 'not connected');
     e.controls.disabled = !again || pause || held;
     e.send.disabled = !again || pause || held;
+    // A quiet hold: aria-disabled at once, so focus stays; a press does nothing but say why.
+    for (const b of [e.send, ...this.element.querySelectorAll('.choice')]) {
+      if (this.#quiet && again && !pause) { b.setAttribute('aria-disabled', 'true'); } else { b.removeAttribute('aria-disabled'); }
+    }
+    if (!this.#quiet) { e.updating.hidden = true; e.updating.textContent = ''; }
     e.resend.hidden = entry?.state !== 'failed';
     e.resend.disabled = held;
     if (pause) { this.#busyTimer = setTimeout(() => { e.controls.disabled = !!this.#held; e.send.disabled = !!this.#held; }, BUSY_PAUSE_MS); }

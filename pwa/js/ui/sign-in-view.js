@@ -12,6 +12,7 @@
 // never logged, announced, stored or put in a notification.
 import { h } from './dom.js';
 import { glyph } from './glyph.js';
+import { copyText } from '../markdown.js';
 import { AGENT_NAME, RESOLVED_SHOWN_MS, SIGN_IN, clockTime, confirming, flowExpired, needsSignIn, plainText, readCode, readDone, readStartResult, spelled } from '../auth-state.js';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -786,12 +787,11 @@ export class SignInBanners {
 
   async #copy(code) {
     const said = this.#sheet?.els.body.querySelector('.sign-in-copied');
-    try {
-      await this.clipboard.writeText(code);
-      if (said) { said.textContent = 'Code copied'; }
-    } catch {
-      if (said) { said.textContent = 'Couldn\u2019t copy. Select the code to copy it.'; }
-    }
+    // The shared copy (js/markdown.js): its selection copy lands where the Clipboard API alone
+    // resolved with nothing copied (#1090). The sheet is a modal dialog, so the copy's scratch
+    // field goes inside it.
+    const ok = await copyText(code, document, this.clipboard, said?.closest('dialog') ?? document.body);
+    if (said) { said.textContent = ok ? 'Code copied' : 'Couldn\u2019t copy. Select the code to copy it.'; }
   }
 
   // A sign-in push's link (?host=&signin=, #969): that machine's banner for that agent, with focus on

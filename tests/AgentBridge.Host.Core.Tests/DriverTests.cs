@@ -170,6 +170,10 @@ public class DriverTests
         Fixture.Append(events, Copilot.User("mine now", 13), Copilot.TurnStart(14));
         await source.RefreshAsync();
         Assert.Equal(("mine now", (UserMessageFrom?)null), (source.Get(Id)!.Activity.UserMessage, source.Get(Id)!.Activity.UserMessageFrom));
+
+        // History says whose each prompt was as live did, though the transcript marks none (#292).
+        var page = await source.HistoryAsync(Id, null, 20);
+        Assert.Equal([null, UserMessageFrom.Agent, null], page.Turns!.Select(t => t.Prompt!.From));
     }
 
     // Context Copilot gives the agent mid-turn (a skill, a memory, a shell's notice) is no new turn:

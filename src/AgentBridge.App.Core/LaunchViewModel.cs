@@ -815,6 +815,9 @@ public sealed partial class LaunchViewModel : Observable
             "started" => (Result(e)?.Launched?.Transfer is not null ? $"Session brought over and started{how}. The original is still on its machine." : $"Session started{how}.", Tone.Ok),
             // Also said here when the launch may never have gone (no reply, a host that restarted).
             "unconfirmed" => ($"Not confirmed whether the session started{(e.Reason is { } r ? $": {Sentence(r)}" : ".")} Check at the machine before launching again.", Tone.Warn),
+            // A resume the host holds back while its discovery is held (#1064): the waiting form, not a refusal.
+            "busy" when e.Payload is LaunchRequest { Resume: not null } && e.Reason is { } w && w.StartsWith("Held:", StringComparison.Ordinal)
+                => ($"{(string.IsNullOrEmpty(machineName) ? "The machine" : machineName)} is still finding its sessions. Try Launch again in a moment.", Tone.Progress),
             "busy" => ($"Not launched: {Sentence(e.Reason ?? "the machine is busy with another launch")} Try again in a moment.", Tone.Warn),
             "refused" => ($"Not launched: {Sentence(e.Reason ?? "the machine refused it")}", Tone.Bad),
             _ => ($"Couldn't launch{(e.Reason is { } f ? $": {Sentence(f)}" : ". Check at the machine.")}{Again(e, machineName)}", Tone.Bad),

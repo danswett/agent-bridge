@@ -232,15 +232,54 @@ test('the machine line says how many sessions are live, the version and that it 
   await expect(status).toHaveText('3 sessions · 0.1.0 (dev)');
 });
 
-test('the machine line says what holds its discovery until it clears, as the HA status line did', async ({ page }) => {
+const REASON = 'an unrecognised copilot process (pid 4120)';
+
+// The page's clock, taken over once the demo is up, so a hold's two minutes pass at once.
+async function pausedClock(page) {
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1000);
+}
+
+test('the machine line says what holds its discovery once the hold has lasted two minutes, until it clears', async ({ page }) => {
   await openDemo(page);
+  await pausedClock(page);
   const status = page.locator('.machine .machine-status');
-  await page.evaluate(() => window.agentBridgeDemo.hold({ reason: 'an unrecognised copilot process (pid 4120)', agents: ['copilot'] }));
+  await page.evaluate((reason) => window.agentBridgeDemo.hold({ reason, agents: ['copilot'] }), REASON);
+  await page.clock.runFor(2 * 60000 + 100);
   // A short fact on the row (#213), in the needs colour; the reason in its tooltip and to a screen reader.
-  await expect(status).toHaveText('4 sessions · Discovery held: an unrecognised copilot process (pid 4120)');
-  await expect(status.locator('.machine-flag.held .sr-only')).toHaveText(': an unrecognised copilot process (pid 4120)');
-  await expect(status).toHaveAttribute('title', '4 sessions · 0.1.0 (dev) · discovery held: an unrecognised copilot process (pid 4120)');
+  await expect(status).toHaveText(`4 sessions · Discovery held: ${REASON}`);
+  await expect(status.locator('.machine-flag.held .sr-only')).toHaveText(`: ${REASON}`);
+  await expect(status).toHaveAttribute('title', `4 sessions · 0.1.0 (dev) · discovery held: ${REASON}`);
   await page.evaluate(() => window.agentBridgeDemo.hold(null));
+  await page.clock.runFor(100);
   await expect(status).toHaveText('4 sessions · 0.1.0 (dev)');
+});
+
+test('a discovery hold shorter than two minutes changes nothing on the machine row', async ({ page }) => {
+  await openDemo(page);
+  await pausedClock(page);
+  const status = page.locator('.machine .machine-status');
+  await page.evaluate((reason) => window.agentBridgeDemo.hold({ reason, agents: ['copilot'] }), REASON);
+  await page.clock.runFor(2 * 60000 - 1000);
+  await expect(status).toHaveText('4 sessions · 0.1.0 (dev)');
+  await page.evaluate(() => window.agentBridgeDemo.hold(null));
+  await page.clock.runFor(60000);
+  await expect(status).toHaveText('4 sessions · 0.1.0 (dev)');
+});
+
+test('a discovery hold that returns counts its two minutes from its own start', async ({ page }) => {
+  await openDemo(page);
+  await pausedClock(page);
+  const status = page.locator('.machine .machine-status');
+  const hold = () => page.evaluate((reason) => window.agentBridgeDemo.hold({ reason, agents: ['copilot'] }), REASON);
+  await hold();
+  await page.clock.runFor(100000);
+  await page.evaluate(() => window.agentBridgeDemo.hold(null));
+  await page.clock.runFor(100);
+  await hold();
+  await page.clock.runFor(100000);
+  await expect(status).toHaveText('4 sessions · 0.1.0 (dev)');
+  await page.clock.runFor(21000);
+  await expect(status).toContainText('Discovery held');
 });
 

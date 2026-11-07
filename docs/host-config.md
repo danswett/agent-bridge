@@ -83,7 +83,7 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `permissions.escapedApprovalDevices` | absent | The devices, by device id, that may confirm one. Absent or `null`: the devices approved for folder trust (`launch.remoteFolderTrustDevices`, as the Windows app's Settings changes them), and only while `launch.remoteFolderTrust` is on, so a device approved there needs no second visit and turning folder trust off (for a lost phone, say) takes Approve from them too. A list, even an empty one, replaces that. Invalid ids are ignored with a problem; a value that is not a list approves none. At most 64. Applies when the host restarts |
 | `permissions.remoteManage` | `true` | A person's other device (a phone or browser, or the app on another machine; never this machine's app, an agent or Home Assistant) may restart this host and repair the hooks of an agent this installation set up, through the relay, each press signed by that device (#801). Restarts are capped at 2 in 6 hours and wait for the host to be quiet; a read-only host never offers it. Read when the host starts |
 | `permissions.trustedPeers` | `false` | Transitional full-key remote authorization floor (#402), for disposable-host evaluation only. Restart-only; requires explicitly seeded pins. See [trusted peers](#trusted-peers-disposable-host-foundation) |
-| `permissions.phoneSignIn` | `false` | Signing Copilot in again from a person's device (`sessions.signin`, #972): the host runs Copilot's own `copilot login --device-code` and shows the one-time code on that device only. While it runs, **the machine opens a browser and copies the code**. Only a device pinned as a person here is offered it, and only on Windows. A value that is not `true` or `false` turns everything off, as `remoteApproval`'s does. Applies when the host restarts. See [phone sign-in](#phone-sign-in) |
+| `permissions.phoneSignIn` | `false` | Signing Copilot in again from a person's device (`sessions.signin`, #972): the host runs Copilot's own `copilot login --device-code` and shows the one-time code on that device only. While it runs, **the machine opens a browser and copies the code**. Only a device #55's device roster pins as a person's is offered it (none until that roster ships), and only on Windows. A value that is not `true` or `false` turns everything off, as `remoteApproval`'s does. Applies when the host restarts. See [phone sign-in](#phone-sign-in) |
 | `delivery.readOnly` | `false` | A host that only shows sessions: it takes no answer, reply, stop, launch, permission approval or transfer from any device, whatever agent-ha-bridge is doing, and says so in `hello` (`machine.readOnly`, "this is a read-only comparison host"), refusing each with that reason. The shadow host beside agent-ha-bridge sets it ([host-shadow.md](host-shadow.md)), so a daemon restart never leaves it acting. Without it, a host is held only while agent-ha-bridge runs (design G5) |
 | `sessions.restoreOnStart` | `true` | After a reboot or a crash of the host, the sessions that died with it are restored, idle, through the resume path, one at a time, and what cannot be is offered to resume ([host-launch.md](host-launch.md#restoring-after-a-reboot-or-a-crash)). Nothing is ever typed into them. `false` restores nothing, only says what went, in `hello` and one notification, and keeps nothing waiting. A value that is not `true` or `false`, or a file that cannot be read, turns it off, but keeps what died offered (the person may have meant it on). Per machine
 | `push.enabled` | `true` | Notifications (Web Push) to the account's phones. `false` sends none and takes no subscription: `hello` leaves `push` out, and `push.subscribe` fails saying the machine doesn't send notifications. For a machine that should be seen but not heard from, as the shadow host beside agent-ha-bridge ([host-shadow.md](host-shadow.md#on-the-phone--relay)) |
@@ -257,11 +257,28 @@ It is offered to a device only when all of these hold:
 - `permissions.phoneSignIn` is `true`, and the host has restarted since;
 - the machine runs Windows, and when the host started it found Copilot as an `.exe` the way
   launching does (`launch.agents.copilot.path`, else `PATH`; a `.cmd` shim is never run);
-- the device is **pinned as a person at this machine** ([trusted peers](#trusted-peers-disposable-host-foundation)),
-  with a current pin. Being signed in to the account is not enough. Pins are made only through the
-  app-only `host.peers.put`; the app has no screen for them yet;
+- the device is **pinned as a person's** by this machine's copy of the account's device roster
+  (#55, [device-approval.md](design/device-approval.md)): an approved device of kind `app`, `pwa`
+  or `phone`, with a presence-proven key (`key` or `webauthn`), past probation and confirmed,
+  found by its full key and relay account. The kind a device says it is counts for nothing. Being
+  signed in to the account is not enough;
 - the machine is not read-only (`delivery.readOnly`, or agent-ha-bridge running for this user).
 
+**Until #55's roster ships, nobody is pinned, so no device is offered sign-in on any machine**,
+with the switch on or off (#972 slice 2): the host's roster is `NoPersonRoster`, which pins no one.
+**A #402 trusted-peer `person` pin (`host.peers.put`) no longer opens sign-in.** Where
+`trustedPeers` enforcement is on, a channel still needs that pin to act at all, but it is never
+enough. While nobody is pinned no session's `signInNeeded` attention says `signIn: "phone"`
+either, so no device shows a Sign in that would be refused. A roster that can't be read, or is
+stale, pins nobody; a device removed from it loses a sign-in under way at once.
+
+The app's Settings lists, under the switch and only while the running host has it on (a change
+applies at the next start, and until then the devices listed can still sign in), **Devices that can sign
+Copilot in**: each by name, with its kind and platform, read-only. It reads "No devices can sign
+Copilot in here yet." until the roster lists someone, and "Can't read the device list on this
+machine." when the roster can't be read. A device's Machines page shows the same in that
+machine's row. Neither adds nor removes a device: adding is #55's enrollment, and removing one
+device waits for #55's single Remove; to stop them all, turn the switch off.
 **To turn it on for one machine** (the owner, at that machine or over RDP; an agent session is
 refused, #67):
 
@@ -272,7 +289,7 @@ refused, #67):
 3. Check the host log (Settings → the log, or `logs\host.log` in the profile folder) for
    `sign-in from devices is on for Copilot (permissions.phoneSignIn)`. "is set ... but off" means
    the host is not on Windows or did not find Copilot's `.exe`; "is off" means the setting did not take.
-4. On the phone, a session needing sign-in on that machine shows **Sign in** in its banner. Press it,
+4. On a pinned device (once #55's roster lists one), a session needing sign-in on that machine shows **Sign in** in its banner. Press it,
    open `https://github.com/login/device` and enter the code shown. The session then reads "Signed in ·
    waiting for the session to confirm" until its next reply clears it.
 
