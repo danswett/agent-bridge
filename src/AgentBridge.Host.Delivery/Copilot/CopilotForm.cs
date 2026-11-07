@@ -126,10 +126,13 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields, string? Mes
                     if (hasDefault && def.ValueKind != JsonValueKind.Null)
                     {
                         if (def.ValueKind != JsonValueKind.Array) { return (null, $"\"{name}\" has a default that is not a list"); }
+                        // By key, as CopilotFieldSchema.Ticks reads it: each entry against every
+                        // option, and against every one ticked, was quadratic (#852).
+                        var positions = CopilotFieldSchema.Positions(options.Select(o => o.Raw));
+                        var seen = new HashSet<int>();
                         foreach (var entry in def.EnumerateArray())
                         {
-                            var at = IndexOf(options, entry);
-                            if (at < 0 || ticked.Contains(at)) { return (null, $"\"{name}\" has a default that does not name its options"); }
+                            if (CopilotFieldSchema.Position(positions, entry) is not { } at || !seen.Add(at)) { return (null, $"\"{name}\" has a default that does not name its options"); }
                             ticked.Add(at);
                         }
                     }
@@ -144,7 +147,7 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields, string? Mes
                 {
                     return (null, $"\"{name}\" opens on its Other box (its default is null); answer it at the machine");
                 }
-                if (hasDefault && def.ValueKind != JsonValueKind.Null && IndexOf(options, def) < 0)
+                if (hasDefault && def.ValueKind != JsonValueKind.Null && CopilotFieldSchema.Position(CopilotFieldSchema.Positions(options.Select(o => o.Raw)), def) is null)
                 {
                     return (null, $"\"{name}\" has a default that is not one of its options; answer it at the machine");
                 }
@@ -157,17 +160,6 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields, string? Mes
     static bool AllowsEmpty(JsonElement p) =>
         !p.TryGetProperty("minItems", out var min) || (min.ValueKind == JsonValueKind.Number && min.TryGetInt64(out var n) && n <= 0);
 
-    static int IndexOf(IReadOnlyList<CopilotOption> options, JsonElement value)
-    {
-        var found = -1;
-        for (var i = 0; i < options.Count; i++)
-        {
-            if (!SameScalar(options[i].Raw, value)) { continue; }
-            if (found >= 0) { return -1; }
-            found = i;
-        }
-        return found;
-    }
 
     // As QuestionMapper writes Option.Value: a string as itself, anything else as its JSON.
     internal static string Scalar(JsonElement v) => v.ValueKind == JsonValueKind.String ? v.GetString()! : v.GetRawText();
@@ -188,26 +180,9 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields, string? Mes
             && prefill.GetString() == value.GetString();
     }
 
-    // The number a number box records for this value, as a JSON number, or null when that is not
-    // certain. Copilot 1.0.105's form (`Uxn`, its accept step) turns a number field's string into
-    // Number(text) when that is finite and keeps it a string otherwise, so a default of "3" is
-    // recorded as 3. Only a string that is plainly a JSON number is read so (Number() also takes
-    // hex, padding and "Infinity"), and only one the CLI holds exactly as written
-    // (CopilotFieldSchema.HeldExactly): "9007199254740993" would be recorded as
-    // 9007199254740992, and "1e-400" as 0, so neither is the answer it reads as.
-    public static JsonElement? Recorded(JsonElement value)
-    {
-        var text = value.ValueKind switch
-        {
-            JsonValueKind.Number => value.GetRawText(),
-            JsonValueKind.String => value.GetString()!,
-            _ => null,
-        };
-        if (text is null || CopilotFieldSchema.HeldExactly(text) is null) { return null; }
-        using var doc = JsonDocument.Parse(text);
-        return doc.RootElement.Clone();
-    }
-
+    // The number a number box records for this value (CopilotFieldSchema.RecordedNumber), which
+    // QuestionMapper also reads to list a default no answer can keep at the machine (#882).
+    public static JsonElement? Recorded(JsonElement value) => CopilotFieldSchema.RecordedNumber(value);
     // Compared as CopilotFieldSchema compares them, so the list and its default read alike.
     public static bool SameScalar(JsonElement a, JsonElement b) => CopilotFieldSchema.SameScalar(a, b);
 
