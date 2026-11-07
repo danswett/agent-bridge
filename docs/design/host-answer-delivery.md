@@ -1,7 +1,9 @@
 # Host answer delivery: resilient, observable, never wedged
 
-Status: design, for the owner's decisions (section 10). Part of #1132.
-Written 2026-11-07 (Pacific). Code is cited at `origin/main` a97060a3.
+Status: design. The owner's decisions of 2026-11-07 are recorded in section 10.1, and the questions
+still open are in section 10.2. Part of #1132.
+Written 2026-11-07 (Pacific). Code is cited at `origin/main` a97060a3. Host fix PR #1137 (branch
+`fix/form-screen-1123`, head 8544da2f, in review) is cited where this design builds on it.
 
 ## Why
 
@@ -36,7 +38,7 @@ This document covers ten things:
 7. Soak and chaos tests, and the success numbers.
 8. Security rules and trust boundaries.
 9. A slicing plan, with the related issues mapped to the slices that close them.
-10. Open questions for the owner.
+10. The owner's decisions, and the questions still open.
 
 Wording rule: anything a person sees says "machine", never "host" or "relay". Times in this
 document are Pacific.
@@ -92,7 +94,7 @@ document are Pacific.
 | F1 | **Any repaint anywhere refuses the next key.** Streaming output, a spinner, the status line or a delegate's output all count. The injector compares every row exactly (Program.cs line 129). Once some keys have gone, the form is left part-answered: "the session's screen changed before the next key could go" (AnswerService line 692, WorkerInjector line 190). | Whole-screen `Expect` | #1123, #1012 |
 | F2 | **A screen that never holds still never settles.** The two-equal-reads rule (line 750) fails while the agent streams, so the Enter is held. | `SettledAsync` | #1101 |
 | F3 | **Words that never show in 3 s hold the Enter.** The answer is left typed but unsubmitted. Every retry is then refused "already typed once" (`AttemptLedger.cs` line 20). | `WordsOnScreen`, ledger | #1101, #1007, #1093 |
-| F4 | **The form is not recognised.** The question text is compared raw to the drawn rows with a prefix walk (CopilotFormScreen lines 139–148), so any of these returns `NotForm`: markdown rendered away, mid-word wraps, an ellipsis, wide characters, a tab bar wrapped onto two rows (line 167), a hints row wrapped in a narrow window, or a form taller than the window (its heading scrolled off, line 122). The 04:21 refusal is most likely one of these. **This is a hypothesis: no screen was kept.** | Exact text matching | #1132 (04:21), #910, #848 |
+| F4 | **The form is not recognised.** The question text is compared raw to the drawn rows with a prefix walk (CopilotFormScreen lines 139–148), so any of these returns `NotForm`: markdown rendered away, mid-word wraps, an ellipsis, wide characters, a tab bar wrapped onto two rows (line 167), a hints row wrapped in a narrow window, or a form taller than the window (its heading scrolled off, line 122). PR #1137 traced the 04:21 refusal to a wrap after a hyphen. Copilot CLI 1.0.105 breaks lines wherever Unicode line breaking allows, and at a content width of 100 it broke the question after `ag-`. The host joined the rows with a space, so the message check failed nine times on a steady screen. **This was reproduced from the CLI's drawing code, not from a kept screen**: the question had since been answered at the machine. | Exact text matching | #1132 (04:21), #910, #848 |
 | F5 | **A part-answered form cannot be resumed or reset.** The attempt record is all or nothing, so a person whose first field went in has no way to finish from the phone. | `AttemptLedger` | #1123, #1101, #1007 |
 | F6 | **The phone says "refused" for what was delivered.** The first-answer memory is kept in memory only, a second device gets a plain refusal, and the PWA keeps answer ids in memory only (`pwa/js/answer-service.js` line 55). | `OutcomeMemory`, PWA | #1093 (PR #1100 fixed same-device retries) |
 | F7 | **Shapes the host does not drive.** Each is sent to the machine: subagents, some field limits, some permission kinds, Claude permissions, Codex approvals without a hook record, resumed sessions, questions too large to show. | Many | #998–#1014 |
@@ -174,15 +176,31 @@ Today `host.log` has these:
 
 Timestamps on these lines are in UTC (#611).
 
+**PR #1137 (in review) closes part of the gap for Copilot forms.** It adds:
+
+* one `answer-attempt v=1` line per form answer (`Copilot/CopilotAnswerTrace.cs`). The line has the
+  request, session, CLI version, field count and shape (for example `choice3+text`), reads,
+  re-reads, steady, retries, the failed check and its row, fields taken, stage timings (slot, typed,
+  confirmed), the total and the outcome. It has no screen or answer words. Its keys keep their order
+  and new keys are only ever appended.
+* a named failed check (`CopilotFormScreen.Diagnose` returns a `FormCheck`: heading, bottom-rule,
+  under, message, bar, field, field-heading, hints or prompted, with its row);
+* a word-free screen outline at each refusal (row count, widest row, blank rows, rule and heading
+  positions).
+
+Slice 1 builds on #1137 rather than replacing it (section 9). The table below is the gap that is
+left once #1137 lands. Approvals, replies, Claude and Codex are still uncovered, and so are the
+phone's side and the "answer at the machine" offers.
+
 Gaps:
 
 | Needed | Today |
 | --- | --- |
-| A stable reason key for each refusal, hold or retry | English sentences that change with each wording fix |
-| CLI name and version | Not logged |
-| Question shape | Not logged |
-| Number of screen reads, and whether they were steady | Not logged |
-| What the screen looked like at a refusal | Nothing. The 04:21 refusal cannot be explained. |
+| A stable reason key for each refusal, hold or retry | English sentences that change with each wording fix. #1137 names the form check for Copilot forms only. |
+| CLI name and version | Not logged. #1137 logs it for Copilot forms. |
+| Question shape | Not logged. #1137 logs it for Copilot forms. |
+| Number of screen reads, and whether they were steady | Not logged. #1137 logs it for Copilot forms. |
+| What the screen looked like at a refusal | Nothing. The 04:21 refusal could be explained only by reproducing the CLI's drawing (#1137). #1137 adds an outline for form refusals. |
 | "Answer at the machine" offers (made when listing, not when answering) | Not logged (#1023) |
 | The phone's side: stages, reconnects, the exact text shown | Not kept (#1128) |
 | One id joining phone, relay and machine | Request ids exist, but nothing carries one id end to end for a report |
@@ -190,7 +208,11 @@ Gaps:
 
 ### 3.2 (a) A delivery record for every attempt
 
-Each answer, reply and approval writes one structured record (JSON lines) when it ends. It is also
+Each answer, reply and approval writes one structured record (JSON lines) when it ends. This
+generalises #1137's `answer-attempt v=1` line to every kind of delivery and every CLI. Each field of
+that line maps to a field below: `reads`/`rereads`/`steady` → `reads`; `check` → `reason`; `taken` →
+`fieldsDone`; `stages` → `stages`. Slice 1a keeps writing the `v=1` line unchanged until the
+triage tool reads the new record, so logs from #1137's builds stay readable. The record is also
 updated at each stage, so a crash still leaves a partial record:
 
 ```json
@@ -222,7 +244,10 @@ strings:
 
 * **Form recognition:**
   `form.not-shown` (NotForm), `form.drawn-under` (Under), `form.wrong-field`,
-  `form.permission-over`, `form.unheaded-field`, `form.ambiguous`.
+  `form.permission-over`, `form.unheaded-field`, `form.ambiguous`. `form.not-shown` takes a
+  sub-key from #1137's `FormCheck`: `form.not-shown.heading`, `.bottom-rule`, `.under`, `.message`,
+  `.bar`, `.field`, `.field-heading`, `.hints` and `.prompted`. These use #1137's names
+  (`CopilotFormScreen.Name`), so a `v=1` line and a new record agree.
 * **Screen:**
   `screen.changed-before` (WorkerInjector 187), `screen.changed-partway` (190),
   `screen.unsettled` (AnswerService 753), `words.not-shown` (802), `field.not-shown` (793),
@@ -359,7 +384,7 @@ issue that tracks it. The first rows:
 | --- | --- | --- | --- |
 | `screen.changed-partway` | Output streamed above the form during typing | Outline diff: changed rows above the form's frame | #1123, slice 6 |
 | `screen.unsettled` | Spinner or stream never held still | `reads.steady=false`, high `reReads` | slice 6 |
-| `form.not-shown` | Text mismatch (markdown, wrap, wide characters) or a form taller than the window | Outline: heading row missing, or message rows count ≠ expected | 04:21 case, #848, #910, slice 7 |
+| `form.not-shown` | Text mismatch (markdown, wrap, wide characters) or a form taller than the window | Outline: heading row missing, or message rows count ≠ expected | 04:21 case (hyphen wrap, #1137), #848, #910, slice 7 |
 | `words.not-shown` | Slow CLI echo, or the pinned Other box | `stages.keys` → no `enter`; field kind | #1101, #908 |
 | `ledger.already-typed` | A retry after a partial delivery | `fieldsDone`; earlier record with the same correlation | #1007, slice 8 |
 | client `reconnect` then a late "received" | Half-open socket | Client ring cause = probe timeout | #1128, #1130 |
@@ -386,10 +411,10 @@ posted at 04:37 PT; the same amendment is on #741 and #732). Two channels, kept 
 * **Opt-in, default off.** The automatic event is sent only when a tester opts in to beta
   diagnostics. It can be turned off in Settings at any time. Turning it off stops collection and
   upload, and clears any records not yet sent. The build ships **default off**.
-* **Owner's default-on wish.** The owner has said the event could be on by default if properly
-  anonymised. That is recorded on #741 as a proposed amendment. It is not designed for here: it is
-  an open owner decision that goes through #732 (section 10). Because the data is pseudonymous, the
-  Feedback Team's gates apply.
+* **Default-on is a separate, reviewed change (owner, 2026-11-07).** The owner has decided that
+  automatic diagnostics ship default off now. Turning them on by default is a separate, reviewed
+  change, made only after checks (a) and (b) pass (section 3.12). It is not designed for here.
+  Because the data is pseudonymous, the Feedback Team's gates apply.
 
 The triggers, the same for both channels: a delivery that ends in one of these:
 
@@ -574,14 +599,14 @@ person with authority to answer them. Product is asked (#741) to assign an owner
 
 | # | Check | Who answers | Status |
 | --- | --- | --- | --- |
-| 1 | **Check (b).** The Feedback Team treats the random install pseudonym as pseudonymous personal data. Under what lawful basis may it be collected from testers in the EEA, the UK and elsewhere? Does default-on with a notice suffice there, or is opt-in required? | **human/legal**: a qualified reviewer named by Product, who has not been identified yet | open, **gate** |
-| 2 | Default-on with a notice versus opt-in: is a first-run notice with an off switch enough anywhere, or is explicit consent needed by region? The build stays default off until this and check 1 are answered (the owner's wish, section 10). | **human/legal** | open |
+| 1 | **Check (b).** The Feedback Team treats the random install pseudonym as pseudonymous personal data. Under what lawful basis may it be collected from testers in the EEA, the UK and elsewhere? Does default-on with a notice suffice there, or is opt-in required? | **human/legal**: a qualified reviewer that Product is to find (owner, 2026-11-07); not yet named | open, **gate** |
+| 2 | Default-on with a notice versus opt-in: is a first-run notice with an off switch enough anywhere, or is explicit consent needed by region? The build stays default off until this and check 1 are answered. Turning the default on is then a separate, reviewed change (owner, 2026-11-07). | **human/legal** | open |
 | 3 | IP address exposure at the endpoint: what does Application Insights (and anything in front of it) log or derive from the sender's IP? Is IP masking and location-off configured and verified? | SRE + #732 review | open |
 | 4 | Linkability over time: events from one install share an install id until it rotates. Is a 30-day rotation plus the tester's reset enough? Do the correlation ids and the dedupe counts add any further linking? | #732 review | open |
 | 5 | Linking to reports: a report that carries a correlation id ties a pseudonymous event to a signed-in tester's report. Is that acceptable under the notice, and is it shown plainly in the preview? | #732 review + owner (#733 UX) | open |
 | 6 | **Check (a).** Schema leakage, install id, retention and linking (checks 3–5 and 7 feed it). Every field is an enumeration or a bucket. Do the adversarial redaction tests pass for both schemas? Is the SDK's auto-collection off? Does the pipeline reject unknown fields? | the #732 independent security review, two model families; staffed by Engineering | open, **gate** |
 | 7 | Retention and deletion of 30 days for events and all derived copies, with least-privilege access, verified in the deployed resource | SRE | open |
-| 8 | Interaction with the owner's 11-04 opt-in decision (#731 item 3) and his 11-07 default-on wish. The amendment is recorded in #732's §5.10 change and the privacy notice (slipgates.com/privacy, #762). | owner via #732 | open |
+| 8 | Interaction with the owner's 11-04 opt-in decision (#731 item 3), his 11-07 default-on wish, and his 11-07 decision that the default stays off now and that turning it on is a separate, reviewed change. The amendment is recorded in #732's §5.10 change and the privacy notice (slipgates.com/privacy, #762). | owner via #732 | open |
 | 9 | The kill switch and the off switch: does turning it off clear pending records, and is that tested? | Quality | open |
 | 10 | Who can read the events, and how support reads them for one tester's report without browsing others' events | SRE + Feedback Team | open |
 
@@ -609,10 +634,18 @@ Rules:
    i", never in "failed". The host resumes it only when the screen positively shows *this* form at
    field i, with fields 1..i−1 committed (their tab marks, or a fresh read of what they hold). Until
    then it holds no keys and re-reads at a steady pace for up to 60 s.
-2. **Reset only when positively on the form.** If resuming is not possible, the form is reset. The
-   host presses Esc (cancel) only when the frame reads as this form, so the agent hears "cancelled"
-   and asks again. The new question is a fresh card. Whether reset is allowed is an owner decision
-   (section 10).
+2. **Resume first, then reset, and only when the screen is positively this exact form (owner,
+   2026-11-07).** The owner chose both:
+   * **First, resume** at the next field not yet committed (rule 1).
+   * **If resuming fails, reset and redo.** The host presses Esc to cancel the form, so the agent
+     hears "cancelled" and asks again, and then answers the new question with the same answer. The
+     new question is a fresh request: the same answer digest goes through the full checks again,
+     from field 1.
+   * Both steps happen only when the frame reads positively as *this* form (heading, message, tab
+     bar and field headings all matched). If the screen is anything else, there is no Esc and no
+     key. The card stays "paused" and offers the phone's ways out (rule 5).
+   * The redo is tried once only. If it fails, the card offers the ways out. It never loops.
+   * #1137 leaves resume out of scope: its ledger refuses a second typing. Slice 8 adds both steps.
 3. **Idempotent by request.** A request id (bound to sender, session and question, PR #1100) and the
    answer's digest identify a delivery. The record moves from all or nothing to a per-field record
    (`fields: [done, done, typed-unsubmitted, —]`), persisted on disk with the first outcome. Any
@@ -642,18 +675,27 @@ Rules:
    * It only works if the frame's position is pinned. When the stream scrolls the frame up, the
      injector must find the frame again by its rules and heading, not by row number, and compare its
      rows relative to the frame's top.
-   * This is sensitive (the injector, `Host.Delivery`), and Trust reviews it.
-2. **Steady double reads per frame.** Settling compares the frame only, so a spinner elsewhere does
-   not hold the Enter. The bound is up to 3 s per field, then up to 3 more tries before pausing
-   (state "paused", not "failed").
-3. **A normalised comparison of the card against the screen.** One function, used for the message,
-   tab bar, field headings and hints, does the following:
+   * This is sensitive (the injector, `Host.Delivery`). **The owner approved it on 2026-11-07, with
+     Trust's agreement: Trust must agree that the frame plus "nothing below it" is enough identity
+     before slice 6 ships.** Until then, slice 6 can be built and reviewed but not merged.
+2. **Steady double reads per frame.** #1137 adds the first part: a read that does not show the form
+   at the next field is read again at each poll for up to 2 s (`FormRecheck`) before a refusal.
+   Keys go only when a read positively shows the form. This design extends that so settling
+   compares the frame only, so a spinner elsewhere does not hold the Enter. The bound is up to 3 s
+   per field, then up to 3 more tries before pausing (state "paused", not "failed").
+3. **A normalised comparison of the card against the screen.** #1137 does the first step: the
+   question, the tab bar and the key hints are compared with all white space left out. That covers
+   the hyphen and mid-word wraps, a tab bar wrapped inside the frame, and wrapped hints (#910).
+   Every other character is still compared in order, and field headings are still compared exactly.
+   Slice 7 grows this into one function, used for the message, tab bar, field headings and hints,
+   that also does the following:
    * drops markdown markers (`**`, `` ` ``, `_`, `#`);
-   * joins wrapped rows with and without a space, so mid-word wraps match (#848);
-   * accepts a tab bar or hints row wrapped across rows (#910);
+   * drops white space before comparing, so mid-word and hyphen wraps match (#848; done in #1137);
+   * accepts a tab bar or hints row wrapped across rows (#910; done in #1137), and a field heading
+     wrapped the same way;
    * treats the CLI's `…` truncation as "prefix matches";
    * counts wide characters as two cells;
-   * normalises whitespace and Unicode (NFC).
+   * normalises Unicode (NFC).
 
    The *identity* rules stay strict: exactly one heading, the frame closed, nothing drawn under it,
    and the field heading at the right place. Loosening comparison never loosens identity.
@@ -671,6 +713,11 @@ Rules:
   with a JSON file stating the expected result: the field index, or a reason key. Sources:
   * every outline and opt-in capture from feedback;
   * the #510 review history (the cases in section 1.3);
+  * #1137's test screens, first: the hyphen and mid-word wraps of the 04:21 question (CLI 1.0.105,
+    width 100), the three hint shapes of a narrow window (#910), a form read mid-redraw, output
+    scrolled above the form during typing, and a field drawn differently when its Enter was refused.
+    Each is filed under the CLI version it was drawn from, and its expected reason key is #1137's
+    named check (section 3.3);
   * #910 (narrow window), #848 (mid-word wraps, Chinese, Japanese and Korean text), #908 (pinned
     Other box).
 
@@ -686,8 +733,15 @@ Rules:
   * reports the health numbers (section 3.8).
 
   A failure files an issue and holds the version back.
-* **Pinning.** Copilot `--no-auto-update` exists (verified). Host-launched sessions can pin to the
-  last version that passed the canary. Whether to pin is an owner decision.
+* **Pinning (owner, 2026-11-07).** Sessions the app launches are pinned to the last CLI version that
+  passed our release check (the canary). Copilot's `--no-auto-update` exists (verified). The host
+  records the passing version per CLI, and launches with that version. A version that fails the
+  canary is held back until a fix ships. Sessions a person started themselves run whatever they
+  run. Their CLI version is in every record, so the health view shows a regression per version.
+  * **Not yet verified:** how to launch one chosen installed version. This machine keeps Copilot's
+    versions under `%LOCALAPPDATA%\copilot\pkg\win32-x64\<version>`, and `--no-auto-update` stops
+    the update. Slice 11 checks that a launch can be held to the passing version, and does the
+    same for Claude and Codex.
 
 ---
 
@@ -738,8 +792,9 @@ replies from Copilot's prompt hook) runs on this harness.
    field, when the highlighted row is the chosen option.
 3. The phone cannot send keys. It sends answers. No "press Enter", no "resubmit", no raw key
    channel, ever.
-4. A field is never typed twice. A resume continues at the first field not yet committed. A reset
-   uses Esc only when positively on the form.
+4. A field of one question is never typed twice. A resume continues at the first field not yet
+   committed. A reset uses Esc only when positively on this exact form. The redo after it answers
+   the agent's new question, through the full checks, and is tried once.
 5. A different answer is never typed over part of an earlier one.
 6. Answers are always sent with an explicit Send answer (#773). "Send as a message instead" is an
    explicit, separate button.
@@ -760,23 +815,30 @@ Observability comes first (slices 1–3), so that every later fix can be measure
 report explains itself. Slices 1 and 2 are not gated on the privacy checks. Slice 3 can be built now
 but stays off.
 
+**Already in review: PR #1137** (host fix for #1123, sensitive, two-family review). It names the
+failed form check, logs a word-free outline, re-reads for up to 2 s before a refusal, compares the
+question, tab bar and hints without white space, retries a `ScreenChanged` write held to a fresh
+read, and writes one `answer-attempt v=1` line per form answer. The slices below build on it and
+do not redo it: slice 1a extends its line, slices 4 and 5 start from its tests, slice 6 builds on
+its re-read and retry, and slice 7 on its white-space-free matching.
+
 | Order | Slice | Sensitive? | Closes / part of |
 | --- | --- | --- | --- |
 | 0 | This design | no | part of #1132 |
-| **1** | **The local record**: allow-listed per-attempt record, reason keys, redacted outlines, ring buffer, the phone's and app's send ring, per-send id, triage recipe and tool, offer keys and counts, local health view (sections 3.1–3.10, 3.11.1). It can split into: 1a host record and keys; 1b outlines; 1c client ring and per-send id (protocol); 1d health view. | yes (1a, 1b, 1c) | closes #1023; gives #998–#1014 their counts; part of #1128 |
+| **1** | **The local record**, starting from #1137's `answer-attempt v=1` line and `FormCheck` names: allow-listed per-attempt record, reason keys, redacted outlines, ring buffer, the phone's and app's send ring, per-send id, triage recipe and tool, offer keys and counts, local health view (sections 3.1–3.10, 3.11.1). It can split into: 1a host record and keys (extends #1137's line to approvals, replies, Claude and Codex; reason keys use #1137's check names); 1b outlines; 1c client ring and per-send id (protocol); 1d health view. | yes (1a, 1b, 1c) | closes #1023; gives #998–#1014 their counts; part of #1128 |
 | **2** | **"Report this" bundle**: "Report this" on failed cards attaches that attempt's record and outline after the preview (section 3.11.2) | yes (client and host) | part of #733, #738 |
 | **3** | **The opt-in automatic event**, `delivery-failure/v1` (section 3.11.3). **Buildable now, enabled only after (a) and (b).** Default off. Kill switch. No network call while off. Tests that nothing is sent or queued while off. | **yes**: two-family review of the schema and linking | part of #741. **Gates before enabling:** (a) the #732 independent security review (staffed by Engineering); (b) the EEA/UK personal-data answer (no owner yet). Also #732's §5.10 amendment and notice, the owner's approval of #733's UX, and SRE's check of the destination and retention. |
-| 4 | Failing-first tests: the three-field choice, text, choice form (#1101's ask), output streaming during a form (#1123), narrow window (#910), mid-word wrap (#848), tall form, markdown message (04:21) | no (tests) | groundwork for #1123, #910, #848 |
-| 5 | Real-screen corpus and replay test, seeded from #510 and slice 1's outlines | no | part of #1132 |
-| 6 | Hold keys to the form's frame, and settle on the frame (sections 5.1–5.2) | **yes** (injector) | with slice 8, closes #1123 and #1012 |
-| 7 | Normalised comparison (section 5.3) | **yes** | closes #910, #848 (item 1); likely the 04:21 refusal |
-| 8 | Delivery state machine: per-field record, resume, persisted first outcome for any device (section 4) | **yes** (Trust review) | closes #1123, #1007, #1093; replaces #1101's proposal |
+| 4 | Failing-first tests: the three-field choice, text, choice form (#1101's ask), output streaming during a form (#1123), narrow window (#910), mid-word wrap (#848), tall form, markdown message. #1137 already adds the hyphen and mid-word wraps (04:21), wrapped hints (#910), a mid-redraw read and a retry after a scroll; slice 4 adds the rest. | no (tests) | groundwork for #1123, #910, #848 |
+| 5 | Real-screen corpus and replay test, seeded first from #1137's test screens, then #510 and slice 1's outlines (section 6) | no | part of #1132 |
+| 6 | Hold keys to the form's frame, and settle on the frame (sections 5.1–5.2), building on #1137's re-read and retry. **Approved by the owner (2026-11-07); ships only once Trust agrees** that the frame plus "nothing below it" is enough identity | **yes** (injector; Trust's agreement before merge) | with slice 8, closes #1123 and #1012 |
+| 7 | Normalised comparison (section 5.3) | **yes** | closes what #1137 leaves of #910 and #848 (item 1) |
+| 8 | Delivery state machine: per-field record; resume at the next field first, then Esc-cancel and redo once, only when the screen is positively this exact form (owner, 2026-11-07); persisted first outcome for any device (section 4) | **yes** (Trust review) | closes #1123, #1007, #1093; replaces #1101's proposal |
 | 9 | Phone ways out: Look again, Send as a message instead, retire out-of-date cards (sections 4.4–4.5) | **yes** (protocol) | #1123's acceptance criterion; closes #1014 and #1010 (fetch the full question); part of #1012 |
 | 10 | Questions survive a host restart: re-list, re-verify and keep the record | **yes** | closes #954 |
-| 11 | Canary per CLI release, and pinning (section 6) | no (CI and VM) | part of #1132 |
+| 11 | Canary per CLI release, and pinning launched sessions to the last version that passed it (owner, 2026-11-07; section 6) | no (CI and VM); the launch change is host code | part of #1132 |
 | 12 | Soak and chaos harness, and targets (section 7), with #604's experiment | no | closes #604; measures #467 |
 | 13 | Coverage on the screen path: Other through the pinned input box; a no-schema `ask_user`; field limits | **yes** | closes #908, #887 (if supported), #1000; follows the #876 decision; #146 (say why Other is missing) |
-| 14 | Structured-channel spike (time-boxed, run in parallel from slice 4): Copilot `--ui-server`/ACP, Claude stream-json/`--permission-prompt-tool`, Codex app server, for host-launched sessions | spike: no; adoption: **yes** | if it holds, adoption closes #998, #1002, #1003, #1004, #1005, #1008, #947, #1001/#42 |
+| 14 | Structured-channel trial (time-boxed, run in parallel from slice 4): Copilot `--ui-server`/ACP, Claude stream-json/`--permission-prompt-tool`, Codex app server, for sessions the app launches. **If the trial works, those sessions use the channel by default** (owner, 2026-11-07); sessions a person started keep the screen path | spike: no; adoption: **yes** | if it holds, adoption closes #998, #1002, #1003, #1004, #1005, #1008, #947, #1001/#42 |
 | 15 | Reply path parity: show what is in the composer and offer Clear and send, using the same frame-scoped reads | **yes** | closes #804; with slice 6, #467 |
 
 ### 9.1 Every related issue in #1132, mapped
@@ -785,11 +847,11 @@ Issues in the same failure family:
 
 | Issue | State | Failure mode | Slice |
 | --- | --- | --- | --- |
-| #1123 part-answered form | open | F1, F2, F5 | 6 + 8 (+ 9 for the way out) |
+| #1123 part-answered form | open | F1, F2, F5 | part fixed by #1137 (re-read, retry, named check); closed by 6 + 8 (+ 9 for the way out) |
 | #1093 "already typed" though delivered | open | F6 | 8 (persisted first outcome); 1c |
 | #1109 session wedged by a watcher shell | open | Not delivery: the session cannot take the prompt. Slice 1 shows it as "queued, session busy in a shell". | 1 (visibility); the fix is in the team scripts |
-| #910 wrapped hint row in narrow windows | open | F4 | 7 |
-| #848 mid-word wraps; no-schema offered then refused | open | F4, F7 | 7 (item 1); 13 (item 2) |
+| #910 wrapped hint row in narrow windows | open | F4 | #1137 (three hint shapes); 7 for the rest |
+| #848 mid-word wraps; no-schema offered then refused | open | F4, F7 | item 1: #1137, with 7 for markdown and wide characters; item 2: 13 |
 | #908 Other through the pinned box | open | F3, F7 | 13 |
 | #876 remote Other on enum fields | open | product decision | 13 follows it |
 | #804 composer not empty | open | reply path F7 | 15 |
@@ -835,34 +897,33 @@ Design, trust, feedback and privacy issues:
 
 ---
 
-## 10. Open questions for the owner
+## 10. The owner's decisions, and the questions still open
 
-1. **Default-on for the automatic event.** You said the event may be on by default if properly
-   anonymised. It is pseudonymous, not anonymous, so this goes through #732.
-   * The Feedback Team recorded it on #741 as an amendment, and Product accepted it.
-   * The build ships **default off** until check (a), the #732 two-family security review, and
-     check (b), the EEA/UK question, have both passed.
-   * Flipping the default is then a separate, reviewed change.
-   * Do you confirm that flipping the default stays a separate decision after both checks?
-2. **Who owns the EEA/UK personal-data question** (check (b), section 3.12, item 1)? Is a
-   pseudonymous install id personal data there, and does it need opt-in? This needs a human or
-   legal answer. Product is asking you in the morning, and we cannot answer it.
-3. **Resume or reset of a part-answered form.**
-   * Is the host allowed to resume at field i when the screen positively shows it?
-   * When it cannot, is it allowed to press Esc (cancel the whole form, so the agent asks again),
-     and only when positively on the form?
-   * Or must a part-answered form always wait for the phone's "Send as a message instead"?
-4. **Narrowing the key check to the form's frame.** Streaming output above the form will no longer
-   stop a key. Trust must agree that the frame plus "nothing below it" is enough identity.
-5. **Structured channels for host-launched sessions.** If the spike shows that Copilot
-   `--ui-server`/ACP, Claude's stream channel or Codex's app server can answer as data, should
-   sessions the app launches use it by default? That splits behaviour between launched sessions and
-   sessions a person started.
-6. **CLI version gate.** Should host-launched sessions pin to the last CLI version that passed the
-   canary (`--no-auto-update`), or always run the newest and rely on the canary's alarm?
-7. **A structural outline in the automatic event** (section 3.11.3): yes, once #732 approves the
+### 10.1 Decided by the owner on 2026-11-07 (about 04:48 Pacific)
+
+1. **Automatic diagnostics ship default off now.** Turning the default on is a separate, reviewed
+   change, made only after check (a), the #732 two-family security review, and check (b), the
+   EEA/UK personal-data question, have both passed (sections 3.11.3 and 3.12). Product is to find
+   the legal reviewer for check (b).
+2. **Part-answered forms: resume first, then reset.** The host resumes at the next field not yet
+   committed. If that fails, it presses Esc to cancel the form and redoes the answer once. Both steps
+   happen only when the screen is positively that exact form (section 4, rule 2; slice 8).
+3. **Narrow the key check to the form's own box: yes.** Trust must agree that the frame plus
+   "nothing below it" is enough identity before it ships (section 5.1; slice 6).
+4. **Structured channels: trial first.** If the trial works, sessions the app launches use the
+   channel by default. Sessions a person started keep the screen path (slice 14).
+5. **CLI updates: pin.** Sessions the app launches are pinned to the last CLI version that passed
+   our release check (section 6; slice 11).
+
+### 10.2 Still open
+
+1. **Trust's agreement to narrowing the key check** (decision 3). Does the frame plus "nothing
+   below it" identify the question well enough for keys? Slice 6 does not merge without it.
+2. **A legal reviewer for the EEA/UK question** (decision 1; check (b), section 3.12, item 1).
+   Is a pseudonymous install id personal data there, and does it need opt-in? This needs a human or
+   legal answer that we cannot give. Product is to find a reviewer; none is named yet.
+3. **A structural outline in the automatic event** (section 3.11.3): yes, once #732 approves the
    exact fields, or never?
-8. **Tall forms** (section 5.4): is a form whose heading has scrolled off answerable?
-9. **Beta targets** (section 7): are 99.5% success and zero part-answered forms after 60 s the
+4. **Tall forms** (section 5.4): is a form whose heading has scrolled off answerable?
+5. **Beta targets** (section 7): are 99.5% success and zero part-answered forms after 60 s the
    right targets?
-
