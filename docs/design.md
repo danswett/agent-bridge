@@ -828,10 +828,13 @@ anonymous, it carries identifiers, and it is held to its own rules:
 
 * **Opt-in worldwide, off by default.** One genuine choice, no region shortcut. The first
   run offers "Not now" and "Allow diagnostics", neither preselected. Settings has "Send
-  optional diagnostics" (off). While it is off nothing is collected, queued or uploaded,
-  and refusing costs no functionality. Withdrawing stops collection and upload and deletes
-  unsent events; re-enabling uploads nothing from the off period. Withdrawal does not
-  erase events already received. Notice text follows Compliance's wording (#741).
+  optional diagnostics" (off).   While it is off nothing is collected, queued or uploaded
+    as a diagnostic event, and refusing costs no functionality. A purely local per-attempt
+    record (#1135) is separate: it holds no install id and no diagnostic id (a diagnostic
+    id exists only once an event is sent), and it never uploads. Withdrawing stops
+    collection and upload and deletes unsent events; re-enabling uploads nothing from the
+    off period. Withdrawal does not erase events already received: they are kept until they
+    expire at 30 days, and the notice says so. Notice text follows Compliance's wording (#741).
 * **Strict versioned allowlist, enforced in CI.** Event type, a finite approved outcome and
   reason vocabulary (no exception text or stack frames), app and host version, channel,
   bounded timing and count buckets, and an optional screen outline of locally generated
@@ -846,7 +849,9 @@ anonymous, it carries identifiers, and it is held to its own rules:
   encrypted feedback store, never in the telemetry pipeline or a public issue. This join
   means the records must never be described as "joined to nothing else".
 * **Destination and retention.** A separate Application Insights health-event pipeline,
-  least-privilege access. 30 days is a proposed maximum counted from original collection
+  least-privilege access. Application Insights stores client IP and geolocation by
+  default, so none may be stored (disabled or masked at ingestion), and SRE proves this at
+  the upload gate. 30 days is a proposed maximum counted from original collection
   (not restarted by retry, export or join), covering derived copies, with a bounded local
   queue. Upload stays disabled until SRE proves per-table and total retention (including
   the 31-day Log Analytics behaviour), exports and deletion on the real pipeline.
