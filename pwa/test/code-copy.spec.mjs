@@ -85,7 +85,7 @@ test('Copy puts the block\'s exact text on the clipboard and says Copied, then C
   await button.click();
   await expect(button).toHaveText('Copied');
   await expect(r.getByRole('status')).toHaveText('Copied');
-  expect(await copies(page)).toEqual([{ via: 'api', text: CODE }]);
+  expect(await copies(page)).toEqual([{ via: 'execCommand', text: CODE }]);
   await expect(button).toHaveText('Copy', { timeout: 3000 });
 });
 
@@ -104,14 +104,14 @@ test('without the Clipboard API, Copy falls back to a selection and execCommand'
   await expect(button).toBeFocused();
 });
 
-test('when the Clipboard API refuses, Copy falls back, and says Copy failed if that fails too', async ({ page }) => {
+test('when the selection copy is refused, Copy uses the Clipboard API, and says Copy failed if that refuses too', async ({ page }) => {
   await openDemo(page);
   const r = await respond(page, '```\necho hi\n```', 'echo hi');
   const button = r.getByRole('button', { name: 'Copy code' });
-  await stubClipboard(page, { api: 'reject' });
+  await stubClipboard(page, { api: 'ok', exec: false });
   await button.click();
   await expect(button).toHaveText('Copied');
-  expect(await copies(page)).toEqual([{ via: 'execCommand', text: 'echo hi' }]);
+  expect(await copies(page)).toEqual([{ via: 'api', text: 'echo hi' }]);
 
   await expect(button).toHaveText('Copy', { timeout: 3000 });
   await stubClipboard(page, { api: 'reject', exec: false });
@@ -169,7 +169,7 @@ test('a block with bidi isolates draws them as escapes, strictly left to right, 
   await expect(r.locator('.md-note')).toHaveText(['Contains hidden characters']);
   await stubClipboard(page);
   await r.getByRole('button', { name: 'Copy code' }).click();
-  expect(await copies(page)).toEqual([{ via: 'api', text: ISOLATED_DRAWN }]);
+  expect(await copies(page)).toEqual([{ via: 'execCommand', text: ISOLATED_DRAWN }]);
 });
 
 test('a block with right-to-left letters draws and copies them as escapes and says it contains right-to-left text', async ({ page }) => {
@@ -186,7 +186,7 @@ test('a block with right-to-left letters draws and copies them as escapes and sa
   expect(n.y + n.height).toBeLessThanOrEqual(c.y + 0.5);
   await stubClipboard(page);
   await button.click();
-  expect(await copies(page)).toEqual([{ via: 'api', text: HEBREW_DRAWN }]);
+  expect(await copies(page)).toEqual([{ via: 'execCommand', text: HEBREW_DRAWN }]);
 });
 
 test('a code span draws its hidden characters and right-to-left letters as escapes, left to right', async ({ page }) => {
@@ -205,7 +205,7 @@ test('a bare carriage return in a block is drawn and copied as an escape on its 
   await expect(r.locator('.md-note')).toHaveText(['Contains hidden characters']);
   await stubClipboard(page);
   await r.getByRole('button', { name: 'Copy code' }).click();
-  expect(await copies(page)).toEqual([{ via: 'api', text: drawn }]);
+  expect(await copies(page)).toEqual([{ via: 'execCommand', text: drawn }]);
 });
 
 // #423: a CR before an LF was left raw in prose, which draws it as a space.
@@ -297,5 +297,5 @@ test('a plain command is copied byte for byte unchanged', async ({ page }) => {
   await expect(r.locator('.md-notes')).toHaveCount(0);
   await stubClipboard(page);
   await r.getByRole('button', { name: 'Copy code' }).click();
-  expect(await copies(page)).toEqual([{ via: 'api', text: command }]);
+  expect(await copies(page)).toEqual([{ via: 'execCommand', text: command }]);
 });
