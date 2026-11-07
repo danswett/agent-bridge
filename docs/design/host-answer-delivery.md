@@ -3,7 +3,8 @@
 Status: design. The owner's decisions of 2026-11-07 are recorded in section 10.1, and the questions
 still open are in section 10.2. Part of #1132.
 Written 2026-11-07 (Pacific). Code is cited at `origin/main` a97060a3. Host fix PR #1137 (branch
-`fix/form-screen-1123`, head 8544da2f, in review) is cited where this design builds on it.
+`fix/form-screen-1123`, in review; see the PR for its current head) is cited where this design
+builds on it. These descriptions were checked against head c7aedade.
 
 ## Why
 
@@ -185,6 +186,11 @@ Timestamps on these lines are in UTC (#611).
   and new keys are only ever appended.
 * a named failed check (`CopilotFormScreen.Diagnose` returns a `FormCheck`: heading, bottom-rule,
   under, message, bar, field, field-heading, hints or prompted, with its row);
+* a tab bar check that also accepts the partial bar Copilot CLI 1.0.105 draws when the labels do not
+  all fit across the console: only the labels around the selected field, between arrows. A live
+  six-field form at 102 columns was refused at its first read (`check=bar`) before this change.
+  It is accepted only while every field heading fits on a row of the frame, and each later field's
+  own heading is still read before its keys;
 * a word-free screen outline at each refusal (row count, widest row, blank rows, rule and heading
   positions).
 
@@ -217,7 +223,7 @@ updated at each stage, so a crash still leaves a partial record:
 
 ```json
 {
-  "v": 1, "at": "2026-11-07T11:21:04.118Z", "correlation": "c-7f3a…", "request": "a-0b7e3c1d", "attemptId": null,
+  "v": 1, "at": "2026-11-07T11:21:04.118Z", "sendId": "snd-7f3a…", "request": "a-0b7e3c1d", "diagnosticId": null,
   "kind": "answer", "agent": "copilot", "cliVersion": "1.0.107", "hostVersion": "0.1.3310",
   "session": "s-1f2e…(hashed)", "shape": { "type": "form", "fields": 3, "kinds": ["choice","text","choice"], "options": [3,0,2] },
   "stages": { "received": 0, "checked": 2, "slot": 3, "screenRead": 40, "keys": [[60,"field 1"],[910,"field 2"]], "enter": [[430,1]], "recorded": null, "confirmed": null },
@@ -231,6 +237,13 @@ Rules:
 
 * Times are milliseconds after `received`. The header time is in UTC, as #611 requires; the triage
   tool shows Pacific.
+* **Two ids, never confused.**
+  * The **send id** (`sendId`, section 3.7) is minted by the phone or app for each Send press and
+    joins the phone's, relay's and machine's sides. It stays in the local record and in manual
+    reports. It never goes in the automatic event.
+  * The **diagnostic id** (`diagnosticId`, section 3.11.3) is random, minted for one failed attempt,
+    and is set here only once an automatic event for that attempt has actually been sent. It is
+    `null` otherwise, as in the sample, and always while diagnostics are off.
 * Session ids are hashed per machine. The tester's own copy shows the session name, but the
   uploaded copy does not.
 * No answer text, reply text, question text, option text, command text or file path is ever
@@ -295,15 +308,21 @@ automatically.
   `docs/protocol/feedback.md`) only after the tester has seen it in the preview. The relay sees
   nothing of it. The preview says in plain words what is attached: "how your last 40 answers and
   replies went: times and reasons, never what you wrote".
+  * **Diagnostic ids are stripped from this export.** A buffer export never carries a
+    `diagnosticId`, so it cannot link a report to automatic events without a per-attempt choice.
+    The only way a diagnostic id enters a report is the per-attempt preview and tick of section
+    3.11.2, which Send feedback also offers: it lists the recent attempts whose automatic event was
+    sent, each unticked by default, with its id shown.
 * **"Report this".** A "Report this" link on any failed or unconfirmed delivery pre-selects that
   delivery's record (section 3.11.2).
-* **Support bundles.** Support bundles (the app's Help, Save diagnostics) include the same file.
+* **Support bundles.** Support bundles (the app's Help, Save diagnostics) include the same file,
+  with diagnostic ids stripped in the same way.
 
 ### 3.6 (d) The phone's and app's side
 
 The PWA and the Windows app keep their own ring of the last 200 sends. Each entry has:
 
-* the correlation id;
+* the send id (section 3.7);
 * when the person pressed Send answer;
 * when the relay acknowledged, and when each progress stage arrived (received, typed, delivered;
   #598, #600);
@@ -318,15 +337,15 @@ This ring is kept in IndexedDB on the phone and in `%LOCALAPPDATA%` for the app.
 the same feedback bundle, so one report from a phone carries both sides. This also fixes F6: answer
 ids that survive a reload let a retry reuse its id.
 
-### 3.7 (e) One per-send id end to end, inside the private channels
+### 3.7 (e) One send id end to end, inside the private channels
 
-* **Created on the client.** The client creates a per-send correlation id for each Send press. A
+* **Created on the client.** The client creates a **send id** (`sendId`) for each Send press. A
   retry of the same answer keeps the id and adds an attempt number.
 * **Carried on every hop.** It goes in the request envelope (phone → relay → machine). The relay
   logs it with timings only. The machine's delivery record and every log line for the delivery
   carry it.
-* **Triage.** The triage tool joins the three sides by this id, from a manual report. The id never
-  goes in the automatic event, which has its own random per-attempt id (section 3.11.3).
+* **Triage.** The triage tool joins the three sides by this id, from a manual report. The send id never
+  goes in the automatic event, which has its own random **diagnostic id** (section 3.11.3).
 * **Protocol change.** Carrying the id changes `docs/protocol/v1-sessions.md`, a sensitive path.
   The field is optional, and old clients get one minted by the machine.
 
@@ -374,7 +393,7 @@ The canary (section 6) and the soak tests (section 7) report the same numbers.
     only;
   * nobody through the relay, which only ever sees sealed bytes;
   * nobody through public issues, which are sanitised templates (#740) and never carry a
-    correlation id or diagnostic content.
+    send id, a diagnostic id or diagnostic content.
 * **Review.** Trust (#749) reviews the redaction list and the canary-string test before slice 1
   merges.
 
@@ -390,7 +409,7 @@ issue that tracks it. The first rows:
 | `screen.unsettled` | Spinner or stream never held still | `reads.steady=false`, high `reReads` | slice 6 |
 | `form.not-shown` | Text mismatch (markdown, wrap, wide characters) or a form taller than the window | Outline: heading row missing, or message rows count ≠ expected | 04:21 case (hyphen wrap, #1137), #848, #910, slice 7 |
 | `words.not-shown` | Slow CLI echo, or the pinned Other box | `stages.keys` → no `enter`; field kind | #1101, #908 |
-| `ledger.already-typed` | A retry after a partial delivery | `fieldsDone`; earlier record with the same correlation | #1007, slice 8 |
+| `ledger.already-typed` | A retry after a partial delivery | `fieldsDone`; earlier record with the same send id | #1007, slice 8 |
 | client `reconnect` then a late "received" | Half-open socket | Client ring cause = probe timeout | #1128, #1130 |
 
 A command, `agent-bridge diag deliveries <bundle>`, prints one line per delivery joined across
@@ -413,7 +432,7 @@ posted at 04:37 PT; the same amendment is on #741 and #732). Two channels, kept 
 * **Pseudonymous, not anonymous.** Records in both channels are pseudonymous. This document never
   calls them anonymous, and neither may any notice or setting. Compliance (#741 comment 6707151446)
   treats them as personal data under EEA and UK GDPR. The install id allows singling out and
-  linking over time. The per-attempt correlation id can link a private report to an event. So no
+  linking over time. The per-attempt diagnostic id can link a private report to an event. So no
   notice, setting or document may say the ids are "joined to nothing else" while the manual-report
   join (section 3.11.4) exists.
 * **Opt-in worldwide, default off (Product, 2026-11-07, 04:49 PT, #741 comment 6707151446).** This
@@ -440,7 +459,7 @@ The triggers, the same for both channels: a delivery that ends in one of these:
 
 The privacy rule of #731–#733 holds throughout. Testers' prompts, code, session titles, file paths
 and transcripts never leave their machines unless the tester explicitly attaches them to one report
-after seeing them. The relay stays blind. No diagnostic, correlation id or report content ever goes
+after seeing them. The relay stays blind. No diagnostic, diagnostic id, send id or report content ever goes
 into a public issue.
 
 #### 3.11.1 The local record (not gated; can be built now)
@@ -469,13 +488,15 @@ A manual report is independent of telemetry and never needs telemetry consent.
 
 * **What it attaches.** "Report this" on a failed card (#733's UX, #738's bundle) attaches that
   attempt's local record and outline, after the tester has seen them in the exact preview.
-* **The correlation id.** The report includes the attempt's correlation id (section 3.11.3) **only
-  if an automatic diagnostic was actually recorded and sent for that attempt**. The id is visible in
-  the preview. Otherwise the id is left out, and the report still goes.
-* **Reports from Settings.** A report sent from Settings lists the recent attempts that have an
-  automatic diagnostic. The tester can see each id and untick it.
-* **Inside the bundle.** The per-send correlation id of section 3.7 lives only inside the sealed
-  bundle. It joins the phone's, relay's and machine's sides for triage.
+* **The diagnostic id.** The report includes the attempt's diagnostic id (section 3.11.3) **only
+  if the automatic event for that attempt was actually sent** (uploaded, not just queued). The id
+  is visible in the preview, and the tester can untick it. If the event is still queued, or none was
+  made, the id is left out, the preview says so in plain words, and the report still goes.
+* **Reports from Settings, and Send feedback.** These list the recent attempts whose automatic event
+  was sent, each unticked by default. The tester sees each id and ticks the ones to include. No other
+  path adds a diagnostic id to a report (section 3.5).
+* **Inside the bundle.** The send id of section 3.7 lives only inside the sealed bundle. It joins
+  the phone's, relay's and machine's sides for triage.
 
 #### 3.11.3 The automatic event (buildable now; uploads enabled only after the gates)
 
@@ -549,7 +570,7 @@ and CI fails if a field is added that is not an enumeration or a bounded bucket.
 | `reReads` | 0, 1–2, 3–9, 10+; `steady` true or false |
 | `attempt` | 1, 2, 3+ |
 | `elapsed` | <1 s, 1–3 s, 3–15 s, 15–60 s, 60 s+ |
-| `correlation` | a random 128-bit id, fresh for this attempt and never reused |
+| `diagnosticId` | a random 128-bit id, fresh for this attempt and never reused |
 | `install` | the diagnostic install id (rules below) |
 
 **The install id.**
@@ -561,13 +582,13 @@ and CI fails if a field is added that is not an enumeration or a bounded bucket.
 * It is replaced at least every 30 days, on "Reset my diagnostics id", and on fresh consent after
   withdrawal.
 * It is deleted when diagnostics are turned off.
-* A test checks that a support join (a report's correlation id) cannot link events across a
+* A test checks that a support join (a report's diagnostic id) cannot link events across a
   rotation, or keep them past their retention.
 
-**The correlation id.** It is random and minted per attempt. It encodes nothing about the user,
+**The diagnostic id** (the rulings on #1132 and #741 call it the per-attempt correlation id). It is
+random and minted per failed attempt. It encodes nothing about the user,
 session, screen or content. It does not contain the install id and is not derived from it or from
-the per-send id. It is never reused. Only the local record keeps the link between it and the
-per-send id.
+the send id. It is never reused. Only the local record keeps the link between it and the send id.
 
 **Errors use a finite, approved vocabulary.** The `reason` and `stage` enums are the only error
 fields. There are no exception types, stack frames or exception text, even where #741 lists "type
@@ -647,7 +668,7 @@ approval of #733's UX.
 * **"Reset my diagnostics id"** replaces the install id. It is never described as deleting records
   already uploaded.
 * **Withdrawal and erasure** are explained separately. Erasure of received events goes through a
-  private rights route, which uses a reference the tester already has (a report or correlation id).
+  private rights route, which uses a reference the tester already has (a report reference or diagnostic id).
   No extra identifying data is created just to find a requester.
 * **Consent evidence** is kept to a minimum and separately justified. No diagnostic payload is kept
   just to prove consent.
@@ -655,12 +676,13 @@ approval of #733's UX.
 #### 3.11.4 How one failure is joined across channels
 
 1. The attempt fails. The machine writes the local record. If the tester has opted in, it also
-   queues the event, carrying a fresh random correlation id.
+   queues the event, carrying a fresh random diagnostic id. Once the event is sent, the local record
+   stores that id.
 2. The tester presses "Report this". The bundle carries the local record and outline. If the event
-   was actually recorded, it also carries that correlation id, shown in the preview.
-3. Triage joins the private report and the pseudonymous event by correlation id. This join is
+   was actually sent, it also carries that diagnostic id, shown in the preview and untickable.
+3. Triage joins the private report and the pseudonymous event by diagnostic id. This join is
    exactly why the ids are linkable personal data, and the notice and preview say so. Inside the
-   report, the per-send id joins the phone's, relay's and machine's sides. Neither the id nor any
+   report, the send id joins the phone's, relay's and machine's sides. Neither the id nor any
    diagnostic content is ever copied into a public issue.
 
 ### 3.12 Privacy review
@@ -676,8 +698,8 @@ attorney-only questions are consolidated on #744.
 | 1 | **Gate (b).** Lawful basis and notice for the opt-in tier. Compliance treats the events as personal data under EEA and UK GDPR, and treats prior consent as the defensible rule. Open for counsel: EEA ePrivacy Article 5(3) by country; UK PECR regulation 6 and Schedule A1 (changed 5 February 2026); controller, processors and transfers. Nothing here is a region shortcut: the tier is opt-in everywhere. | **human/legal**: counsel chosen by the owner (#744) | open, **gate** |
 | 2 | **Gate (c).** `docs/design.md` section 5.10 amended for this pseudonymous tier: PR #1139 (Feedback), reviewed and merged | Feedback Team + reviewers of #1139 | open, **gate** |
 | 3 | IP address exposure at the endpoint: what does Application Insights (and anything in front of it) log or derive from the sender's IP? Is IP masking and location-off configured and verified? | SRE + #732 review | open |
-| 4 | Linkability over time: is the install id created only after opt-in, replaced at least every 30 days and on reset or fresh consent, never derived from a device or account id, never inside the correlation id, and kept with no old-to-new mapping? Is there a test that a support join cannot defeat rotation or retention? | #732 review | open |
-| 5 | Linking to reports: a report that carries a correlation id ties a pseudonymous event to a signed-in tester's report. The notice and the exact preview say so, and nothing claims the ids are "joined to nothing else". | #732 review + owner (#733 UX) | open |
+| 4 | Linkability over time: is the install id created only after opt-in, replaced at least every 30 days and on reset or fresh consent, never derived from a device or account id, never inside the diagnostic id, and kept with no old-to-new mapping? Is there a test that a support join cannot defeat rotation or retention? | #732 review | open |
+| 5 | Linking to reports: a report that carries a diagnostic id ties a pseudonymous event to a signed-in tester's report. The notice and the exact preview say so, and nothing claims the ids are "joined to nothing else". | #732 review + owner (#733 UX) | open |
 | 6 | **Gate (a).** The #732 independent security review by two model families: schema leakage, the install id, retention and linking (items 3–5 and 7 feed it). Every field is an enumeration or a bucket; the error vocabulary is finite, with no exception types, frames or text; the adversarial redaction tests pass for both schemas; the SDK's auto-collection is off; the pipeline rejects unknown fields. | Engineering staffs it | open, **gate** |
 | 7 | **Gate (d).** SRE proves per-table and total retention, exports, support copies, metadata suppression, access and deletion, including the 31-day Log Analytics behaviour (`immediatePurgeDataOn30Days`, table overrides). No "deleted within 30 days" promise until then. | SRE; Quality verifies | open, **gate** |
 | 8 | **Gate (e).** The owner approves #733's UX. The notice (#762) carries the verified retention sentence and the controller's contact details, and the first-run and Settings text follows Compliance's wording (section 3.11.3). | owner; Feedback Team | open, **gate** |
@@ -708,9 +730,15 @@ Rules:
    i", never in "failed". The host resumes it only when the screen positively shows *this* form at
    field i, with fields 1..i−1 committed (their tab marks, or a fresh read of what they hold). Until
    then it holds no keys and re-reads at a steady pace for up to 60 s.
+   * **A field left typed but not submitted** (`typed-unsubmitted` in rule 3) is never typed again.
+     On resume it gets only its Enter, and only after the words for that field are verified on
+     screen in that field (invariant 2), or for a choice field, the highlighted row is the chosen
+     option. If they are not shown exactly, there is no Enter: the form goes to reset (rule 2).
+     This keeps invariant 4: no field of one question is typed twice.
 2. **Resume first, then reset, and only when the screen is positively this exact form (owner,
    2026-11-07).** The owner chose both:
-   * **First, resume** at the next field not yet committed (rule 1).
+   * **First, resume** at the next field not yet committed (rule 1). A typed-but-unsubmitted field
+     gets only its verified Enter, never a second typing.
    * **If resuming fails, reset and redo.** The host presses Esc to cancel the form, so the agent
      hears "cancelled" and asks again, and then answers the new question with the same answer. The
      new question is a fresh request: the same answer digest goes through the full checks again,
@@ -732,7 +760,8 @@ Rules:
    explicit button):
    * **Look again**: re-sync the question from the machine;
    * **Send as a message instead**: the answer goes as a reply, written as "Answer to 'X': …";
-   * **Retry**: only when nothing was typed, or when resuming is safe.
+   * **Retry**: only when nothing was typed, or when resuming is safe (rule 1, including the
+     Enter-only rule for a typed-but-unsubmitted field).
 
    The phone never gets a "press Enter".
 6. **Wording.** Unconfirmed says "Check the conversation", never "at the machine" (#967, #995).
@@ -789,7 +818,8 @@ Rules:
   * the #510 review history (the cases in section 1.3);
   * #1137's test screens, first: the hyphen and mid-word wraps of the 04:21 question (CLI 1.0.105,
     width 100), the three hint shapes of a narrow window (#910), a form read mid-redraw, output
-    scrolled above the form during typing, and a field drawn differently when its Enter was refused.
+    scrolled above the form during typing, a field drawn differently when its Enter was refused,
+    and a six-field form at 102 columns whose tab bar shows only the labels around each field.
     Each is filed under the CLI version it was drawn from, and its expected reason key is #1137's
     named check (section 3.3);
   * #910 (narrow window), #848 (mid-word wraps, Chinese, Japanese and Korean text), #908 (pinned
@@ -867,7 +897,7 @@ replies from Copilot's prompt hook) runs on this harness.
 3. The phone cannot send keys. It sends answers. No "press Enter", no "resubmit", no raw key
    channel, ever.
 4. A field of one question is never typed twice. A resume continues at the first field not yet
-   committed. A reset uses Esc only when positively on this exact form. The redo after it answers
+   committed; a field already typed but not submitted gets only its Enter, after invariant 2's check. A reset uses Esc only when positively on this exact form. The redo after it answers
    the agent's new question, through the full checks, and is tried once.
 5. A different answer is never typed over part of an earlier one.
 6. Answers are always sent with an explicit Send answer (#773). "Send as a message instead" is an
@@ -891,7 +921,8 @@ but stays off. **A beta does not wait for slice 3**: slices 1 and 2 ship on thei
 
 **Already in review: PR #1137** (host fix for #1123, sensitive, two-family review). It names the
 failed form check, logs a word-free outline, re-reads for up to 2 s before a refusal, compares the
-question, tab bar and hints without white space, retries a `ScreenChanged` write held to a fresh
+question, tab bar and hints without white space, reads a tab bar drawn only in part (its labels
+around the selected field), retries a `ScreenChanged` write held to a fresh
 read, and writes one `answer-attempt v=1` line per form answer. The slices below build on it and
 do not redo it: slice 1a extends its line, slices 4 and 5 start from its tests, slice 6 builds on
 its re-read and retry, and slice 7 on its white-space-free matching.
@@ -899,15 +930,15 @@ its re-read and retry, and slice 7 on its white-space-free matching.
 | Order | Slice | Sensitive? | Closes / part of |
 | --- | --- | --- | --- |
 | 0 | This design | no | part of #1132 |
-| **1** | **The local record**, starting from #1137's `answer-attempt v=1` line and `FormCheck` names: allow-listed per-attempt record, reason keys, redacted outlines, ring buffer, the phone's and app's send ring, per-send id, triage recipe and tool, offer keys and counts, local health view (sections 3.1–3.10, 3.11.1). It can split into: 1a host record and keys (extends #1137's line to approvals, replies, Claude and Codex; reason keys use #1137's check names); 1b outlines; 1c client ring and per-send id (protocol); 1d health view. | yes (1a, 1b, 1c) | closes #1023; gives #998–#1014 their counts; part of #1128 |
+| **1** | **The local record**, starting from #1137's `answer-attempt v=1` line and `FormCheck` names: allow-listed per-attempt record, reason keys, redacted outlines, ring buffer, the phone's and app's send ring, send id, triage recipe and tool, offer keys and counts, local health view (sections 3.1–3.10, 3.11.1). It can split into: 1a host record and keys (extends #1137's line to approvals, replies, Claude and Codex; reason keys use #1137's check names); 1b outlines; 1c client ring and send id (protocol); 1d health view. | yes (1a, 1b, 1c) | closes #1023; gives #998–#1014 their counts; part of #1128 |
 | **2** | **"Report this" bundle**: "Report this" on failed cards attaches that attempt's record and outline after the preview (section 3.11.2) | yes (client and host) | part of #733, #738 |
 | **3** | **The opt-in automatic event**, `delivery-failure/v1` (section 3.11.3). Opt-in worldwide, default off. **Buildable now; uploads enabled only after gates (a)–(e).** Kill switch. Install id created only after opt-in. No collection, queue or network call while off; off deletes unsent events; re-enabling uploads nothing from the off period, all tested. Compliance's first-run and Settings wording. Finite error vocabulary. | **yes**: the #732 two-family review of schema, install id, retention and linking | part of #741. **Gates before enabling uploads:** (a) the #732 two-family security review (Engineering); (b) lawful basis and notice from counsel (#744); (c) the `docs/design.md` section 5.10 amendment, PR #1139; (d) SRE's proof of retention, exports and deletion, including the 31-day Log Analytics behaviour; (e) the owner's approval of #733's UX and the notice (#762). |
-| 4 | Failing-first tests: the three-field choice, text, choice form (#1101's ask), output streaming during a form (#1123), narrow window (#910), mid-word wrap (#848), tall form, markdown message. #1137 already adds the hyphen and mid-word wraps (04:21), wrapped hints (#910), a mid-redraw read and a retry after a scroll; slice 4 adds the rest. | no (tests) | groundwork for #1123, #910, #848 |
+| 4 | Failing-first tests: the three-field choice, text, choice form (#1101's ask), output streaming during a form (#1123), narrow window (#910), mid-word wrap (#848), tall form, markdown message. #1137 already adds the hyphen and mid-word wraps (04:21), wrapped hints (#910), a mid-redraw read, a retry after a scroll, and a six-field form whose tab bar shows only the labels around each field (and a wrong bar that gets no keys); slice 4 adds the rest. | no (tests) | groundwork for #1123, #910, #848 |
 | 5 | Real-screen corpus and replay test, seeded first from #1137's test screens, then #510 and slice 1's outlines (section 6) | no | part of #1132 |
 | 6 | Hold keys to the form's frame, and settle on the frame (sections 5.1–5.2), building on #1137's re-read and retry. **Approved by the owner (2026-11-07); ships only once Trust agrees** that the frame plus "nothing below it" is enough identity | **yes** (injector; Trust's agreement before merge) | with slice 8, closes #1123 and #1012 |
 | 7 | Normalised comparison (section 5.3) | **yes** | closes what #1137 leaves of #910 and #848 (item 1) |
-| 8 | Delivery state machine: per-field record; resume at the next field first, then Esc-cancel and redo once, only when the screen is positively this exact form (owner, 2026-11-07); persisted first outcome for any device (section 4) | **yes** (Trust review) | closes #1123, #1007, #1093; replaces #1101's proposal |
-| 9 | Phone ways out: Look again, Send as a message instead, retire out-of-date cards (sections 4.4–4.5) | **yes** (protocol) | #1123's acceptance criterion; closes #1014 and #1010 (fetch the full question); part of #1012 |
+| 8 | Delivery state machine: per-field record; resume at the next field first (a typed-but-unsubmitted field gets only its verified Enter, never a retype), then Esc-cancel and redo once, only when the screen is positively this exact form (owner, 2026-11-07); persisted first outcome for any device (section 4) | **yes** (Trust review) | closes #1123, #1007, #1093; replaces #1101's proposal |
+| 9 | Phone ways out: Look again, Send as a message instead, retire out-of-date cards (section 4, rules 4–5) | **yes** (protocol) | #1123's acceptance criterion; closes #1014 and #1010 (fetch the full question); part of #1012 |
 | 10 | Questions survive a host restart: re-list, re-verify and keep the record | **yes** | closes #954 |
 | 11 | Canary per CLI release, and pinning launched sessions to the last version that passed it (owner, 2026-11-07; section 6) | no (CI and VM); the launch change is host code | part of #1132 |
 | 12 | Soak and chaos harness, and targets (section 7), with #604's experiment | no | closes #604; measures #467 |
@@ -962,12 +993,15 @@ offer key and counts in slice 1, which closes #1023:
 
 Design, trust, feedback and privacy issues:
 
-* #749 (the Trust epic) reviews slices 1, 2, 3, 6, 7, 8, 9, 10 and 13.
+* #749 (the Trust epic) reviews slices 1, 2, 3, 6, 7, 8, 9, 10, 13, 14 (adoption) and 15: every
+  slice marked sensitive.
 * #773 is invariant 6.
 * #76 (the HA connector's reply-box boundary) can reuse slice 6's frame reads later. It is not part
   of this plan.
 * #731, #732, #733, #738, #739, #740 and #741: slices 2 and 3 follow their bundle format, consent
-  flow and privacy rule. Slice 3 is gated on #732.
+  flow and privacy rule. Slice 3's uploads are gated on all of (a)–(e) in section 3.11.3: the #732
+  two-family review, counsel (#744), the section 5.10 amendment (PR #1139), SRE's retention and
+  deletion proof, and the owner's approval of #733's UX and the notice.
 
 ---
 
@@ -979,7 +1013,7 @@ Design, trust, feedback and privacy issues:
    #741 comment 6707151446) settles the rest: opt-in worldwide, default off, with no region
    shortcut. This supersedes the earlier default-on path, so no default-on change is planned.
 2. **Part-answered forms: resume first, then reset.** The host resumes at the next field not yet
-   committed. If that fails, it presses Esc to cancel the form and redoes the answer once. Both steps
+   committed (a field already typed gets only its verified Enter, never a retype). If that fails, it presses Esc to cancel the form and redoes the answer once. Both steps
    happen only when the screen is positively that exact form (section 4, rule 2; slice 8).
 3. **Narrow the key check to the form's own box: yes.** Trust must agree that the frame plus
    "nothing below it" is enough identity before it ships (section 5.1; slice 6).
