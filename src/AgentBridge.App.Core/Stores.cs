@@ -110,6 +110,12 @@ public sealed record AppPreferences
     // The press from another device that update answers, if one asked for it (#51), and how the
     // last update asked for or installed ended, for the host to tell the account's devices.
     public string? UpdateRequest { get; init; }
+    // Installs that failed in a row, and when the next may be tried by itself (UpdateBackoff):
+    // kept because a failed update restarts the app.
+    public int? UpdateFailures { get; init; }
+    public DateTimeOffset? UpdateRetryAt { get; init; }
+    // The release those failures were of: a different release pending is not held by them.
+    public string? UpdateFailedRelease { get; init; }
     public UpdateResult? LastUpdate { get; init; }
     // The presses from other devices this app has taken on, the latest last: one the host still
     // lists after the app restarts (its report that it took them lost) is not carried out twice.

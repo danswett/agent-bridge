@@ -45,6 +45,9 @@ param githubClientId string
 @description('Web origins of the PWA.')
 param allowedOrigins array
 
+@description('Origins allowed on staging only (its relay and blob store), added to allowedOrigins. A preview or test site goes here so production never accepts it.')
+param stagingExtraAllowedOrigins array = []
+
 param production appConfig
 param staging appConfig
 
@@ -176,7 +179,7 @@ module stagingApp 'modules/relay-app.bicep' = {
     app: staging
     deployApp: deployApps
     githubClientId: githubClientId
-    allowedOrigins: allowedOrigins
+    allowedOrigins: concat(allowedOrigins, stagingExtraAllowedOrigins)
     deployerPrincipalId: stagingDeployerPrincipalId
     deployerReadsSecrets: true
     deployBlobStore: true
