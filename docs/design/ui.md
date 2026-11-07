@@ -1546,7 +1546,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Near the end,** it rides down with the scroll, and past its room it is compact: a
     pinned 48 bar (plus the safe area) holding a one-line copy of the box, the draft's first
     line or the placeholder. The copy is drawn, not read, and is not a tab stop; a tap on it
-    brings the box back in full and focuses it.
+    brings the box back in full and focuses it. The box slid away behind the bar is clipped at the
+    conversation's foot, so on an installed iPhone none of it shows in the home indicator's band
+    below the bar (#1078).
   - **Away from the end,** 32 up sends it away and 64 down brings it back, with its own
     count. The end always shows it in full. A draft is never hidden: the bar shows its first
     line. Like the header, it never expands over the focused control: while that control
