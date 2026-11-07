@@ -1,0 +1,53 @@
+name: Update gap
+
+# How long an update keeps the Windows app away, on Arm64 (#1167): Daily has no Arm64 machine, so
+# the owner's 8 s budget for the gap between the old window closing and the new version starting
+# is measured here. build/measure-update-gap.ps1 packs the app built from this commit twice under a
+# throwaway pack id, installs the first as a portable copy on the runner and applies the second
+# with Velopack's silent apply (#1167's hand-off), five times, then prints the medians.
+# The runner is throwaway, so the update hooks run as they would for a person (-RealHooks); the app
+# restarts into its demo, so no host starts and nothing reaches a relay. No secrets, read-only.
+#
+# By hand: gh workflow run update-gap.yml --ref <branch> -f runs=5
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: How many timed updates
+        type: number
+        default: 5
+  pull_request:
+    branches: [main]
+    paths:
+      - build/measure-update-gap.ps1
+      - .github/workflows/update-gap.yml
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  arm64:
+    runs-on: windows-11-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      RUNS: ${{ inputs.runs || 5 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet tool install -g vpk --version 1.2.161
+      - name: Publish the app for Arm64
+        shell: pwsh
+        run: ./build/pack-app.ps1 -Version 0.1.1 -Runtime win-arm64 -Out out/app-arm64 -NoPack
+      - name: Time the update
+        shell: pwsh
+        run: ./build/measure-update-gap.ps1 -Publish out/app-arm64/publish -Work "$env:RUNNER_TEMP/update-gap" -Runtime win-arm64 -Runs $env:RUNS -RealHooks
