@@ -175,6 +175,31 @@ above. A code is shown as two groups of three digits. What a person types is acc
 dropped, only as exactly six ASCII digits, and compared without an early exit. The QR secret `q`
 is 16 bytes.
 
+### The exchange state machines (A4)
+
+`EnrollmentApprover` and `EnrollmentJoiner` (`src/AgentBridge.Roster/EnrollmentExchange.cs`) carry
+out design §4.2 with no I/O. The caller moves the messages over the Noise channel and passes in the
+channel's handshake hash `h`; they do not open channels, talk to the relay or show anything.
+
+| Step | Joiner | Approver |
+|---|---|---|
+| 1 | `Commit()` returns `C` (refused while joining is locked) | `OnCommit(C)` returns the offer `nA`; one commit per attempt |
+| 3 | `OnOffer(nA)` returns the reveal `nN` and shows code 1 | `OnReveal(nN)` is false, and ends the attempt, unless it matches `C` |
+| 5 | | `EnterCode1(typed)`; code 2 and the transcript to sign exist only after a match |
+| 6 | `EnterCode2(typed)` | |
+| 8 | `Accepts(newest, own, approverId)`: the newest entry of the roster it has already verified (§3.5) is an `add` by that approver of exactly this descriptor, `approval.method` `code`, carrying this exchange's `T`; only after code 2 matched | |
+
+A typed code gives `Match`, `Wrong`, `Ended` (three wrong entries, or the 5 minutes ran out) or
+`Locked`. Limits (§4.4) are counted by `EnrollmentLockout` on the device the person types on: three
+wrong code-1 entries block that pending device for 15 minutes, and three wrong in an hour lock the
+approver for 15 minutes; three ended attempts in an hour lock a joiner's joining for 15 minutes.
+Neither the relay nor the other device can reset them. An expiry blocks no pending device at an
+approver. A relay that ends both channels has two different `h`, so the codes it could read off one
+leg do not match the other.
+
+Not here: the channel, the relay's `pending` list and its 8-pending and 20-attempts limits (R2),
+the QR paths (§4.3), signing the `add`, and any screen.
+
 ## Acceptance and state
 
 A verifier (`RosterVerifier`) holds one generation's accepted entries as a DAG and decides each
