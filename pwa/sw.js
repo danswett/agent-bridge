@@ -218,7 +218,9 @@ self.addEventListener('notificationclick', (e) => {
   const url = inApp(e.notification.data?.url);
   e.waitUntil((async () => {
     const open = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const client = open.find((c) => c.url.startsWith(self.registration.scope));
+    // The app's own page, not one of the spikes served under the same scope (#393).
+    const appPath = new URL(self.registration.scope).pathname;
+    const client = open.find((c) => c.url.startsWith(self.registration.scope) && new URL(c.url).pathname === appPath);
     if (client) {
       client.postMessage({ type: 'agent-bridge.open', url });
       return client.focus();

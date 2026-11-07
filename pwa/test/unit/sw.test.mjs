@@ -379,8 +379,9 @@ test('a tap brings an open app forward and tells it where to go, keeping its con
   const messages = [];
   let focused = 0;
   const elsewhere = { url: 'https://danswett.github.io/other-app/', postMessage: () => assert.fail('not this app'), focus: async () => assert.fail('not this app') };
+  const spike = { url: `${scope}s4/`, postMessage: () => assert.fail('a page of another site, not the app'), focus: async () => assert.fail('a page of another site, not the app') };
   const app = { url: `${scope}?x=1`, postMessage: (m) => messages.push(m), focus: async () => { focused++; } };
-  const sw = worker({ clients: [elsewhere, app] });
+  const sw = worker({ clients: [elsewhere, spike, app] });
   await sw.fire('notificationclick', tapped({ url: `${scope}?host=${MACHINE}&session=s1&question=q1` }));
   assert.deepEqual(plain(messages), [{ type: 'agent-bridge.open', url: `${scope}?host=${MACHINE}&session=s1&question=q1` }]);
   assert.equal(focused, 1);
