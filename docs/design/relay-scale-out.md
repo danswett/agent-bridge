@@ -97,7 +97,7 @@ Per `docs/relay-deploy.md`: on shutdown the relay sends close code 1012 to every
 - **Rolling revision.** Replicas are replaced one at a time. A draining replica fails `/readyz`, stops accepting sockets, sends 1012, and removes its directory entries. Its devices reconnect to the others, which are already serving. At most one replica's worth of devices reconnects at a time.
 - **Reconnect storm control.** The per-IP limit (120 new sockets per minute) and client backoff are the guard. The load test must measure reconnects per second a surviving replica absorbs; that number sets the safe rollout step.
 - **Replica loss (crash, node move, out of memory).** Its sockets drop without a close frame; devices notice and reconnect to a healthy replica within their backoff window. Its directory entries expire on their own (design goal: a few seconds), so presence heals without a clean shutdown. Frames for a device on a dead replica count as undeliverable, as for any offline device. Nothing is persisted per replica, so only in-flight frames are lost.
-- **Backplane loss.** Each replica keeps serving its own sockets. Cross-replica delivery stops until it returns. The relay reports this (metric and alert) and does not crash. Whether `/readyz` should fail is an open question (section 11); the default is stay up and alert, because failing readiness on every replica would turn a partial degradation into a full outage.
+- **Backplane loss.** Each replica keeps serving its own sockets. Cross-replica delivery stops until it returns. The relay reports this (metric and alert) and does not crash. The owner decided (section 12) that it stays up and alerts rather than failing `/readyz`, because failing readiness on every replica would turn a partial degradation into a full outage.
 - **Ordering.** Frames from one sender to one target stay in order: a sender socket uses one path for a given target, direct when local, the bus otherwise.
 
 ## 6. Autoscale
@@ -249,7 +249,7 @@ Rules:
 
 - **Region down.** Its devices reconnect through the global entry point to the next-nearest healthy region within their backoff window (as in section 5, but across a larger pool). Their directory entries expire or are overwritten on reconnect. Peers in the failed region are unreachable until their devices reconnect elsewhere, which is the same recovery as replica loss.
 - **Capacity of the survivor.** Failover is only safe if the neighbour can absorb the load. Plan each region with enough headroom for a failed neighbour (for example, size so that losing the largest neighbour keeps every survivor under its alert level), and cap reconnect rates so a failover does not become a storm. The load test measures this (below).
-- **Directory loss or partition.** Each region keeps serving its own sockets and its local peers; cross-region delivery degrades and alerts, as in the backplane-loss case. The relay must not fail readiness on this alone (open question 3 covers the exception).
+- **Directory loss or partition.** Each region keeps serving its own sockets and its local peers; cross-region delivery degrades and alerts, as in the backplane-loss case. The relay must not fail readiness on this alone (the owner chose stay-up-degraded; section 12).
 - **Entry point loss.** The global entry point is a new shared dependency; it must itself be multi-region and have a documented manual override (DNS at Cloudflare today, per `docs/relay-deploy.md`).
 
 ### Per-region capacity and rollout rings
@@ -283,14 +283,21 @@ Add to section 7, once a second region exists on staging (a throwaway second sta
 
 Drive devices from probes placed near each region where possible. All figures remain counts, sizes and percentiles by region, never by account or device.
 
-## 12. Open questions
+## 12. Owner decisions and open questions
 
-1. Owner: which regions, and which residency zones, are in scope first? The design supports many; the first two or three set the cost floor.
-2. Owner: is a second replica for availability wanted ahead of the capacity threshold?
-3. Owner and SRE: on backplane loss, stay up degraded (the default here) or fail readiness?
-4. SRE: confirm the pass criteria and that staging can use many source addresses.
-5. Messaging Lead: measured concurrent sockets per user, from #1134 production data once exported.
-6. Engineering: split the backplane work into a directory PR and a bus PR (section 4)?
+Decided by the owner on 2026-11-07:
+
+- **Build approach: build the code now, ship it dark.** The backplane code (directory, bus, region-ready keys, version-skew rules) is built behind a configuration flag that is off by default. No Redis is provisioned and production runs exactly as today, so there is no new monthly cost until measured data says scale-out is needed. Turning it on later is a setting change plus provisioning, not a rewrite. The no-backplane mode (section 10) is what runs while it is dark.
+- **First regions: West US 2 only.** The design stays region-ready (section 11); no second region or residency zone is built or paid for yet.
+- **No second replica yet.** Production stays at one replica until the capacity threshold (section 8) is reached or the owner changes this.
+- **On backplane loss: stay up degraded and alert** (do not fail readiness).
+- **Staging-only Redis spike approved in principle:** a small, temporary Redis on staging to check latency, expiry after a crash and frame ordering, deleted afterwards. The exact resource and teardown are confirmed with the owner at the time, per #55.
+
+Still open (a second region or an EU zone comes in when the user-count data says so):
+
+1. SRE: confirm the pass criteria and that staging can use many source addresses.
+2. Messaging Lead: measured concurrent sockets per user, from #1134 production data once exported.
+3. Engineering: split the backplane work into a directory PR and a bus PR (section 4)?
 
 ## 13. Out of scope
 
