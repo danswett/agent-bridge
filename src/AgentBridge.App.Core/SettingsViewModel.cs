@@ -160,7 +160,7 @@ public sealed class SettingsViewModel : Observable
     // "Get started": none while the host can't report agents, so it never guesses.
     public IReadOnlyList<SetupStep> SetupSteps => !HostRunning ? SetupGuide.Steps(false, [], false)
         : Agents is { Count: > 0 } rows ? SetupGuide.Steps(true, rows, Status?.Account is not null) : [];
-    public bool ShowSetupSteps => SetupSteps.Count > 0;
+    public bool ShowSetupSteps => SetupSteps is { Count: > 0 } steps && !steps.All(s => s.Settled);
     // Where the app's log is (AppLog in the app).
     public Action<string> LogTo { get; init; } = _ => { };
     readonly HashSet<string> loggedRaw = new(StringComparer.Ordinal);

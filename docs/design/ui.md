@@ -1988,6 +1988,13 @@ Collaboration (§6.7) keeps its own section, after Accounts, whose Devices it fo
 **Not built yet (#384 slice 5).** Today there is no guided setup: a machine is set up from
 Settings' page (§6.9), each agent from its row.
 
+**Interim (slice 1):** until the stepper lands, Settings > Agents shows a plain **Get started** list
+above the agent rows (§6.9). It reads the same readiness as the rows, names the one next step, and
+adds no host operation. "Sign in to the CLI itself" is always **Yours to check**, because the host
+cannot verify it yet (#691). The list hides once every step is Done, Yours to check or Optional. Each
+step is read to a screen reader with its state and position first, for example "Next, step 3 of 5,
+Connect its hooks". The stepper below replaces it.
+
 Settings with a guide. Six steps, in a stepper that **replaces Settings' own pane** while setup
 runs; the app rail stays, with Settings selected, so Sessions and Machines are one click away
 and setup never traps the person (decision 4). The steps, in order, with their boards

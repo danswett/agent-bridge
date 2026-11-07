@@ -620,7 +620,8 @@ public sealed class SettingsTests : IAsyncLifetime
 
         var fresh = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.NeedsAction, installation: ReadinessState.Missing))], false);
         Assert.Equal(("Done", "Next", "Later"), (Mark(fresh, "bridge"), Mark(fresh, "install"), Mark(fresh, "hooks")));
-        Assert.Contains("Install CLI on Claude Code", fresh.Single(x => x.Id == "install").Detail);
+        Assert.Contains("Install CLI on one of the agents below", fresh.Single(x => x.Id == "install").Detail);
+        Assert.Equal("Next, step 2 of 6, Install an agent's CLI. Choose Install CLI on one of the agents below.", fresh.Single(x => x.Id == "install").AccessibleName);
 
         var installed = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.NeedsAction))], false);
         Assert.Equal(("Done", "Next"), (Mark(installed, "install"), Mark(installed, "hooks")));
@@ -633,6 +634,8 @@ public sealed class SettingsTests : IAsyncLifetime
 
         var heard = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record") with { LastHookHandledAt = DateTimeOffset.UtcNow })], false);
         Assert.Equal("Done", Mark(heard, "session"));
+        Assert.All(heard, s => Assert.True(s.Settled));
+        Assert.Contains(installed, s => !s.Settled);
 
         var one = SetupGuide.Steps(true, [
             Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record")),

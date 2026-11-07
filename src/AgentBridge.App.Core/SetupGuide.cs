@@ -4,7 +4,7 @@ namespace AgentBridge.App.Core;
 
 public enum SetupStepState { Done, Next, Waiting, Yours, Optional }
 
-public sealed record SetupStep(string Id, string Title, SetupStepState State, string Detail)
+public sealed record SetupStep(string Id, string Title, SetupStepState State, string Detail, int Position = 0, int Total = 0)
 {
     public string Mark => State switch
     {
@@ -15,6 +15,9 @@ public sealed record SetupStep(string Id, string Title, SetupStepState State, st
         _ => "Later",
     };
     public string Line => $"{Title} · {Mark} · {Detail}";
+    public string AccessibleName => $"{Mark}, step {Position} of {Total}, {Title}. {Detail}";
+    // Nothing left for the app to say: only Done, Yours to check or Optional remain.
+    public bool Settled => State is SetupStepState.Done or SetupStepState.Yours or SetupStepState.Optional;
 }
 
 // "Get started" on Settings › Agents (#384 slice 1): what a first-time person does next, read from the
@@ -35,7 +38,7 @@ public static class SetupGuide
         {
             ("bridge", "Start the bridge", hostRunning, "Settings can't reach this machine's bridge yet; wait a moment or choose Start under This machine.", "Running"),
             ("install", "Install an agent's CLI", installed.Count > 0,
-                agents.Any(a => a.ShowInstall) ? $"Choose Install CLI on {Names(agents.Where(a => a.ShowInstall))} below." : "Install Copilot CLI, Claude Code or Codex on this machine, then Check agents again.",
+                agents.Any(a => a.ShowInstall) ? "Choose Install CLI on one of the agents below." : "Install Copilot CLI, Claude Code or Codex on this machine, then Check agents again.",
                 $"{Names(installed)} found"),
             ("hooks", "Connect its hooks", connected,
                 toSetUp.Count > 0 ? $"Choose {Verbs(toSetUp)} below. {Product.Name} adds only its own hooks." : installed.Count > 0 ? "The row below says why its hooks can't be changed from here." : "Needs an installed agent first.",
@@ -59,7 +62,7 @@ public static class SetupGuide
                 "Restart the bridge if Settings asks, then start a session in the CLI; its first hook shows here as working."));
         result.Add(new("account", $"Sign in to {Product.Name} for your phone", signedIn ? SetupStepState.Done : SetupStepState.Optional,
             signedIn ? "Signed in" : "Only needed to reach this machine from another device; use Sign in below."));
-        return result;
+        return [.. result.Select((s, i) => s with { Position = i + 1, Total = result.Count })];
     }
 
     static string Names(IEnumerable<AgentReadinessRow> rows) => string.Join(", ", rows.Select(r => r.Label));
