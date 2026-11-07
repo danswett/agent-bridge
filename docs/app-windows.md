@@ -24,7 +24,9 @@ first-time person does: start the bridge, install a CLI, connect its hooks, sign
 a hook has arrived), and an optional phone sign-in. It is read from the same rows, adds no host
 operation, and marks a step Done only on the host's evidence. Slice 2: the installed app (not the demo or a
 development copy) opens on Settings once per profile, the first time the host reports agents and none
-has its hooks connected (`AppPreferences.GuideOpened`, `SettingsViewModel.GuideWanted`).
+has its hooks connected (`AppPreferences.GuidePending`, `SettingsViewModel.GuideWanted`). It applies
+only to a first install (no settings file existed, so upgraders never see it) and only to a launch that
+shows the window: a start at sign-in or a toast launch leaves it pending for the next one.
 
 ## Decisions
 
