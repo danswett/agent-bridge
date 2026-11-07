@@ -234,7 +234,7 @@ Update now interrupts what Install would wait for.
 | A read-only machine (`delivery.readOnly`, or agent-ha-bridge running, G5) | `read-only` | It serves no `update.*` at all, and the `Update` purpose's eligibility is read again just before the commit, so a machine that turns read-only after the press never leaves for it |
 | `permissions.remoteManage` off ([host-config.md](../host-config.md)) | `disabled` | The one switch that takes remote management back. `canUpdateNow` is false and Install still works |
 | Not through the relay, not a person's device (`pwa` or `app` in presence until #55), not connected now, or this machine's own app | `not-person`, `not-peer`, `not-connected`, `local-device` | As `update.*` and `manage.*`: the pipe is where agents, the MCP server and the Home Assistant connector are, and an agent here could use the app's key as the same user |
-| A signature that doesn't verify, is older than 2 minutes or from the future, or names another request, machine or action | `bad-signature`, `expired`, `future` | #801's bound on a disruptive press: whoever pressed did so in the last two minutes, on that device |
+| A signature that doesn't verify, is older than 2 minutes or from the future, or names another machine or action | `bad-signature`, `expired`, `future` | #801's bound on a disruptive press: whoever pressed did so in the last two minutes, on that device |
 | Another profile's app or host running from the same installation | `other-profile` (the app's, in `last`) | Velopack stops every process in the package, busy or not, and restarts only the profile that installed. The app refuses at once, before anything is downloaded, and again just before the host stops |
 | The app not running, a build folder rather than an installed copy, or an app too old for Update now | `unavailable`, `old-app` | Nothing would carry it out. An old app is told apart, since Install still works there |
 | #800's agent sign-in entrypoint on | `sign-in` | A restart cancels a pending sign-in, as for `manage.restart` (Connection, Q-C8) |
@@ -387,7 +387,7 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
    then downloads and checks the package **outside the lease** (`DownloadMark`, and #984's
    per-profile copy). It holds the usage probes (#238) as every install does. It does not wait
    for a quiet machine unless, when it is ready, the machine is busier than the person
-   confirmed, or the press is 15 minutes old by then (a download that slow): then it keeps the
+   confirmed, or the press carried `accept` and is 15 minutes old by then (a download that slow): then it keeps the
    download and waits for the next quiet moment ([After the press](#the-confirmation)), never
    going on sessions nobody confirmed it for.
 3. The app asks the host to leave: one app-only pipe op (proposed `host.update.depart`,
@@ -486,7 +486,7 @@ need an independent review and a second model family; 3 and 4 touch how a confir
 so they need one too.
 
 1. **Host and protocol.** `Update.cs`: `now` on the command, `canUpdateNow`, `busy`,
-   `requestNow`, outcome `confirm`, `code`. `UpdateService` verifies `now` through the same
+   `requestNow`, `waitingCode`, outcome `confirm`, `code`. `UpdateService` verifies `now` through the same
    signed-command check as `ManageService` (one shared gate, not a copy), counts the restart cap
    with it, computes `busy`, and passes `now` asks to the app. The app-only departure op takes
    the lease, announces and commits; the `Update` purpose's conditions are registered at
@@ -513,7 +513,7 @@ so they need one too.
 2. **App.** `AutoUpdater` takes a `now` ask: refuses another profile or a build folder at once,
    downloads and checks, holds the probes, skips `IdleFor` and the backstop (using the settled
    gap only while waiting for a quiet moment), leaves through the departure op, and reports
-   `last` with its code. It reports that it
+   `last` with its code, and `waitingCode` while it waits, through `host.update.report`. It reports that it
    can carry Update now. Tests: "an Update now ask installs without waiting for the machine to be
    idle"; "an Update now ask with another profile running is refused before anything is
    downloaded"; "a refused departure starts nothing and keeps the release offered"; "a quiet
