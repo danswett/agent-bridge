@@ -45,6 +45,9 @@ Envelope parsers must map malformed/authentication failures to `FeedbackEnvelope
 key-provider outages must use `FeedbackInboxTransientException`, not
 `CryptographicException`.
 
+The v1 envelope parser validates the client header, ciphertext length and canonical
+zero-padded bucket; it does not decrypt or authenticate the ciphertext on its own.
+
 This core slice is tested with fakes only. It does not configure a real private repository,
 Key Vault, storage identity or schedule deployment. Those adapters must be wired with
 least-privilege identities and secrets held outside the repository before live feedback is
