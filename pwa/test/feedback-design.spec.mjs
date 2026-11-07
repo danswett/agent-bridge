@@ -34,6 +34,12 @@ async function openFeedbackDialog(page) {
   });
 }
 
+async function settleAnimations(page) {
+  await page.evaluate(async () => {
+    await Promise.all(document.getAnimations().map((animation) => animation.finished));
+  });
+}
+
 test('feedback disclosure stays keyboard accessible and actions remain pinned across color modes', async ({ page }) => {
   const captureDir = process.env.PWA_FEEDBACK_CAPTURE_DIR;
   if (captureDir) { await mkdir(captureDir, { recursive: true }); }
@@ -55,6 +61,7 @@ test('feedback disclosure stays keyboard accessible and actions remain pinned ac
   await expect(included).toHaveAttribute('open', '');
   const openChevron = await summary.evaluate((element) => getComputedStyle(element, '::after').transform);
   expect(openChevron).not.toBe(closedChevron);
+  await settleAnimations(page);
 
   const layout = await page.evaluate(() => {
     const surface = document.querySelector('#feedback-dialog');
@@ -75,7 +82,15 @@ test('feedback disclosure stays keyboard accessible and actions remain pinned ac
   expect(layout.scrolls).toBe(true);
   expect(layout.footerVisible).toBe(true);
   expect(layout.footerBottomGap).toBeLessThanOrEqual(1);
+  await page.locator('#feedback-error-codes > summary').focus();
+  const focusClearance = await page.evaluate(() => {
+    const focused = document.activeElement.getBoundingClientRect();
+    const actions = document.querySelector('.feedback-actions').getBoundingClientRect();
+    return actions.top - focused.bottom;
+  });
+  expect(focusClearance).toBeGreaterThanOrEqual(0);
   await page.evaluate(() => { document.activeElement.blur(); });
+  await page.evaluate(() => { document.querySelector('#feedback-dialog').scrollTop = 0; });
 
   if (captureDir) {
     await page.screenshot({ path: path.join(captureDir, 'feedback-1440-light-expanded-sticky.png') });
@@ -109,6 +124,7 @@ test('feedback disclosure stays keyboard accessible and actions remain pinned ac
     document.querySelector('#feedback-send').textContent = 'Retry';
     document.querySelector('#feedback-dialog').scrollTop = 0;
   });
+  await settleAnimations(page);
   if (captureDir) {
     await page.screenshot({ path: path.join(captureDir, 'feedback-1440-light-failed-sticky.png') });
   }

@@ -36,7 +36,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 test.skip(!existsSync(dll), 'the dev stack is not built: dotnet build spikes/s4-relay/src/S4.DevStack -c Release');
 test.describe.configure({ mode: 'serial' });
 
-let stack, site, host, appUrl, relayUrl;
+let stack, site, host, appUrl, relayUrl, siteDir;
+let feedbackBuildConfigured = false;
 
 const vapidKey = () => generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64');
 const stackOut = [];
@@ -48,8 +49,9 @@ test.beforeAll(async ({}, info) => {
   const sitePort = relayPort + 1;
   const relay = `http://127.0.0.1:${relayPort}`;
   relayUrl = relay;
-  const dir = buildSite({ out: path.join(pwa, '.site', `e2e-${info.project.name}`), relay });
-  site = await startStaticServer({ dir, port: sitePort });
+  siteDir = path.join(pwa, '.site', `e2e-${info.project.name}`);
+  buildSite({ out: siteDir, relay });
+  site = await startStaticServer({ dir: siteDir, port: sitePort });
   appUrl = `http://127.0.0.1:${sitePort}${APP_PATH}`;
   stack = spawn('dotnet', [dll, 'serve', '--port', String(relayPort)], {
     // The page's origin, which the relay must accept for sign-in (CORS) and the socket.
@@ -68,6 +70,12 @@ test.afterAll(async () => {
   stack?.kill();
   await new Promise((r) => (site ? site.close(r) : r()));
   expect(stackOut.join('')).not.toContain('LEAK');
+});
+
+test.afterEach(() => {
+  if (!feedbackBuildConfigured) { return; }
+  buildSite({ out: siteDir, relay: relayUrl });
+  feedbackBuildConfigured = false;
 });
 
 async function signIn(page) {
@@ -155,15 +163,13 @@ test('feedback panel stays hidden until its build has a feedback key', async ({ 
 });
 
 test('feedback preview shows readable diagnostics and exact data before sending', async ({ page }) => {
-  await page.route('**/config.js', (route) => route.fulfill({
-    contentType: 'text/javascript',
-    body: [
-      `export const RELAY = ${JSON.stringify(relayUrl)};`,
-      'export const APP_VERSION = "dev";',
-      'export const FEEDBACK_KEY_ID = "test-key";',
-      'export const FEEDBACK_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";',
-    ].join('\n'),
-  }));
+  buildSite({
+    out: siteDir,
+    relay: relayUrl,
+    feedbackKeyId: 'test-key',
+    feedbackPublicKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+  });
+  feedbackBuildConfigured = true;
   await signIn(page);
   await page.click('#nav [data-nav="settings"]');
   await expect(page.locator('#feedback')).toBeVisible();

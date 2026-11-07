@@ -363,7 +363,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .feedback-dialog {
   width: min(720px, calc(100vw - 24px)); max-height: 90vh; overflow: auto; margin: auto;
   color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);
-  padding: 16px 16px 0;
+  padding: 16px 16px 0; scroll-padding-bottom: calc(var(--tap) + 8px + 16px + 1px + 8px);
 }
 .feedback-dialog::backdrop { background: var(--ab-shell); opacity: .85; }
 .feedback-dialog h2 { margin: 0 0 8px; }
