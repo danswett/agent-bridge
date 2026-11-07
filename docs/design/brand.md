@@ -49,9 +49,9 @@ mythology or flavour text appears in the product UI.
 - **Short name:** also "Slipgates" (9 characters). It fits every home-screen and launcher label,
   so there is no abbreviation. Don't write SG or Slip.
 - **Support email:** `support@slipgates.com`.
-- **Addresses:** the PWA will be served at `app.slipgates.com` and the relay at
-  `relay.slipgates.com`. Neither is live yet: #393 and #540 move them. Until then, no
-  surface may show or link either address.
+- **Addresses:** the PWA is served at `app.slipgates.com` (live since 11-07, #393). The relay
+  will be at `relay.slipgates.com`, which is not live yet: #540 moves it. Until then, no
+  surface may show or link the relay address.
 - **A component's name** is "Slipgates" followed by a plain noun in lower case: "the
   Slipgates relay", "the Slipgates app for Windows". Only the product name is capitalised.
 
@@ -414,7 +414,7 @@ The brand adds **no brand colour.** It is drawn with the roles in `tokens.json`:
 - Show finished in green, or add a success token.
 - Use the display mark below 30 px, or scale one native cut to another size.
 - Add flavour text: "Opening the gate…", "Gate closed", "Slipping through…".
-- Show `app.slipgates.com` or `relay.slipgates.com` before #393 and #540 make them live.
+- Show `relay.slipgates.com` before #540 makes it live.
 - Rename an identifier in §3.3 as part of a brand change.
 - Synthesise a bold, an italic or an oblique (§7).
 
@@ -458,8 +458,8 @@ before-and-after boards show the target:
   every theme, `forced-colors` included.
 - [ ] The app bar shows the mark with the name in `system-ui` (§7), not the wordmark.
 - [ ] The app bar's mark uses `icon-mark-20`, the native 20 px cut, not `icon-mark`.
-- [ ] Storage keys, cache names and the Pages URL are unchanged (§3.3). `app.slipgates.com`
-  is not shown until #393.
+- [ ] Storage keys and cache names are unchanged (§3.3). The app's address is `app.slipgates.com`
+  (#393); `relay.slipgates.com` is not shown until #540.
 
 ### Docs (#539)
 - [ ] The README's title, introduction (one or two sentences from §1) and screenshots say
