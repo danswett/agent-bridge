@@ -1,0 +1,268 @@
+name: Lab nightly (held)
+
+# DRAFT, HELD: the nightly clean-VM end-to-end run of the shared #736 lab (#357), both roles,
+# Windows 11 x64 and native Windows 11 Arm64, against one cut. Nothing in it can run today: its
+# first job, gate, refuses every run, and every other job needs gate.
+#
+# Why it can't run, and what lets it (quality/lab/nightly-gate.ps1 is the list):
+#  - The provisioner (#849) and shared runner interface (#1115), quality/lab/provision.ps1 and
+#    run.ps1, have landed, but both are nonexecuting drafts whose -Apply refuses. The v1 scenario,
+#    AgentSim and transport/evidence (#736) remain unbuilt. This workflow carries no second
+#    runner or provisioner; their presence alone clears no execution prerequisite.
+#  - The owner hasn't authorized this nightly's execution or spend, and its bootstrap (resource group, `lab`
+#    environment, OIDC principal), S0 snapshots, native Arm64 feasibility, run registration,
+#    the expiry sweeper and cost alerts (#357 B1-B3) remain unverified for this nightly.
+#  - Each role's fresh VM needs owner-only Slipgates-lab-bot device flow within its original
+#    expiry. No lab token is provisioned as a CI or vault secret, and no signed-in image is reused.
+# Each is a constant in gate's script, marked met only by the reviewed change that delivers its
+# receipt. No input, variable or secret clears one: a dispatch runs the same gate, and the only
+# inputs are the relay and the cut.
+#
+# One nightly source (#849 §6): this is Platform's temporary one. Its schedule below is left
+# commented out, so merging this enables nothing; turning it on is its own reviewed change once
+# gate can pass, and it must also give a scheduled run its relay (staging until PPE), since a
+# schedule has no inputs and gate refuses an empty one. SRE's #590 later calls this workflow
+# (workflow_call) from its cut path and removes the schedule in the same change, so there are
+# never two timers or two cuts.
+#
+# The jobs, by what they may do:
+#   gate     reads the checkout and refuses (today, always). No token beyond contents: read, no
+#            environment, no OIDC.
+#   cut      reads releases and attestations only: the newest main pre-release, or the release
+#            tag given, whose two Setup.exe are attested by ci.yml on main and whose CI run was
+#            a push to main. Never a pull request's or a dispatched run's artifacts.
+#   run      one per role, in the `lab` environment, the only job with id-token: write. Signs in
+#            with the lab's OIDC principal and hands the cut to run.ps1 -Apply, which currently
+#            refuses rather than returning a successful plan; uploads only result.json
+#            (#849 §9: recordings and raw logs are never workflow artifacts).
+#   verdict  quality/lab/nightly-verdict.ps1 over both results: pass only when both roles pass
+#            one cut against one unchanged relay; invalid when either can't count. Audio
+#            (#849 §12) is separate, non-gating evidence and never reaches it.
+#
+# Re-runs: a retry is a new run (#849 §8), never another attempt of this one. Re-running only
+# failed jobs reuses gate's earlier outputs without running gate again, so cut, run and verdict
+# each refuse any attempt but the first in their own if:, before checkout or sign-in. On attempt 2
+# or later nothing signs in, no result is uploaded, and no verdict or outcome is produced.
+#
+# Cost fences (owner decision B1: both roles nightly within $75/month): one run at a time
+# (concurrency, never cancelled mid-run, which would leave resources for the sweeper), each role
+# capped below provision.ps1's 4-hour expiry, and only S0 snapshots kept between runs. The
+# fences that hold when this workflow doesn't finish are the sweeper's and the cost alerts'.
+
+on:
+  # schedule:
+  #   # 01:00 Pacific in standard time, 02:00 in daylight time (#849 §6); GitHub may start late.
+  #   - cron: '0 9 * * *'
+  workflow_call:
+    inputs:
+      relay:
+        description: staging (until PPE) or ppe; never production
+        type: string
+        required: true
+      cut:
+        description: A release tag (v0.1.N) built by main's ci.yml; empty for the newest main pre-release
+        type: string
+        required: false
+        default: ''
+    outputs:
+      outcome:
+        description: The cut's verdict, pass, fail or invalid; empty when gate refused
+        value: ${{ jobs.verdict.outputs.outcome }}
+  workflow_dispatch:
+    inputs:
+      relay:
+        description: staging (until PPE) or ppe; never production
+        type: choice
+        required: true
+        options: [staging, ppe]
+      cut:
+        description: A release tag (v0.1.N) built by main's ci.yml, for a cut's one diagnosed retry; empty for the newest main pre-release
+        type: string
+        required: false
+        default: ''
+
+permissions: {}
+
+# One lab run at a time; a newer one waits, and a running one is never cancelled.
+concurrency:
+  group: lab-nightly
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      cleared: ${{ steps.gate.outputs.cleared }}
+      run-id: ${{ steps.gate.outputs.run-id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Refuse the run unless the lab may run
+        id: gate
+        shell: pwsh
+        env:
+          RELAY: ${{ inputs.relay }}
+          CUT: ${{ inputs.cut }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPO: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          $gate = ./quality/lab/nightly-gate.ps1 -Relay "$env:RELAY" -Cut "$env:CUT" -EventName "$env:EVENT" -Ref "$env:REF" `
+            -Repository "$env:REPO" -GitHubRunId "$env:GH_RUN_ID" -RunAttempt "$env:GH_RUN_ATTEMPT"
+          "cleared=true" >> $env:GITHUB_OUTPUT
+          "run-id=$($gate.RunId)" >> $env:GITHUB_OUTPUT
+
+  cut:
+    needs: gate
+    if: github.run_attempt == '1' && needs.gate.outputs.cleared == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # the release and its assets
+      attestations: read # their build provenance
+      actions: read # the CI run that built them
+    outputs:
+      cut-id: ${{ steps.cut.outputs.cut-id }}
+      sha: ${{ steps.cut.outputs.sha }}
+      ci-run: ${{ steps.cut.outputs.ci-run }}
+      win-x64: ${{ steps.cut.outputs.win-x64 }}
+      win-arm64: ${{ steps.cut.outputs.win-arm64 }}
+    steps:
+      - name: Resolve and verify the cut
+        id: cut
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CUT: ${{ inputs.cut }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CUT" ]; then
+            tag="$CUT"
+          else
+            tag=$(gh release list -R "$REPO" --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
+          fi
+          [ -n "$tag" ] || { echo "::error::no pre-release to test"; exit 1; }
+          read -r draft sha < <(gh release view "$tag" -R "$REPO" --json isDraft,targetCommitish --jq '"\(.isDraft) \(.targetCommitish)"')
+          [ "$draft" = false ] || { echo "::error::$tag is a draft"; exit 1; }
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::$tag targets $sha, not a commit"; exit 1; }
+          dir="$RUNNER_TEMP/cut"
+          ci_run=''
+          # Velopack's installer names (build/app-channels.ps1): x64's `win` channel has no suffix.
+          for role in win-x64 win-arm64; do
+            if [ "$role" = win-x64 ]; then asset=AgentBridgeApp-win-Setup.exe; else asset=AgentBridgeApp-win-arm64-Setup.exe; fi
+            gh release download "$tag" -R "$REPO" -D "$dir/$role" -p "$asset"
+            # Attested by main's ci.yml at this commit (ci.yml attest), or it isn't a cut.
+            gh attestation verify "$dir/$role/$asset" -R "$REPO" --signer-workflow "$REPO/.github/workflows/ci.yml" \
+              --source-ref refs/heads/main --source-digest "$sha" --deny-self-hosted-runners --format json > "$dir/$role.attestation.json"
+            # The certificate's run invocation URI (Fulcio OID 1.3.6.1.4.1.57264.1.21; sigstore-go's
+            # verificationResult.signature.certificate.runInvocationURI). Unproven against gh's own
+            # output: if the path is absent, the run id doesn't parse and the cut is refused.
+            run_uri=$(jq -r '.[0].verificationResult.signature.certificate.runInvocationURI' "$dir/$role.attestation.json")
+            run=$(sed -En 's#^https://github\.com/[^/]+/[^/]+/actions/runs/([0-9]+)/attempts/[0-9]+$#\1#p' <<< "$run_uri")
+            [ -n "$run" ] || { echo "::error::$role's attestation names no CI run ($run_uri)"; exit 1; }
+            [ -z "$ci_run" ] || [ "$ci_run" = "$run" ] || { echo "::error::the roles' installers come from CI runs $ci_run and $run"; exit 1; }
+            ci_run="$run"
+            echo "$role=sha256:$(sha256sum "$dir/$role/$asset" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          done
+          # A push to main, never a pull request's or a dispatched run.
+          read -r event branch head path < <(gh api "repos/$REPO/actions/runs/$ci_run" --jq '"\(.event) \(.head_branch) \(.head_sha) \(.path)"')
+          if [ "$event" != push ] || [ "$branch" != main ] || [ "$head" != "$sha" ] || [ "$path" != .github/workflows/ci.yml ]; then
+            echo "::error::$tag was built by run $ci_run ($event, $branch, $head, $path), not ci.yml on a push to main at $sha"; exit 1
+          fi
+          { echo "cut-id=$tag"; echo "sha=$sha"; echo "ci-run=$ci_run"; } >> "$GITHUB_OUTPUT"
+          echo "Cut $tag at $sha, from ci.yml run $ci_run" >> "$GITHUB_STEP_SUMMARY"
+
+  run:
+    needs: [gate, cut]
+    if: github.run_attempt == '1' && needs.gate.outputs.cleared == 'true' && needs.cut.outputs.cut-id != ''
+    runs-on: ubuntu-latest
+    # Within provision.ps1's 4-hour expiry, so a run that ends its own way ends before the sweeper
+    # may take its resources.
+    timeout-minutes: 120
+    environment: lab
+    permissions:
+      contents: read
+      id-token: write # azure/login's OIDC sign-in, trusted only for the lab environment
+    strategy:
+      # Both roles or neither: one role's failure doesn't stop the other's run of the same cut.
+      fail-fast: false
+      matrix:
+        role: [win-x64, win-arm64]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: The subscription is the lab's, named, never a default
+        env:
+          LAB_SUBSCRIPTION_ID: ${{ vars.LAB_SUBSCRIPTION_ID }}
+        run: |
+          [[ "$LAB_SUBSCRIPTION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+            && [ "$LAB_SUBSCRIPTION_ID" != 00000000-0000-0000-0000-000000000000 ] \
+            || { echo "::error::the lab environment has no LAB_SUBSCRIPTION_ID"; exit 1; }
+      # The lab's own principal, from the lab environment: never the relay's AZURE_* variables.
+      - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.LAB_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.LAB_AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.LAB_SUBSCRIPTION_ID }}
+      - name: Run the cut on a clean ${{ matrix.role }} VM
+        shell: pwsh
+        env:
+          LAB_SUBSCRIPTION_ID: ${{ vars.LAB_SUBSCRIPTION_ID }}
+          ROLE: ${{ matrix.role }}
+          # The cut and its installer's digest, for run.ps1 to install nothing else.
+          BUILD: ${{ needs.cut.outputs.cut-id }}@${{ needs.cut.outputs[matrix.role] }}
+          RELAY: ${{ inputs.relay }}
+          RUN_ID: ${{ needs.gate.outputs.run-id }}
+        run: |
+          ./quality/lab/run.ps1 -Subscription $env:LAB_SUBSCRIPTION_ID -Role $env:ROLE -Build $env:BUILD `
+            -Scenario nightly-v1 -Relay $env:RELAY -RunId $env:RUN_ID -Out "$env:RUNNER_TEMP/lab" -Apply
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: lab-result-${{ matrix.role }}
+          path: ${{ runner.temp }}/lab/result.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  verdict:
+    needs: [gate, cut, run]
+    if: ${{ !cancelled() && github.run_attempt == '1' && needs.gate.outputs.cleared == 'true' && needs.cut.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.verdict.outputs.outcome }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: lab-result-*
+          path: ${{ runner.temp }}/results
+      - name: Judge the cut
+        id: verdict
+        shell: pwsh
+        env:
+          RUN_ID: ${{ needs.gate.outputs.run-id }}
+          CUT_ID: ${{ needs.cut.outputs.cut-id }}
+          SHA: ${{ needs.cut.outputs.sha }}
+          RELAY: ${{ inputs.relay }}
+          # What cut verified: each role's installer digest and the CI run that built them.
+          CI_RUN: ${{ needs.cut.outputs.ci-run }}
+          X64_DIGEST: ${{ needs.cut.outputs.win-x64 }}
+          ARM64_DIGEST: ${{ needs.cut.outputs.win-arm64 }}
+        run: |
+          $verdict = ./quality/lab/nightly-verdict.ps1 -ResultsDir "$env:RUNNER_TEMP/results" -RunId $env:RUN_ID -CutId $env:CUT_ID -Sha $env:SHA -Relay $env:RELAY `
+            -CiRun $env:CI_RUN -X64Digest $env:X64_DIGEST -Arm64Digest $env:ARM64_DIGEST
+          "outcome=$($verdict.outcome)" >> $env:GITHUB_OUTPUT
+          @("## Lab nightly: $($verdict.cutId) $($verdict.outcome)", '') + @($verdict.reasons | ForEach-Object { "- $_" }) >> $env:GITHUB_STEP_SUMMARY
+          if ($verdict.outcome -ne 'pass') { exit 1 }
