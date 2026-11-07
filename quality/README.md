@@ -687,8 +687,9 @@ one secret DPAPI-protected. The lab generalizes them rather than replacing them.
 
 The contract agreed on #357 and #736 (ownership, v1 and v2 coverage, `result.json`, outcomes,
 lifecycle, evidence) and what of it exists are in [lab/README.md](lab/README.md), which wins
-where this section differs. Of the pieces below, only a draft of the provisioning step exists
-(`quality/lab/provision.ps1`), and it refuses to apply.
+where this section differs. Of the pieces below, only the nonexecuting provisioning and
+runner-interface drafts exist (`quality/lab/provision.ps1` and `quality/lab/run.ps1`).
+They plan only and refuse execution; neither produces scenario evidence or `result.json`.
 
 - **`quality/lab/fleet.yml`:** the machines, by role. Each image is built once and
   snapshotted as S0; every run makes its own disk from S0 and deletes it after. v1 needs
@@ -704,7 +705,9 @@ where this section differs. Of the pieces below, only a draft of the provisionin
   | `perf` | A fixed-size VM kept only for benchmarks | §3.2 comparisons |
   | `macos` | See §9: hosted `macos-latest`, a self-hosted Mac mini, or EC2 Mac | macOS host and app E2E |
 - **`quality/lab/run.ps1 -Subscription <id> -Role <r> -Build <artifact> -Scenario <s> -Relay <staging|ppe>`:**
-  make the run's VM from S0, install the build under test from the CI artifact, run the
+  the current draft validates a pinned release digest and `nightly-v1` request, returns an
+  unverified plan and always refuses `-Apply`; offline checks run in `lab-scripts`.
+  The full runner remains unbuilt. It will make the run's VM from S0, install the build under test, run the
   scenario, collect artifacts (logs, transcripts, Hyperloop recordings), then delete the VM.
   The subscription and relay are always named, never defaulted; arbitrary relay URLs are
   refused. It runs from a workflow
@@ -722,7 +725,7 @@ where this section differs. Of the pieces below, only a draft of the provisionin
   sign-in makes the run invalid, not a pass. For v2, test accounts for each agent, with
   per-agent caps (the soak already caps Codex). No credential is ever printed, as AGENTS.md
   requires.
-- **Cost guard:** cost and age alerts on the resource group (SRE). Every run deletes its
+- **Cost guard:** trusted inventory, independent sweeper, and cost and age fences (SRE). Every run deletes its
   resources in a `finally`, but that is best effort, so a durable sweeper deletes run-owned
   resources past their expiry (at most 4 hours) before any run may start, by exact name from
   the inventory each run is registered in before its first create

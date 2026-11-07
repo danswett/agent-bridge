@@ -369,12 +369,12 @@ suites:
     kind: unit
     ring: 0
     select: affected
-    # The clean-VM lab's provisioning draft (quality/lab/README.md) against a stand-in for az:
+    # The clean-VM lab's provisioning and runner-interface drafts, with external commands stubbed:
     # nothing reaches Azure. Ring 0 on Linux, so a draft's fast ring runs it too.
     platforms: [win-x64, linux-x64]
     runner: local
     triggers: [quality/lab/**]
-    command: pwsh quality/lab/test-provision.ps1
+    command: pwsh quality/lab/test-provision.ps1; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; pwsh quality/lab/test-run.ps1; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     where: ci.yml light
     status: exists
 
@@ -712,7 +712,7 @@ suites:
     # answer from the PWA through the staging relay, reply, attach, stop, transfer between
     # machines) with simulated agents that write real-format transcripts and run the real hook.
     # Its first coverage (v1, Windows x64 and native Arm64) is agreed in quality/lab/README.md;
-    # only a provisioning draft that refuses to apply exists (lab-scripts).
+    # only nonexecuting provisioning and runner-interface drafts exist (lab-scripts).
     platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
     runner: lab
     status: planned
