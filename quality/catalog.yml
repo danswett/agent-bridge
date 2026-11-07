@@ -118,6 +118,17 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: mcp-server
+    kind: component
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [mcp/**, docs/protocol/local-pipe*]
+    command: node --test "mcp/test/*.test.mjs"
+    where: ci.yml light
+    status: exists
+
   - id: transport
     kind: component
     ring: 0

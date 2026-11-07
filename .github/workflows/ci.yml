@@ -1142,6 +1142,13 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'beta-release-manifest')) }}
         shell: pwsh
         run: pwsh -NoProfile -File build/test-release-manifest.ps1
+      - name: The MCP server's packages
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'mcp-server')) }}
+        working-directory: mcp
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: MCP server tests
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'mcp-server')) }}
+        run: node --test "mcp/test/*.test.mjs"
       - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
         run: bash .github/actions/playwright-system-packages/test.sh
