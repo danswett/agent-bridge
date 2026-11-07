@@ -146,14 +146,14 @@ resource dataAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 // The relay only ever creates feedback: the same role as above, but a condition takes away
-// read, list and delete (and tags), so a compromised relay cannot read or destroy what the
+// read, list and delete, so a compromised relay cannot read or destroy what the
 // testers sent. The relay holds the bytes only while it checks their size and writes them.
 resource feedbackAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(feedback.id, relayPrincipalId, roles.blobDataContributor)
   scope: feedback
   properties: {
     conditionVersion: '2.0'
-    condition: '((!(ActionMatches{\'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read\'}) AND !(ActionMatches{\'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete\'}) AND !(ActionMatches{\'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read\'}) AND !(SubOperationMatches{\'Blob.List\'})))'
+    condition: '((!(ActionMatches{\'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read\'}) AND !(ActionMatches{\'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete\'}) AND !(SubOperationMatches{\'Blob.List\'})))'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
     principalId: relayPrincipalId
     principalType: 'ServicePrincipal'
