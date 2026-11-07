@@ -407,6 +407,7 @@ export class QuestionPanel {
   // The sheet, and Approve once only from its own button: signed for the answer's request when it is
   // pressed, then sent as any answer is, so a resend carries the same confirmation.
   #confirmEscaped() {
+    if (this.#quiet) { this.#updating(); return; }
     if (this.#held || this.#sheetOpen) { return; }
     const entry = this.entry;
     if (entry && (entry.state === 'sending' || entry.state === 'waiting')) { return; }
