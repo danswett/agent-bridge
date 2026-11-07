@@ -8,7 +8,7 @@ namespace AgentBridge.Host;
 
 // Velopack's GithubSource with its release list from the machine's shared ReleaseDiscovery
 // (#530), rather than a request to the API of its own at every check, and from the CDN's copy of
-// that list first once ReleaseDiscovery.ReadCdnFirst is on (#927). The rest is Velopack's: each
+// that list first while ReleaseDiscovery.ReadCdnFirst is on (#927). The rest is Velopack's: each
 // release's releases.<channel>.json, and the packages, from their browser download URLs on
 // GitHub, which the API's limit does not count. The app compiles this same file (linked from
 // AgentBridge.App.csproj), so the app and the host read releases one way.

@@ -385,14 +385,15 @@ into one folder with one version. An app update is a host update, so they never 
   when GitHub last answered, not when the shared copy was read.
   No static feed is published (no Pages copy of `releases.<channel>.json`, and every release is a
   pre-release, so `releases/latest/download` finds nothing), so the API list stays the source.
-* **The release list from the CDN first** (#927, off until the relay is live). Only the list is
+* **The release list from the CDN first** (#927, on since the relay went live). Only the list is
   rate limited, so SRE's relay at `releases.slipgates.com` caches just that response for every
-  machine. With `ReleaseDiscovery.ReadCdnFirst` on (a constant a release flips, never a setting),
+  machine. `ReleaseDiscovery.ReadCdnFirst` is on (a constant a release flips, never a setting), so
   discovery asks
   `https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10&page=1` (the same
   page and size as GitHub's request, pinned in code) before GitHub, whenever its shared copy is
-  due again, and GitHub only when the relay's answer isn't used. Off, nothing changes, and
-  `feed.txt` always wins over both. The relay is untrusted transport, so its list is used only
+  due again, and GitHub only when the relay's answer isn't used (a 502 from the relay, which is
+  how it answers when it has no copy and GitHub fails, a body that isn't a list, no `Age`, and
+  so on). `feed.txt` always wins over both. The relay is untrusted transport, so its list is used only
   if it answers 200 itself (no redirect is followed), within 10 seconds, and the list:
   * is one GitHub could have given (the same checks as GitHub's), with no draft and every
     release tagged `v<version>`;
@@ -424,8 +425,28 @@ into one folder with one version. An app update is a host update, so they never 
   is when its copy was made, so `UpdateState.CheckedAt` and Settings say that), and it doesn't
   end GitHub's backoff: only GitHub answering does, and if the relay then fails, the check is
   held until GitHub's time as before. Which answered is kept with the list (`Source`, `cdn` or
-  `github`) and, while the switch is on, said in the app's and the host's logs at each ask,
-  with the relay copy's age or the plain reason it wasn't used, never an exception's text.
+  `github`) and said in the app's and the host's logs at each ask, with the relay copy's age or
+  the plain reason it wasn't used, never an exception's text.
+
+  **GitHub must answer at least every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
+  relay says how old its copy is, so a compromised relay could serve an old but valid list with
+  `Age: 0` for ever, and the floor above only moves when GitHub answers: machines would be frozen
+  on that list and never offered anything newer. So when GitHub last answered a check (a 200, or a
+  304 for its list) is kept in the same state file, `release-discovery.json` (`gitHubAnsweredAt`,
+  written atomically; one file shared by the app and every profile's host, so a GitHub answer to
+  any of them counts for all), and only GitHub's own answer moves it, never the relay's. Once it
+  is 6 hours old, or missing, unreadable or in the future, neither the relay nor a relay's list
+  kept in the file is used for the check: GitHub is asked. If GitHub then fails (limited,
+  offline) the check fails as any GitHub failure does (the hold and backoff of #934), and is never
+  answered from the relay. A machine that has never had an answer from GitHub asks GitHub first.
+  Inside the 6 hours the relay is used as above.
+
+  **What a compromised relay can still do** (a risk both reviewers of #1175 accepted): choose
+  among this repository's genuine releases, whose feeds and packages still come from GitHub and
+  are checked against their checksums, and flip a release's pre-release flag, so a machine with
+  Include pre-releases off could be offered a genuine pre-release. It cannot offer anything older
+  than GitHub's last list here or than the installed version, and it cannot hold a machine on an
+  older genuine list for more than 6 hours.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and

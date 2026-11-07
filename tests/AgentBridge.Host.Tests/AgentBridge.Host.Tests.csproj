@@ -33,6 +33,8 @@
     <!-- Copilot CLI screens built from captured screens and its rendering code (#825). -->
     <None Include="..\fixtures\screens\*" Link="fixtures\screens\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\fixtures\copilot\signin-401.jsonl" Link="fixtures\copilot\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The release list the CDN answered on 2026-11-07 (#927), trimmed: the update tests read it as the client does. -->
+    <None Include="..\fixtures\updates\*" Link="fixtures\updates\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
