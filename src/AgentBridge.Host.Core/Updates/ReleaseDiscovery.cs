@@ -37,6 +37,14 @@ namespace AgentBridge.Host.Core.Updates;
 // come from GitHub's download URLs and are still checked against their checksums. A list from the
 // relay is as old as the relay's copy (its Age header, which it must send), never "GitHub answered
 // now": FetchedAt says so, and GitHub's own backoff stays in force until GitHub itself answers.
+//
+// The relay also says how old its copy is, so a compromised one could serve an old but valid list
+// with Age 0 for ever, and the floor above only moves when GitHub answers. So GitHub must answer
+// at least every GithubRevalidateEvery: when it last did is kept in the state file
+// (GitHubAnsweredAt), only GitHub's own answer moves it, and once it is that old (or missing,
+// unreadable or in the future) neither the relay nor a list kept from it is used: GitHub is asked,
+// and if it fails the check fails as any GitHub failure does (its hold and backoff), never
+// answered from the relay.
 public sealed class ReleaseDiscovery : IDisposable
 {
     // The switch, on now the relay is live (SRE's Worker, #927): flipped by a release, never by a setting.
@@ -49,6 +57,8 @@ public sealed class ReleaseDiscovery : IDisposable
     const string AssetApiPrefix = "https://api.github.com/repos/danswett/agent-bridge/releases/assets/";
     // A relay copy older than this is not used: GitHub is asked, or its backoff says when it will be.
     public static readonly TimeSpan CdnOldest = TimeSpan.FromHours(1);
+    // GitHub itself must answer a check at least this often, whatever the relay says.
+    public static readonly TimeSpan GithubRevalidateEvery = TimeSpan.FromHours(6);
     static readonly TimeSpan CdnWait = TimeSpan.FromSeconds(10);
     // GitHub's page of ten releases is tens of KiB.
     const int CdnLargest = 4 * 1024 * 1024;
@@ -159,6 +169,8 @@ public sealed class ReleaseDiscovery : IDisposable
             // raises it, so a forged high version can't make later genuine lists look old.
             var floor = channel is not null && state.Url == url && state.Floors?.TryGetValue(Floor(channel, prereleases), out var f) == true ? f : null;
             var askCdn = cdn && url == GitHubList && channel is not null;
+            // Only GitHub's own answer moves this, so a relay can't renew its own list's welcome.
+            var revalidate = state.GitHubAnsweredAt is not { } answered || answered > now || now - answered >= GithubRevalidateEvery;
             if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn))
             {
                 if (state.Source != Sources.Cdn) { return releases; }
@@ -167,6 +179,7 @@ public sealed class ReleaseDiscovery : IDisposable
                 // not be this one's (a list with a pre-release above GitHub's floor and an older
                 // stable release would take a stable caller back; review 6712185589).
                 var problem = channel is null ? "this check's channel isn't known"
+                    : revalidate ? $"GitHub has not answered here in the last {Span(GithubRevalidateEvery)}"
                     // Its age now, not when it was fetched: a copy taken at 59 minutes may not be
                     // served for another interval past the hour (review 6712407884).
                     : state.FetchedAt is not { } copied || now - copied > CdnOldest ? $"its copy is more than {Span(CdnOldest)} old now"
@@ -175,10 +188,21 @@ public sealed class ReleaseDiscovery : IDisposable
                 log?.Invoke($"update check: the CDN's release list kept here was not used for this check, as {problem}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
                 askCdn = false;
             }
+            if (askCdn && revalidate)
+            {
+                log?.Invoke($"update check: the CDN was not asked, as GitHub has not answered here in the last {Span(GithubRevalidateEvery)}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
+                askCdn = false;
+            }
             if (askCdn)
             {
                 var (body, age, refused) = await AskCdnAsync(floor, installed, channel!, prereleases, cancellationToken);
                 now = time.GetUtcNow();
+                // The deadline may have passed while the relay was answering.
+                if (state.GitHubAnsweredAt is not { } before || before > now || now - before >= GithubRevalidateEvery)
+                {
+                    body = null;
+                    refused = $"GitHub has not answered here in the last {Span(GithubRevalidateEvery)}";
+                }
                 if (body is not null && age is { } a && Readable(body, read, out var relayed))
                 {
                     // GitHub's backoff, its failures and its problem stay as they were: only
@@ -216,6 +240,7 @@ public sealed class ReleaseDiscovery : IDisposable
                     Failures = 0,
                     Problem = null,
                     Source = Sources.GitHub,
+                    GitHubAnsweredAt = url == GitHubList ? now : state.GitHubAnsweredAt,
                     Floors = ChannelNewest(body),
                 };
                 Write(state);
@@ -549,7 +574,8 @@ public sealed class ReleaseDiscovery : IDisposable
             (unsaved, underneath) = (false, disk.Saved);
             return memory = disk;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return memory; }
+        catch (JsonException) { return memory = memory with { GitHubAnsweredAt = null }; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return memory; }
     }
 
     void Write(State state)
@@ -598,6 +624,8 @@ public sealed class ReleaseDiscovery : IDisposable
         public string? Problem { get; init; }
         public DateTimeOffset? Saved { get; init; }
         public string? Source { get; init; }
+        // When GitHub itself last answered a check (a 200, or a 304 for a list it gave): never a relay's.
+        public DateTimeOffset? GitHubAnsweredAt { get; init; }
         // What GitHub's last list offered each channel (ChannelNewest), never a relay's.
         public Dictionary<string, string>? Floors { get; init; }
     }
