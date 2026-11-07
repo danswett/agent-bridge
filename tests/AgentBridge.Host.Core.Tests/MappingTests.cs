@@ -29,6 +29,63 @@ public class QuestionMappingTests
         Assert.True(q.AnswerAtMachine);
     }
 
+    [Fact]
+    public void Free_text_with_no_form_or_list_is_shown_to_be_answered_at_the_machine_and_forms_and_lists_are_offered_as_before()
+    {
+        // The host types into a form it can see on screen, field by field, and a schema-less
+        // ask_user draws none it knows (#510 review, Copilot 5784910042).
+        Assert.True(Ask("""{ "message": "What next?" }""").AnswerAtMachine);
+        Assert.True(Ask("""{ "question": "What next?" }""").AnswerAtMachine);
+
+        Assert.Null(Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] } } } }""").AnswerAtMachine);
+    }
+
+    [Theory]
+    // What CopilotForm.Read refuses, or reads as no fields at all, the host never types, so each
+    // is shown to be answered at the machine rather than offered and refused every time (#510
+    // review, Copilot 4480874464): an empty schema, one with no properties, one that is not an
+    // object, properties none or only some of which are objects, and the older `choices` format,
+    // an empty list or one beside a schema included.
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": {} } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": {} }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": [] }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": "not json" }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": "{\"properties\":{}}" }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": [] } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": "text", "b": 1 } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean" }, "b": 1 } } }""")]
+    [InlineData("""{ "question": "Which?", "choices": ["a", "b"] }""")]
+    [InlineData("""{ "message": "m", "choices": [], "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "choices": ["a"], "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    // Two fields between the first and the last headed alike, which the host cannot tell apart
+    // on screen; a field with no heading to find (a title with a line break, of white space, empty
+    // or not a string); and a schema encoded as JSON twice, which CopilotForm.Read parses once
+    // to text (#510 review, Trust on 8335427d).
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": { "type": "boolean" }, "x": { "type": "string", "title": "Same" }, "y": { "type": "string", "title": "Same" }, "z": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": { "type": "boolean" }, "x": { "type": "boolean", "title": "Same  one" }, "y": { "type": "boolean", "title": "Same one" }, "z": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean", "title": "Pick\n" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "string", "title": "   " } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "string", "title": "" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean", "title": 5 } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": "\"{\\\"properties\\\":{\\\"go\\\":{\\\"type\\\":\\\"boolean\\\"}}}\"" }""")]
+    public void A_question_the_host_would_refuse_to_type_is_shown_to_be_answered_at_the_machine(string arguments) =>
+        Assert.True(Ask(arguments).AnswerAtMachine);
+
+    [Theory]
+    // Forms the host types are offered as before: one field or several, from an object schema or
+    // one sent as a JSON string, and a `choices` of null is no older format.
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "name": { "type": "string" }, "n": { "type": "number" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": "{\"properties\":{\"go\":{\"type\":\"boolean\"}}}" }""")]
+    [InlineData("""{ "message": "m", "choices": null, "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    // Alike headings the hints tell apart (first and last), or that differ by the colon a text
+    // box goes without; and a null title, which the CLI reads as the field's name.
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "x": { "type": "string", "title": "Same" }, "y": { "type": "string", "title": "Same" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": { "type": "boolean" }, "x": { "type": "string", "title": "Same" }, "y": { "type": "boolean", "title": "Same" }, "z": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean", "title": null } } } }""")]
+    public void A_form_the_host_types_is_offered_to_be_answered_from_a_client(string arguments) =>
+        Assert.Null(Ask(arguments).AnswerAtMachine);
+
     [Theory]
     // A list Copilot opens on its Other box (a null default, or one naming no option), and lists
     // the host cannot drive, are flagged to the person rather than offered and then refused (#700).
@@ -146,14 +203,18 @@ public class QuestionMappingTests
     }
 
     [Fact]
-    public void A_question_that_is_one_option_list_also_takes_words_through_Other_and_a_form_does_not()
+    public void A_lone_Copilot_list_shows_its_Other_unavailable_with_why_and_a_form_or_checkbox_list_does_not()
     {
         var lone = Assert.Single(Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] } } } }""").Fields);
         var form = Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] }, "go": { "type": "boolean" } } } }""");
         var list = Assert.Single(Ask("""{ "message": "m", "requestedSchema": { "properties": { "many": { "type": "array", "items": { "enum": ["a", "b"] } } } } }""").Fields);
 
-        Assert.True(lone.AllowOther);
-        Assert.Null(form.Fields[0].AllowOther);
+        // A live session takes a lone list's Other words in a box of its own, drawn apart from the
+        // form, which the host cannot hold its keys to yet (#510 review, Trust on 5c1d5147): the
+        // CLI offers Other, so the field says why it can't be sent rather than leave it out (#908).
+        Assert.Equal((null, AnswerReasons.OtherNotSendable), (lone.AllowOther, lone.OtherUnavailable));
+        Assert.Equal((null, null), (form.Fields[0].AllowOther, form.Fields[0].OtherUnavailable));
+        Assert.Null(list.OtherUnavailable);
         Assert.Null(list.AllowOther);
     }
 

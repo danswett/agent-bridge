@@ -16,6 +16,9 @@ public class CopilotPlannerTests
     {
         using var doc = JsonDocument.Parse(arguments);
         var question = QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0);
+        // Free text is listed for the machine and refused before it is planned (AnswerService,
+        // #510 review); its plan is still the planner's to make, and is tested here as such.
+        if (question.Fields.Count == 0) { question = question with { AnswerAtMachine = null }; }
         var (form, problem) = CopilotForm.Read(doc.RootElement.Clone());
         Assert.Null(problem);
         // The two readers of one schema agree, or nothing would be typed at all.
@@ -125,7 +128,10 @@ public class CopilotPlannerTests
             """, Answer(new { colour = "blue", go = true, notes = "note\nhere", count = 42 }));
 
         Assert.Equal([(U + U + D + D, true), (U, true), ("note here", true), ("42", true)], Keys(plan));
-        Assert.All(plan.Keys.Sends, s => Assert.Equal((CopilotPlanner.FieldEnterDelayMs, CopilotPlanner.AfterFieldMs), (s.EnterDelayMs, s.PauseAfterMs)));
+        // Words wait the reply's pause before their Enter, an option list its own (#467).
+        Assert.Equal([CopilotPlanner.FieldEnterDelayMs, CopilotPlanner.FieldEnterDelayMs, CopilotPlanner.ReplyEnterDelayMs, CopilotPlanner.ReplyEnterDelayMs],
+            plan.Keys.Sends.Select(s => s.EnterDelayMs));
+        Assert.All(plan.Keys.Sends, s => Assert.Equal(CopilotPlanner.AfterFieldMs, s.PauseAfterMs));
         Assert.Equal(["colour", "go", "notes", "count"], plan.Fields.Select(f => f.Name));
     }
 
@@ -813,7 +819,12 @@ public class CopilotPlannerTests
     [Fact]
     public void Words_through_Other_walk_up_to_the_top_then_down_past_the_last_option_and_submit_separately()
     {
-        var plan = Plan(Pick, Answer(new { pick = new { other = "none of these 🙂" } }));
+        // Planned as before, and marked as going through Other, which the host refuses before any
+        // key for now and the listing does not offer (#510 review, Trust on 5c1d5147).
+        var (form, _) = Ask(Pick);
+        var plan = CopilotPlanner.Plan(form, Answer(new { pick = new { other = "none of these 🙂" } })).Plan!;
+        Assert.True(CopilotPlanner.ThroughOther(form, plan));
+        Assert.False(CopilotPlanner.ThroughOther(form, Plan(Pick, Answer(new { pick = "b" }))));
 
         // Four options: three Ups reach the top from any row, four Downs open Other.
         Assert.Equal([(U + U + U + D + D + D + D, false), ("none of these 🙂", true)], Keys(plan));
@@ -956,6 +967,14 @@ public class CopilotPlannerTests
 
         Assert.False(form.Matches(reordered));
         Assert.False(form.Matches(question with { Fields = [] }));
+    }
+
+    [Fact]
+    public void Typed_words_are_found_on_screen_by_their_end_however_the_CLI_wraps_and_borders_them()
+    {
+        var tail = WordsOnScreen.Tail("Very close. The middle bar does not connect all the way");
+        Assert.Equal(0, WordsOnScreen.Count(["\u2502 Feedback (optional)  \u2502", "\u2502                      \u2502"], tail));
+        Assert.Equal(1, WordsOnScreen.Count(["\u2502 Very close. The middle bar does \u2502", "\u2502 not connect all the  \u2502", "\u2502 way                  \u2502"], tail));
     }
 }
 

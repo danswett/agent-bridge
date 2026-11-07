@@ -139,10 +139,36 @@ export class AnswerService {
   }
 
   // A client for a host is up: anything waiting to be resent to that host goes now. Without
-  // a host, every host's.
+  // a host, every host's. And an answer the host reported typed but unconfirmed (a stage) is
+  // asked about again, with the same request, so one the session recorded late, or the person
+  // submitted at the machine, comes back delivered (#467). The host never types a request
+  // twice, so this only reads; it stops once the host may have forgotten the request.
   ready(hostId = null) {
     for (const entry of this.#entries.values()) {
-      if (entry.state === 'waiting' && (hostId === null || entry.hostId === hostId)) { this.#attempt(entry); }
+      if (hostId !== null && entry.hostId !== hostId) { continue; }
+      if (entry.state === 'waiting') { this.#attempt(entry); } else if (this.#checkable(entry)) { this.#recheck(entry); }
+    }
+  }
+
+  #checkable(entry) {
+    return entry.state === 'done' && entry.outcome === 'unconfirmed' && entry.detail?.stage != null
+      && entry.firstSentAt !== null && this.now() - entry.firstSentAt <= this.giveUpFor(entry);
+  }
+
+  // The settled entry is shown as it is meanwhile, and changes only if the host says more.
+  // Only the latest ask may change it: one still out on an older channel, answered after a
+  // newer one, would otherwise put back what the newer one replaced.
+  async #recheck(entry) {
+    const cur = this.current(entry.hostId);
+    if (!cur?.client || cur.client.closed || cur.hostId !== entry.hostId) { return; }
+    const token = ++entry.token;
+    let result;
+    try { result = await this.send(cur.client, this.payload(entry), this.#snapshot(entry), () => {}); } catch { return; }
+    if (token !== entry.token || entry.state !== 'done' || entry.outcome !== 'unconfirmed') { return; }
+    // A new reason at the same stage is news too (a late completion's error replacing a
+    // mismatch), so it is shown rather than the evidence it replaced.
+    if (result.outcome === 'delivered' || (result.outcome === 'unconfirmed' && (result.stage !== entry.detail?.stage || result.reason !== entry.reason))) {
+      this.#set(entry, { outcome: result.outcome, reason: result.reason, detail: result });
     }
   }
 

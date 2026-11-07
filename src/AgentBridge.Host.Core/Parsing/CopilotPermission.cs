@@ -176,6 +176,14 @@ public static partial class CopilotPermission
     // and Windows' default line ending would end every line of a tool's arguments in its escape.
     static readonly JsonWriterOptions Indented = new() { Indented = true, NewLine = "\n", Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
+    // The tool call a permission.requested event's data is for, as Describe reads it
+    // (promptRequest's, else permissionRequest's) without describing the request: attributing
+    // every request a transcript holds needs no more, and describing each one formats and hashes
+    // what it would run (#510 review, Copilot 4484009896).
+    public static string? ToolCallId(JsonElement data) =>
+        (Json.Obj(data, "promptRequest") is { } prompt ? Json.Str(prompt, "toolCallId") : null)
+        ?? (Json.Obj(data, "permissionRequest") is { } permission ? Json.Str(permission, "toolCallId") : null);
+
     // data: a permission.requested event's data. promptRequest is what the CLI draws, so it is
     // preferred; older builds wrote only permissionRequest, whose shell kind is the commands
     // prompt.
@@ -187,7 +195,7 @@ public static partial class CopilotPermission
         if (request is null || (prompt ?? permission) is not { } p) { return null; }
         var kind = Json.Str(p, "kind") ?? "";
         if (prompt is null && kind == "shell") { kind = "commands"; }
-        var toolCallId = Json.Str(p, "toolCallId") ?? (permission is { } q ? Json.Str(q, "toolCallId") : null);
+        var toolCallId = ToolCallId(data);
 
         string? atMachine = null;
         var message = Message(kind, p);

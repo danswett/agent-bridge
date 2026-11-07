@@ -74,6 +74,9 @@ public static class ProtocolVectors
         Default = JsonSerializer.SerializeToElement("s6"), Required = true,
     };
     static readonly Field Parts = new() { Name = "parts", Title = "Parts", Type = FieldType.Multi, Options = [new("host"), new("relay"), new("pwa")], AllowOther = true };
+    // A Copilot list whose Other the machine cannot send yet (#908): shown disabled, with why.
+    static readonly Field Pick = new() { Name = "pick", Type = FieldType.Choice, Options = [new("pg"), new("sqlite")], OtherUnavailable = AnswerReasons.OtherNotSendable };
+    static readonly Question Lone = new() { Id = "call_q4", Kind = QuestionKind.Form, Message = "Which store?", Fields = [Pick], AskedAt = T0 };
     static readonly Field Confirm = new() { Name = "confirm", Type = FieldType.Boolean };
     static readonly Field Notes = new() { Name = "notes", Type = FieldType.Text };
     static readonly Field Count = new() { Name = "count", Type = FieldType.Number, Default = JsonSerializer.SerializeToElement(3) };
@@ -202,6 +205,7 @@ public static class ProtocolVectors
             .Valid("value-only", new Option("s7"));
         f.Record<Field>(Host)
             .Valid("choice", Spike)
+            .Valid("a-choice-whose-other-the-machine-cannot-send-yet", Pick)
             .Valid("text", Notes)
             .Valid("number", Count)
             .Valid("a-number-with-constraints", Bounded)
@@ -346,8 +350,8 @@ public static class ProtocolVectors
             .Valid("gone-to-a-client-of-patches", new SessionRemoved(SessionId, 131));
         Patches(f);
 
-        const string form = "a-form", plain = "a-plain-question", approval = "an-approval", many = "five-text-fields";
-        f.Context(form, new { question = Form }).Context(plain, new { question = Plain }).Context(approval, new { question = Approval }).Context(many, new { question = ManyTexts })
+        const string form = "a-form", plain = "a-plain-question", approval = "an-approval", many = "five-text-fields", lone = "a-list-whose-other-cannot-be-sent";
+        f.Context(form, new { question = Form }).Context(lone, new { question = Lone }).Context(plain, new { question = Plain }).Context(approval, new { question = Approval }).Context(many, new { question = ManyTexts })
             .Context("a-form-with-constraints", new { question = Limited })
             .Context("a-truncated-question", new { question = Plain with { Truncated = true } })
             .Context("an-approval-answered-at-the-machine", new { question = Approval with { AnswerAtMachine = true } });
@@ -393,6 +397,8 @@ public static class ProtocolVectors
             .Refused("a-required-field-sent-as-null", Answer(form, With("spike", null)), form)
             .Refused("not-one-of-the-choices", Answer(form, With("spike", "s8")), form)
             .Refused("an-other-answer-where-none-is-allowed", Answer(approval, new() { ["decision"] = new { other = "maybe" } }), approval)
+            .Valid("an-option-of-a-list-whose-other-cannot-be-sent", Answer(lone, new() { ["pick"] = "pg" }), lone)
+            .Refused("an-other-answer-the-machine-cannot-send-yet", Answer(lone, new() { ["pick"] = new { other = "DuckDB" } }), lone)
             .Refused("an-empty-other-answer", Answer(form, With("spike", new { other = " " })), form)
             .Refused("more-beside-other", Answer(form, With("spike", new { other = "s9", label = "x" })), form)
             .Refused("an-other-answer-over-4-KiB", Answer(form, With("spike", new { other = Repeat('a', Limits.AnswerText + 1) })), form)
@@ -425,8 +431,12 @@ public static class ProtocolVectors
         f.Record<AnswerResult>(Host)
             .Valid("delivered", new AnswerResult(AnswerOutcome.Delivered))
             .Valid("refused", new AnswerResult(AnswerOutcome.Refused, "\"Spike\" needs an answer"))
+            .Valid("refused-for-other-the-machine-cannot-send-yet", new AnswerResult(AnswerOutcome.Refused, AnswerReasons.Text(AnswerReasons.OtherNotSendable)) { Code = AnswerReasons.OtherNotSendable })
             .Valid("stale", new AnswerResult(AnswerOutcome.Stale, "the question is no longer pending"))
-            .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"queued","reason":"later"}""");
+            .Valid("typed-but-not-recorded", new AnswerResult(AnswerOutcome.Unconfirmed, "the answer was typed into the prompt, but the session did not record an answer within 15 seconds, so it may not have been submitted; check at the machine", AnswerStage.Typed))
+            .Valid("recorded-differently", new AnswerResult(AnswerOutcome.Unconfirmed, "the session recorded a different answer for \"spike\"; check at the machine", AnswerStage.Recorded))
+            .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"queued","reason":"later"}""")
+            .Reads("an-unknown-stage-reads-as-typed", """{"outcome":"unconfirmed","reason":"later","stage":"acknowledged"}""");
 
         ReplyRequest Reply(string? text, params string[] attachments) => new()
         {

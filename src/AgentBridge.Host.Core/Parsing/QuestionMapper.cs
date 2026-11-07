@@ -121,15 +121,28 @@ internal static class QuestionMapper
         else if (Json.Get(arguments, "requestedSchema") is { } schema)
         {
             (fields, var drivable) = SchemaForm(schema, patterns);
-            // Every Copilot option list ends in "Other (type your answer)", but words reach
-            // it only in a question that is that one list: the Down past its last option
-            // opens Other there, and in a tabbed form or a checkbox list it does not.
-            if (fields is [{ Type: FieldType.Choice } only]) { fields = [only with { AllowOther = true }]; }
+            // Every Copilot option list ends in "Other (type your answer)", and a lone list's
+            // Other takes words at the CLI, but not from here yet. In a live 1.0.105 session the
+            // Down past its last option opens Other as a label in the form ("Other (type your
+            // answer below)") and takes the words in a box of the session's own, drawn apart from
+            // the form (`Dxn`'s onExternalFreeform, `bOe` in pinnedFooterContent), above or below
+            // it by the footer's mode; the host holds keys only to the form, so it refuses the
+            // words before any key (AnswerService). The field says so rather than leave Other out:
+            // a client shows it disabled, with why (#510 review, Trust on 5c1d5147; #908). Typed
+            // blind, as agent-ha-bridge did, the words reached that box.
+            if (fields is [{ Type: FieldType.Choice } only]) { fields = [only with { OtherUnavailable = AnswerReasons.OtherNotSendable }]; }
             // A field the CLI draws as something other than its schema says, or that cannot be
             // told, is never typed into, so a client shows the question to be answered at the
             // machine rather than offer what the host would then refuse (#662).
-            atMachine = !drivable;
+            atMachine = !drivable || !Drivable(schema);
         }
+        // What the host does not type, listed for the machine rather than offered with a box or
+        // list whose answer is always refused, as CopilotForm.Read refuses it, in its order: the
+        // older format (`choices` present at all, an empty list or one beside a schema included),
+        // then a question with no fields once its schema is read: free text, with no form on
+        // screen to hold its keys to, or a schema that is empty, not an object, or whose
+        // properties are none of them objects (#510 review, Copilot 5784910042, 4480874464).
+        if (Json.Get(arguments, "choices") is not null || fields.Count == 0) { atMachine = true; }
         return new Question
         {
             Id = id,
@@ -161,7 +174,8 @@ internal static class QuestionMapper
     }
 
     // One Field per schema property, in order. A schema that arrived as text (the model
-    // wrote it as a string) is parsed first.
+    // wrote it as a string) is parsed first, once, as CopilotForm.Read parses it: text that
+    // parses to more text is no form (#510 review, Trust on 8335427d).
     public static IReadOnlyList<Field> SchemaFields(JsonElement schema) => SchemaForm(schema).Fields;
 
     // The fields, and whether every one reads as one input Copilot CLI is known to draw for it
@@ -175,7 +189,7 @@ internal static class QuestionMapper
             try
             {
                 using var doc = JsonDocument.Parse(Json.Repaired(System.Text.Encoding.UTF8.GetBytes(schema.GetString() ?? "")));
-                return SchemaForm(doc.RootElement, budget);
+                return doc.RootElement.ValueKind == JsonValueKind.Object ? SchemaForm(doc.RootElement, budget) : ([], true);
             }
             catch (Exception e) when (e is JsonException or InvalidOperationException) { return ([], true); }
         }
@@ -197,6 +211,36 @@ internal static class QuestionMapper
             fields.Add(field);
         }
         return (fields, drivable);
+    }
+
+    // Whether every field of a schema reads as one input Copilot CLI is known to draw for it,
+    // under a heading the host can find on screen and tell from every other field's. A schema
+    // sent as text is parsed once, as CopilotForm.Read parses it.
+    static bool Drivable(JsonElement schema)
+    {
+        if (schema.ValueKind == JsonValueKind.String)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(schema.GetString() ?? "");
+                return doc.RootElement.ValueKind == JsonValueKind.Object && Drivable(doc.RootElement);
+            }
+            catch (JsonException) { return false; }
+        }
+        if (Json.Obj(schema, "properties") is not { } properties) { return true; }
+        var headings = new List<string?>();
+        foreach (var p in properties.EnumerateObject())
+        {
+            // A property that is not an object is refused too (CopilotForm.Schema), even beside
+            // one that is: listed as answerable, that form was refused every time (#510 review,
+            // Copilot 4480874464). So is a field with no heading to find on screen, or two whose
+            // headings cannot be told apart there (CopilotFormScreen; Trust on 8335427d).
+            if (p.Value.ValueKind != JsonValueKind.Object) { return false; }
+            var (input, _, problem) = CopilotFieldSchema.Read(p.Value);
+            if (problem is not null || CopilotFieldSchema.Label(p.Name, p.Value) is not { } label) { return false; }
+            headings.Add(CopilotFieldSchema.Heading(label, input is CopilotFieldSchema.Input.Text or CopilotFieldSchema.Input.Number));
+        }
+        return CopilotFieldSchema.Alike(headings) is null;
     }
 
     // A required text box that opens with only spaces in it has no answer from another device: its

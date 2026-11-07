@@ -538,6 +538,12 @@ public sealed partial class QuestionViewModel : Observable
         }
         var text = OutcomeText[outcome](at);
         if (outcome == "refused" && e.Reason is { } r) { text = $"The machine refused this answer: {r}."; }
+        // A reason with fixed words of its own, the same in every client (#908).
+        if (outcome == "refused" && e.Result is { ValueKind: JsonValueKind.Object } result && result.TryGetProperty("code", out var c)
+            && c.ValueKind == JsonValueKind.String && c.GetString() is { } code && AnswerReasons.Known(code))
+        {
+            text = AnswerReasons.NotSent + AnswerReasons.Text(code);
+        }
         if (outcome == "unconfirmed" && e.Reason is { } u) { text += $" ({u})"; }
         return Said(outcome, text, outcome == "refused" ? Tone.Bad : Tone.Warn);
     }
@@ -560,7 +566,7 @@ public sealed partial class QuestionViewModel : Observable
 
     static bool SameField(Field a, Field b) =>
         a.Name == b.Name && a.Type == b.Type && a.Title == b.Title && a.Description == b.Description
-        && a.AllowOther == b.AllowOther && a.Required == b.Required && a.Default?.GetRawText() == b.Default?.GetRawText()
+        && a.AllowOther == b.AllowOther && a.OtherUnavailable == b.OtherUnavailable && a.Required == b.Required && a.Default?.GetRawText() == b.Default?.GetRawText()
         && (a.Options ?? []).SequenceEqual(b.Options ?? []);
 
     // Whether this client may answer, and if not, why (pwa/js/answers.js, answerability).
@@ -670,6 +676,10 @@ public sealed partial class FieldViewModel : Observable
     public string TypeLabel => TypeLabels[spec.Type];
     public bool Required => spec.Required == true;
     public bool AllowOther => spec.AllowOther == true && spec.Type is FieldType.Choice or FieldType.Multi;
+    // Other the agent offers and this machine cannot send yet (#908): shown, disabled, with this
+    // sentence under the choices and as their description. Null when Other is offered or absent.
+    public string? OtherUnavailable => !AllowOther && spec.Type is FieldType.Choice && AnswerReasons.Known(spec.OtherUnavailable)
+        ? AnswerReasons.Text(spec.OtherUnavailable!) : null;
     public ObservableCollection<OptionViewModel> Options { get; }
 
     public bool OtherChosen

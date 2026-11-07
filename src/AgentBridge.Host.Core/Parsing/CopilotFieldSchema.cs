@@ -83,6 +83,55 @@ public static partial class CopilotFieldSchema
         }
     }
 
+    // The field's heading as Copilot CLI 1.0.105 draws it (`Uxn`: `title ?? name`; a list's,
+    // Yes/No's or multi-select's component adds a colon, a text or number box's does not). A
+    // title that is not a string, or an empty one (drawn as nothing at all), is not a heading
+    // the host can look for. Nor is one of white space alone: a text or number box draws it as a
+    // blank row, which cannot be told from the blank rows around it, and a list's as a lone
+    // colon. Nor is one with a control character: a line break ("Pick\n", "Pick\r") splits the
+    // heading across rows, its colon on the next, while the tab bar's first row still reads as
+    // the labels, so the field was found missing only once the fields before it had been
+    // answered (#510 review, Trust on 412f1b2d). Without a label every field of the form is
+    // refused before the first key, rather than this one only once the fields before it have
+    // been answered (#510 review, Copilot 5780656913).
+    public static string? Label(string name, JsonElement p) =>
+        (!p.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null ? name
+        : title.ValueKind == JsonValueKind.String && title.GetString() is { Length: > 0 } text ? text
+        : null) is { } label && !string.IsNullOrWhiteSpace(label) && !label.Any(char.IsControl) ? label : null;
+
+    // The heading as drawn, for a label: a text or number box's (`box`) title alone, any other's
+    // with a colon (`Fxn`, `Lxn`; `Dxn`, `Oxn`, `Nxn`). Read as "<title>:" for every field, the
+    // text field after a list was never found: the list was picked and committed, and the form
+    // left half answered (#510 review, Copilot 5780329899). The colon is added to the title as
+    // written before the whitespace is collapsed, as the CLI draws the two together (`t,":"`,
+    // never trimmed): "Pick one " is drawn "Pick one :", which the title collapsed first and the
+    // colon added after read as "Pick one:", and the list was refused after the fields before it
+    // had been committed (Copilot 5780656913).
+    public static string Heading(string label, bool box) => Spaces().Replace(label + (box ? "" : ":"), " ").Trim();
+
+    // The first field whose heading cannot be told on screen from an earlier one's, or null;
+    // headings are null for a field with no label. The field being answered is known by its
+    // heading and, among several, by the tab hints, which say only whether it is first, last or
+    // between; the tab bar marks it by colour alone, which the screen read does not carry. So two
+    // fields with the same heading, both between the first and the last, look the same: a screen
+    // that changed without the form moving on (an Enter the CLI did not act on, while something
+    // else repainted) would pass for the next one, and its keys go into the field before (#510
+    // review, Copilot 5780128109).
+    public static int? Alike(IReadOnlyList<string?> headings)
+    {
+        var count = headings.Count;
+        string Place(int i) => i == 0 ? "first" : i == count - 1 ? "last" : "between";
+        var seen = new HashSet<(string, string)>();
+        for (var i = 0; i < count; i++)
+        {
+            if (headings[i] is { } heading && !seen.Add((heading, Place(i)))) { return i; }
+        }
+        return null;
+    }
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex Spaces();
+
     // A keyword's list: absent (or null, which the CLI reads as absent), the list, or something
     // else, which it would read some other way.
     static (JsonElement? List, bool Bad) List(JsonElement o, string name)
