@@ -26,7 +26,10 @@ Only a future backend-authenticated identity source could safely support that co
 Public error and stage values must match the explicit `PublicErrorTypes` and `PublicStages`
 allowlists. Both default to empty, so an unrecognized code stays private until the #738
 envelope vocabulary is reviewed and configured. Public versions accept only numeric
-components with an optional `alpha`, `beta` or `preview` channel and numeric suffix.
+components of up to four digits with an optional `alpha`, `beta` or `preview` channel and
+numeric suffix. This accommodates workflow build numbers such as `0.1.1108`. Unclassified
+decrypted feedback retains its original metadata and private content in the private store
+for possible later classification.
 
 Public titles and labels follow #740: `[beta-feedback] <error type> at <stage> (<fp8>)`,
 `beta-feedback`, and `fb-kind:<error-type>`. The body is a deterministic rendering of

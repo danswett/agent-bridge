@@ -32,7 +32,8 @@ public sealed record FeedbackPrivateRecord(
     string Summary,
     string? PrivateContent,
     string? OpaqueCiphertextBase64,
-    string? UnclassifiedReason);
+    string? UnclassifiedReason,
+    FeedbackMetadata? Metadata = null);
 
 public sealed record PublicFeedbackIssue(
     string Fingerprint,
@@ -124,7 +125,7 @@ public sealed class FeedbackInboxProcessor(
 {
     static readonly Regex Code = new("^[a-z0-9][a-z0-9._-]{0,47}$", RegexOptions.CultureInvariant);
     static readonly Regex Version = new(
-        @"^[0-9]{1,3}(?:\.[0-9]{1,3}){1,3}(?:-(?:alpha|beta|preview)(?:\.[0-9]{1,3})?)?$",
+        @"^[0-9]{1,4}(?:\.[0-9]{1,4}){1,3}(?:-(?:alpha|beta|preview)(?:\.[0-9]{1,4})?)?$",
         RegexOptions.CultureInvariant);
     static readonly HashSet<string> OperatingSystems = ["windows", "macos", "ios", "android", "linux"];
     static readonly HashSet<string> Architectures = ["x64", "arm64", "x86", "arm", "wasm"];
@@ -187,7 +188,8 @@ public sealed class FeedbackInboxProcessor(
 
             if (!TryNormalize(decoded.Metadata, out var metadata))
             {
-                await SaveUnclassifiedAsync(name, "unclassified", decoded.PrivateContent, null, cancellationToken);
+                await SaveUnclassifiedAsync(
+                    name, "unclassified", decoded.PrivateContent, null, cancellationToken, decoded.Metadata);
                 await source.DeleteAsync(name, cancellationToken);
                 continue;
             }
@@ -215,7 +217,8 @@ public sealed class FeedbackInboxProcessor(
         string reason,
         string? privateContent,
         ReadOnlyMemory<byte>? ciphertext,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FeedbackMetadata? metadata = null)
     {
         var record = new FeedbackPrivateRecord(
             name,
@@ -224,7 +227,8 @@ public sealed class FeedbackInboxProcessor(
             "Unclassified beta feedback; public fields could not be safely derived.",
             privateContent,
             ciphertext is null ? null : Convert.ToBase64String(ciphertext.Value.Span),
-            reason);
+            reason,
+            metadata);
         await privateStore.StoreUnclassifiedAsync(record, cancellationToken);
     }
 

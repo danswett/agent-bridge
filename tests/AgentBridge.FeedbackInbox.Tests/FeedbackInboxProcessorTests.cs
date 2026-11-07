@@ -71,14 +71,19 @@ public sealed class FeedbackInboxProcessorTests
 
         await Processor(source, decryptor, privateStore, publicStore).ProcessAsync();
 
-        Assert.Equal("unclassified", Assert.Single(privateStore.Unclassified).UnclassifiedReason);
+        var record = Assert.Single(privateStore.Unclassified);
+        Assert.Equal("unclassified", record.UnclassifiedReason);
+        Assert.Equal(metadata, record.Metadata);
+        Assert.Contains(PrivateMarker, record.PrivateContent);
         Assert.Empty(publicStore.Issues);
     }
 
-    [Fact]
-    public async Task Non_numeric_versions_are_omitted_from_public_issues()
+    [Theory]
+    [InlineData("0.1.1108")]
+    [InlineData("0.1.4-preview.1108")]
+    public async Task Four_digit_build_numbers_are_preserved_in_public_issues(string version)
     {
-        var metadata = Classified with { AppVersion = "alice.smith" };
+        var metadata = Classified with { AppVersion = version };
         var source = new FakeSource(("random-name", [1, 2, 3]));
         var decryptor = new FakeDecryptor(new DecryptedFeedback(metadata, PrivateMarker));
         var privateStore = new FakePrivateStore();
@@ -87,7 +92,24 @@ public sealed class FeedbackInboxProcessorTests
         await Processor(source, decryptor, privateStore, publicStore).ProcessAsync();
 
         var issue = Assert.Single(publicStore.Issues);
-        Assert.DoesNotContain("alice.smith", issue.Body);
+        Assert.Contains($"App version: `{version}`", issue.Body);
+    }
+
+    [Theory]
+    [InlineData("alice.smith")]
+    [InlineData("0.1.11080")]
+    public async Task Invalid_versions_are_omitted_from_public_issues(string version)
+    {
+        var metadata = Classified with { AppVersion = version };
+        var source = new FakeSource(("random-name", [1, 2, 3]));
+        var decryptor = new FakeDecryptor(new DecryptedFeedback(metadata, PrivateMarker));
+        var privateStore = new FakePrivateStore();
+        var publicStore = new FakePublicStore();
+
+        await Processor(source, decryptor, privateStore, publicStore).ProcessAsync();
+
+        var issue = Assert.Single(publicStore.Issues);
+        Assert.DoesNotContain(version, issue.Body);
         Assert.Contains("App version: `unknown`", issue.Body);
     }
 
@@ -295,7 +317,9 @@ public sealed class FeedbackInboxProcessorTests
 
         await Processor(source, decryptor, privateStore, publicStore).ProcessAsync();
 
-        Assert.Equal("unclassified", Assert.Single(privateStore.Unclassified).UnclassifiedReason);
+        var record = Assert.Single(privateStore.Unclassified);
+        Assert.Equal("unclassified", record.UnclassifiedReason);
+        Assert.Equal(unsafeMetadata, record.Metadata);
         Assert.Empty(publicStore.Issues);
     }
 
