@@ -24,6 +24,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     private protected static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
     private protected readonly Fixture f = new();
+    // Time stands still for a launch unless a test gives it a short budget to run out (see PollClock).
+    private protected readonly PollClock clock = new(DateTimeOffset.UtcNow, frozen: true);
     private protected readonly FakeProbe probe = new();
     private protected readonly FakeScreens screens = new();
     private protected readonly FakeStarter starter;
@@ -70,6 +72,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     {
         await relay.DisposeAsync();
         await source.DisposeAsync();
+        await clock.DisposeAsync();
         foreach (var file in Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories)) { File.SetAttributes(file, FileAttributes.Normal); }
         f.Dispose();
     }
@@ -84,30 +87,36 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null)
     {
-        CopilotHome = homes?.Copilot ?? f.CopilotHome,
-        ClaudeHome = homes?.Claude ?? f.ClaudeHome,
-        ClaudeConfigDirExplicit = homes?.ClaudeConfigDirExplicit,
-        CodexHome = homes?.Codex ?? f.CodexHome,
-        Config = config,
-        PlatformSupported = true,
-        RegistrationWait = wait ?? TimeSpan.FromSeconds(5),
-        PollInterval = TimeSpan.FromMilliseconds(25),
-        ScreenAfter = TimeSpan.Zero,
-        ScreenEvery = TimeSpan.FromMilliseconds(25),
-        ReadyWait = readyWait ?? TimeSpan.FromSeconds(5),
-        TrustConfirmWait = trustConfirm ?? TimeSpan.FromSeconds(5),
-        FollowFor = follow ?? TimeSpan.FromMinutes(10),
-        TrustFollowFor = follow ?? TimeSpan.FromMinutes(30),
-        ExitGrace = TimeSpan.FromMilliseconds(100),
-        // The fixture's folders are under temp, which is a system folder to a real launch.
-        IsSystemDirectory = _ => false,
-        WorktreeUsage = usage,
-        LocalNow = now ?? (() => DateTime.Now),
-        Transfers = fetcher ?? transfers,
-        TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
-    }, log: logged.Enqueue, attachments: attachments);
+        // A test that names a budget is about it running out.
+        if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
+        return new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+        {
+            Time = clock,
+            CopilotHome = homes?.Copilot ?? f.CopilotHome,
+            ClaudeHome = homes?.Claude ?? f.ClaudeHome,
+            ClaudeConfigDirExplicit = homes?.ClaudeConfigDirExplicit,
+            CodexHome = homes?.Codex ?? f.CodexHome,
+            Config = config,
+            PlatformSupported = true,
+            RegistrationWait = wait ?? TimeSpan.FromSeconds(5),
+            PollInterval = TimeSpan.FromMilliseconds(25),
+            ScreenAfter = TimeSpan.Zero,
+            ScreenEvery = TimeSpan.Zero,
+            ReadyWait = readyWait ?? TimeSpan.FromSeconds(5),
+            TrustConfirmWait = trustConfirm ?? TimeSpan.FromSeconds(5),
+            FollowFor = follow ?? TimeSpan.FromMinutes(10),
+            TrustFollowFor = follow ?? TimeSpan.FromMinutes(30),
+            ExitGrace = TimeSpan.FromMilliseconds(100),
+            // The fixture's folders are under temp, which is a system folder to a real launch.
+            IsSystemDirectory = _ => false,
+            WorktreeUsage = usage,
+            LocalNow = now ?? (() => DateTime.Now),
+            Transfers = fetcher ?? transfers,
+            TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
+        }, log: logged.Enqueue, attachments: attachments);
+    }
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
         host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage, now, readyWait: readyWait)).HandleAsync;
@@ -965,8 +974,8 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         const string First = "71111111-1111-4111-8111-111111111111", Second = "72222222-2222-4222-8222-222222222222";
         locator.Installed["codex"] = @"C:\fake\codex.cmd";
         starter.Registers = false;
-        // The first's wait spans both launches and the second's registration: 5 s ran out on a slow runner (main, e50ec8e7).
-        Serve(Config(), wait: Patience * 6);
+        // The first's wait spans both launches and the second's registration: the clock stands still until it is told to run, so it cannot run out (5 s did on a slow runner, main e50ec8e7).
+        Serve(Config());
         var ch = await OpenAsync();
         var first = LaunchAsync(ch, new { agent = "codex", prompt = "one" });
         await WaitAsync(() => Task.FromResult(starter.Pids.Count == 1));

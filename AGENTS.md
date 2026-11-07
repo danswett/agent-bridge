@@ -1,8 +1,17 @@
 # Working on agent-bridge
 
-Read this before you change anything, whether you are a person or an agent. For where the
-project stands and what comes next, see [docs/status.md](docs/status.md). For the
-architecture, see [docs/design.md](docs/design.md).
+Read this before you change anything, whether you are a person or an agent.
+**New contributor or fresh session?** Read [CONTRIBUTING.md](CONTRIBUTING.md), then
+[the contributor workflow](docs/contributor-workflow.md), before taking work.
+These are required reading, not optional background. Read any instructions in the
+area you change too. For project context see [docs/status.md](docs/status.md);
+for architecture see [docs/design.md](docs/design.md).
+
+Do not assume personal memories, a previous session, a shared GitHub login or private
+Project access establish current ownership or permission. Confirm the canonical issue
+and accepted scope before editing. Helping a contributor does not make an agent a
+standing team coordinator; use [the participation rules](docs/contributor-workflow.md#participation)
+and do not start a collector, reporting timer or worker fleet just to contribute.
 
 ## The one rule that outranks the rest
 

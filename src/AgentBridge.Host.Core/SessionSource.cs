@@ -1089,6 +1089,10 @@ public sealed class SessionSource : ISessionSource, IRestoreMarks
                 else { _recovery.Remove(full.Id); }
             }
         }
+        if (shown.Attention is { Kind: AttentionKind.SignInNeeded, SignIn: null } needed && _options.PhoneSignIn.Contains(needed.Agent ?? shown.Agent))
+        {
+            shown = shown with { Attention = needed with { SignIn = SignInWhere.Phone } };
+        }
         if (endingSince is { } since) { shown = shown with { Status = SessionStatus.Ending, StatusSince = since }; }
         if (restored is not null) { shown = shown with { Restored = restored }; }
         // Badge or not (it goes after a day; the restore stays):
