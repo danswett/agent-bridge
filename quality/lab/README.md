@@ -163,8 +163,12 @@ run's artifacts are never a cut.
 
 There is one nightly source. Until SRE's #590 delivers the cut and promotion path, Platform
 may add one temporary default-branch schedule and cut resolver; #590 replaces it in one
-coordinated change, so there are never two timers or two cuts. Neither exists yet, and nothing
-is scheduled by this folder.
+coordinated change, so there are never two timers or two cuts. The orchestration draft is
+`.github/workflows/lab-nightly.yml`: its cron is commented out and its fixed source gate always
+refuses before cut resolution, OIDC or Azure sign-in. It calls the sole runner's refusing
+`-Apply` entrypoint, never treating a returned plan as execution. The landed provisioner and
+runner interface clear no execution prerequisite. No lab token is supplied; owner device flow
+on each role's fresh VM in every run remains required (§8). Nothing is scheduled by this folder.
 
 The nominal start is 01:00 Pacific. GitHub's cron is in UTC, so a fixed `0 9 * * *` starts at
 01:00 PST and 02:00 PDT; GitHub may also start a scheduled run late. `result.json` records the
@@ -264,13 +268,16 @@ Each item blocks execution, not this draft. `provision.ps1 -Apply` lists the one
 refuses while any is unmet; each is marked met only by the reviewed change that delivers its
 receipt.
 
+Any separately approved manual proof has its own scope; it clears none of these nightly
+execution gates.
+
 | Item | State | Owner |
 |---|---|---|
 | Owner authorization to execute and spend | **Absent**. Accepting the contract and this draft authorized neither | owner |
 | Cadence and budget (B1) | **Decided**: nightly, both roles, $75/month. Cost unmeasured | owner |
 | Native Windows Arm64: image, size, Trusted Launch, licence billing in this subscription | **Unproven** | Platform, owner |
 | Bootstrap (B2): `rg-agent-bridge-lab`, its network, the `lab` environment, an OIDC principal scoped to that group only, a subscription receipt | **Absent** | owner, Platform |
-| S0 snapshots per role, with the restore proof (§4) | **Absent** | Platform |
+| S0 snapshots per role, with the restore proof (§4) | **Absent** | owner |
 | Durable expiry sweeper and trusted inventory (§4) | **Absent** | SRE |
 | Run registration before the first create (§4): the trusted inventory, `provision.ps1` writing each run's exact names and expiry to it, and a verified read-back receipt | **Absent**; `Register-LabRun` refuses | Platform |
 | Cost and age alerts | **Absent** | SRE |

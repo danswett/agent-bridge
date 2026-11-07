@@ -54,19 +54,30 @@ are.
 
 ## What we collect
 
-**[confirm: copy the exact wording of what Send feedback and the opt-in telemetry collect from
-the D2 design (#732).]** Separately, the sessions you watch send their prompts, replies and
-approvals to your own phone through Slipgates' relay, encrypted end to end so the relay cannot
-read them. The relay does see connection details: which of your devices are online, when, and
-how much each sends.
+**[confirm: the controller's name and private contact, what each kind of data is used for,
+who handles it, where it is stored and for how long, and your rights, from Compliance's finding
+on #744 and the D2 design (#732). Do not send invitations until this is filled in.]**
+
+- Normal use: the sessions you watch send their prompts, replies and approvals to your own phone
+  through Slipgates' relay, encrypted end to end so the relay cannot read them. They do leave your
+  PC to reach your phone.
+- The relay does see connection details: which of your devices are online, when, and how much
+  each sends.
+- The optional automatic diagnostics described in #741 are not enabled in this beta and cannot
+  be turned on yet. Their design excludes session content; they must pass #732's technical and
+  privacy reviews before any uploads are enabled.
+- Feedback is only what you choose to send, by replying to your invitation today. When the
+  in-app Send feedback button lands, you will see a report before it goes. The feedback team can
+  read what you send; it is not visible only to you.
 
 ## Getting help and sending feedback
 
 Until the in-app Send feedback button lands (#738, #739), reply in the email or Teams
 conversation your invitation came in. Please do not file it as a public issue. If something
-fails, tell us the first step that failed and its exact error message. If it all worked, tell
-us that too: a PC session showing on your phone is the end of the guide. Never send tokens or
-sign-in codes.
+fails, tell us the first step that failed. Send only the minimum we need, and remove names,
+paths, prompts, code, tokens and sign-in codes first. Do not send a screenshot or log until you
+have looked through it. If it all worked, tell us that too: a PC session showing on your phone is
+the end of the guide.
 
 ## Uninstall
 
