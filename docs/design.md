@@ -286,6 +286,10 @@ answered only by a person at that machine).
 Same data as today's usage sensors and update entities, as resources. The fleet
 "check updates" action becomes a parallel command to each host.
 
+Managing a machine from a person's other device (restart, stop, hook repair, allowlisted
+config and the Home Assistant token) is proposed in
+[protocol/v1-manage.md](protocol/v1-manage.md) (#801), following the remote-update rules.
+
 ### 4.5 Ordering and the "first answer wins" race
 
 The host remains the single writer for its sessions. Two clients answering at once
