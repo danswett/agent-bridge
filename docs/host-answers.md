@@ -224,7 +224,12 @@ request ed05e9d7)" when another's dialog is the one drawn, or why the screen can
 and never typed for the request on screen instead: answer it at the machine. The key is
 held from the frame's top edge. The transcript is checked so before the screen is read and
 again after, so what the screen showed was this request while it was still waiting, and no
-request that arrived meanwhile is drawn in its place. Copilot 1.0.105 keeps a queue for each
+request that arrived meanwhile is drawn in its place. Each transcript check reconstructs the
+pending requests and their order before formatting and hashing only those still waiting;
+completed edits are not described again. Text parts of the dialog compare with all whitespace
+removed on both sides, so a hard-wrapped URL or token still matches, but any changed non-whitespace
+character does not. Boxed lines keep their exact, row-by-row comparison.
+Copilot 1.0.105 keeps a queue for each
 sort of prompt, in the order asked, and draws a waiting shell or other request (edit, read,
 MCP, tool) first, then a hook's, then a path request, then a URL request, whichever was asked
 first (`cli-main.js`: `GCn`'s queues, drawn in `cxo`'s order; `CopilotDialogs.DrawOrder`). So

@@ -30,16 +30,18 @@ public static class CopilotPermissionTranscript
     public static CopilotPermissionState Before(string path, string requestId)
     {
         // In the order asked: a Dictionary's enumeration order is not kept once one is removed.
-        var permissions = new List<(string Id, CopilotPermissionPrompt? Prompt)>();
+        var permissions = new List<(string Id, JsonElement Data)>();
         var asks = new Dictionary<string, string?>(StringComparer.Ordinal);
         if (Jsonl.Lines(path, 0, skipFirst: false, Line) is not { } to)
         {
             return new CopilotPermissionState(false, null, 0, 0, 0);
         }
-        var at = permissions.FindIndex(p => p.Id == requestId);
-        return new CopilotPermissionState(true, at < 0 ? null : permissions[at].Prompt, permissions.Count, asks.Count, to)
+        // Completed edits can carry entire files: format and hash only what is still waiting.
+        var pending = permissions.Select(p => (p.Id, Prompt: CopilotPermission.Describe(p.Data))).ToList();
+        var at = pending.FindIndex(p => p.Id == requestId);
+        return new CopilotPermissionState(true, at < 0 ? null : pending[at].Prompt, pending.Count, asks.Count, to)
         {
-            Others = [.. permissions.Where(p => p.Id != requestId)],
+            Others = [.. pending.Where(p => p.Id != requestId)],
             First = at == 0,
         };
 
@@ -63,9 +65,8 @@ public static class CopilotPermissionTranscript
                         asks.Remove(id);
                         break;
                     case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
-                        // Every one is described: the screen is checked for the others too.
                         permissions.RemoveAll(p => p.Id == id);
-                        permissions.Add((id, CopilotPermission.Describe(data)));
+                        permissions.Add((id, data.Clone()));
                         break;
                     case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:
                         permissions.RemoveAll(p => p.Id == id);
@@ -323,9 +324,7 @@ public static class CopilotPermissionScreen
 
     // Text wrapped onto rows reads as it was given, its runs of white space aside.
     static bool Reads(List<string> drawn, string text) =>
-        string.Equals(Collapse(string.Join(' ', drawn)), Collapse(text), StringComparison.Ordinal);
-
-    static string Collapse(string text) => string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        string.Equals(Squeeze(string.Concat(drawn)), Squeeze(text), StringComparison.Ordinal);
 
     static bool Rule(string mid) => mid.Trim() is { Length: >= 3 } s && s.All(c => c == '\u2500');
 

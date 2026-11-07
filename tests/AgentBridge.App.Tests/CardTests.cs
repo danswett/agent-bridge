@@ -214,6 +214,53 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_permission_count_change_keeps_the_original_answer_retryable_whether_it_fails_before_or_after_the_update(bool failedBefore)
+    {
+        var gate = new TaskCompletionSource();
+        host.OnAsync(Ops.SessionAnswer, async _ =>
+        {
+            await FakeHost.Until(gate.Task);
+            throw new InvalidOperationException("the host failed after reading it");
+        });
+        var asked = Make.Approval("r1#d") with { Waiting = 3 };
+        var card = new SessionCardViewModel(Make.Session(question: asked),
+            Context(caps: () => [.. connection.Capabilities, Capabilities.SessionsApprove]));
+        var q = card.Question!;
+        q.Choose(q.Fields[0].Options.Single(o => o.Value == "approve"));
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count == 1, "the approval sent");
+        if (failedBefore)
+        {
+            gate.SetResult();
+            await Wait.UntilAsync(() => q.ShowResend, "the failure before the count changes");
+        }
+        var queueChanged = false;
+        q.PropertyChanged += (_, e) => queueChanged |= e.PropertyName == nameof(QuestionViewModel.Queue);
+
+        card.Update(Make.Session(question: asked with { Waiting = 4 }));
+
+        Assert.Same(q, card.Question);
+        Assert.True(queueChanged);
+        Assert.Equal("1 of 4 permissions waiting", q.Queue);
+        Assert.False(q.CanAnswer);
+        if (!failedBefore) { gate.SetResult(); }
+        await Wait.UntilAsync(() => q.ShowResend, "Try again for the original approval");
+        card.Update(Make.Session(question: asked with { Waiting = null }));
+        Assert.Null(q.Queue);
+        Assert.True(q.ShowResend);
+        Assert.DoesNotContain("The question changed", q.StatusText, StringComparison.Ordinal);
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        q.Resend();
+
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count == 2, "the retry");
+        var sent = host.Sent(Ops.SessionAnswer);
+        Assert.Equal(sent[0].GetProperty("request").GetString(), sent[1].GetProperty("request").GetString());
+        await Wait.UntilAsync(() => deliveries.Get(q.Key)?.State == DeliveryState.Done, "the original approval delivered");
+        card.Detach();
+    }
+
+    [Theory]
     [InlineData(true, false, "approvalOff")]
     [InlineData(true, true, "atMachine")]
     public void A_permission_prompt_held_at_the_machine_says_why(bool answers, bool approves, string why)

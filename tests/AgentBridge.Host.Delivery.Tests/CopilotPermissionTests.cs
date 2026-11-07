@@ -200,6 +200,70 @@ public sealed class CopilotPermissionTests : IDisposable
         Assert.False(CopilotPermissionTranscript.Before(events + ".missing", "r1").Readable);
     }
 
+    [Fact]
+    public void A_completed_large_edit_is_not_formatted_and_hashed_again_while_pending_requests_keep_their_order()
+    {
+        var events = f.CopilotSession("11111111-1111-4111-8111-111111111111", 100);
+        var contents = new string('x', 256 * 1024);
+        var edit = Copilot.Prompts["write"].DeepClone().AsObject();
+        edit.Remove("diff");
+        edit["newFileContents"] = contents;
+        Fixture.Append(events, Copilot.Permission("edit", "c0", edit, 1),
+            Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2),
+            Copilot.Permission("r2", "c2", Copilot.Prompts["read"], 3));
+        CopilotPermissionTranscript.Before(events, "r1");
+        long Allocated()
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            CopilotPermissionTranscript.Before(events, "r1");
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        var pendingAllocations = Allocated();
+        Fixture.Append(events, Copilot.PermissionDone("edit", "c0", "approved", 4));
+        CopilotPermissionTranscript.Before(events, "r1");
+
+        var completedAllocations = Allocated();
+        Assert.True(completedAllocations + contents.Length < pendingAllocations,
+            $"Completed edit allocated {completedAllocations} bytes; pending edit allocated {pendingAllocations} bytes.");
+        var waiting = CopilotPermissionTranscript.Before(events, "r1");
+        Assert.True(waiting.First);
+        Assert.Equal(2, waiting.PendingPermissions);
+        Assert.Equal("r1", waiting.Request?.RequestId);
+        Assert.Equal("r2", Assert.Single(waiting.Others).Prompt?.RequestId);
+
+        Fixture.Append(events, Copilot.Permission("r1", "c3", Copilot.Prompts["path"], 5));
+        var replaced = CopilotPermissionTranscript.Before(events, "r2");
+        Assert.True(replaced.First);
+        Assert.Equal("c3", Assert.Single(replaced.Others).Prompt?.ToolCallId);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_hard_wrapped_long_token_in_a_warning_matches_without_accepting_different_characters(bool approve)
+    {
+        const string token = "https://example.com/" + "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789";
+        const string question = "Do you want to run this command?";
+        var mine = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the tests",
+            [new(false, ["Check " + token]), new(true, ["npm test"])], question);
+        var theirs = new AgentBridge.Host.Core.Parsing.CopilotDialog("Run the linter", [new(true, ["npm run lint"])], question);
+        var crowd = new CopilotPermissionScreen.Crowd(mine, [token, "npm test"],
+            [new CopilotPermissionScreen.Other("shell, request r2", ["npm run lint"], theirs)]);
+        var screen = CopilotScreen.Dialog("Run the tests",
+            [(false, ["Check " + token[..50]]), (true, ["npm test"])], question, CopilotScreen.ShellOptions).ToList();
+        var row = screen.FindIndex(s => s.Contains("Check ", StringComparison.Ordinal)) + 1;
+        screen.Insert(row, "\u2502" + (" " + token[50..]).PadRight(118) + "\u2502");
+
+        var (choice, problem) = CopilotPermissionScreen.Locate(screen, approve, ["npm test"], crowd);
+
+        Assert.Null(problem);
+        Assert.Equal(approve ? "1" : KeyPlan.Escape, choice!.Key);
+        screen[row] = screen[row].Replace(token[50..], "X" + token[51..], StringComparison.Ordinal);
+        var mismatch = CopilotPermissionScreen.Locate(screen, approve, ["npm test"], crowd);
+        Assert.Null(mismatch.Choice);
+        Assert.Contains("does not show this permission as Copilot draws it", mismatch.Problem);
+    }
+
     // Copilot asks a permission for each of a batch of parallel tool calls and draws one of them
     // (#690). With others waiting, the dialog is identified positively: inside one frame whose top
     // edge is on screen, every row above the options is this prompt's dialog as Copilot draws it.

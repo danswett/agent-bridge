@@ -1221,7 +1221,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     machine until it waits alone, unless its only escapes are in a path request's access kind,
     which its dialog never draws as written (v1-sessions.md, "Escaped approvals"). That can clear under the
     same id as the others are answered. The next is a new question with its own id once this one
-    is answered, so a second tap or a stale button never answers it.
+    is answered, so a second tap or a stale button never answers it. A change only to the waiting
+    count refreshes the queue label, not the question's meaning: an answer already on its way
+    keeps its delivery state, and a failed answer keeps Try again for that original request.
   - **An approval is drawn as it runs,** since Approve once allows all of it: exactly as
     written, in the code face, never read as Markdown, with its hidden characters,
     right-to-left letters and bare carriage returns escaped and the code notes beside it, and
