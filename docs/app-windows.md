@@ -18,6 +18,12 @@ phone.
  Task Scheduler: "AgentBridgeHost_<profile>_<user>" ── agent-bridge-hostw.exe (no window)
 ```
 
+A **Get started** list above Settings' **Agents on this machine** section (`#384` slice 1, `SetupGuide` in App.Core) orders what a
+first-time person does: start the bridge, install a CLI, connect its hooks, sign in to the CLI
+(always "Yours to check": the host can't see it until #691), start a new session (Done only once
+a hook has arrived), and an optional phone sign-in. It is read from the same rows, adds no host
+operation, and marks a step Done only on the host's evidence.
+
 ## Decisions
 
 ### Local API: a named pipe owned by the host

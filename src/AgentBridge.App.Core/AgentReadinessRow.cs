@@ -27,6 +27,10 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // Whether this profile's setup finished, from the host's `hookSetup` (Unknown from an older host).
     public HookSetup Setup { get; } = setup ?? HookSetups.Of(agent);
     bool Installed => agent.Installation.State == ReadinessState.Working;
+    public bool IsInstalled => Installed;
+    // A hook from a session started since the bridge began, which is the host's only evidence that
+    // the agent's hooks work (not a finished setup).
+    public bool HooksWorking => agent.Hooks.State == ReadinessState.Working || agent.LastHookHandledAt is not null;
     bool Blocked => agent.Hooks.State == ReadinessState.Blocked;
 
     // A row the app can't act on has its own words and no verb, in the neutral tone, never Ready,
