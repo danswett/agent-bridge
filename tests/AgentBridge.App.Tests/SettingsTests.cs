@@ -828,6 +828,19 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Get_started_marks_the_new_session_step_done_only_on_a_passed_test_of_an_installed_agent()
+    {
+        var rows = new[] { new AgentReadinessRow(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record")) };
+        string Session(params AgentVerificationReport[] v) => SetupGuide.Steps(true, rows, false, v).Single(x => x.Id == "session").Mark;
+
+        var claude = VerificationReport("r1", VerificationState.Verified) with { Agent = "claude" };
+        Assert.Equal("Next", Session());
+        Assert.Equal("Next", Session(claude with { State = VerificationState.Running }));
+        Assert.Equal("Next", Session(claude with { Agent = "codex" }));
+        Assert.Equal("Done", Session(claude));
+    }
+
+    [Fact]
     public void A_set_up_agent_the_host_cannot_test_yet_offers_no_verb_and_says_it_is_not_tested_yet()
     {
         var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), canManage: true);
