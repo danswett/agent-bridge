@@ -307,6 +307,47 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         Assert.Equal(typed, injector.Plans.Count);
     }
 
+    // #1100 review (Codex): a second device sending the same answer while the first call has
+    // registered as the prompt's first but not yet reached the request cache must join that
+    // one delivery, not start another beside it: one delivery per prompt, its outcome kept with
+    // the registered record, so a later identical submission gets it rather than the refusal.
+    [Fact]
+    public async Task An_identical_answer_arriving_while_the_first_is_between_registering_and_starting_joins_its_delivery_and_its_outcome_is_kept()
+    {
+        var answerer = Answerer();
+        using var registered = new ManualResetEventSlim();
+        using var otherDone = new ManualResetEventSlim();
+        var held = 0;
+        answerer.AfterRegistered = () =>
+        {
+            if (Interlocked.Increment(ref held) != 1) { return; }
+            registered.Set();
+            // The other call may finish meanwhile, where nothing stops it starting a delivery of its own.
+            otherDone.Wait(TimeSpan.FromSeconds(1));
+        };
+
+        var one = Task.Run(() => answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone"));
+        registered.Wait();
+        var same = Task.Run(async () =>
+        {
+            var result = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+            otherDone.Set();
+            return result;
+        });
+        var results = await Task.WhenAll(one, same);
+
+        // The second call joined: one real outcome, one that says nothing was typed again.
+        Assert.All(results, r => Assert.Equal(AnswerOutcome.Unconfirmed, r.Outcome));
+        Assert.Single(results, r => r.Reason != DeliveryReasons.AnswerNotConfirmed);
+        Assert.Equal(2, injector.Plans.Count);
+        // And the outcome was kept with the registered record: a later submission gets it, not the refusal.
+        var later = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+        Assert.Equal((AnswerOutcome.Unconfirmed, DeliveryReasons.AnswerNotConfirmed), (later.Outcome, later.Reason));
+        // Another sender is still refused plainly.
+        Assert.Equal(AnswerOutcome.Refused, (await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "laptop")).Outcome);
+        Assert.Equal(2, injector.Plans.Count);
+    }
+
     // #1093 review (Sol): a request UUID belongs to the sender, session and question it was
     // admitted for. Another sender replaying the first request's own UUID, with that question or
     // any other, gets what its own fresh request would (the refusal other text gets, or stale for

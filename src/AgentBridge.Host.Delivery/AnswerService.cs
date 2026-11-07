@@ -149,6 +149,10 @@ public sealed class AnswerService : ISessionAnswerer
 
     public bool ApprovesPermissions => Available && options.CopilotRemoteApproval;
 
+    // Test-only: run once a call has registered as its prompt's first answer, and before it is
+    // admitted to the request cache, to hold it there while another identical call arrives (#1100).
+    internal Action? AfterRegistered { get; set; }
+
     public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key))
@@ -163,25 +167,34 @@ public sealed class AnswerService : ISessionAnswerer
         // other asking for it, whether the first's record is still held or not, is a request of
         // its own under a new UUID, so that no outcome, stage or progress is given to it.
         var prompt = (request.Id, request.Question);
-        var first = SameAnswerBefore(prompt, key, AnswerDigest.Of(request), sender, out var foreign);
         Task<AnswerResult> AsAnother() => AnswerAsync(request with { Request = Guid.NewGuid().ToString("D") }, cancellationToken, watch, confirmed, sender);
-        if (foreign) { return AsAnother(); }
-        if (first is not null)
+        // Finding the prompt's first answer, registering this one as it, and admitting it to the
+        // request cache are one step: a second identical call cannot land between them and start
+        // a delivery of its own beside the registered one, so there is one delivery per prompt, a
+        // later identical call joins it, and its outcome is saved against the right record.
+        lock (firstGate)
         {
-            log($"answer {key.ToString()[..8]} to {Short(request.Id)}: the outcome of {first.Request.ToString()[..8]}, the same answer, is returned and nothing is typed");
-            if (!requests.Knows(first.Request)) { return ReadAgain(first, true); }
-        }
-        var flow = first?.Request ?? key;
-        var outcome = requests.Once(flow, watch, () => new DeliveryTimeline(options.Time, "answer", flow, log),
-            t => first is null ? DeliverAsync(request, key, t, confirmed) : Task.FromResult(AsRetried(first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed), true)),
-            result =>
+            var first = SameAnswerBefore(prompt, key, AnswerDigest.Of(request), sender, out var foreign);
+            if (foreign) { return AsAnother(); }
+            if (first is null) { AfterRegistered?.Invoke(); }
+            if (first is not null)
             {
-                log($"answer {flow.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
-                Settled(prompt, flow, result);
-            },
-            Recheck(flow), (sender, request.Id, request.Question), AsAnother, result => AsRetried(result, true));
-        if (first is null) { Started(prompt, key); }
-        return outcome;
+                log($"answer {key.ToString()[..8]} to {Short(request.Id)}: the outcome of {first.Request.ToString()[..8]}, the same answer, is returned and nothing is typed");
+                if (!requests.Knows(first.Request)) { return ReadAgain(first, true); }
+            }
+            var flow = first?.Request ?? key;
+            var outcome = requests.Once(flow, watch, () => new DeliveryTimeline(options.Time, "answer", flow, log),
+                t => first is null ? DeliverAsync(request, key, t, confirmed) : Task.FromResult(AsRetried(first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed), true)),
+                result =>
+                {
+                    log($"answer {flow.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
+                    Settled(prompt, flow, result);
+                },
+                Recheck(flow), (sender, request.Id, request.Question), AsAnother, result => AsRetried(result, true));
+            // Refused to start (the host is departing): nothing ran, so nothing is the first.
+            if (first is null && !requests.Knows(key) && firstAnswers.TryGetValue(prompt, out var mine) && mine.Request == key) { firstAnswers.Remove(prompt); }
+            return outcome;
+        }
     }
 
     // The first answer's outcome once its request has been forgotten: an unconfirmed one is read
@@ -232,9 +245,6 @@ public sealed class AnswerService : ISessionAnswerer
         // guessing it under a new request.
         public string? Sender { get; } = sender;
         public DateTimeOffset At { get; } = at;
-        // Whether the request's own memory has been asked to run it: until then it is not known
-        // there, and not to be taken for one that never ran.
-        public bool Started;
         // What it came to once typed: delivered or unconfirmed, and as read again since.
         public AnswerResult? Last;
         // How to read the session's record of that same call again, without typing, while it
@@ -270,21 +280,11 @@ public sealed class AnswerService : ISessionAnswerer
                 if (!same) { return null; }
                 // Still known, or settled and forgotten with its outcome kept.
                 if (requests.Knows(known.Request) || known.Last is not null) { return known; }
-                // Not yet asked to run, or never run (the host was departing): the first is
-                // left alone, and a request that is not it goes the usual way.
-                if (!known.Started) { return null; }
+                // Never run, or forgotten before its outcome was kept: no longer the first.
                 firstAnswers.Remove(prompt);
             }
             if (!requests.Knows(key)) { firstAnswers[prompt] = new FirstAnswer(key, digest, sender, now); }
             return null;
-        }
-    }
-
-    void Started((string Session, string Question) prompt, Guid key)
-    {
-        lock (firstGate)
-        {
-            if (firstAnswers.TryGetValue(prompt, out var known) && known.Request == key) { known.Started = true; }
         }
     }
 

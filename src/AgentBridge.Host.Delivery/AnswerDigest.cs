@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery;
@@ -31,11 +32,15 @@ internal static class AnswerDigest
         return SHA256.HashData(stream.ToArray());
     }
 
+    // Every value is written as a tagged pair, so a string that reads like a number, or an object
+    // shaped like a tag, can never stand for another kind of value.
     static void Write(Utf8JsonWriter writer, JsonElement value)
     {
+        writer.WriteStartArray();
         switch (value.ValueKind)
         {
             case JsonValueKind.Object:
+                writer.WriteStringValue("o");
                 writer.WriteStartObject();
                 foreach (var property in value.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
                 {
@@ -45,17 +50,27 @@ internal static class AnswerDigest
                 writer.WriteEndObject();
                 break;
             case JsonValueKind.Array:
+                writer.WriteStringValue("a");
                 writer.WriteStartArray();
                 foreach (var item in value.EnumerateArray()) { Write(writer, item); }
                 writer.WriteEndArray();
                 break;
-            // 3 and 3.0 are the same answer; the divisor drops the trailing zeros.
-            case JsonValueKind.Number when value.TryGetDecimal(out var number):
-                writer.WriteNumberValue(number / 1.0000000000000000000000000000m);
+            case JsonValueKind.Number:
+                // Compared exactly, as the Copilot planner compares numbers: 3, 3.0 and 3e0 are
+                // one answer, and 1e-29 and 2e-29 are two. Read through decimal both were 0 (#1100).
+                // A number that cannot be put in that form is kept as written.
+                var raw = value.GetRawText();
+                if (CopilotFieldSchema.ExactNumber(raw) is { } exact) { writer.WriteStringValue("n"); writer.WriteStringValue(exact); }
+                else { writer.WriteStringValue("r"); writer.WriteStringValue(raw); }
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue("s");
+                writer.WriteStringValue(value.GetString());
                 break;
             default:
-                value.WriteTo(writer);
+                writer.WriteStringValue(value.ValueKind.ToString());
                 break;
         }
+        writer.WriteEndArray();
     }
 }
