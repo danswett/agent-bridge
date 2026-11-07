@@ -415,7 +415,9 @@ into one folder with one version. An app update is a host update, so they never 
 
   A relay's list kept in the shared file is judged again, the same way, for each check that
   would be answered from it (its channel, pre-release choice, floor and installed version may
-  differ from the check that fetched it); one that fails for that check sends it to GitHub.
+  differ from the check that fetched it), and by its age then (`Age` at fetch plus the time
+  since), so a copy taken just under the hour isn't served past it; one that fails for that
+  check sends it to GitHub.
 
   Feeds and packages still download from those GitHub URLs and are still checked against their
   checksums as before (#719). A list from the relay counts as old as the relay says (`FetchedAt`

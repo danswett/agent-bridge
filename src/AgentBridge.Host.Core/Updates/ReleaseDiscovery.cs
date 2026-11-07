@@ -166,7 +166,11 @@ public sealed class ReleaseDiscovery : IDisposable
                 // passed for the caller that fetched it, whose channel or pre-release choice may
                 // not be this one's (a list with a pre-release above GitHub's floor and an older
                 // stable release would take a stable caller back; review 6712185589).
-                var problem = channel is null ? "this check's channel isn't known" : CdnProblem(state.Body!, channel, prereleases, floor, installed);
+                var problem = channel is null ? "this check's channel isn't known"
+                    // Its age now, not when it was fetched: a copy taken at 59 minutes may not be
+                    // served for another interval past the hour (review 6712407884).
+                    : state.FetchedAt is not { } copied || now - copied > CdnOldest ? $"its copy is more than {Span(CdnOldest)} old now"
+                    : CdnProblem(state.Body!, channel, prereleases, floor, installed);
                 if (problem is null) { return releases; }
                 log?.Invoke($"update check: the CDN's release list kept here was not used for this check, as {problem}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
                 askCdn = false;

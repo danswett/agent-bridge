@@ -504,6 +504,25 @@ public sealed class HostUpdatesTests : IDisposable
         Assert.Equal((2, 2), (web.CdnRequests, web.GitHubRequests));
     }
 
+    // Review 6712407884: a kept relay copy is judged by its age when it is served, not only when
+    // it was fetched, so one taken just under the hour isn't served past it.
+    [Fact]
+    public async Task A_kept_cdn_copy_is_served_until_it_is_an_hour_old_and_not_after()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero));
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.602")}]", TimeSpan.FromMinutes(58)), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, time, random: () => 0, cdn: true);
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+        Assert.Equal((1, 0), (web.CdnRequests, web.GitHubRequests));
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+    }
+
     [Fact]
     public async Task A_feed_txt_wins_over_the_cdn_and_github()
     {
