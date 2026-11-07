@@ -63,9 +63,11 @@ on #744 and the D2 design (#732). Do not send invitations until this is filled i
   PC to reach your phone.
 - The relay does see connection details: which of your devices are online, when, and how much
   each sends.
-- Optional diagnostics are off unless you turn them on, and never include session content.
-- Feedback is only what you choose to send. You see a report before it goes. The feedback team
-  can read a report you send; it is not visible only to you.
+- Diagnostics are off in this beta: nothing is uploaded automatically and there is no switch to
+  turn them on yet (#732). Any future diagnostics are designed to exclude session content.
+- Feedback is only what you choose to send, by replying to your invitation today. When the
+  in-app Send feedback button lands, you will see a report before it goes. The feedback team can
+  read what you send; it is not visible only to you.
 
 ## Getting help and sending feedback
 
