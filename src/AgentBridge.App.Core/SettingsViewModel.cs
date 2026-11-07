@@ -734,6 +734,23 @@ public sealed class SettingsViewModel : Observable
         CaughtUp();
         DrawDevices();
         RaiseAll();
+        OfferGuide();
+    }
+
+    // Slice 2 of #384: a first install opens on the Get started list once, the first time the host
+    // reports agents and none has its hooks connected (AppPreferences.GuidePending, set only by a
+    // first run, so an upgrader is never pulled to Settings). The app asks for it only when its window
+    // is to be shown: not the demo, a development copy, the self-test or a start at sign-in, which
+    // leaves it pending for the first launch that shows the window.
+    public bool OpenGuideAtFirstLaunch { get; init; }
+    public event Action? GuideWanted;
+    void OfferGuide()
+    {
+        if (!OpenGuideAtFirstLaunch || !prefs().GuidePending || !HostRunning || Agents.Count == 0) { return; }
+        var steps = SetupSteps;
+        if (steps.Any(s => s.Id == "hooks" && s.State == SetupStepState.Done)) { return; }
+        GuideWanted?.Invoke();
+        savePrefs(prefs() with { GuidePending = false });
     }
 
     public Task StartHostAsync() => RunAsync(() => manager.StartAsync());

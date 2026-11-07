@@ -97,6 +97,14 @@ test('a prompt the host marks for the machine is never answered remotely, whatev
   assert.equal(readQuestion({ id: 'p1', kind: 'approval', message: 'Allow?', answerAtMachine: 'yes' }).answerAtMachine, false);
 });
 
+test('an optional at-machine reason is display-only, including unknown and malformed values', () => {
+  for (const reason of ['shape', 'future', null, [], true]) {
+    const q = readQuestion({ ...form(choice('answer')), answerAtMachine: true, answerAtMachineReason: reason });
+    assert.equal(q.answerAtMachineReason, typeof reason === 'string' ? reason : null);
+    assert.deepEqual(answerability(q, ['sessions.read', 'sessions.answer']), { ok: false, why: 'atMachine' });
+  }
+});
+
 test('an outcome from a newer host reads as unconfirmed, never as delivered', () => {
   assert.deepEqual(readAnswerResult({ outcome: 'queued', reason: 'later' }), { outcome: 'unconfirmed', reason: 'later', stage: null });
   assert.deepEqual(readAnswerResult({ outcome: 'delivered' }), { outcome: 'delivered', reason: null, stage: null });

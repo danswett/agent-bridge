@@ -1278,6 +1278,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
     (`truncated`) can't be answered from here either, as before. Leaving the session is never
     an answer: the row keeps its glyph until the host clears the question.
+    In PWA and Windows cards, the host's `answerAtMachineReason: "shape"` adds a second line,
+    exactly "This kind of question can only be answered at the machine.", in Needs you's text
+    colour, after "Answer at the machine · *machine*". Both lines are accessible text, not a live
+    region. No reason, or an unknown one, keeps today's single line; no client guesses the reason.
+    This does not change the row, attention or HA text.
   - **Resolved:** the card quietens, with no Needs you fill, and reads "Main agent asked"
     (or "Delegate *name* asked") over the question as it was shown. Below that:
     - with this device's answer record for the question, the record's progress and outcome as
@@ -1998,7 +2003,7 @@ Settings' page (§6.9), each agent from its row.
 above the agent rows (§6.9). It reads the same readiness as the rows, names the one next step, and
 adds no host operation. "Sign in to the CLI itself" is always **Yours to check**, because the host
 cannot verify it yet (#691). The list hides once every step is Done, Yours to check or Optional. Each
-step is read to a screen reader with its state and position first, for example "Next, step 3 of 5,
+step is read to a screen reader with its state and position first, for example "Next, step 3 of 6,
 Connect its hooks". The stepper below replaces it.
 
 Settings with a guide. Six steps, in a stepper that **replaces Settings' own pane** while setup

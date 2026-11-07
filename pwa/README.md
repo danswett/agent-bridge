@@ -5,7 +5,9 @@ through the relay. Plain ES modules and CSS, no framework, no build step, nothin
 CDN: the page's Content-Security-Policy allows scripts and styles from this site only,
 and network access to the relay only.
 
-Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`.
+Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`. It moves to
+<https://app.slipgates.com/> (#393) when the repository variable `PAGES_APP_AT_ROOT` is `true`: the app is then the
+site's root, and `/app/` redirects to it. The tests serve the app at `/`, as it will be there.
 Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
 
 It shows sessions, their activity and their pending questions, answers those questions
@@ -216,6 +218,10 @@ sessions and never moves their rows. An entry leaves when its question does.
 * **A form**, or a question this machine won't take from the phone, opens its session (the
   title), where the card says what it asks.
 * **A prompt marked `answerAtMachine`** says "Answer at the machine", with nothing to press.
+  Only `answerAtMachineReason: "shape"` adds "This kind of question can only be answered at
+  the machine." after "Answer at the machine · *machine*", in Needs you's text colour.
+  Both lines are accessible text, not a live region. Missing or unknown reasons retain the
+  current single line. Row status and attention do not change.
 
 The lane's count is the app's badge on the Home Screen or taskbar, where the browser has the
 Badging API (`navigator.setAppBadge`), and nothing where it hasn't.
