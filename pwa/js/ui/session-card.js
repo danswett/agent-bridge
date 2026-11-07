@@ -29,7 +29,7 @@ import { designIcon, drivenBadge, glyph, setGlyph } from './glyph.js';
 import { ago, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
 import { ATTENTION_RULES, rowAt, sessionStatus, statusLabel } from '../status.js';
-import { detailRows } from '../details-rows.js';
+import { awayWords, detailRows } from '../details-rows.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
 import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, receiptLive } from './receipt.js';
 import { answerability } from '../answers.js';
@@ -50,7 +50,7 @@ import { holdKey } from './hold.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
-const CLOCK_ROWS = new Set(['status', 'since', 'updated']);
+const CLOCK_ROWS = new Set(['status', 'since', 'started', 'updated']);
 // Each session's delegate events as the person left them (ui.md §6.4): its fold (D3) open or
 // closed, and the shared lines opened to name everyone. By machine and session, so a card drawn
 // again (a machine back online, a list sent again) keeps them, for as long as the page is open.
@@ -837,9 +837,10 @@ export class SessionCard {
     if (!first && echoed && !e.user.hidden) { enter(e.user, 'acknowledge', { dy: 1 }); }
 
     // The rows, as the shared table sets them. What moves with the clock is drawn again by the
-    // tick, in place, so only the rest, and which rows there are, decide a redraw.
+    // tick, in place, so only the rest, and which rows there are, decide a redraw. Started's own time
+    // is in the key: another start is another <time>.
     const rows = detailRows(s, { status: stale ? words.text : null, machine: this.machineName || null, away: !!stale });
-    if (this.#changed('facts', rows.map((r) => (CLOCK_ROWS.has(r.kind) ? [r.kind] : [r.kind, r.text])))) {
+    if (this.#changed('facts', rows.map((r) => (CLOCK_ROWS.has(r.kind) ? [r.kind, r.at] : [r.kind, r.text])))) {
       this.#renderFacts(rows);
     }
     this.#tickFacts(s, Date.now());
@@ -1136,7 +1137,9 @@ export class SessionCard {
     if (!this.#factCells?.size) { return; }
     for (const row of detailRows(s, { status: this.#detailsStatus, machine: this.machineName || null, away: this.#detailsAway, now })) {
       const dd = CLOCK_ROWS.has(row.kind) ? this.#factCells.get(row.kind) : null;
-      if (dd && dd.textContent !== row.text) { dd.textContent = row.text; }
+      // Started's words are in its <time>, which keeps its datetime and its full timestamp's tooltip.
+      const at = row.kind === 'started' ? dd?.firstElementChild ?? dd : dd;
+      if (at && at.textContent !== row.text) { at.textContent = row.text; }
     }
   }
 
@@ -1160,17 +1163,9 @@ export class SessionCard {
     if (this.#s) { this.update(this.#s); }
   }
 
-  // ui.md §2.2 (#269), as facts: "Offline · last seen 2m ago" while its machine is away,
-  // "Reconnecting…" while it has no open channel and is still tried; null otherwise, including
-  // while its snapshot is still coming (its rows say what that snapshot says, and still take
-  // nothing) and for a machine that no longer offers sessions (its host line says so).
+  // ui.md §2.2 (#269), as facts (details-rows.js's awayWords).
   #staleText(now = Date.now()) {
-    const stale = this.#stale;
-    // On a return the row is as it was last seen: the away states wait for the grace to end (#950).
-    if (!stale || stale.grace || stale.reason === 'confirming' || stale.reason === 'unsupported') { return null; }
-    if (stale.reason === 'reconnecting') { return ['Reconnecting…']; }
-    const seen = ago(stale.since, now);
-    return seen ? ['Offline', `last seen ${seen}`] : ['Offline'];
+    return awayWords(this.#stale, now);
   }
 
   // Activity since the session was last on screen (session-order.js): semibold, and the 6 px

@@ -634,6 +634,27 @@ test('Details lists the shared table\'s rows in its order: Status, how long, Age
   expect(await id.evaluate((n) => n.isConnected)).toBe(true);
 });
 
+test('Details\' Started gains its date when the clock passes local midnight, in the same <time> with its tooltip', async ({ page }) => {
+  const midnight = new Date();
+  midnight.setHours(24, 0, 0, 0);
+  await page.clock.install({ time: new Date(midnight.getTime() - 10 * 60000) });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const startedAt = new Date(midnight.getTime() - 30 * 60000).toISOString();
+  await upsert(page, COPILOT, { startedAt });
+  const started = view(page, COPILOT).locator('.facts .fact-started time');
+  await expect(started).toHaveAttribute('datetime', startedAt);
+  const before = await started.textContent();
+  expect(before).not.toMatch(/[A-Za-z]{3,}\.? \d{1,2}/);
+  const node = await started.elementHandle();
+  const title = await started.getAttribute('title');
+  await page.clock.fastForward(20 * 60000);
+  await expect(started).toHaveText(/[A-Za-z]{3,}\.? \d{1,2}/);
+  await expect(started).toContainText(before);
+  expect(await node.evaluate((n) => n.isConnected)).toBe(true);
+  await expect(started).toHaveAttribute('title', title);
+});
+
 test('the header\'s Pin pins the session, and its row goes to Pinned', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openDemo(page);

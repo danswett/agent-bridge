@@ -86,7 +86,8 @@ static partial class SelfTest
             var table = JsonNode.Parse(File.ReadAllText(file))!;
             List<string> Labels(JsonNode? rows) => [.. rows!.AsArray().Select(r => r!["row"]!.GetValue<string>())];
             var scenarios = table["scenarios"]!.AsArray();
-            return (Labels(table["rows"]), Labels(scenarios[0]!["rows"]), Labels(scenarios[1]!["rows"]));
+            JsonNode Scenario(string name) => scenarios.First(s => s!["name"]!.GetValue<string>() == name)!["rows"]!;
+            return (Labels(table["rows"]), Labels(Scenario("every row present")), Labels(Scenario("only what the session sent")));
         }
         return null;
     }

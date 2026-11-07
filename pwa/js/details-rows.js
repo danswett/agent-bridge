@@ -10,6 +10,19 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // What is code, drawn in the mono face (§4.1, #215).
 const MONO = new Set(['branch', 'folder', 'pid', 'id']);
 
+// ui.md §2.2 (#269), as facts: "Offline · last seen 2m ago" while its machine is away,
+// "Reconnecting…" while it has no open channel and is still tried; null otherwise, including
+// while its snapshot is still coming (its rows say what that snapshot says, and still take
+// nothing) and for a machine that no longer offers sessions (its host line says so).
+// stale: { reason, since, grace } as the fleet holds it. On a return the row is as it was last
+// seen: the away states wait for the grace to end (#950).
+export function awayWords(stale, now = Date.now()) {
+  if (!stale || stale.grace || stale.reason === 'confirming' || stale.reason === 'unsupported') { return null; }
+  if (stale.reason === 'reconnecting') { return ['Reconnecting…']; }
+  const seen = ago(stale.since, now);
+  return seen ? ['Offline', `last seen ${seen}`] : ['Offline'];
+}
+
 // The start as a clock time, with the date once it was another day (or year) than now's.
 export function startedText(iso, now = Date.now()) {
   const t = Date.parse(iso ?? '');
