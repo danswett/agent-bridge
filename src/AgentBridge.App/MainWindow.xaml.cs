@@ -94,6 +94,8 @@ public sealed partial class MainWindow : Window
             SettingsPane.ViewModel = s;
             s.PropertyChanged += (_, _) => DrawSettingsDot(s);
             DrawSettingsDot(s);
+            // The first launch with no agent set up opens on Get started (#384).
+            s.GuideWanted += () => DispatcherQueue.TryEnqueue(() => ShowPage("settings"));
         }
         SessionsView.ViewModel = viewModel;
         SessionsView.Launch = launch;
