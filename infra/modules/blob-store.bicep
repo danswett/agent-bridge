@@ -30,9 +30,9 @@ var feedbackContainer = 'feedback'
 var roles = {
   // Read, write and delete blobs: given on the one container only.
   blobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-  // Get a user delegation key, to sign SAS with: needs the account (blob service) scope.
   // Read blobs: given to the feedback reader on the feedback container only, no condition.
   blobDataReader: '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
+  // Get a user delegation key, to sign SAS with: needs the account (blob service) scope.
   blobDelegator: 'db58b8e5-c6ad-4a2a-8342-4190687cbf4a'
 }
 
