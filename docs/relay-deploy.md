@@ -466,11 +466,23 @@ Azure Storage on URLs the relay signs; no blob byte passes through a relay node.
   beta-feedback bundle itself (exact ticketed size, 8 MiB cap) and writes it with
   create-only semantics. Its role assignment there is Blob Data Contributor with a condition
   that removes read, list, tags and delete, and a 30-day time-based retention policy on the
-  container means no one, the relay included, can overwrite or delete a bundle before the
+  container means the relay cannot overwrite or delete a bundle before the
   30 days are up. A lifecycle rule deletes `feedback/` at 31 days; the `blobs` rule is
   scoped to its own container. Reading feedback is a role given to the feedback lead's
   identity (SRE), never to the relay. Environment: `Relay__Feedback__Backend`,
   `AccountUrl`, `Container`, `ManagedIdentityClientId`; empty `Backend` turns it off.
+* The retention policy deploys **unlocked**. Until it is locked, someone with write access
+  to the storage account (not the relay) could shorten or remove it, so "no one can
+  overwrite or delete" holds against the relay and any data-plane identity, not against an
+  account owner. After the first production apply, a person locks it (this cannot be
+  undone, and a locked policy can only be extended):
+
+  ```powershell
+  $etag = az storage container immutability-policy show --account-name <account> --container-name feedback --query etag -o tsv
+  az storage container immutability-policy lock --account-name <account> --container-name feedback --if-match $etag
+  ```
+
+  Until then the accepted risk is account-owner tampering; record the lock on #731.
 
 Staging has its account (`abblobstgwus2`, applied with `./infra/deploy.ps1` on 2026-10-29,
 which also registered `Microsoft.Storage` in the subscription). Production gets

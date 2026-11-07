@@ -45,8 +45,10 @@ Errors: `disabled`, `bad-request`, `too-large` (over `max`), `bad-size` (not a b
   garbage (within the limits above) but cannot read or delete feedback. Reading is the
   feedback lead's role (#740).
 * The container has a 30-day time-based retention policy, so a stored bundle cannot be
-  overwritten or deleted by anyone, the relay included, until 30 days have passed. (A role
-  condition cannot express "no overwrite", so storage enforces it.)
+  overwritten or deleted by the relay or any other data-plane identity until 30 days have
+  passed. (A role condition cannot express "no overwrite", so storage enforces it.) The
+  policy deploys unlocked, so an account owner could still remove it until an operator locks
+  it; the lock step is in [relay-deploy.md](../relay-deploy.md#blob-store).
 * A lifecycle rule deletes bundles 31 days after they were written (#731); the `blobs`
   container's one-day rule is scoped so it never touches them.
 
