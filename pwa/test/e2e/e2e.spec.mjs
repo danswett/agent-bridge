@@ -147,15 +147,47 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   expect(violations).toEqual([]);
 });
 
-test('feedback preview shows the bounded diagnostic bundle before sending', async ({ page }) => {
+test('feedback panel stays hidden until its build has a feedback key', async ({ page }) => {
   await signIn(page);
   await page.click('#nav [data-nav="settings"]');
+  await expect(page.locator('#feedback')).toBeHidden();
+  await expect(page.locator('#feedback-dialog')).toBeHidden();
+});
+
+test('feedback preview shows readable diagnostics and exact data before sending', async ({ page }) => {
+  await page.route('**/config.js', (route) => route.fulfill({
+    contentType: 'text/javascript',
+    body: [
+      `export const RELAY = ${JSON.stringify(relayUrl)};`,
+      'export const APP_VERSION = "dev";',
+      'export const FEEDBACK_KEY_ID = "test-key";',
+      'export const FEEDBACK_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";',
+    ].join('\n'),
+  }));
+  await signIn(page);
+  await page.click('#nav [data-nav="settings"]');
+  await expect(page.locator('#feedback')).toBeVisible();
   await page.click('#feedback-open');
   await expect(page.locator('#feedback-dialog')).toBeVisible();
-  await expect(page.locator('#feedback-dialog summary')).toHaveText('What’s included');
-  await page.click('#feedback-dialog summary');
+  await expect(page.locator('#feedback-dialog > .note').first()).toHaveText(
+    "Your note and selected diagnostics are encrypted on this device before they're sent to the Slipgates feedback service, where they're processed automatically.",
+  );
+  await page.locator('#feedback-included > summary').click();
+  await expect(page.locator('#feedback-platform')).not.toBeEmpty();
+  await expect(page.locator('#feedback-app-version')).toHaveText('dev');
+  await expect(page.locator('#feedback-browser')).not.toBeEmpty();
+  await expect(page.locator('#feedback-protocol-version')).toHaveText('1');
+  await expect(page.locator('#feedback-events-summary')).toHaveText(/^\d+ connection events?$/);
+  await expect(page.locator('#feedback-error-codes-summary')).toHaveText(/^\d+ error codes?$/);
+  await page.locator('#feedback-hosts > summary').click();
+  await page.locator('#feedback-events > summary').click();
+  await page.locator('#feedback-error-codes > summary').click();
+  await expect(page.locator('#feedback-hosts-list')).toBeVisible();
+  await expect(page.locator('#feedback-events-list')).toBeVisible();
+  await expect(page.locator('#feedback-error-codes-list')).toBeVisible();
+  await page.locator('#feedback-exact-data > summary').click();
   await expect(page.locator('#feedback-preview')).toBeVisible();
-  const note = 'The app stopped after I refreshed the page.';
+  const note = 'The app stopped after refresh.';
   await page.locator('#feedback-note').fill(note);
   const preview = await page.locator('#feedback-preview').textContent();
   const bundle = JSON.parse(preview);
@@ -168,7 +200,11 @@ test('feedback preview shows the bounded diagnostic bundle before sending', asyn
   expect(preview).not.toContain(CLAUDE);
   expect(preview).not.toContain(fixture.sessions[0].title);
   await expect(page.locator('#feedback-send')).toBeDisabled();
-  await expect(page.locator('#feedback-error')).toContainText('not configured');
+  await expect(page.locator('#feedback-error')).toContainText("doesn't accept feedback uploads yet");
+  await page.locator('#feedback-note').fill('password=hunter2');
+  await expect(page.locator('#feedback-warning')).toHaveText(
+    'This looks like a password or token. Remove it to send.',
+  );
 });
 
 test('a machine from before the sessions protocol is reported, ?host= opens a machine directly, and a refused sign-in leaves nothing behind', async ({ page, context }) => {

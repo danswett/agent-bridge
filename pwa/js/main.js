@@ -52,7 +52,7 @@ import { RelayBlobs } from './blobs.js';
 import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
-import { FeedbackDiagnostics, isSensitiveFeedbackText, sendFeedbackBundle, serializeFeedbackBundle } from './feedback.js';
+import { FeedbackDiagnostics, feedbackFailureMessage, isSensitiveFeedbackText, sendFeedbackBundle, serializeFeedbackBundle } from './feedback.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
 if (installedOnApple(markPlatform())) { edgeSwipeBack(document, () => history.back()); }
@@ -635,18 +635,46 @@ function begin(account) {
   const feedbackSend = $('feedback-send');
   let feedbackBundle = null;
   let feedbackSending = false;
-  $('feedback').hidden = false;
+  const feedbackConfigured = !!(FEEDBACK_KEY_ID && FEEDBACK_PUBLIC_KEY);
+  $('feedback').hidden = !feedbackConfigured;
+  const fillFeedbackList = (element, values, field) => {
+    const items = values.map((value) => {
+      const item = document.createElement('li');
+      item.textContent = value[field];
+      return item;
+    });
+    if (!items.length) {
+      const item = document.createElement('li');
+      item.textContent = 'None collected';
+      items.push(item);
+    }
+    element.replaceChildren(...items);
+  };
+  const renderFeedbackOverview = () => {
+    $('feedback-platform').textContent = feedbackBundle.platform;
+    $('feedback-app-version').textContent = feedbackBundle.versions.app;
+    $('feedback-browser').textContent = feedbackBundle.versions.browser;
+    $('feedback-protocol-version').textContent = feedbackBundle.versions.protocol ?? 'Unknown';
+    const hosts = feedbackBundle.versions.hosts;
+    $('feedback-hosts-summary').textContent = `Machine versions (${hosts.length})`;
+    fillFeedbackList($('feedback-hosts-list'), hosts.map((version) => ({ version })), 'version');
+    const events = feedbackBundle.events;
+    $('feedback-events-summary').textContent = `${events.length} connection event${events.length === 1 ? '' : 's'}`;
+    fillFeedbackList($('feedback-events-list'), events, 'name');
+    const logs = feedbackBundle.logs;
+    $('feedback-error-codes-summary').textContent = `${logs.length} error code${logs.length === 1 ? '' : 's'}`;
+    fillFeedbackList($('feedback-error-codes-list'), logs, 'code');
+  };
   const feedbackBlockReason = () => {
-    if (!FEEDBACK_KEY_ID || !FEEDBACK_PUBLIC_KEY) { return 'Feedback uploads are not configured in this build.'; }
     if (!connection.ready || !connection.relay) { return 'Connect to the relay to send feedback.'; }
-    if (!(connection.relay.feedbackMaxBytes > 0)) { return 'This relay does not accept feedback uploads yet.'; }
+    if (!(connection.relay.feedbackMaxBytes > 0)) { return "This relay doesn't accept feedback uploads yet."; }
     return '';
   };
   const drawFeedbackAvailability = () => {
     const reason = feedbackBlockReason();
     $('feedback-status').textContent = reason || 'Diagnostics are ready to review.';
     if (!feedbackDialog.open) { return; }
-    if (reason) {
+    if (reason && feedbackError.dataset.kind !== 'send') {
       feedbackError.textContent = reason;
       feedbackError.hidden = false;
       feedbackError.dataset.kind = 'availability';
@@ -660,14 +688,20 @@ function begin(account) {
     if (!feedbackBundle) { return null; }
     if (feedbackNote.value.trim()) { feedbackBundle.note = feedbackNote.value; } else { delete feedbackBundle.note; }
     feedbackPreview.textContent = serializeFeedbackBundle(feedbackBundle);
+    renderFeedbackOverview();
     const sensitive = isSensitiveFeedbackText(feedbackNote.value);
     feedbackWarning.hidden = !sensitive;
-    feedbackWarning.textContent = sensitive ? 'This note matches a common credential pattern. Remove it; this note cannot be sent.' : '';
+    feedbackWarning.textContent = sensitive ? 'This looks like a password or token. Remove it to send.' : '';
     drawFeedbackAvailability();
     return feedbackBundle;
   };
   $('feedback-open').onclick = () => {
+    if (!feedbackConfigured) { return; }
     feedbackNote.value = '';
+    feedbackError.hidden = true;
+    feedbackError.dataset.kind = '';
+    feedbackWarning.hidden = true;
+    feedbackSend.textContent = 'Send feedback';
     feedbackBundle = feedbackDiagnostics.snapshot({
       appVersion: APP_VERSION,
       protocolVersion: PROTOCOL_VERSION,
@@ -698,25 +732,29 @@ function begin(account) {
     $('feedback-cancel').disabled = true;
     feedbackSend.textContent = 'Sending…';
     feedbackError.hidden = true;
+    feedbackError.dataset.kind = '';
+    feedbackSend.disabled = true;
     try {
-      const { storedSize } = await sendFeedbackBundle({
+      await sendFeedbackBundle({
         relay,
         bundle,
         keyId: FEEDBACK_KEY_ID,
         publicKey: FEEDBACK_PUBLIC_KEY,
         upload: (url, bytes) => new RelayBlobs(relay).upload(url, bytes),
       });
-      $('feedback-status').textContent = `Feedback sent (${storedSize} encrypted bytes).`;
+      const sentAt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date());
+      $('feedback-status').textContent = `Thanks. Sent at ${sentAt}.`;
       feedbackDialog.close();
     } catch (e) {
-      feedbackError.textContent = `Couldn't send feedback: ${e.message}`;
+      feedbackError.textContent = feedbackFailureMessage(e, BRAND);
       feedbackError.hidden = false;
       feedbackError.dataset.kind = 'send';
+      feedbackSend.textContent = 'Retry';
     } finally {
       feedbackSending = false;
       feedbackNote.disabled = false;
       $('feedback-cancel').disabled = false;
-      feedbackSend.textContent = 'Send feedback';
+      if (feedbackError.dataset.kind !== 'send') { feedbackSend.textContent = 'Send feedback'; }
       drawFeedbackAvailability();
     }
   };

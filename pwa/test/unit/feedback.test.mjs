@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FeedbackDiagnostics, isSensitiveFeedbackText, sealFeedbackEnvelope, sendFeedbackBundle, serializeFeedbackBundle } from '../../js/feedback.js';
+import { FeedbackDiagnostics, FeedbackError, feedbackFailureMessage, isSensitiveFeedbackText, sealFeedbackEnvelope, sendFeedbackBundle, serializeFeedbackBundle } from '../../js/feedback.js';
 import { toBase64url } from '../../js/blobs.js';
 
 const decodeBase64url = (value) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=')), (c) => c.charCodeAt(0));
@@ -125,6 +125,38 @@ test('sending uses the sealed byte size and relay-issued URL; unsafe notes never
     keyId: 'test-key',
     publicKey,
     upload: async () => assert.fail('unsafe note must not upload'),
-  }), /credential-like text/);
+  }), (error) => error instanceof FeedbackError && error.kind === 'unavailable' && error.message === 'feedback send failed');
   assert.deepEqual(requests, [4096]);
+});
+
+test('feedback send failures expose safe categories without relaying raw errors', async () => {
+  const recipient = await crypto.subtle.generateKey({ name: 'X25519' }, false, ['deriveBits']);
+  const publicKey = toBase64url(new Uint8Array(await crypto.subtle.exportKey('raw', recipient.publicKey)));
+  const bundle = new FeedbackDiagnostics().snapshot({ appVersion: 'test', protocolVersion: 1 });
+  const input = (relay) => ({ relay, bundle, keyId: 'test-key', publicKey });
+  const hasKind = (kind) => (error) => error instanceof FeedbackError && error.kind === kind && error.message === 'feedback send failed';
+
+  await assert.rejects(sendFeedbackBundle(input({ open: false })), hasKind('unreachable'));
+  await assert.rejects(sendFeedbackBundle(input({ open: true, feedbackMaxBytes: 0 })), hasKind('unavailable'));
+  await assert.rejects(sendFeedbackBundle(input({ open: true, feedbackMaxBytes: 1 })), hasKind('too-large'));
+  await assert.rejects(sendFeedbackBundle(input({
+    open: true,
+    feedbackMaxBytes: 4096,
+    async feedbackPut() { return {}; },
+  })), hasKind('unreachable'));
+  await assert.rejects(sendFeedbackBundle({
+    ...input({
+      open: true,
+      feedbackMaxBytes: 4096,
+      async feedbackPut() { return { url: 'https://blob.example/once' }; },
+    }),
+    upload: async () => { throw new Error('raw upload detail'); },
+  }), hasKind('unreachable'));
+});
+
+test('feedback failure copy is plain-language and never includes raw error text', () => {
+  assert.equal(feedbackFailureMessage(new FeedbackError('unreachable'), 'Slipgates'), "Can't reach Slipgates right now. Try again in a moment.");
+  assert.equal(feedbackFailureMessage(new FeedbackError('too-large'), 'Slipgates'), 'Too much to send. Shorten your note and try again.');
+  assert.equal(feedbackFailureMessage(new FeedbackError('unavailable'), 'Slipgates'), "Feedback isn't available on this connection yet.");
+  assert.equal(feedbackFailureMessage(new Error('raw server response'), 'Slipgates'), "Feedback isn't available on this connection yet.");
 });

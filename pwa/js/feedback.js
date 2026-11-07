@@ -14,6 +14,21 @@ const MAX_EVENTS = 100;
 const MAX_LOGS = 100;
 const MAX_NOTE = 1000;
 
+export class FeedbackError extends Error {
+  constructor(kind) {
+    super('feedback send failed');
+    this.name = 'FeedbackError';
+    this.kind = kind;
+  }
+}
+
+export function feedbackFailureMessage(error, brand) {
+  if (!(error instanceof FeedbackError)) { return "Feedback isn't available on this connection yet."; }
+  if (error.kind === 'unreachable') { return `Can't reach ${brand} right now. Try again in a moment.`; }
+  if (error.kind === 'too-large') { return 'Too much to send. Shorten your note and try again.'; }
+  return "Feedback isn't available on this connection yet.";
+}
+
 const concat = (...parts) => {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let at = 0;
@@ -160,16 +175,25 @@ export async function sealFeedbackEnvelope(plain, { keyId, publicKey, bundleId }
 }
 
 export async function sendFeedbackBundle({ relay, bundle, keyId, publicKey, upload } = {}) {
-  if (!relay?.open) { throw new Error('connect to the relay before sending feedback'); }
-  if (relay.feedbackMaxBytes <= 0) { throw new Error('feedback uploads are not enabled on this relay'); }
-  if (isSensitiveFeedbackText(bundle?.note)) { throw new Error('remove credential-like text before sending feedback'); }
+  if (!relay?.open) { throw new FeedbackError('unreachable'); }
+  if (!(relay.feedbackMaxBytes > 0)) { throw new FeedbackError('unavailable'); }
+  if (isSensitiveFeedbackText(bundle?.note)) { throw new FeedbackError('unavailable'); }
   const body = await sealFeedbackEnvelope(new TextEncoder().encode(serializeFeedbackBundle(bundle)), {
     keyId, publicKey, bundleId: bundle.bundleId,
   });
-  if (body.length > relay.feedbackMaxBytes) { throw new Error('the feedback bundle is larger than this relay allows'); }
-  const slot = await relay.feedbackPut(body.length);
-  if (typeof slot?.url !== 'string' || !slot.url) { throw new Error('the relay did not return a feedback upload URL'); }
+  if (body.length > relay.feedbackMaxBytes) { throw new FeedbackError('too-large'); }
+  let slot;
+  try {
+    slot = await relay.feedbackPut(body.length);
+  } catch {
+    throw new FeedbackError('unreachable');
+  }
+  if (typeof slot?.url !== 'string' || !slot.url) { throw new FeedbackError('unreachable'); }
   const put = upload ?? ((url, bytes) => new RelayBlobs(relay).upload(url, bytes));
-  await put(slot.url, body);
+  try {
+    await put(slot.url, body);
+  } catch {
+    throw new FeedbackError('unreachable');
+  }
   return { storedSize: body.length };
 }
