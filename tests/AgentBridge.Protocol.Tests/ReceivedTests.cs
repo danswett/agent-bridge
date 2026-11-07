@@ -246,6 +246,24 @@ public class ReceivedTests
         Assert.Equal(("s1", (int?)null), (s.Id, s.ProcessId));
     }
 
+    [Theory]
+    [InlineData("shape")]
+    [InlineData("future")]
+    [InlineData(null)]
+    public void An_at_machine_reason_is_optional_display_text_and_does_not_change_the_hold(string? reason)
+    {
+        var node = Session();
+        node["question"]!["answerAtMachine"] = true;
+        node["question"]!["answerAtMachineReason"] = reason;
+
+        var q = Read(node).Question!;
+        Assert.True(q.AnswerAtMachine);
+        Assert.Equal(reason, q.AnswerAtMachineReason);
+        node["question"]!["answerAtMachineReason"] = new JsonArray();
+        Assert.True(Read(node).Question!.AnswerAtMachine);
+        Assert.Null(Read(node).Question!.AnswerAtMachineReason);
+    }
+
     [Fact]
     public void An_unknown_question_kind_still_reads_as_a_form_as_the_spec_says()
     {

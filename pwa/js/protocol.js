@@ -128,6 +128,7 @@ export function readQuestion(raw) {
     askedAt: str(q.askedAt),
     truncated: q.truncated === true,
     answerAtMachine: q.answerAtMachine === true,
+    answerAtMachineReason: str(q.answerAtMachineReason),
     // The sub-agent that asked, when it is not the session's own question.
     agent: str(q.agent),
     // What the host escaped in an approval (#803): null when it escaped nothing. Marks that do not
