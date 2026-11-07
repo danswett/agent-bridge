@@ -930,7 +930,7 @@ jobs:
     #  - pwa-unit: the PWA's unit tests in Node, then again for coverage, beside the Playwright
     #    jobs rather than before them (#457);
     #  - pwa-site-csp: the Pages build's CSP;
-    #  - lab-scripts: the clean-VM lab's provisioning draft, against a stand-in for az;
+    #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
     #  - playwright-apt: the download of Playwright's system packages leaves a slow apt mirror only
     #    when it should (.github/actions/playwright-system-packages);
     #  - docs-links: relative links and their #anchors in every Markdown file resolve.
@@ -958,11 +958,11 @@ jobs:
       - name: Connector read-contract mock
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'connector-conformance')) }}
         run: node --test tools/connector-conformance/mock-host.test.mjs
-      - name: The lab's provisioning draft plans only run-owned resources and refuses to apply
+      - name: The lab drafts plan only and refuse execution
         # Against a stand-in for az: nothing reaches Azure.
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts')) }}
         shell: pwsh
-        run: pwsh -NoProfile -File quality/lab/test-provision.ps1
+        run: pwsh -NoProfile -File quality/lab/test-scripts.ps1
       - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
         run: bash .github/actions/playwright-system-packages/test.sh
