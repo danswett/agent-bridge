@@ -586,6 +586,9 @@ public sealed record Question
     // no controls and says it is waiting at the machine.
     [Strict(Strictness.Security)]
     public bool? AnswerAtMachine { get; init; }
+    // Display only: "shape" explains a Copilot ask_user with no form fields or with legacy
+    // choices. Unknown or absent reasons keep the client's existing at-machine wording.
+    public string? AnswerAtMachineReason { get; init; }
     // The sub-agent that asked, when it is not the session's own question (status
     // precedence rule 2). Absent for the main agent's.
     [Strict(Strictness.Security)]

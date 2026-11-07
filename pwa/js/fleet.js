@@ -25,6 +25,8 @@ import { SIGN_IN_DEVICES, readSignInDevices } from './signin-devices.js';
 
 export const PROBE_EVERY_MS = 5 * 60 * 1000;
 export const REFRESH_EVERY_MS = 60 * 1000;
+// How long a discovery hold must last before its machine's row says so (#1064).
+export const HELD_ROW_MS = 2 * 60 * 1000;
 
 export class FleetStatus {
   #listeners = new Set();
@@ -57,7 +59,10 @@ export class FleetStatus {
   // on for a machine shown.
   #signIns = new Map();
   #signInsRead = new Map();
-
+  // When each machine's current discovery hold began as this client saw it, and the timer that
+  // draws its row once the hold has lasted HELD_ROW_MS.
+  #heldAt = new Map();
+  #heldTimers = new Map();
   // hosts: a HostSession (host-session.js): links() for the machines shown, link(id), shows(id)
   // and refresh(id).
   // probeEveryMs: how often each machine is looked at. refreshEveryMs: how often a machine shown
@@ -70,7 +75,7 @@ export class FleetStatus {
     connection.on('presence', () => { this.probe(); this.#retime(); });
     connection.on('ready', () => this.probe());
     hosts.onChange(() => this.#onHosts());
-    hosts.sessions.onChange(() => this.#emit());
+    hosts.sessions.onChange(() => { this.#watchHeld(); this.#emit(); });
     doc?.addEventListener?.('visibilitychange', () => {
       if (doc.visibilityState === 'hidden') { this.#stopTimer(); return; }
       this.probe();
@@ -198,7 +203,35 @@ export class FleetStatus {
     // A machine shown has its count live once its snapshot is in.
     const link = this.hosts.shows(id) ? this.hosts.link(id) : null;
     const live = link?.phase === 'open' && link.client?.synced;
-    return { ...m, sessions: live ? link.store.size : m.sessions, held: live ? link.store.held?.reason : null };
+    return { ...m, sessions: live ? link.store.size : m.sessions, held: live && this.#heldLong(id) ? link.store.held?.reason : null };
+  }
+
+  // Whether a machine's discovery hold has lasted HELD_ROW_MS (ui.md §6.6, #1064): a hold shorter
+  // than that is routine (a start or an end of discovery) and changes nothing on screen.
+  #heldLong(id) {
+    const at = this.#heldAt.get(id);
+    return at !== undefined && this.now() - at >= HELD_ROW_MS;
+  }
+
+  // Starts each hold's clock when a machine's list first says it is held, and ends it when it
+  // is not (or the machine is not live): a hold that returns counts from its own start. The row
+  // is drawn again when the clock runs out.
+  #watchHeld() {
+    const holding = new Set();
+    for (const link of this.hosts.links()) {
+      if (link.phase === 'open' && link.client?.synced && link.store.held) { holding.add(link.id); }
+    }
+    for (const id of [...this.#heldAt.keys()]) {
+      if (holding.has(id)) { continue; }
+      this.#heldAt.delete(id);
+      clearTimeout(this.#heldTimers.get(id));
+      this.#heldTimers.delete(id);
+    }
+    for (const id of holding) {
+      if (this.#heldAt.has(id)) { continue; }
+      this.#heldAt.set(id, this.now());
+      this.#heldTimers.set(id, setTimeout(() => { this.#heldTimers.delete(id); this.#emit(); }, HELD_ROW_MS));
+    }
   }
 
   // Whether a machine's figures come on a channel of its own: shown, and not found unable to
@@ -218,6 +251,9 @@ export class FleetStatus {
     this.#signIns.delete(id);
     this.#signInsRead.delete(id);
     this.#watchUntil.delete(id);
+    clearTimeout(this.#heldTimers.get(id));
+    this.#heldTimers.delete(id);
+    this.#heldAt.delete(id);
     this.book.delete(id, { forget: true });
     this.#retime();
     this.#emit();
@@ -237,6 +273,9 @@ export class FleetStatus {
     this.#signIns.clear();
     this.#signInsRead.clear();
     this.#watchUntil.clear();
+    for (const t of this.#heldTimers.values()) { clearTimeout(t); }
+    this.#heldTimers.clear();
+    this.#heldAt.clear();
     this.book.clear();
     this.#emit();
   }
@@ -267,6 +306,7 @@ export class FleetStatus {
     for (const id of [...this.#viewed.keys()]) {
       if (!shown.has(id)) { this.#viewed.delete(id); this.#viewedAt.delete(id); this.#updateFollowed.delete(id); this.#signInsRead.delete(id); }
     }
+    this.#watchHeld();
     this.#retime();
     this.#emit();
     this.probe();

@@ -43,7 +43,7 @@ and naming changes, and this branch adds operational behaviour. Compared side by
 | Devices | Id = SHA-256 of the device key; nothing stored | Same | None: nothing to migrate |
 | Presence | In memory, rebuilt as devices reconnect | Same | Devices reconnect once (1012), as on any restart |
 | Web Push | `PushGateway`, VAPID key `Relay:VapidPrivateKey`, push-host allowlist, 30/min/account | Same code | **Subscriptions survive only if the VAPID key is carried over** (a browser subscription is bound to the public key). `deploy.ps1` copies it |
-| CORS and origins | `Relay:AllowedOrigins` = `https://danswett.github.io`, and `https://app.slipgates.com` from #393 | Same option and checks | Set the same origins (they are in `regions/westus2.bicepparam`) |
+| CORS and origins | `Relay:AllowedOrigins` = `https://danswett.github.io`, and `https://app.slipgates.com` from #393 (both stamps). Staging alone also allows `https://preview.slipgates.com` (`stagingExtraAllowedOrigins`) | Same origins as staging, without the preview one | Set the same origins (they are in `regions/westus2.bicepparam`) |
 | GitHub sign-in | Device flow through the GitHub App client id | Same | Same client id; nothing for users to do |
 | Limits | 200 frames/s per socket, 32 devices per account, 60 sign-in calls/min per IP | Same, plus 120 new sockets/min per IP, 16 KiB request bodies, 10,000 sockets per replica | None for real clients: hosts and the PWA back off 1 s → 30 s |
 | Logs | GitHub login, account id, device id prefix and device name per connection | None of those: a random per-socket tag, kind and counts; JSON lines | Operational only |
@@ -269,8 +269,9 @@ is a later change, once both names pass step 3. Retiring `relay.bad-duck.com` is
 The first name's steps work as follows. `deploy.ps1` steps it forward
 as DNS allows: it prints both records while they are missing; once they resolve it puts the
 hostname on the app (pass 2), then issues the managed certificate and binds it with SNI
-(pass 3); after that it re-states the binding. Staging has no custom domain; adding
-`customDomain: 'relay-staging.bad-duck.com'` to `staging` and two more records would give it one.
+(pass 3); after that it re-states the binding. Staging is served at
+`https://relay-staging.slipgates.com` (its `customDomain`; DNS-only CNAME `relay-staging` and TXT
+`asuid.relay-staging`), so the new-hostname steps can be exercised there before production.
 
 **Renewal** is automatic as long as the CNAME keeps pointing at the app and stays DNS only.
 Moving the record, proxying it, or deleting the TXT makes renewal fail silently until the
@@ -462,6 +463,27 @@ Azure Storage on URLs the relay signs; no blob byte passes through a relay node.
   `Relay__Blobs__Container`, `Relay__Blobs__ManagedIdentityClientId`. Not a secret among
   them. An app without them (`Backend` empty) says `blobs: null` in `ready`, and every
   client keeps to 256 KiB in its channels.
+* A second private container, `feedback` (docs/protocol/feedback.md): the relay takes each
+  beta-feedback bundle itself (exact ticketed size, 8 MiB cap) and writes it with
+  create-only semantics. Its role assignment there is Blob Data Contributor with a condition
+  that removes read, list and delete, and a 30-day time-based retention policy on the
+  container means the relay cannot overwrite or delete a bundle before the
+  30 days are up. A lifecycle rule deletes `feedback/` at 31 days; the `blobs` rule is
+  scoped to its own container. Reading feedback is a role given to the feedback lead's
+  identity (SRE), never to the relay. Environment: `Relay__Feedback__Backend`,
+  `AccountUrl`, `Container`, `ManagedIdentityClientId`; empty `Backend` turns it off.
+* The retention policy deploys **unlocked**. Until it is locked, someone with write access
+  to the storage account (not the relay) could shorten or remove it, so "no one can
+  overwrite or delete" holds against the relay and any data-plane identity, not against an
+  account owner. After the first production apply, a person locks it (this cannot be
+  undone, and a locked policy can only be extended):
+
+  ```powershell
+  $etag = az storage container immutability-policy show --account-name <account> --container-name feedback --query etag -o tsv
+  az storage container immutability-policy lock --account-name <account> --container-name feedback --if-match $etag
+  ```
+
+  Until then the accepted risk is account-owner tampering; record the lock on #731.
 
 Staging has its account (`abblobstgwus2`, applied with `./infra/deploy.ps1` on 2026-10-29,
 which also registered `Microsoft.Storage` in the subscription). Production gets

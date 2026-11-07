@@ -18,9 +18,17 @@ async function openDemo(page, extra = '') {
   await page.addInitScript(() => {
     window.__cspViolations = [];
     document.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
-    // What Copy code put on the clipboard, without asking the browser for the permission.
+    // What Copy code put on the clipboard, without asking the browser for the permission: through
+    // the selection copy, which goes first, or the Clipboard API (the real one is tested in
+    // code-copy-real.spec.mjs).
     window.__copied = [];
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied.push(t); } } });
+    document.execCommand = (command) => {
+      const a = document.activeElement;
+      if (command !== 'copy' || !(a instanceof HTMLTextAreaElement)) { return false; }
+      window.__copied.push(a.value.slice(a.selectionStart, a.selectionEnd));
+      return true;
+    };
   });
   await page.goto(`?demo=1&static=1&signin=1&name=DEV-VM1${extra}#/sessions`);
   await page.waitForSelector('html[data-demo-ready]');

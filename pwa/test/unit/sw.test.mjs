@@ -210,6 +210,55 @@ test('every notification carries the app icon and the mark as its badge, for And
   assert.deepEqual(sw.shown.map((n) => [n.icon, n.badge]), [['icons/icon-192.png', 'icons/badge-96.png'], ['icons/icon-192.png', 'icons/badge-96.png']]);
 });
 
+// A group: the machine's questions as one notice, with no session of its own (#913).
+const group = (extra = {}, data = {}) => ({
+  web_push: 8030,
+  notification: {
+    title: 'Needs you',
+    body: 'DEV · 3 sessions are waiting on you',
+    navigate: `${scope}?host=${MACHINE}&needsyou=1`,
+    tag: `${MACHINE}:~needsyou`,
+    lang: 'en',
+    data: { v: 1, kind: 'group', machine: MACHINE, session: '', sessions: 3, class: 'needsYou', at: '2026-10-28T04:22:43.182Z', ...data },
+    ...extra,
+  },
+});
+
+test('a group is shown as Needs you with its count, under the machine\'s group tag, alerting, and a tap goes to Needs you', async () => {
+  const sw = worker();
+  await sw.fire('push', push(group()));
+  const [n] = sw.shown;
+  assert.equal(n.title, 'Needs you');
+  assert.equal(n.tag, `${MACHINE}:~needsyou`);
+  assert.equal(n.renotify, true);
+  assert.equal(n.silent, undefined);
+  assert.deepEqual(plain(n.data), { url: `${scope}?host=${MACHINE}&needsyou=1`, kind: 'group', machine: MACHINE, session: null, question: null, class: 'needsYou', sessions: 3 });
+});
+
+test('a group the host calls silent changes in place without alerting again', async () => {
+  const sw = worker();
+  await sw.fire('push', push(group()));
+  await sw.fire('push', push(group({ silent: true }, { sessions: 2 })));
+  assert.deepEqual(sw.shown.map((n) => [n.silent ?? false, n.renotify, n.data.sessions]), [[false, true, 3], [true, false, 2]]);
+  assert.equal(sw.open.length, 1);
+});
+
+test('a resolved under the group\'s tag takes the group away, and other notices stay', async () => {
+  const sw = worker();
+  await sw.fire('push', push(group()));
+  await sw.fire('push', push(classed('question', 'needsYou', { tag: `${MACHINE}:s2` })));
+  await sw.fire('push', push(notice('resolved', { tag: `${MACHINE}:~needsyou`, body: 'DEV · nobody is waiting on you', data: { v: 1, kind: 'resolved', machine: MACHINE, session: '' } })));
+  assert.deepEqual(sw.open.map((n) => n.tag), [`${MACHINE}:s2`]);
+});
+
+test('a question\'s reminder is kept in its notice, which still alerts', async () => {
+  const sw = worker();
+  const reminded = (reminder) => ({ ...classed('question', 'needsYou'), notification: { ...classed('question', 'needsYou').notification, data: { ...notice('question').notification.data, class: 'needsYou', reminder } } });
+  await sw.fire('push', push(reminded(true)));
+  await sw.fire('push', push(reminded('yes')));
+  assert.deepEqual(sw.shown.map((n) => [n.data.reminder, n.renotify]), [[true, true], [undefined, true]]);
+});
+
 test('a kind from a newer machine is shown as a question', async () => {
   const sw = worker();
   await sw.fire('push', push(notice('reminder')));
@@ -316,6 +365,13 @@ test('a release\'s own files come from its cache, with nothing asked of the netw
   assert.deepEqual(sw.fetched, []);
 });
 
+test('a page of another site under the same scope is left to the browser, never answered with the app', async () => {
+  const sw = cachingWorker({ [CURRENT]: { [scope]: 'page' } });
+  assert.equal(await sw.get(`${scope}s4/`, 'navigate'), undefined);
+  assert.equal(await sw.get(`${scope}app/?demo=1`, 'navigate'), undefined);
+  assert.deepEqual(sw.fetched, []);
+});
+
 test('a file that is not the release\'s own is served as kept, and fetched again for next time', async () => {
   const sw = cachingWorker({ [CURRENT]: { [`${scope}js/ui/glyph.js`]: 'kept' } });
   assert.equal((await sw.get(`${scope}js/ui/glyph.js`)).body, 'kept');
@@ -372,8 +428,9 @@ test('a tap brings an open app forward and tells it where to go, keeping its con
   const messages = [];
   let focused = 0;
   const elsewhere = { url: 'https://danswett.github.io/other-app/', postMessage: () => assert.fail('not this app'), focus: async () => assert.fail('not this app') };
+  const spike = { url: `${scope}s4/`, postMessage: () => assert.fail('a page of another site, not the app'), focus: async () => assert.fail('a page of another site, not the app') };
   const app = { url: `${scope}?x=1`, postMessage: (m) => messages.push(m), focus: async () => { focused++; } };
-  const sw = worker({ clients: [elsewhere, app] });
+  const sw = worker({ clients: [elsewhere, spike, app] });
   await sw.fire('notificationclick', tapped({ url: `${scope}?host=${MACHINE}&session=s1&question=q1` }));
   assert.deepEqual(plain(messages), [{ type: 'agent-bridge.open', url: `${scope}?host=${MACHINE}&session=s1&question=q1` }]);
   assert.equal(focused, 1);
