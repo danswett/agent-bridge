@@ -412,9 +412,10 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
   bottom navigation gives way to it, and Back (the header's, or the platform's own) returns
   to the list.
 
-**Resizing (the Windows app, #297).** A divider between the list and the session, and between
-the session and the inspector, wherever both show. The widths above are the defaults; at two
-panes the app's list is 320 too, as long as the session keeps its narrowest.
+**Resizing (the Windows app, #297; the PWA, #1030).** A divider between the list and the
+session, and between the session and the inspector, wherever both show. The widths above are
+the defaults; at two panes the list is 320 too, as long as the session keeps its narrowest.
+Everything below holds in both clients; the PWA's differences are at the end.
 - **Limits** (`tokens.json` `layout.windows`): the list 264–480, so a row's two lines keep a
   title and its facts (§6.1); the inspector 280–560, so Details keeps its label column and a
   value beside it; and the session never under 440, about 50 characters of the Reading role
@@ -432,7 +433,24 @@ panes the app's list is 320 too, as long as the session keeps its narrowest.
   or focused from the keyboard; each is a system colour in high contrast. Left and Right move a
   focused divider 16 px, a screen reader sees a splitter whose value is its pane's width, and a
   double-click puts its pane back to its default.
-- **The PWA** keeps its fixed widths for now.
+- **The PWA** (`tokens.json` `layout.pwa`, the same defaults and limits) from 760 up; a phone
+  under 760 keeps its one column and has no divider.
+  - **Kept** in the browser's local storage, beside Your order, across reloads. Never sent to
+    a host, like the app's.
+  - **The divider** is an element with `role="separator"`, `aria-orientation="vertical"`,
+    `aria-valuenow` its pane's width in px and `aria-valuemin`/`aria-valuemax` its limits,
+    labelled "Resize the session list" or "Resize the delegate inspector". It is in the tab
+    order; Left and Right move it 16 px, as the app's do. It drags with pointer events, so a
+    mouse, a pen and a finger move it alike.
+  - **Touch:** the line stays a hairline, but its hit area is 44 wide (`dividerTouch`) under
+    a coarse pointer, centred on the line and over the panes' edges, and 8 (`divider`)
+    otherwise. Nothing is drawn wider for touch.
+  - **Reset:** a double-click or a double-tap puts its pane back to its default. Not a long
+    press: that is the browser's own (selection, the context menu) and nothing tells a person
+    it's there.
+  - **Colours** as the app's: clear at rest, `stroke2` while pointed at, Bridge while dragged
+    or focused (a visible focus ring, §9), and system colours under `forced-colors`.
+  - **Motion:** none. The pane follows the pointer; a reset jumps, under reduced motion or not.
 ### 5.3 Motion
 
 *Signed off by the owner on 2026-11-02 (#232). That includes three calls: platform
@@ -2943,7 +2961,7 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
 | A8 | **Contrast:** text 4.5:1, and glyphs and the non-text parts that show state or focus 3:1, against what they sit on, in light, dark and high contrast (§3's Contrast). Words that would be Bridge on light's `selected` tint take `text` instead, and every foreground and background pair a client draws is listed in `tokens.json` `color.contrast`, so `a11y-contrast` checks it. | Tokens: `a11y-contrast` (`tokens.json` `color.contrast`). PWA: axe `color-contrast` in light, dark and forced colours in `a11y-pwa`, and on a selected machine's words in light. Not every drawn pair is listed yet: `danger.text` on light's selected tint over the shell is 4.18:1, drawn by a selected machine's refused update (`.machine-error`), and isn't listed, tracked in #858. Non-text 3:1 is manual. Windows: manual | #366 |
 | A9 | **High contrast uses system colours.** In Windows high contrast and the browser's forced colours, every role and surface takes a system colour (§3's Theme, `tokens.json` `hc`), and shape and words still carry each state (§2.1). | PWA: `pwa-ui`'s theme.spec, "in forced colours every role is a system colour", and `a11y-pwa`'s forced-colours axe run (Chromium); that shape and words still tell states apart is manual. Windows: manual | |
 | A10 | **Reduced motion** follows each platform's setting, as §5.3's reduced-motion column and §9.2 say. | PWA: `a11y-pwa`'s reduced-motion.spec. Windows: manual | #659 |
-| A11 | **Targets:** at least 44×44 on touch platforms and 32×32 with a pointer on desktop; never under WCAG 2.5.8's minimum anywhere (24×24, or its spacing exception). | PWA: axe `target-size` in `a11y-pwa` (WCAG 2.5.8 only); 44 and 32 are manual | |
+| A11 | **Targets:** at least 44×44 on touch platforms and 32×32 with a pointer on desktop; never under WCAG 2.5.8's minimum anywhere (24×24, or its spacing exception). "On touch" means touch is the only pointer: a tablet with a trackpad or mouse attached takes pointer sizes, as a desktop does (PWA: `(pointer: coarse) and (not (any-pointer: fine))`, never `(pointer: coarse)` alone, which an iPad keeps with a trackpad). | PWA: axe `target-size` in `a11y-pwa` (WCAG 2.5.8 only); 44 and 32 are manual | |
 | A12 | **Keyboard focus is always shown** (WCAG 2.4.7). In the PWA the ring is drawn through `:focus-visible` (§3: Bridge is focus), never `:focus` alone, and outlines are never hidden for the whole page; on Windows it is the system's focus visuals. A ring is drawn only for focus moved by a key: a press, a touch, or the app coming back from a notification draws none. Focus still moves for a screen reader; in the PWA the one element focused without a key draws no ring until a key is pressed, and a text field keeps the browser's ring wherever focus came from, since it shows where typing goes, as does focus the browser brings in from its address bar or another window while the page stayed on screen (its Tab, whose key the page never sees). Nothing else that looks like focus marks the session a notification opened: it is shown selected. | PWA: `a11y-pwa`'s keyboard.spec ("with focus shown"; "a session opened with a touch … no ring drawn"; "the session a notification tapped … opens … no ring"; "as the app starts … no ring"; "a notification for the session already open … takes the title's ring away"; "focus the browser brings in from its address bar … keeps the browser's ring"), and `pwa-e2e`'s "a notification's link opens its machine and session" (cold and warm, through the real link and the worker's message). A real iPhone's notification is the owner's check. Windows: manual | #373 |
 | A13 | **Content stays selectable.** Conversation, code, prompts, questions and every field stay selectable and copyable; never a blanket `user-select: none`. A control's own words (a button, a tab, a menu item), a row's title, a session's header, the app bar's title (on a phone, the page's title row, which stands in for it) and a banner's words are not selected by a press, a long press or a double tap; anything a person may want to copy stays selectable. | PWA: `pwa-ui`'s ui.spec, "chrome's words are not selectable, and the conversation, code, a question and every field are". Windows: manual | #373 |
 | A14 | **Risky settings carry warning weight.** A setting that weakens a safeguard (bypassing the agent's permission prompts) is drawn with warning weight: Needs you's text colour for its explanation, or an InfoBar while it is on. Its confirmation names exactly what changes and has Cancel as its default button. | Not yet enforced, tracked in #699 | #699 |

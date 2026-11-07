@@ -32,7 +32,7 @@ internal interface ISignInContextResolver
 {
     // Synchronous host-owned structured metadata only, never agent prose or CLI output.
     // An account without a structured identity stays null; request text only selects an
-    // already-known identity. No production implementation is registered yet.
+    // already-known identity. Production: HostSignInContextResolver.
     SignInContext? Resolve(AgentKind agent, string? account);
     SignInTarget? ResolveTarget(AgentKind agent, string? account);
 }

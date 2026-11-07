@@ -2,8 +2,7 @@ using System.Diagnostics;
 
 namespace AgentBridge.Host.SignIn;
 
-// Prepared launch contract, not a process factory or an auth-output parser. Captured
-// fixtures and containment admission still gate wiring this to a production runner.
+// The launch contract CopilotSignInAdapter starts (#972); it parses no output itself.
 internal static class CopilotDeviceCommand
 {
     public const string SideEffects = "the machine opens a browser and copies the code";
@@ -33,6 +32,9 @@ internal static class CopilotDeviceCommand
         // Remove by name without inspecting values. This flow must not authenticate
         // using a token inherited from the hosting process.
         foreach (var name in new[] { "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN" }) { start.Environment.Remove(name); }
+        // Nor follow the CLI's debug overrides (its browser command, API URL, offer timeout): this
+        // login is the CLI's own, as shipped.
+        foreach (var name in start.Environment.Keys.Where(k => k.StartsWith("COPILOT_DEBUG", StringComparison.OrdinalIgnoreCase)).ToArray()) { start.Environment.Remove(name); }
         return start;
     }
 }

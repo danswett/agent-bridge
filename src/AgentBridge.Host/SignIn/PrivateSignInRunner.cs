@@ -8,8 +8,8 @@ namespace AgentBridge.Host.SignIn;
 internal sealed record SignInTarget(string Store, AgentKind Agent, string? Account);
 internal enum SignInOutcome { SignedIn, Expired, Cancelled, Failed, Refused }
 
-// This is an adapter frame contract, not guessed Copilot console output. No production
-// factory is supplied until the auth entrypoint, fixtures and side effects are approved.
+// This is an adapter frame contract, not guessed Copilot console output. The production
+// factory (CopilotSignInAdapter, #972) translates the CLI's own lines into these frames.
 internal interface IPrivateSignInProcessFactory
 {
     // Recheck authorize at the actual launch, including after any factory queue.
