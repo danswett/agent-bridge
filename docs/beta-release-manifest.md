@@ -25,6 +25,11 @@ generation without writing a manifest; the site must not invent a checksum.
 Names come from [the existing channel definitions](../build/app-channels.ps1).
 Unrelated release assets are not exposed as installers.
 
+This contract follows #1177's public-download rename: `Slipgates-win-Setup.exe`
+and `Slipgates-win-arm64-Setup.exe`. Releases with only the old `AgentBridgeApp`
+installer names are refused, not given invented renamed URLs. The pack ID,
+nupkg/delta names, feeds and install folder remain unchanged.
+
 An app publish rerun can regenerate/upload the manifest for its already-published
 Beta without republishing the installers. This is separate from `published=true`,
 which still means only a new upload and controls the existing attest job. A tag
@@ -48,14 +53,14 @@ Example shape (not a claim that this example manifest has been published):
   "releaseNotesUrl": "https://github.com/danswett/agent-bridge/releases/tag/v0.1.600",
   "downloads": {
     "win-x64": {
-      "fileName": "AgentBridgeApp-win-Setup.exe",
-      "url": "https://github.com/danswett/agent-bridge/releases/download/v0.1.600/AgentBridgeApp-win-Setup.exe",
+      "fileName": "Slipgates-win-Setup.exe",
+      "url": "https://github.com/danswett/agent-bridge/releases/download/v0.1.600/Slipgates-win-Setup.exe",
       "sizeBytes": 123,
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "win-arm64": {
-      "fileName": "AgentBridgeApp-win-arm64-Setup.exe",
-      "url": "https://github.com/danswett/agent-bridge/releases/download/v0.1.600/AgentBridgeApp-win-arm64-Setup.exe",
+      "fileName": "Slipgates-win-arm64-Setup.exe",
+      "url": "https://github.com/danswett/agent-bridge/releases/download/v0.1.600/Slipgates-win-arm64-Setup.exe",
       "sizeBytes": 456,
       "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
