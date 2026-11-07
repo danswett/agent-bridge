@@ -1474,21 +1474,24 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     const string SixMessage = "Five decisions from the #1135 host answer delivery design. My recommendation is the default on each.";
 
-    async Task<string[]> AskSixAsync(object answer)
+    async Task<string[]> AskSixAsync(object answer, string[]? titles = null)
     {
+        titles ??= SixTitles;
         string[] names = ["diagnostics", "eea", "partial", "keys", "channel", "updates"];
         string[] Options(int n) => [.. Enumerable.Range(0, n).Select(i => $"Option {i + 1}")];
         await AskFieldsAsync(new
         {
-            diagnostics = new { type = "string", title = SixTitles[0], description = "Whether a report is sent.", @enum = Options(2) },
-            eea = new { type = "string", title = SixTitles[1], description = "Who is asked.", @enum = Options(3) },
-            partial = new { type = "string", title = SixTitles[2], description = "What the host does.", @enum = Options(4) },
-            keys = new { type = "string", title = SixTitles[3], description = "How narrow.", @enum = Options(2) },
-            channel = new { type = "string", title = SixTitles[4], description = "Which channel.", @enum = Options(3) },
-            updates = new { type = "string", title = SixTitles[5], description = "When to update.", @enum = Options(2) },
+            diagnostics = new { type = "string", title = titles[0], description = "Whether a report is sent.", @enum = Options(2) },
+            eea = new { type = "string", title = titles[1], description = "Who is asked.", @enum = Options(3) },
+            partial = new { type = "string", title = titles[2], description = "What the host does.", @enum = Options(4) },
+            keys = new { type = "string", title = titles[3], description = "How narrow.", @enum = Options(2) },
+            channel = new { type = "string", title = titles[4], description = "Which channel.", @enum = Options(3) },
+            updates = new { type = "string", title = titles[5], description = "When to update.", @enum = Options(2) },
         }, 6, answer, SixMessage);
         return names;
     }
+
+    static readonly object SixAnswer = new { diagnostics = "Option 1", eea = "Option 2", partial = "Option 3", keys = "Option 1", channel = "Option 2", updates = "Option 1" };
 
     // The form as Copilot CLI 1.0.105 draws it in a console `columns` wide: its rules across it,
     // the question wrapped, and the tab bar `bar` draws at the field it is at.
@@ -1537,23 +1540,60 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     // unavailable.
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_six_field_form_whose_tab_bar_shows_only_the_labels_around_each_field_is_answered_field_by_field(bool marked)
+    public async Task A_six_field_form_whose_whole_tab_bar_fits_a_wide_window_is_answered_field_by_field(bool marked)
     {
-        // At 102 columns the six titles do not fit across the bar: it shows two of them and an
-        // arrow for those hidden, and every answer to this form was refused at its first read
-        // (#1123). Each field is still read by its own heading before its keys.
-        var answer = new { diagnostics = "Option 1", eea = "Option 2", partial = "Option 3", keys = "Option 1", channel = "Option 2", updates = "Option 1" };
-        var names = await AskSixAsync(answer);
-        injector.Screen = () => SixScreen(names, 102, at => CliBar(SixTitles, at, 102, marked));
-        Assert.Contains("\u2192", CliBar(SixTitles, 0, 102, marked));
-        Assert.Contains("\u2190", CliBar(SixTitles, 5, 102, marked));
+        var names = await AskSixAsync(SixAnswer);
+        injector.Screen = () => SixScreen(names, 260, at => CliBar(SixTitles, at, 260, marked));
+        Assert.DoesNotContain("\u2192", CliBar(SixTitles, 0, 260, marked));
         var ch = await OpenAsync();
 
-        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+        var result = await AnswerResultAsync(ch, SixAnswer, Guid.NewGuid().ToString());
 
         Assert.Equal("delivered", result.GetProperty("outcome").GetString());
         Assert.Equal(6, Enters());
         Assert.Contains("check=none", (await AttemptLineAsync()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_six_field_form_whose_tab_bar_hides_titles_gets_no_keys_and_is_named_for_the_machine(bool marked)
+    {
+        // At 102 columns the six titles do not fit across the bar: it shows two of them and an
+        // arrow for those hidden (#1123). The hidden titles cannot be read before the first key,
+        // so nothing is typed, and the refusal says why rather than that no form showed.
+        var names = await AskSixAsync(SixAnswer);
+        injector.Screen = () => SixScreen(names, 102, at => CliBar(SixTitles, at, 102, marked));
+        Assert.Contains("\u2192", CliBar(SixTitles, 0, 102, marked));
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, SixAnswer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("too narrow for the question's form to show every field's title", reason);
+        Assert.Contains("answer it at the machine", reason);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
+    }
+
+    [Fact]
+    public async Task A_form_that_differs_from_the_question_only_in_a_title_its_tab_bar_hides_gets_no_keys()
+    {
+        // The question's last title is not the one on screen, but at the first field the bar
+        // shows only the first two: message, labels shown, heading and hints all read the same.
+        // Typed into, the first field of a form that is not this question would stay filled
+        // before its last field's heading told them apart (#1137 review).
+        string[] asked = [.. SixTitles[..5], "5. CLI updates for archived sessions"];
+        var names = await AskSixAsync(SixAnswer, asked);
+        injector.Screen = () => SixScreen(names, 102, at => CliBar(SixTitles, at, 102, marked: false));
+        Assert.Equal(CliBar(asked, 0, 102, marked: false), CliBar(SixTitles, 0, 102, marked: false));
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, SixAnswer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Attempts);
+        Assert.Empty(injector.Plans);
     }
 
     [Theory]
@@ -1563,14 +1603,13 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [InlineData("elsewhere")]
     public async Task A_tab_bar_that_is_not_the_window_drawn_at_this_field_gets_no_keys(string bar)
     {
-        var answer = new { diagnostics = "Option 1", eea = "Option 2", partial = "Option 3", keys = "Option 1", channel = "Option 2", updates = "Option 1" };
-        var names = await AskSixAsync(answer);
+        var names = await AskSixAsync(SixAnswer);
         injector.Screen = () => SixScreen(names, 102, at => bar == "no-arrow"
             ? $" {SixTitles[0]}   {SixTitles[1]}  "
             : $"\u2190  {SixTitles[2]}    {SixTitles[3]}   \u2192  ");
         var ch = await OpenAsync();
 
-        var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
+        var (outcome, reason) = await AnswerAsync(ch, SixAnswer, question: "q2");
 
         Assert.Equal("refused", outcome);
         Assert.Contains("no longer showed the question's form", reason);

@@ -165,10 +165,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     wrap, and a character the console draws other than as written is drawn so in the bar
     too, and refused there. A bar too wide for the console shows only the labels around the
     field being answered, between arrows ("←" when labels are hidden before them, "→" when
-    after, `Da`'s `Hfn` window), and is taken only as exactly such a window at that field,
-    and only while every field's heading fits on a row of the frame; each later field's own
-    heading is still read before its keys. A six-field form with long titles at 102 columns
-    showed two labels and "→", and every answer was refused at its first read (#1123).
+    after, `Da`'s `Hfn` window). Read as exactly such a window at that field, it is refused
+    with nothing typed and named (`bar-window`), for the machine or a wider window: a form
+    that differs from the question only in a hidden title reads the same, and each field's
+    own heading is read only once the keys reach it, after earlier fields are already filled
+    (#1137 review). A six-field form with long titles at 102 columns showed two labels and
+    "→", and was refused as no form at all, unnamed (#1123).
     What cannot be known beforehand (a permission prompt opening over a later field, or a
     long field scrolling the form's heading off a short window) still stops the keys there:
     the answer is then `unconfirmed`, and its reason names the fields that were answered,
@@ -188,8 +190,8 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     the field itself (its options and pointer, or what is typed into it) drawn exactly as in
     the rows the write was held to: what changed was elsewhere on the screen, and the keys do
     the same there. A field drawn otherwise gets nothing more. Each refusal logs which check
-    failed (`heading`, `bottom-rule`, `under`, `message`, `bar`, `field`, `field-heading`,
-    `hints` or `prompted`, with the row) and the screen's outline (its row count, widest
+    failed (`heading`, `bottom-rule`, `under`, `message`, `bar`, `bar-window`, `field`,
+    `field-heading`, `hints` or `prompted`, with the row) and the screen's outline (its row count, widest
     row, blank rows, where its rules and form headings are), never what any row says. A form
     left part answered across attempts is not yet resumed by a later answer: the attempt that
     stopped says which fields were answered, for the person to finish at the machine.
@@ -211,7 +213,8 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     count taken too early can only send the words' Enter early, behind the words, which is
     reported `typed`, not `delivered`; rows are compared whole, so an animated form would be
     refused rather than typed into; a form drawn taller than the console's window, its
-    heading or hints scrolled out of sight, is stopped rather than typed into.
+    heading or hints scrolled out of sight, is stopped rather than typed into, and so is a
+    form whose tab bar is too wide to name every field (`bar-window`).
   * An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.

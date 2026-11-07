@@ -26,9 +26,8 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //     read at the first field vouches for every later field's title before the first key:
 //     it holds every label and more, so each heading, drawn in the same column, fits on its
 //     row too; and a title the console draws other than as written (a line break, a character
-//     it shows otherwise) is drawn so in the bar too, and refused there. Windowed, it is taken
-//     only while every title fits on a row of the frame, and each later field's own heading is
-//     still read before its keys.
+//     it shows otherwise) is drawn so in the bar too, and refused there. Windowed, it vouches
+//     for none of the hidden titles, so it is refused, named, with nothing typed.
 //   * Under it, the key hints (`Ft`, joined by " · ", wrapping): "enter accept", "tab next"
 //     unless at the last field, "shift+tab prev" unless at the first, "ctrl+d decline",
 //     "esc cancel".
@@ -52,6 +51,9 @@ public enum FormCheck
     Message,
     // The tab bar does not name the fields.
     Bar,
+    // The tab bar is the one the CLI draws at this field, but too wide for the console, so it
+    // hides some of the fields' titles, and the form cannot be told from another one.
+    BarWindow,
     // The form has no such field, or one the host cannot say how it is headed.
     Field,
     // The field being answered is not the one headed.
@@ -141,6 +143,7 @@ public static partial class CopilotFormScreen
         FormCheck.Under => "under",
         FormCheck.Message => "message",
         FormCheck.Bar => "bar",
+        FormCheck.BarWindow => "bar-window",
         FormCheck.Field => "field",
         FormCheck.FieldHeading => "field-heading",
         FormCheck.Hints => "hints",
@@ -200,6 +203,7 @@ public static partial class CopilotFormScreen
 
     const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
     const string NotForm = "the session's screen no longer showed the question's form";
+    const string Narrow = "the session's window is too narrow for the question's form to show every field's title, so the host cannot tell it is this question; answer it at the machine, or widen the window and answer again";
     const string Under = "something other than the question's form was drawn under it on the session's screen";
 
     static string? Find(IReadOnlyList<string> rows, CopilotForm form, int index, Found found)
@@ -256,9 +260,9 @@ public static partial class CopilotFormScreen
             // out as in the question: the bar (`Da`) measures itself against the console's width,
             // not the frame's, so it can wrap inside the frame, and where it breaks is the
             // renderer's. Too wide for the console, it shows only the labels around the field
-            // being answered, between arrows (Bars). Wrapped or windowed, it still vouches for
-            // every later field's heading only while each fits on a row of the frame, so it is
-            // taken so only then.
+            // being answered, between arrows (Bars), and is refused below. Wrapped, it still
+            // vouches for every later field's heading only while each fits on a row of the
+            // frame, so it is taken so only then.
             var bars = Bars([.. form.Fields.Select(f => f.Label!)], index);
             at = Next(rows, at);
             var bar = "";
@@ -273,8 +277,15 @@ public static partial class CopilotFormScreen
                 (bar, barRows) = (more, barRows + 1);
                 at++;
             }
+            // Windowed, the bar hides some titles, and a form that differs from this question only
+            // in a hidden title reads the same: its message, the labels shown, the field's heading
+            // and hints. Each field's own heading is read before its keys, but a field typed into
+            // stays so, so the keys could fill a form that is not this question before the one
+            // title that tells them apart showed (#1137 review). Named, it is refused with nothing
+            // typed, for the machine, rather than read as no form at all (#1123).
+            if (bars[bar]) { return found.Fail(FormCheck.BarWindow, at - 1, Narrow); }
             var inside = top.Trim(' ').Length - 2;
-            if ((barRows > 1 || bars[bar]) && form.Fields.Any(f => Headed(f).Length > inside)) { return found.Fail(FormCheck.Bar, at - 1, NotForm); }
+            if (barRows > 1 && form.Fields.Any(f => Headed(f).Length > inside)) { return found.Fail(FormCheck.Bar, at - 1, NotForm); }
         }
         at = Next(rows, at);
         if (at >= rows.Count || Collapse(rows[at]) != heading) { return found.Fail(FormCheck.FieldHeading, at, off); }
@@ -317,9 +328,10 @@ public static partial class CopilotFormScreen
     // window `Hfn` centres on the selected one (from `index - n / 2`, kept inside the list), "←"
     // before it when labels are hidden on the left and "→" after it when on the right. A window
     // is one of these alone: the selected field in it, the arrows saying exactly which ends are
-    // hidden, and the labels in it in the form's order. Six long titles at 102 columns showed two
-    // and "→", and every answer was refused at its first read (#1123). A label with an arrow of
-    // its own could read as a window it is not, so such a form's bar is taken only whole.
+    // hidden, and the labels in it in the form's order; read so, it is named (bar-window) rather
+    // than refused as no form at all. Six long titles at 102 columns showed two and "→" (#1123).
+    // A label with an arrow of its own could read as a window it is not, so such a form's bar is
+    // taken only whole.
     static Dictionary<string, bool> Bars(IReadOnlyList<string> labels, int index)
     {
         string Run(int start, int end, bool mark) =>
