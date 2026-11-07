@@ -36,7 +36,9 @@ public enum BridgeNotificationActions {
               question.readOnlyReason(capabilities: capabilities, sessionAgent: session.agent) == nil else { return [] }
         // #826: the OS truncates a notification's body, so an approval never decides from one.
         // It opens its question card; neither Approve Once nor Deny is offered.
-        if question.isApproval { return [] }
+        if question.isApproval {
+            return []
+        }
         if question.fields.isEmpty {
             return [.init(id: "answer", title: "Answer", kind: .answerText)]
         }

@@ -74,7 +74,7 @@ private func actionRequest(_ notice: BridgeSessionNotice, text: String? = nil) t
     }
     #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "other-account", capabilities: actionCaps, isLive: true) }
     #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "account-one", capabilities: actionCaps, isLive: false) }
-    #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "account-one",     capabilities: ["sessions.read", "sessions.approve"], isLive: true) }
+    #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "account-one", capabilities: ["sessions.read", "sessions.approve"], isLive: true) }
 }
 
 @Test func notificationRepliesRequireTheSameFinishedTurnAndNonemptyText() throws {
