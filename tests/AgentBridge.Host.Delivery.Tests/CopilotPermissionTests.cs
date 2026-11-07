@@ -192,7 +192,7 @@ public sealed class CopilotPermissionTests : IDisposable
         var crowded = CopilotPermissionTranscript.Before(events, "r1");
         Assert.Equal((2, 1), (crowded.PendingPermissions, crowded.PendingAsks));
         Assert.True(crowded.First);
-        Assert.Equal("r2", Assert.Single(crowded.Others).Prompt?.RequestId);
+        Assert.Equal("r2", Assert.Single(crowded.Others).Described.Value?.RequestId);
         Assert.False(CopilotPermissionTranscript.Before(events, "r2").First);
 
         Fixture.Append(events, Copilot.PermissionDone("r1", "c1", "approved", 4));
@@ -216,7 +216,7 @@ public sealed class CopilotPermissionTests : IDisposable
         long Allocated()
         {
             var before = GC.GetAllocatedBytesForCurrentThread();
-            CopilotPermissionTranscript.Before(events, "r1");
+            foreach (var other in CopilotPermissionTranscript.Before(events, "r1").Others) { _ = other.Described.Value; }
             return GC.GetAllocatedBytesForCurrentThread() - before;
         }
         var pendingAllocations = Allocated();
@@ -230,12 +230,12 @@ public sealed class CopilotPermissionTests : IDisposable
         Assert.True(waiting.First);
         Assert.Equal(2, waiting.PendingPermissions);
         Assert.Equal("r1", waiting.Request?.RequestId);
-        Assert.Equal("r2", Assert.Single(waiting.Others).Prompt?.RequestId);
+        Assert.Equal("r2", Assert.Single(waiting.Others).Described.Value?.RequestId);
 
         Fixture.Append(events, Copilot.Permission("r1", "c3", Copilot.Prompts["path"], 5));
         var replaced = CopilotPermissionTranscript.Before(events, "r2");
         Assert.True(replaced.First);
-        Assert.Equal("c3", Assert.Single(replaced.Others).Prompt?.ToolCallId);
+        Assert.Equal("c3", Assert.Single(replaced.Others).Described.Value?.ToolCallId);
     }
 
     [Theory]

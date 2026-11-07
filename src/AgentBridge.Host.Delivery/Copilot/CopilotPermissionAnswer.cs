@@ -13,7 +13,7 @@ namespace AgentBridge.Host.Delivery.Copilot;
 public sealed record CopilotPermissionState(bool Readable, CopilotPermissionPrompt? Request, int PendingPermissions, int PendingAsks, long ScannedTo,
     IReadOnlySet<string>? Asks = null, bool Replaced = false)
 {
-    public IReadOnlyList<(string RequestId, CopilotPermissionPrompt? Prompt)> Others { get; init; } = [];
+    public IReadOnlyList<(string RequestId, Lazy<CopilotPermissionPrompt?> Described)> Others { get; init; } = [];
     public bool First { get; init; }
 }
 
@@ -121,11 +121,11 @@ public sealed class CopilotPermissionWatch(string path, string requestId, Func<J
         if (end is not { } read) { return new CopilotPermissionState(false, null, 0, 0, 0, Replaced: replaced); }
         (LastRead, to) = (read - to, read);
         // Completed edits can carry entire files: format and hash only what is still waiting.
-        var pending = permissions.Select(p => (p.Id, Prompt: (describe ?? CopilotPermission.Describe)(p.Data))).ToList();
-        var at = pending.FindIndex(p => p.Id == requestId);
-        return new CopilotPermissionState(true, at < 0 ? null : pending[at].Prompt, pending.Count, asks.Count, to, asks.Keys.ToHashSet(StringComparer.Ordinal), replaced)
+        var at = permissions.FindIndex(p => p.Id == requestId);
+        var pending = permissions;
+        return new CopilotPermissionState(true, at < 0 ? null : (describe ?? CopilotPermission.Describe)(pending[at].Data), pending.Count, asks.Count, to, asks.Keys.ToHashSet(StringComparer.Ordinal), replaced)
         {
-            Others = [.. pending.Where(p => p.Id != requestId)],
+            Others = [.. pending.Where(p => p.Id != requestId).Select(p => (p.Id, new Lazy<CopilotPermissionPrompt?>(() => CopilotPermission.Describe(p.Data))))],
             First = at == 0,
         };
     }
@@ -171,7 +171,7 @@ public sealed class CopilotPermissionWatch(string path, string requestId, Func<J
                     break;
                 case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
                     {
-                        var by = e.AgentId ?? (CopilotPrompts.Str(data, "toolCallId") is { } call ? tools.GetValueOrDefault(call) : null);
+                        var by = e.AgentId ?? (CopilotPermission.ToolCallId(data) is { } call ? tools.GetValueOrDefault(call) : null);
                         permissions.RemoveAll(p => p.Id == id);
                         permissions.Add((id, data.Clone(), by));
                         break;
