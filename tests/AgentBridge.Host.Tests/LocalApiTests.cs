@@ -4,6 +4,7 @@ using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Usage;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -49,6 +50,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     RelayAccount? credential;
     string? probesFinishing;
     int probeHolds;
+    Func<Task<IDisposable?>> prepareStop = () => Task.FromResult<IDisposable?>(new CancellationTokenSource());
 
     public LocalApiTests()
     {
@@ -98,6 +100,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
             SignedIn = (account, relay) => saved = (account, relay),
             Stop = () => Interlocked.Increment(ref stops),
+            PrepareStop = () => prepareStop(),
             Restart = () => Interlocked.Increment(ref restarts),
             HoldProbes = () => { Interlocked.Increment(ref probeHolds); return probesFinishing; },
         });
@@ -628,6 +631,23 @@ public sealed class LocalApiTests : IAsyncLifetime
             Assert.Equal($"unknown op {op}", response.GetProperty("error").GetString());
         }
         Assert.Equal(0, Volatile.Read(ref stops));
+    }
+
+    [Fact]
+    public async Task A_stop_that_times_out_on_a_delivery_refuses_without_stopping_the_host()
+    {
+        var gate = new DeliveryGate();
+        using var delivery = gate.TryEnterDelivery();
+        Assert.NotNull(delivery);
+        prepareStop = () => gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50));
+        var ch = await ConnectAsync();
+
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Stop));
+
+        Assert.Contains("delivery or typing is still in progress", refused.Message);
+        Assert.Equal(0, Volatile.Read(ref stops));
+        using var next = gate.TryEnterDelivery();
+        Assert.NotNull(next);
     }
 
     // ---- §6.3 invariant 13: no agent session stops or restarts its host ----

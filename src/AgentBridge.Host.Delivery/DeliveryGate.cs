@@ -15,7 +15,10 @@ public sealed class DeliveryGate
     int deliveries;
     bool isTyping;
     bool uncertain;
+    // The end of each injector worker that failed by exception, which may still be sending keys.
+    readonly List<Task> failedWorkers = [];
     Exclusion? exclusion;
+    StopLease? stopping;
 
     public DeliveryGate(TimeProvider? time = null) => this.time = time ?? TimeProvider.System;
 
@@ -23,13 +26,26 @@ public sealed class DeliveryGate
 
     public void MarkJournalUncertain() { lock (state) { uncertain = true; } }
 
+    // An injector that threw may have left its worker typing. exited completes once the worker is
+    // proven gone (InjectorWorkerException); null, or a faulted task, means nobody can tell, and
+    // no planned stop is granted after it: a stopped or restarted host could otherwise leave the
+    // old worker sending keys into a question asked after it.
+    public void MarkWorkerUncertain(Task? exited)
+    {
+        lock (state)
+        {
+            uncertain = true;
+            failedWorkers.Add(exited ?? Task.FromException(new InvalidOperationException("the injector worker's end cannot be observed")));
+        }
+    }
+
     // Admission must precede OutcomeMemory's Task.Run, not just the later session claim.
     public IDisposable? TryEnterDelivery()
     {
         lock (state)
         {
             Expire();
-            if (exclusion is not null) { return null; }
+            if (exclusion is not null || stopping is not null) { return null; }
             deliveries++;
             return new Delivery(this);
         }
@@ -51,7 +67,11 @@ public sealed class DeliveryGate
         public void Dispose()
         {
             if (Interlocked.Exchange(ref disposed, 1) != 0) { return; }
-            lock (owner.state) { owner.deliveries--; }
+            lock (owner.state)
+            {
+                owner.deliveries--;
+                if (owner.deliveries == 0) { owner.stopping?.Quiet.TrySetResult(); }
+            }
             owner.AdmissionReleased?.Invoke();
         }
     }
@@ -63,6 +83,72 @@ public sealed class DeliveryGate
     internal void Complete<T>(IDisposable admission, TaskCompletionSource<T> outcome, T result, Exception? error = null) =>
         ((Delivery)admission).Complete(outcome, result, error);
 
+    // Blocks new deliveries immediately, but leaves admitted deliveries free to finish their
+    // typing and confirmation. A timeout refuses the stop; it must not abandon an injector.
+    // A latched journal uncertainty does not refuse it once nothing is in flight or typing and
+    // every injector worker that failed is proven gone; one whose end cannot be proven refuses it.
+    public async Task<IDisposable?> PrepareStopAsync(TimeSpan timeout, CancellationToken cancellation = default)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        limit.CancelAfter(timeout);
+        StopLease? mine = null;
+        try
+        {
+            while (mine is null)
+            {
+                Task? released;
+                lock (state)
+                {
+                    released = stopping?.Released.Task;
+                    if (released is null)
+                    {
+                        stopping = mine = new StopLease(this);
+                        if (deliveries == 0) { mine.Quiet.SetResult(); }
+                    }
+                }
+                if (released is not null) { await released.WaitAsync(limit.Token); }
+            }
+            await mine.Quiet.Task.WaitAsync(limit.Token);
+            Task[] workers;
+            lock (state) { workers = [.. failedWorkers]; }
+            try { await Task.WhenAll(workers).WaitAsync(limit.Token); }
+            catch (Exception e) when (e is not OperationCanceledException) { return null; }
+            lock (state)
+            {
+                // Uncertainty forbids a graceful departure, not a recovery stop: with new deliveries
+                // blocked, none in flight and every failed worker gone, nothing can type again.
+                if (!isTyping && failedWorkers.TrueForAll(w => w.IsCompletedSuccessfully))
+                {
+                    var lease = mine;
+                    mine = null;
+                    return lease;
+                }
+            }
+            return null;
+        }
+        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
+        {
+            return null;
+        }
+        finally { mine?.Dispose(); }
+    }
+
+    sealed class StopLease(DeliveryGate owner) : IDisposable
+    {
+        internal TaskCompletionSource Quiet { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Dispose()
+        {
+            lock (owner.state)
+            {
+                if (!ReferenceEquals(owner.stopping, this)) { return; }
+                owner.stopping = null;
+                Released.TrySetResult();
+            }
+        }
+    }
+
     internal Exclusion? TryExclude(TimeSpan lifetime, out Blocker blocker)
     {
         if (lifetime <= TimeSpan.Zero || lifetime > TimeSpan.FromSeconds(30)) { throw new ArgumentOutOfRangeException(nameof(lifetime)); }
@@ -71,7 +157,7 @@ public sealed class DeliveryGate
             Expire();
             blocker = uncertain ? Blocker.JournalUncertain : isTyping ? Blocker.Typing
                 : deliveries > 0 || !sessions.IsEmpty ? Blocker.DeliveryInFlight : Blocker.LifecycleInProgress;
-            if (uncertain || isTyping || deliveries > 0 || !sessions.IsEmpty || exclusion is not null) { return null; }
+            if (uncertain || isTyping || deliveries > 0 || !sessions.IsEmpty || exclusion is not null || stopping is not null) { return null; }
             return exclusion = new Exclusion(this, lifetime);
         }
     }
@@ -194,7 +280,8 @@ public sealed class DeliveryGate
 // Each request's outcome, by its UUID: a resend gets the first request's outcome (still
 // pending, or settled) and starts nothing. Settled outcomes are forgotten after RememberFor;
 // the contract promises at least 10 minutes.
-internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, DeliveryGate? deliveryGate = null, Func<T>? blocked = null)
+internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, DeliveryGate? deliveryGate = null, Func<T>? blocked = null,
+    Func<Guid, (bool Known, T Value)>? remembered = null, Func<Guid, T, T>? remember = null)
 {
     readonly Lock gate = new();
     readonly Dictionary<Guid, Entry> requests = [];
@@ -260,8 +347,15 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
             if (repeat && foreign is not null && !Equals(known!.Owner, owner)) { divert = true; }
             else
             {
+                if (!repeat && remembered is not null)
+                {
+                    var prior = remembered(key);
+                    if (prior.Known) { return Task.FromResult(prior.Value); }
+                }
                 if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery()) is null)
                 {
+                    // Never remembered: nothing was admitted or typed, and a receipt would refuse the
+                    // same request for RememberFor even after a stop that did not happen.
                     return Task.FromResult(blocked is null ? throw new InvalidOperationException("no departure refusal was supplied") : blocked());
                 }
                 try { entry = known ?? (requests[key] = new Entry(timeline?.Invoke()) { Owner = owner }); }
@@ -293,6 +387,7 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
             try
             {
                 var result = await deliver(entry.Timeline);
+                if (remember is not null) { result = remember(key, result); }
                 lock (gate) { entry.Settled = time.GetUtcNow(); }
                 settled(result);
                 entry.Timeline?.Settled();
@@ -317,6 +412,7 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
             try { later = await read(first); }
             catch (Exception) { later = default; }
             if (later is null) { return first; }
+            if (remember is not null) { later = remember(key, later); }
             settled(later);
             return later;
         }

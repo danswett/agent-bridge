@@ -1108,6 +1108,44 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_claimed_Copilot_form_is_listed_at_the_machine_without_stopping_its_remaining_fields()
+    {
+        await source.DisposeAsync();
+        var attempts = new AttemptLedger(Path.Combine(f.Root, "profile", "answer-attempts.json"));
+        source = new SessionSource(f.Options(), f.Processes, answerAttempted: attempts.IsClaimed);
+        await source.RefreshAsync();
+        Serve(new AnswerService(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            ConfirmTimeout = TimeSpan.FromSeconds(2),
+            PollInterval = TimeSpan.FromMilliseconds(25),
+            AttemptLedger = attempts,
+        }));
+        var answer = new { one = "first words", two = "second words" };
+        await AskFieldsAsync(new { one = new { type = "string" }, two = new { type = "string" } }, 2, answer);
+        injector.Screen = () => FieldsScreen(["one", "two"]);
+        var record = injector.OnInject;
+        var sawClaim = false;
+        injector.OnInject = () =>
+        {
+            record?.Invoke();
+            if (!sawClaim)
+            {
+                source.RefreshAsync().GetAwaiter().GetResult();
+                sawClaim = source.Get(Id)!.Question!.AnswerAtMachine == true;
+            }
+        };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.True(sawClaim);
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(4, injector.Plans.Count);
+    }
+
+    [Fact]
     public async Task A_list_after_words_goes_on_its_own_held_to_the_list_never_with_the_words_Enter()
     {
         var answer = new { note = Feedback, pick = "c" };
