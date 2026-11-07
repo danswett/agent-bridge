@@ -39,6 +39,14 @@ public sealed class RestoreProtocolTests
     }
 
     [Fact]
+    public void A_run_result_with_a_session_entry_that_has_no_id_is_refused_rather_than_read_without_it()
+    {
+        var json = """{"outcome":"partial","sessions":[{"id":"s1","outcome":"started"},{"outcome":"started"}]}""";
+
+        Assert.Throws<MalformedRecordException>(() => Received.Read<RestoreRunResult>(JsonDocument.Parse(json).RootElement));
+    }
+
+    [Fact]
     public void A_run_request_keeps_its_offer_and_the_ids_in_order()
     {
         const string json = """

@@ -91,6 +91,7 @@ with the wrong type):
 | `DiscoveryHeld` | `reason` | `agents` (whole) |
 | `SessionList`, `SessionsSynced`, `DiscoveryChanged` | | `discoveryHeld` |
 | `SessionsSynced` | `live` (whole) | |
+| `RestoreRunResult` | `sessions` (whole) | |
 | `SessionPatch` | `id`, `base`, `set`, `append`, `subagents` | |
 | `SubagentsPatch` | `set`, `remove`, `order` (each whole) | |
 | `session.remove` data | `id` | |

@@ -6352,7 +6352,38 @@
           }
         }
       ],
-      "refused": []
+      "refused": [
+        {
+          "name": "a-session-entry-without-an-id",
+          "json": {
+            "outcome": "partial",
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "outcome": "started"
+              },
+              {
+                "outcome": "started"
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-session-entry-that-is-not-an-object",
+          "json": {
+            "outcome": "partial",
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "outcome": "started"
+              },
+              7
+            ]
+          },
+          "refusedBy": "parse"
+        }
+      ]
     },
     "RestoreRunProgress": {
       "direction": "host",
