@@ -57,6 +57,44 @@ public class EnvelopeVectorTests
         Neg("members swapped", SwapMembers(Sample.Wrap(key, goodBytes)), Refusal.NonCanonical);
         Neg("envelope over 2 KiB", new byte[2049].Select(_ => (byte)' ').ToArray(), Refusal.TooLarge);
 
+        Neg("version written 1.0", Edited("\"v\":1,", "\"v\":1.0,"), Refusal.Value);
+        Neg("number with a leading zero", Edited("\"v\":1,", "\"v\":01,"), Refusal.Json);
+        Neg("number with an exponent", Edited("\"rootAt\":1800000000", "\"rootAt\":18e8"), Refusal.Value);
+        Neg("number above 2^53 - 1", Edited("\"rootAt\":1800000000", "\"rootAt\":9007199254740992"), Refusal.Value);
+        Neg("body with a byte-order mark", Sample.Wrap(key, [0xEF, 0xBB, 0xBF, .. goodBytes]), Refusal.Json);
+        Neg("body that is not UTF-8", Sample.Wrap(key, [.. goodBytes[..^1], 0xC3, goodBytes[^1]]), Refusal.Json);
+        Neg("body with data after it", Sample.Wrap(key, [.. goodBytes, .. "x"u8]), Refusal.Json);
+        Neg("body with a lone surrogate", Edited("\"account\":\"" + good.Account + "\"", "\"account\":\"\\ud800\""), Refusal.Json);
+        Neg("body nested past 16 levels", Sample.Wrap(key, Utf8(new string('[', 17) + new string(']', 17))), Refusal.Json);
+        Neg("envelope with data after it", [.. Sample.Wrap(key, goodBytes), .. "x"u8], Refusal.Json);
+        {
+            var sealedEnvelope = Encoding.UTF8.GetString(Sample.Wrap(key, goodBytes));
+            var tail = sealedEnvelope.IndexOf("\",\"sig\"", StringComparison.Ordinal) - 1;
+            var spelled = Codec.Base64Url(goodBytes);
+            // The last body character with its unused low bits set: another spelling of the same bytes.
+            var last = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".IndexOf(spelled[^1]);
+            var flipped = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"[last ^ 1];
+            if (Codec.TryBase64Url(spelled[..^1] + flipped, out _)) { throw new InvalidOperationException("sample has no spare bits"); }
+            Neg("body base64 with non-zero trailing bits", Utf8(sealedEnvelope[..tail] + flipped + sealedEnvelope[(tail + 1)..]), Refusal.Base64);
+        }
+        Neg("session.list with a target session", Sample.Wrap(key, Sample.Body("sessions.list", b => b with { Target = b.Target with { Session = "agent-b2" } }).Encode()), Refusal.Target);
+        Neg("session.launch with a target instance", Sample.Wrap(key, Sample.Body("session.launch", b => b with { Target = b.Target with { Session = "agent-b2", Instance = Codec.Base64Url(new byte[12]) } }).Encode()), Refusal.Target);
+        Neg("session.get with a target instance and no session", Sample.Wrap(key, Sample.Body("session.get", b => b with { Target = b.Target with { Session = null, Instance = Codec.Base64Url(new byte[12]) } }).Encode()), Refusal.Target);
+        Neg("session.reply without a target instance", Sample.Wrap(key, Sample.Body(edit: b => b with { Target = b.Target with { Instance = null } }).Encode()), Refusal.Target);
+        Neg("launch.result without a target instance", Sample.Wrap(key, Sample.Body("launch.result", b => b with { Target = b.Target with { Instance = null } }).Encode()), Refusal.Target);
+        Neg("launch.result without a target session", Sample.Wrap(key, Sample.Body("launch.result", b => b with { Target = b.Target with { Session = null } }).Encode()), Refusal.Target);
+        {
+            var offCurve = Sample.Point(key);
+            offCurve[^1] ^= 1;
+            negatives.Add(new JsonObject
+            {
+                ["name"] = "hostSign point that is not on the curve",
+                ["envelope"] = Encoding.UTF8.GetString(Sample.Wrap(key, goodBytes)),
+                ["hostSign"] = Codec.Base64Url(offCurve),
+                ["refusedBy"] = Refusal.Point,
+            });
+        }
+
         return new JsonObject
         {
             ["description"] = "Signed agent-command envelopes (docs/design/agent-principals.md §4.3). Each envelope is verified with hostSign. A case with refusedBy is refused with that code; one without verifies.",
@@ -76,7 +114,7 @@ public class EnvelopeVectorTests
     // Signatures are not deterministic, so the committed file is the source of truth: it is written
     // only when asked for, and every other run replays it.
     [Fact]
-    public void Committed_vectors_are_replayed_by_every_implementation()
+    public void Committed_vectors_are_replayed_by_the_csharp_library()
     {
         if (Environment.GetEnvironmentVariable(VectorFiles.UpdateVariable) == "1")
         {
@@ -93,7 +131,8 @@ public class EnvelopeVectorTests
         }
         foreach (var c in vectors["refused"]!.AsArray())
         {
-            var ex = Assert.Throws<EnvelopeException>(() => Envelope.Parse(Utf8((string)c!["envelope"]!)).Verify(point));
+            var key = c!["hostSign"] is { } own && Codec.TryBase64Url((string)own!, out var ownPoint) ? ownPoint : point;
+            var ex = Assert.Throws<EnvelopeException>(() => Envelope.Parse(Utf8((string)c!["envelope"]!)).Verify(key));
             Assert.True((string)c!["refusedBy"]! == ex.Code, $"{c["name"]}: expected {c["refusedBy"]}, got {ex.Code} ({ex.Where})");
         }
     }
@@ -109,6 +148,22 @@ public class EnvelopeVectorTests
             var ex = Assert.Throws<EnvelopeException>(() => EnvelopeBody.Parse(body.Encode()));
             Assert.Equal(Refusal.Action, ex.Code);
         }
+    }
+
+    [Theory]
+    [InlineData("account")]
+    [InlineData("session")]
+    [InlineData("action")]
+    public void Seal_refuses_a_body_that_would_not_parse_back(string field)
+    {
+        using var key = Sample.NewKey();
+        var body = field switch
+        {
+            "account" => Sample.Body(edit: b => b with { Account = "a\",\"x\":\"b" }),
+            "session" => Sample.Body(edit: b => b with { Target = b.Target with { Session = "a\"b" } }),
+            _ => Sample.Body(edit: b => b with { Action = "session.answer" }),
+        };
+        Assert.Throws<EnvelopeException>(() => Envelope.Seal(body, new EcdsaEnvelopeSigner(key)));
     }
 
     [Fact]

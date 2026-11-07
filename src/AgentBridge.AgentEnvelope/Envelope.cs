@@ -75,6 +75,9 @@ public static class Envelope
     public static byte[] Seal(EnvelopeBody body, IEnvelopeSigner signer)
     {
         var bodyBytes = body.Encode();
+        // Encode does not escape (every valid field is plain ASCII), so a body that is not valid
+        // would sign to bytes no verifier accepts, or to a different structure. Read it back first.
+        EnvelopeBody.Parse(bodyBytes);
         var sig = P256.Normalize(signer.Sign(Framing.AgentCommand(bodyBytes)));
         var envelope = Encode(bodyBytes, sig);
         if (envelope.Length > MaxBytes) { throw new EnvelopeException(Refusal.TooLarge, "envelope"); }
