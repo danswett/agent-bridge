@@ -83,6 +83,17 @@
                     AutomationProperties.AutomationId="HostAtSignIn"
                     IsOn="{x:Bind ViewModel.StartAtSignIn, Mode=TwoWay}" />
 
+                <StackPanel Spacing="4" AutomationProperties.AutomationId="GetStarted" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowSetupSteps), Mode=OneWay}">
+                    <TextBlock Style="{StaticResource AbSectionTitle}" Text="Get started" AutomationProperties.HeadingLevel="Level2" />
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.SetupSteps, Mode=OneWay}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="core:SetupStep">
+                                <TextBlock TextWrapping="Wrap" Text="{x:Bind Line}" AutomationProperties.Name="{x:Bind Line}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Agents on this machine" AutomationProperties.HeadingLevel="Level2" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" AutomationProperties.AutomationId="AgentsState" Text="{x:Bind ViewModel.AgentsState, Mode=OneWay}" />
                 <Button Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
