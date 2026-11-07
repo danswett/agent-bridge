@@ -53,8 +53,10 @@ public sealed partial class SessionsPage : IPaneSizer
         // One column is the visual state's: the list's column fills the page.
         if (Layout is null || Mode == PaneMode.One || PageWidth <= 0) { return; }
         var now = widths.Arrange(PageWidth, Mode, InspectorShown);
-        ListColumn.Width = new GridLength(now.List);
-        if (now.Inspector > 0) { Inspector.Width = now.Inspector; }
+        // SizePanes runs at every step of a window resize; a width already set is left alone, as
+        // setting it again would invalidate the grid's measure for nothing.
+        if (ListColumn.Width.Value != now.List || !ListColumn.Width.IsAbsolute) { ListColumn.Width = new GridLength(now.List); }
+        if (now.Inspector > 0 && Inspector.Width != now.Inspector) { Inspector.Width = now.Inspector; }
     }
 
     void Watch(PaneLayoutViewModel? layout)
