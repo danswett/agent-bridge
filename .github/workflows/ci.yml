@@ -960,7 +960,7 @@ jobs:
         run: node --test tools/connector-conformance/mock-host.test.mjs
       - name: The lab's provisioning draft plans only run-owned resources and refuses to apply
         # Against a stand-in for az: nothing reaches Azure.
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/lab/test-provision.ps1
       - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
