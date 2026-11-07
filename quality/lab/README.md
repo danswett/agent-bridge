@@ -14,6 +14,7 @@ The agreement it records:
 - Coverage: [Product's v1 and v2](https://github.com/danswett/agent-bridge/issues/736#issuecomment-6644011273).
 - The owner's decisions B1, B3 and B4: [#357](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6645343882),
   accepted by Platform [here](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6646500327).
+  B3's lab-token plan is superseded by Trust's choice A, device flow, recorded in §8.
 
 Where this file and those comments disagree, the comments win and this file is fixed.
 
@@ -88,7 +89,9 @@ Every run:
    between runs: a deallocated VM's disk still costs money.
 3. Has no public IP, no NSG of its own and no inbound from the Internet; the bootstrap's
    subnet NSG denies it. No admin user or password is passed: the disk is a specialized copy
-   of S0, which itself holds no reusable credential.
+   of S0, which itself holds no reusable credential. A relay sign-in reaches an image only if
+   §8's golden-image option is separately approved, and that approval settles its credential
+   and device identity.
 4. Deletes all three by exact name when it ends.
 
 Cleanup in a `finally` or `catch` is **best effort only**: a cancelled or killed job never
@@ -177,12 +180,28 @@ One per run per role. Fields are only ever added to version 1, never renamed or 
   provenance didn't verify. If either role's run is `invalid`, the cut is invalid.
 - `invalid` is never admission or promotion evidence. A cut gets at most one retry, after a
   diagnosis, under a new run id; the original result is kept.
-- Accounts (owner decision B3): the owner's own GitHub account through a dedicated,
-  fine-grained lab token held only as a `lab` environment secret, never the interactive
-  sign-in; the relay pinned to staging or PPE. Devices are named `lab-<role>-<runId>`, a label
-  and not an authorization. Each run signs out and forgets its devices, and the sweeper
-  forgets those of crashed runs. Only the relay is shared: the lab has no path to the owner's
-  machines, Home Assistant or broker. Real agent accounts are v2 only.
+- Accounts (owner decision B3, its credential plan superseded by Trust's choice A): the lab
+  signs in to the relay as `Slipgates-lab-bot`, a dedicated, revocable GitHub account with no
+  organization access and no write access to any repository, never the owner's identity; the
+  relay pinned to staging or PPE. There is no staging-only or other second sign-in path. The
+  relay's sign-in has no allowlist, organization or invite check, so it needs only that the
+  relay's OAuth app has device flow enabled and asks for no organization-membership scope;
+  this file changes no OAuth setting.
+  - The owner, who alone holds the account's password and second factor, completes GitHub
+    device flow once per lab VM, or once on a golden image if one is separately approved. No
+    GitHub token is provisioned as a `lab` environment or vault secret, or put in the
+    repository, CI, logs or screenshots (PNGs). The account is named; its sign-in is the
+    owner's alone and has not been done.
+  - After sign-in the app keeps its normal local relay credential on that VM, as any
+    installation does, so the VM's disk is handled as holding a credential. Any snapshot or
+    image that holds it stays tagged and private inside `rg-agent-bridge-lab`, is never
+    exported or shared, is named in the sweeper's inventory and is deleted with the group.
+  - Nothing here authorizes a new VM, image, clone, snapshot, resource or OAuth-setting
+    change: images and cloning are future work, each separately approved.
+  - Devices are named `lab-<role>-<runId>`, a label and not an authorization. Each run signs
+    out and forgets its devices, and the sweeper forgets those of crashed runs. Only the relay
+    is shared: the lab has no path to the owner's machines, Home Assistant or broker. v1's
+    agent is simulated (§3); real agent accounts are v2 only.
 - PPE (owner decision B4) also serves the owner's Beta machines, so it is not disposable: the
   lab consumes an immutable cut there and never rolls PPE or touches a Beta machine.
 
@@ -218,7 +237,7 @@ receipt.
 | Durable expiry sweeper (§4) | **Absent** | Platform |
 | Run registration before the first create (§4): the trusted inventory, `provision.ps1` writing each run's exact names and expiry to it, and a verified read-back receipt | **Absent**; `Register-LabRun` refuses | Platform |
 | Cost and age alerts | **Absent** | SRE |
-| Lab token as a `lab` secret, and proof the credential, relay and device guards hold (B3) | **Absent**, unverified | owner, Platform |
+| B3 sign-in (§8): the relay OAuth app's device flow enabled with no organization-membership scope, the owner's device-flow sign-in as `Slipgates-lab-bot`, and proof the credential, relay and device guards hold. No lab token or secret | **Absent**: account named, OAuth settings unverified, sign-in not done | owner, Platform |
 | PPE (B4, #590): **population decided**, the lab and the owner's Beta machines | Enrollment, keys, DNS and deploy **pending**; staging until then | SRE, owner |
 | Relay churn (B5) | **Open**: makes runs `invalid` | SRE |
 
