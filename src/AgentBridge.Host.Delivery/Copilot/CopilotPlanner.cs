@@ -186,6 +186,11 @@ public static class CopilotPlanner
     static (List<string>? Keys, Expected? Record, string? Problem) Multi(CopilotField field, JsonElement value)
     {
         var wanted = new SortedSet<int>();
+        // Each value looked up by key, and the default's ticks as a set: each against every option,
+        // and each row against every tick, was quadratic in a long list a default ticks (#852).
+        var index = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < field.Options.Count; i++) { index[field.Options[i].Value] = index.ContainsKey(field.Options[i].Value) ? -1 : i; }
+        var ticked = field.Checked.ToHashSet();
         foreach (var item in value.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.String)
@@ -193,8 +198,7 @@ public static class CopilotPlanner
                 // Its Other row sits among the checkboxes, where Enter accepts what is ticked.
                 return ([], null, "a multi-select list takes no other answer at Copilot's prompt");
             }
-            var at = Index(field, item.GetString());
-            if (at < 0) { return ([], null, "not one of the choices"); }
+            if (!index.TryGetValue(item.GetString()!, out var at) || at < 0) { return ([], null, "not one of the choices"); }
             wanted.Add(at);
         }
         if (wanted.Count == 0 && !field.AllowsEmpty) { return ([], null, "choose at least one option"); }
@@ -204,7 +208,7 @@ public static class CopilotPlanner
         var cursor = 0;
         for (var row = 0; row < field.Options.Count; row++)
         {
-            if (wanted.Contains(row) == field.Checked.Contains(row)) { continue; }
+            if (wanted.Contains(row) == ticked.Contains(row)) { continue; }
             keys.Add((keys.Count == 0 ? top : "") + string.Concat(Enumerable.Repeat(KeyPlan.Down, row - cursor)) + " ");
             cursor = row;
         }

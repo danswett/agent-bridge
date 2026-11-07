@@ -110,10 +110,10 @@ internal sealed class BackgroundWork
         if (callId is null) { return; }
         var args = arguments is { ValueKind: JsonValueKind.Object } a ? a : default;
         if (_calls.Count >= KeepCalls) { _calls.Remove(_calls.Keys.First()); }
-        // Cut as it is kept: the skim takes these too, and a prompt can be huge.
-        CallsVersion++;
-        _calls[callId] = new TaskCall(Limits.KeepStart(Text.NonBlank(Json.Str(args, "description")), 4 * Limits.SubagentName),
-            Limits.KeepStart(Text.NonBlank(Json.Str(args, "prompt")), Limits.SubagentTask), Limits.KeepStart(starter, Limits.SubagentName));
+        // Cut as it is kept: the skim takes these too, and a prompt can be huge. Read as shown:
+        // half a surrogate pair in either threw on every pass over the line (#921 review).
+        _calls[callId] = new TaskCall(Limits.KeepStart(Text.NonBlank(CopilotFieldSchema.Shown(args, "description")), 4 * Limits.SubagentName),
+            Limits.KeepStart(Text.NonBlank(CopilotFieldSchema.Shown(args, "prompt")), Limits.SubagentTask), Limits.KeepStart(starter, Limits.SubagentName));
     }
 
     // A start seen only in the skimmed part of the transcript: the agent is worth knowing

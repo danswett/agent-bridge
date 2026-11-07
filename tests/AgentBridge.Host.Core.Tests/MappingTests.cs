@@ -308,6 +308,30 @@ public class QuestionMappingTests
         Assert.Contains("\"type\":\"number\"", json);
         Assert.Equal(1.5, back.Fields[0].Default!.Value.GetDouble());
     }
+
+    [Fact]
+    public void Required_numbers_use_a_lower_bound_when_a_shorter_allowed_number_may_serialize()
+    {
+        var properties = Enumerable.Range(0, 800)
+            .ToDictionary(i => $"n{i:D4}", _ => new { type = "number", minimum = 1e20 });
+        var q = Ask(JsonSerializer.Serialize(new
+        {
+            message = "m",
+            requestedSchema = new { properties, required = properties.Keys },
+        }));
+        var fields = properties.Keys.ToDictionary(name => name, _ => JsonSerializer.SerializeToElement(1e21));
+        var request = new AnswerRequest
+        {
+            Id = new string('x', 256),
+            Question = "m",
+            Request = "00000000-0000-4000-8000-000000000000",
+            Fields = fields,
+            Progress = true,
+        };
+
+        Assert.True(ProtocolJson.ByteCount(request) <= Limits.AnswerRequest);
+        Assert.Null(q.AnswerAtMachine);
+    }
 }
 
 public class LimitsTests

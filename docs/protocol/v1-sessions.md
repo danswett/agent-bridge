@@ -2090,9 +2090,26 @@ and `"  ab"` is 4 characters typed and 2 trimmed. A host checks the text it woul
 breaks flattened. A field whose constraints a host cannot check exactly (a bound JavaScript would
 hold as another number, a length that is not a whole number, a pattern it cannot read as
 JavaScript does, or patterns past the 250 ms one question's patterns share), or whose pre-filled
-default breaks them (checked so too), makes its question `answerAtMachine`. So does a `required`
-`text` field whose pre-filled default is blank (non-empty, but blank as above): that default
-is the only answer it can be given from another device, and it is refused as blank. So does a
+default breaks them (checked so too), makes its question `answerAtMachine`. So does a `text`
+field, required or not, whose pre-filled default is blank (non-empty, but blank as above, or
+nothing but what shows as nothing, as free text is judged: `"\u200B"`, `"\u2800"`, `"\u0301"`):
+that default is the only answer it can be given from another device, a client leaves blank text
+out of an answer, and a required field's is refused as blank. A default with something visible
+in it, such as `"a\u200Bb"`, is answered as usual. So does a `text` or `number` field
+whose pre-filled default no answer can match: a `text` field's that is not a string, holds half
+a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (4 KiB), a
+`number` field's that is `null`, not plainly a number, or one JavaScript would hold as another
+number; a form whose smallest answer exceeds 16 KiB in the largest envelope a host takes (a
+256-character session id, a request id, `progress`), counting each pre-filled `text` or `number`
+default (a number as the number it holds, written the longer of the ways JavaScript and .NET
+write it), and every other default and every required field
+at its smallest (a required `number` at 0, or at the number nearest 0 that its bounds,
+`multipleOf` and `integer` allow, past an exclusive bound; a required `text`
+at its `minLength`, which past 4 KiB no answer can meet); and a form with
+half a surrogate pair anywhere in its schema, which a host cannot read. Required `text` that
+must match a `pattern` or `format` is counted at its `minLength` (or one character): a host
+does not solve a pattern for its shortest match, so such a form may be offered and its answer
+refused as larger than 16 KiB, before any key. So does a
 `choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a
 `pattern` reads it as JavaScript does, without flags: `\d` and `\w` are ASCII.
 
