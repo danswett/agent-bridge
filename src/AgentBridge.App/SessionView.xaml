@@ -546,11 +546,88 @@
 
                     <!-- Delegates starting and reporting back (§6.4): one meta line each, with an icon,
                          the name linking to the delegate. The main agent's own delegates only. -->
+                    <StackPanel Spacing="4" Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasEvents), Mode=OneWay, FallbackValue=Collapsed}">
+                    <!-- Two or more lines fold into one row (§6.4, Runs fold; #1063), as the PWA's: its
+                         button, the chevron ending it inside its target and focus ring and turning as
+                         it opens, then the "still working" link after a 12 gap as a target of its own,
+                         wrapping under the words on a narrow pane. Closed until opened, and as it was
+                         left for as long as the session's card lives. -->
+                    <local:FlowPanel
+                        x:Name="EventsFold"
+                        Spacing="12"
+                        LineSpacing="0"
+                        AutomationProperties.AutomationId="DelegateFoldRow"
+                        Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasFold), Mode=OneWay, FallbackValue=Collapsed}">
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <ContentControl VerticalAlignment="Center" Style="{StaticResource AbIconDelegate}" Width="16" Height="16" Foreground="{ThemeResource AbText2}" IsTabStop="False" AutomationProperties.AccessibilityView="Raw" />
+                            <local:DisclosureButton
+                                x:Name="EventsToggle"
+                                Grid.Column="1"
+                                HorizontalAlignment="Left"
+                                MinHeight="32"
+                                Padding="0,4"
+                                BorderThickness="0"
+                                Background="{ThemeResource SubtleFillColorTransparentBrush}"
+                                Foreground="{ThemeResource AbText2}"
+                                CornerRadius="{StaticResource AbRadiusControl}"
+                                AutomationProperties.AutomationId="DelegateFold"
+                                AutomationProperties.Name="{x:Bind Card.Delegates.FoldName, Mode=OneWay}"
+                                IsExpanded="{x:Bind Card.Delegates.EventsOpen, Mode=TwoWay}">
+                                <Grid ColumnSpacing="4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        VerticalAlignment="Center"
+                                        TextWrapping="Wrap"
+                                        Style="{StaticResource AbTypeMeta}"
+                                        AutomationProperties.AutomationId="DelegateFoldText"
+                                        Text="{x:Bind Card.Delegates.FoldText, Mode=OneWay}" />
+                                    <ContentControl
+                                        x:Name="EventsChevron"
+                                        AutomationProperties.AutomationId="EventsChevron"
+                                        Grid.Column="1"
+                                        Style="{StaticResource AbIconChevron}"
+                                        Width="16"
+                                        Height="16"
+                                        VerticalAlignment="Center"
+                                        Foreground="{ThemeResource AbText2}"
+                                        AutomationProperties.AccessibilityView="Raw" />
+                                </Grid>
+                            </local:DisclosureButton>
+                        </Grid>
+                        <HyperlinkButton
+                            x:Name="EventsWorking"
+                            VerticalAlignment="Center"
+                            Padding="0"
+                            MinHeight="32"
+                            FontSize="12"
+                            Tag="{x:Bind Card.Delegates.FoldWorkingId, Mode=OneWay}"
+                            AutomationProperties.AutomationId="DelegateFoldWorking"
+                            AutomationProperties.Name="{x:Bind Card.Delegates.FoldLinkName, Mode=OneWay}"
+                            ToolTipService.ToolTip="Show this delegate"
+                            Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasFoldLink), Mode=OneWay, FallbackValue=Collapsed}"
+                            Click="OnDelegateEvent">
+                            <TextBlock Text="{x:Bind Card.Delegates.FoldLink, Mode=OneWay}" TextWrapping="Wrap" />
+                        </HyperlinkButton>
+                    </local:FlowPanel>
+                    <Border
+                        x:Name="EventsRule"
+                        AutomationProperties.AutomationId="EventsRule"
+                        Margin="{x:Bind local:SessionView.RuleMargin(Card.Delegates.HasFold), Mode=OneWay}"
+                        Padding="{x:Bind local:SessionView.RulePadding(Card.Delegates.HasFold), Mode=OneWay}"
+                        BorderBrush="{ThemeResource AbStroke2}"
+                        BorderThickness="{x:Bind local:SessionView.RuleThickness(Card.Delegates.HasFold), Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Show(Card.Delegates.ShowLines), Mode=OneWay, FallbackValue=Collapsed}">
                     <ItemsControl
                         IsTabStop="False"
                         AutomationProperties.AutomationId="DelegateEvents"
-                        ItemsSource="{x:Bind Card.Delegates.Events, Mode=OneWay}"
-                        Visibility="{x:Bind local:Ui.Show(Card.Delegates.HasEvents), Mode=OneWay, FallbackValue=Collapsed}">
+                        ItemsSource="{x:Bind Card.Delegates.Events, Mode=OneWay}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <StackPanel Spacing="8" />
@@ -582,6 +659,8 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    </Border>
+                    </StackPanel>
 
                     <!-- What it is doing now: the tool glyph, then the call in inline mono on a meta line, one weight (ui.md §4.2, #215). -->
                     <Grid ColumnSpacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasTool), Mode=OneWay}">

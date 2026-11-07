@@ -491,6 +491,68 @@ public sealed class DelegatesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Two_or_more_of_the_conversations_delegate_lines_fold_into_one_closed_row_that_counts_each_delegate_once_and_stays_as_it_was_left()
+    {
+        var delegates = Card("del").Delegates;
+        Assert.Equal(
+            ("3 delegates · 1 failed", "2 still working", "3 delegates · 1 failed, 2 still working", "2 still working, opens the first", "witness"),
+            TestUi.Read(() => (delegates.FoldText, delegates.FoldLink, delegates.FoldName, delegates.FoldLinkName, delegates.FoldWorkingId)));
+        Assert.Equal((true, false, false), TestUi.Read(() => (delegates.HasFold, delegates.EventsOpen, delegates.ShowLines)));
+
+        ui.Post(() => delegates.EventsOpen = true);
+        Assert.True(TestUi.Read(() => delegates.ShowLines));
+
+        // An update from the host leaves it as the person left it, and the lines as they were.
+        await host.SendAsync(Events.SessionUpsert, Delegating() with { UpdatedAt = Now.AddSeconds(3) });
+        await Wait.UntilAsync(() => TestUi.Read(() => Card("del").Session.UpdatedAt == Now.AddSeconds(3)), "the update");
+        Assert.Equal((true, true, true, 3), TestUi.Read(() => (delegates.HasFold, delegates.EventsOpen, delegates.ShowLines, delegates.Events.Count)));
+    }
+
+    [Fact]
+    public async Task The_fold_counts_reported_back_failed_and_ended_apart_leaves_out_zeros_and_has_a_delegate_asking_or_woken_among_those_still_working()
+    {
+        var mixed = Delegating("mixed") with
+        {
+            Subagents =
+            [
+                Delegate("a", "Tidy changelog", status: SubagentStatus.Ended, started: -30) with { Outcome = SubagentOutcome.Done, EndedAt = Now.AddMinutes(-29) },
+                Delegate("b", "Update screenshots", status: SubagentStatus.Idle, started: -28) with { Outcome = SubagentOutcome.Done, EndedAt = Now.AddMinutes(-27) },
+                Delegate("c", "Lint the PWA", status: SubagentStatus.Ended, started: -26) with { Outcome = SubagentOutcome.Failed, EndedAt = Now.AddMinutes(-25) },
+                Delegate("d", "Read the logs", status: SubagentStatus.Idle, started: -24) with { EndedAt = Now.AddMinutes(-23) },
+                Delegate("e", "Review the witness", status: SubagentStatus.Waiting, started: -20),
+                // Reported back before, woken again: a live entry wins over anything known before.
+                Delegate("f", "Run the suite", status: SubagentStatus.Working, started: -10) with { Outcome = SubagentOutcome.Done, EndedAt = Now.AddMinutes(-9) },
+            ],
+        };
+        await host.SendAsync(Events.SessionUpsert, mixed);
+        await Wait.UntilAsync(() => main.Sessions.Any(c => c.Id == "mixed"), "the session");
+        var delegates = Card("mixed").Delegates;
+        Assert.Equal(
+            ("6 delegates · 2 reported back, 1 failed, 1 ended", "2 still working", "6 delegates · 2 reported back, 1 failed, 1 ended, 2 still working", "e"),
+            TestUi.Read(() => (delegates.FoldText, delegates.FoldLink, delegates.FoldName, delegates.FoldWorkingId)));
+
+        // With none still working the fold is its button alone; a count of 0 is left out.
+        var stopped = mixed with { UpdatedAt = Now.AddSeconds(4), Subagents = [.. mixed.Subagents!.Where(a => a.Status != SubagentStatus.Waiting && a.Status != SubagentStatus.Working)] };
+        await host.SendAsync(Events.SessionUpsert, stopped);
+        await Wait.UntilAsync(() => !TestUi.Read(() => delegates.HasFoldLink), "the link to go");
+        Assert.Equal(("4 delegates · 2 reported back, 1 failed, 1 ended", null), TestUi.Read(() => (delegates.FoldName, delegates.FoldWorkingId)));
+    }
+
+    [Fact]
+    public async Task One_line_stays_a_line_while_one_delegate_that_reported_back_has_two_and_folds_as_one_delegate()
+    {
+        var one = Delegating("one") with { Subagents = [Delegate("a", "Tidy changelog", started: -5)] };
+        var two = Delegating("two") with { Subagents = [Delegate("a", "Tidy changelog", status: SubagentStatus.Ended, started: -5) with { Outcome = SubagentOutcome.Done, EndedAt = Now.AddMinutes(-4) }] };
+        await host.SendAsync(Events.SessionUpsert, one);
+        await host.SendAsync(Events.SessionUpsert, two);
+        await Wait.UntilAsync(() => main.Sessions.Any(c => c.Id == "one") && main.Sessions.Any(c => c.Id == "two"), "the sessions");
+
+        Assert.Equal((1, false, true), TestUi.Read(() => (Card("one").Delegates.Events.Count, Card("one").Delegates.HasFold, Card("one").Delegates.ShowLines)));
+        var folded = Card("two").Delegates;
+        Assert.Equal((2, true, false, "1 delegate · 1 reported back", false), TestUi.Read(() => (folded.Events.Count, folded.HasFold, folded.ShowLines, folded.FoldName, folded.HasFoldLink)));
+    }
+
+    [Fact]
     public void A_minute_passing_changes_each_conversation_events_age_in_place_and_keeps_the_same_item()
     {
         var card = Card("del");

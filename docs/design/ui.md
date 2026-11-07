@@ -1043,8 +1043,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   own. "Main agent" only where the host says whose the words are (`activity.source`, `own`
   or a delegate list); otherwise the label is the agent's name ("Claude"), as such a host may
   send a delegate's words as the response.
-- **Delegate events** (#661). *Proposed: decided by the owner on 2026-11-04, not yet built;
-  #661 builds it. No client draws these lines yet.* A past-tense record of the main agent's own delegates starting and reporting back. The strip, the Delegates tab and
+- **Delegate events** (#661, built in the PWA and the Windows app). A past-tense record of the main agent's own delegates starting and reporting back. The strip, the Delegates tab and
   the chips (§6.3) are the present tense and the only live status, and the
   inspector holds the detail, so a line never says a delegate is working and never shows the
   working glyph. A fold's "still working" count (D3, below) is the one exception: a live count
@@ -1071,10 +1070,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     always closer together than the next line and a wrapped line reads as one. With a pointer,
     lines keep the meta style's own leading.
     One that reports back in the same gap leaves the shared line for its own merged line, in place.
-  - **Runs fold (D3):** more than 3 lines in a row between two messages fold into one, drawn
-    "5 delegates · 4 reported back › 1 still working". It shows no working glyph. It expands in
+  - **Runs fold (D3):** 2 or more lines in a row between two messages fold into one (#1063; it
+    was more than 3), drawn
+    "5 delegates · 4 reported back › 1 still working". It shows no working glyph. It is closed
+    until opened, and expands in
     place to its lines, indented under a rule (Disclosure, §5.3), and is remembered open or
-    closed per session.
+    closed per session for the visit, never saved to disk. The PWA and the Windows app both
+    draw it, with the same words and counts.
     - **The count is live, and never guessed.** Each delegate in the run is in exactly one
       count, from its entry in `subagents` ([v1-sessions](../protocol/v1-sessions.md#subagent))
       while it has one:

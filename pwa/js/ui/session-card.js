@@ -619,7 +619,7 @@ export class SessionCard {
     e.toolGlyph = glyph('working', { size: 12 });
     e.tool = h('p', { class: 'tool-line', hidden: true }, e.toolGlyph, e.toolName, e.toolSummary);
     // Its own delegates starting and reporting back (§6.4, #661): one meta line per delegate, the
-    // name opening it; after its words and before what it is running now. More than three lines
+    // name opening it; after its words and before what it is running now. Two or more lines
     // fold into one (D3): its button, the chevron ending it, then a link of its own to the
     // earliest delegate still working.
     e.events = h('ol', { class: 'delegate-events', 'aria-label': 'Delegates started and finished', hidden: true });

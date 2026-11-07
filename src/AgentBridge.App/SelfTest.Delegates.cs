@@ -17,7 +17,7 @@ static partial class SelfTest
     const string DelegatingId = "demo-delegates";
     const string Witness = "demo-agent-witness";
 
-    static async Task CheckDelegates(MainWindow window, MainViewModel main, Action<bool, string> check, string outFile)
+    static async Task CheckDelegates(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile)
     {
         var page = window.Sessions;
         var layout = page.Layout!;
@@ -31,13 +31,15 @@ static partial class SelfTest
         check(drawn && Item("demo-agent-grep") is null && AutomationProperties.GetName(Item(Witness)!).Contains("2 nested", StringComparison.Ordinal),
             $"draws the delegate strip under the session's header, a nested delegate counted on its parent, the finished folded ({(Item(Witness) is { } w ? AutomationProperties.GetName(w) : "none")})");
 
-        // The main agent's own words, never a delegate's, and its delegates as one-line events.
+        // The main agent's own words, never a delegate's, and its delegates' lines folded into one
+        // closed row (#1063, ui.md §6.4 Runs fold): the PWA's words and counts, its chevron inside
+        // the button and its "still working" link a separate target after it.
         var events = ById<ItemsControl>(view, "DelegateEvents");
-        var links = events is null ? [] : Find<HyperlinkButton>(events).Where(l => l.Visibility == Visibility.Visible).ToList();
-        check(card.Speaker == "Main agent" && card.Response.StartsWith("Started 2 background agents", StringComparison.Ordinal) && links.Count >= 1,
-            $"shows the main agent's own words, and its delegates starting and reporting back as lines with links ({links.Count} links)");
+        check(card.Speaker == "Main agent" && card.Response.StartsWith("Started 2 background agents", StringComparison.Ordinal), "shows the main agent's own words");
+        await CheckEventsFold(window, main, view, card, layout, demo, check, outFile);
 
         // A delegate's link in the conversation opens it in the inspector.
+        var links = events is null ? [] : Find<HyperlinkButton>(events).Where(l => l.Visibility == Visibility.Visible).ToList();
         if (links.FirstOrDefault(l => l.Tag is "demo-agent-lint") is { } lint)
         {
             ((IInvokeProvider)new HyperlinkButtonAutomationPeer(lint).GetPattern(PatternInterface.Invoke)).Invoke();
