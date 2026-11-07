@@ -1682,9 +1682,11 @@ machine, online ones first, then the account's offline machines (#213):
 - **Update now** (#1159; design, not built; Creative's rules, 6711605555, are spelled out in
   [v1-update.md](../protocol/v1-update.md#what-the-person-sees)): beside Install, only when an
   update is ready and this device can carry it out; otherwise the row says why in text2. A quiet
-  machine updates on one press; a busy one confirms first, listing each busy session by name
-  with "Mid-turn" or "Question waiting", then "They pause while the bridge restarts, usually
-  under a minute.", with **Update now** and **Cancel**, focus on Cancel (as #1142). The restart
+  machine updates on one press; a busy one, or one the bridge can't read, confirms first, listing
+  each busy session by name with "Mid-turn", "Question waiting" or "Approval waiting", then
+  "They pause while the bridge restarts, usually under a minute.", with **Update now** and
+  **Cancel**, focus on Cancel (as #1142). One that turns busy during the download waits: "Update
+  ready · waiting for the current turn to finish" (Product, #1161). The restart
   reads "Restarting to update…", never "Updating…" (#950); the result reads "Updated to *v*" or
   "Not updated: *reason*", the reason fixed by its code, never the machine's text (#826).
 - **When an update is ready** (owner decision on #689, 6674007815; Product, 6674016765; Creative,

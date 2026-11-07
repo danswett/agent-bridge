@@ -94,6 +94,7 @@ it ignores the field, so a client sends it only to a machine whose state says `c
 | `updateNowAt` | time? | **#1159, not built.** With `updateNowWhy` `restart-cap`: when it can be pressed again |
 | `busy` | `UpdateBusy`? | **#1159, not built.** Only with `canUpdateNow`: what Update now would go over, from the host's own session snapshot ([What the phone sees](#what-the-phone-sees-before-the-press)) |
 | `requestNow` | bool | **#1159, not built.** The press in `request` is an Update now |
+| `waitingCode` | string? | **#1159, not built.** With phase `waiting`: why, as a code a client words itself (`turn-running`, `question-waiting`, `unknown`), never showing `waiting`'s text ([The confirmation](#the-confirmation)) |
 
 An unknown `phase` reads as `idle`. Text fields are cut to 64 bytes (versions), 512 (reasons)
 and 4 KiB (notes).
@@ -127,7 +128,7 @@ again": an install pressed hours before must not go ahead on sessions never watc
 | `outcome` | `accepted` `refused` `confirm` | `confirm` (#1159, not built): an Update now that would go over more than the person accepted; nothing was asked, and `state.busy` says what is busy now. An unknown outcome reads as `refused`. `accepted`: the machine's app has been asked, and how it goes is in the state (`request`, then `last` with this request). A Check that finds a newer release ends instead with `request` gone and `available` and `checkedAt` set (`last` stays how the last update, or a check finding nothing, ended). `refused`: nothing was asked |
 | `reason` | string? | Why it was refused |
 | `state` | `UpdateState`? | The state as the press found it |
-| `code` | string? | **#1159, not built.** Only for a press with `now`: why it was refused or needs confirming, as a code: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`became-busy`, `release-changed`, `too-slow`, `other-profile`, `old-app`, `restart-cap`, `sign-in`). Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
+| `code` | string? | **#1159, not built.** Only for a press with `now`: why it was refused or needs confirming, as a code: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`release-changed`, `other-profile`, `old-app`, `restart-cap`, `sign-in`). Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
 
 The host refuses a device that is not connected to the relay now, one that is not a person's,
 and a press with no app to carry it out. The app's refusals (another profile running, the host
@@ -233,12 +234,13 @@ Update now interrupts what Install would wait for.
 The host adds `busy` to the `UpdateState` it serves, from **its own session snapshot**, never
 from the app's report:
 
-`UpdateBusy`: `{ "working": int, "waiting": int, "unknown"?: true, "sessions"?: [{ "id", "state": "working" | "waiting" }] }`
+`UpdateBusy`: `{ "working": int, "waiting": int, "unknown"?: true, "sessions"?: [{ "id", "state": "working" | "question" | "approval" }] }`
 
 * `working`: sessions whose `status` is `working`, or `idle` with `activity.background`
   (delegating): a turn or work in flight, as `session.stop` counts it.
 * `waiting`: sessions with a `question`, or whose `status` is `waiting`. A session that is both
-  counts as `waiting`.
+  counts as `waiting`. In `sessions` its state is `approval` when its question's `kind` is
+  `approval`, else `question`, so a waiting approval is named as one (Product, below).
 * `unknown`: the snapshot isn't whole yet, or the host is unsure of a session, so it can't be
   told whether one is busy (`AutoUpdater`'s `Sessions.Complete` and `Unsure`).
 * `sessions`: the busy sessions themselves, at most 32, by id and state only, so a client can
@@ -265,20 +267,32 @@ The owner's rule: a confirmation only when a session there is mid-turn or has a 
 waiting. A quiet machine updates on one press.
 
 * **The client asks.** It reads `busy` from the state it already follows. With `working` and
-  `waiting` both 0 and not `unknown`, the press goes at once, with no `accept`. Otherwise it
-  shows the confirmation (below), and the press carries `accept`: the counts the person saw.
+  `waiting` both 0 and not `unknown`, the press goes at once, with no `accept`. Otherwise,
+  `unknown` included (Product: "if it cannot tell, treat the machine as busy"), it shows the
+  confirmation (below), and the press carries `accept`: the counts the person saw.
 * **The host checks.** At the press, from its snapshot then: a press with no `accept` goes only
-  if the machine is quiet; one with `accept` goes if `working` and `waiting` are each no more
+  if the machine is quiet and its sessions are known; one with `accept` goes if `working` and `waiting` are each no more
   than accepted, and, if the host is unsure now, only if `accept.unknown` was set. Otherwise
   the outcome is `confirm`, nothing is asked of the app, and `state.busy` says what is busy now;
   the client shows the confirmation again with the new counts. The check is the host's, as
   `session.stop`'s is, so an old or careless client can't skip the person; it is a seatbelt,
   not the security boundary, which is the signature and the caps.
-* **After the press.** A press with `accept` goes over whatever is busy when the host leaves:
-  the person accepted the downtime. A press without `accept` (the machine was quiet) that finds a
-  session busy when the download is done waits up to **2 minutes** for it to be quiet again (the
-  app's settled gap, five seconds), then is refused `became-busy`, which brings up the
-  confirmation. **Open question 3.**
+* **After the press: never over a turn nobody confirmed** (Product, settled decision 3). When the
+  download is done and checked, the app looks at the machine again. It leaves at once if the
+  press had no `accept` and the machine is still quiet, or if the press had `accept`, is less
+  than 15 minutes old, and nothing is busier than the person accepted (`working` and `waiting`
+  each no more, and `unknown` only if accepted). Otherwise it **keeps the download and does not
+  install**: the phase is `waiting` with `waitingCode` `turn-running`, `question-waiting` or
+  `unknown`, and the release installs at the **next quiet moment** (no turn running, no question
+  waiting, its sessions known, settled for five seconds: Install between turns' gap, never the
+  two-minute wait or a backstop), through the same lease. Or the person presses Update now
+  again, sees the confirmation again with what is busy now, and that press replaces the waiting
+  one, with no second download. Nothing is refused for it, and nothing is downloaded twice.
+
+`UpdateState` gains, for this, **`waitingCode`** (#1159, not built): with phase `waiting`, why,
+as a code a client words itself: `turn-running`, `question-waiting` or `unknown`. The host's
+`waiting` text stays for the log and older clients, and is never shown by a client that knows
+the code.
 
 ### What the person sees
 
@@ -294,17 +308,25 @@ host's own text (#826). "Bridge", never "host".
   now"; `restart-cap` "Update now is available again at *time*" (`updateNowAt`, in the viewer's
   local time). A read-only machine already says "View only", and offers neither. Install keeps
   its words and its wait.
-* **One press on a quiet machine** (owner): nothing working, no question waiting, and its
-  sessions known. No dialog.
+* **One press on a quiet machine** (owner): nothing working, no question or approval waiting,
+  and its sessions known. No dialog.
 * **Otherwise one confirmation**, the same dialog as the confirm before a more expensive model
-  (#1142). Title "Update *machine* now?" Body: each busy session from `busy.sessions`, by the
-  name the client shows for it, with its state in words, "Mid-turn" or "Question waiting"; a
-  session the client has no name for yet reads "A session". If `unknown`: "Some sessions there
-  aren't read yet." Then one line: "They pause while the bridge restarts, usually under a
-  minute." (The time is one the bridge backs up: planned update restarts came back in 20 to 25
-  s in #498's logs, and #815 announces 90 s as the most it expects.) Buttons **Update now** and
-  **Cancel**, focus on Cancel. If the machine answers `confirm`, the dialog comes back with the
-  sessions it names now.
+  (#1142), and also whenever the bridge can't tell (Product: err toward warning). Title
+  "Update *machine* now?" Body: each busy session from `busy.sessions`, by the name the client
+  shows for it, with its state in words, "Mid-turn", "Question waiting" or "Approval waiting"; a
+  session the client has no name for yet reads "A session". If `unknown`: "The bridge can't tell
+  yet whether a session there is busy." Then one line: "They pause while the bridge restarts,
+  usually under a minute." (The time is one the bridge backs up: planned update restarts came
+  back in 20 to 25 s in #498's logs, and #815 announces 90 s as the most it expects.) Until #954
+  lands, and only when a question or approval is waiting or the bridge can't tell, one more
+  line: "A question or approval waiting may have to be answered at the machine afterwards."
+  Buttons **Update now** and **Cancel**, focus on Cancel. If the machine answers `confirm`, the
+  dialog comes back with the sessions it names now.
+* **Waiting for a quiet moment** (decision 3), on the update line, from `waitingCode`:
+  `turn-running` "Update ready · waiting for the current turn to finish"; `question-waiting`
+  "Update ready · waiting for a question to be answered" (the line #719 already uses);
+  `unknown` "Update ready · waiting until the bridge can tell the sessions are quiet". **Update
+  now** stays offered beside it, and brings up the confirmation.
 * **While it goes:** "Downloading *v* · 40%", then **"Restarting to update…"**, the Windows app's
   words for its own restart ([app-windows.md](../app-windows.md#updates-velopack-one-version-for-app-and-host)),
   kept through the restart ([Announced as planned](#announced-as-planned-498)). Never
@@ -315,7 +337,6 @@ host's own text (#826). "Bridge", never "host".
   | `code` | Reason |
   |---|---|
   | `not-quiet` | a message was being delivered there the whole time |
-  | `became-busy` | a session there became busy while the update downloaded |
   | `changed` | something changed on the machine; try again |
   | `release-changed` | a newer update arrived; try again |
   | `rate-limited` | too many presses just now; try again in a few minutes |
@@ -323,7 +344,6 @@ host's own text (#826). "Bridge", never "host".
   | `busy` | another update or restart is under way there |
   | `sign-in` | an agent sign-in is under way there |
   | `announce-failed` | the bridge couldn't tell your devices it was restarting |
-  | `too-slow` | the update took too long to download |
   | `other-profile` | another bridge profile is running there |
   | `disabled`, `read-only` | Update now is off on this machine |
   | `expired`, `future`, `bad-signature` | the request didn't verify; try again |
@@ -331,9 +351,10 @@ host's own text (#826). "Bridge", never "host".
   | `failed` (outcome) | the update didn't take |
   | anything else | the machine refused it |
 
-* **A question waiting during the restart** stays on its card, still answerable once the bridge
-  is back (#954): the restart doesn't take the card away. Until #954 lands, the host can't
-  promise that for an approval it carried through the agent's hook; **open question 8**.
+* **A question or approval waiting during the restart** stays on its card, still answerable once
+  the bridge is back (#954): the restart doesn't take the card away. Until #954 lands the host
+  can't promise that for an approval it carried through the agent's hook, so the confirmation
+  names every waiting question and approval and warns (settled decision 8).
 
 ### Going: the lease and the departure
 
@@ -345,9 +366,10 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
 2. The app takes it, refuses at once what it refuses today (another profile, a build folder),
    then downloads and checks the package **outside the lease** (`DownloadMark`, and #984's
    per-profile copy). It holds the usage probes (#238) as every install does. It does not wait
-   for a quiet machine. A press not at the departure within **15 minutes** of being made (a
-   download that slow) is refused `too-slow`, rather than going on sessions nobody is watching
-   for it.
+   for a quiet machine unless the machine is busier than the person confirmed, or the press is
+   15 minutes old by then (a download that slow): then it keeps the download and waits for the
+   next quiet moment ([After the press](#the-confirmation)), never going on sessions nobody
+   confirmed it for.
 3. The app asks the host to leave: one app-only pipe op (proposed `host.update.depart`,
    `{ "request" }`), the seam #819's installs will use too ([open question 1](#open-questions)). The
    host takes #805's lease, purpose `Update`, waiting up to 10 s. If an answer, a reply or a stop
@@ -401,11 +423,11 @@ channel closes, then Offline as usual.
   (the ledger's refusal), not "delivered". **Open question 4.**
 * **A question or approval waiting.** The agents keep running, and a question still pending when
   the new host starts is notified again ([v1-sessions.md](v1-sessions.md#when-a-host-notifies)).
-  An approval the host carries through the agent's hook may not survive (#954). Creative's rule is
-  that a question waiting stays on its card, still answerable, and the confirmation carries no
-  caveat; until #954 lands that holds for questions the host re-notifies, not for every
-  approval (**open question 8**). Update now doesn't wait for #954: the owner accepted the
-  downtime.
+  An approval the host carries through the agent's hook may not survive (#954). So, until #954
+  lands, the confirmation names every question and approval the bridge knows is waiting, warns
+  that it may have to be answered at the machine afterwards, and treats a machine it can't read
+  as busy (settled decision 8). Update now doesn't wait for #954: the owner accepted the
+  downtime, and the person decides with the warning in front of them.
 
 ### Security
 
@@ -446,8 +468,9 @@ so they need one too.
    whichever of this or #870 lands first. `ManageService`'s header comment changes from "never
    forced, never carried out later (owner, Q-O7)" to "never forced; a restart is never carried
    out later (owner, Q-O7); an update a person asks for now (#1159, owner 2026-11-07) waits for
-   its download (at most 15 minutes), up to 2 minutes more if it was pressed on a quiet machine
-   that has become busy since, and up to a minute for the lease, and never longer". Vectors in `update.json`
+   its download and up to a minute for the lease, and goes over no turn nobody confirmed: if the
+   machine became busier meanwhile it keeps the download and installs at the next quiet moment
+   (Product, #1161)". Vectors in `update.json`
    and `signed-command.json`. Tests, among others: "Update now on a quiet machine is accepted on
    one press"; "Update now with a turn running and no accept is answered confirm and asks the
    app nothing"; "Update now accepts no more busy sessions than the person confirmed"; "Update
@@ -455,7 +478,7 @@ so they need one too.
    management off"; "Update now from this machine's own app is refused"; "an Update now signed
    more than two minutes ago is refused"; "Update now and a remote restart share one cap of two
    in six hours"; "a remote restart committed while an Update now downloads leaves the Update now
-   refused restart-cap"; "busy counts sessions and never carries their text"; "the departure is refused
+   refused restart-cap"; "busy names a waiting approval as an approval and never carries any text"; "the departure is refused
    while an answer is being typed, and nothing is typed twice"; "a committed update departure
    refuses new deliveries until the host exits".
 2. **App.** `AutoUpdater` takes a `now` ask: refuses another profile or a build folder at once,
@@ -463,9 +486,11 @@ so they need one too.
    leaves through the departure op, and reports `last` with the host's words. It reports that it
    can carry Update now. Tests: "an Update now ask installs without waiting for the machine to be
    idle"; "an Update now ask with another profile running is refused before anything is
-   downloaded"; "a refused departure starts nothing and keeps the release offered"; "an Update now
-   that has not reached the departure in 15 minutes is refused"; "a quiet press that finds a
-   session busy after the download waits two minutes, then is refused became-busy".
+   downloaded"; "a refused departure starts nothing and keeps the release offered"; "a quiet
+   press that finds a turn running after the download keeps the download, installs nothing and
+   waits with turn-running"; "a waiting Update now installs at the next quiet moment"; "an
+   Update now pressed again while one waits replaces it without downloading again"; "an
+   accepted press 15 minutes old waits for a quiet moment rather than going over a turn".
 3. **PWA.** Update now beside Install, or the row's reason when it can't be pressed, the
    confirmation, signing the press with `accept`, the `confirm` outcome shown as the
    confirmation again, the lines while it goes, the 90 s "Restarting to update…" across the
@@ -474,7 +499,9 @@ so they need one too.
    machine lists each busy session by name and state, and sends what was shown", "the
    confirmation's focus starts on Cancel", "Cancel sends nothing", "a confirm outcome shows the
    sessions busy now", "a machine that can't update now says why instead of the button", "a
-   refusal shows its fixed reason, never the machine's text", plus the demo's states for the
+   refusal shows its fixed reason, never the machine's text", "a waiting approval is named and
+   warned of", "a machine the bridge can't read asks first", "an update waiting for a turn says
+   so from its code, never the machine's text", plus the demo's states for the
    visual check.
 4. **Windows app, for another machine.** The Machines row's Update now (or its reason) and a
    `ContentDialog` with the same list, words and buttons, focus on Cancel, as #1142's model
@@ -482,7 +509,24 @@ so they need one too.
 
 Order: 1, then 2, then 3 and 4 together.
 
+### Settled decisions
+
+3. **A machine that turns busy during the download** (Product, 2026-11-07, on #1161): "finish the
+   download but do NOT install. The phone shows 'Update ready - waiting for the current turn to
+   finish'. It installs at the next quiet moment, or the person presses Update now again and sees
+   the confirmation again. Never interrupt a running turn without a fresh confirmation, and never
+   discard the download." Specified in [The confirmation](#the-confirmation) (After the press)
+   and [What the person sees](#what-the-person-sees); the line is written with the middle dot
+   of the existing "Update ready · waiting for a question to be answered".
+8. **A question or approval waiting before #954 lands** (Product, 2026-11-07, on #1161): "Warn
+   about a waiting approval or question even before #954 lands: if the bridge knows of one, the
+   confirmation names it; if it cannot tell, treat the machine as busy and show the
+   confirmation. Err toward warning." Specified in [What the person sees](#what-the-person-sees)
+   and [Questions and answers across the restart](#questions-and-answers-across-the-restart).
+
 ### Open questions
+
+Numbered as first raised; 3 and 8 are settled above.
 
 1. **One departure seam with #819.** #870 (#819's host-only convergence draft) also has to
    leave through `Update`; which lands the pipe op and the `Update` registrations, and does
@@ -495,8 +539,6 @@ Order: 1, then 2, then 3 and 4 together.
 2. **`Legacy` announcement for Update now** until #815's transport lands (above). Without a yes
    here, or the transport, every Update now is refused `announce-failed`, so slice 1 is not
    useful until one of them. SRE.
-3. **A quiet press that finds the machine busy after the download:** wait 2 minutes and refuse,
-   as proposed, or go anyway since the person said "now"? Product.
 4. **An answer's outcome across the restart.** Persist the first-outcome record with the attempt
    ledger, so a retry after the restart is told "delivered" or "unconfirmed" rather than the
    ledger's refusal; or wait longer than 3 s at the departure for answer results to reach their
@@ -509,11 +551,6 @@ Order: 1, then 2, then 3 and 4 together.
    accepted either; Connection to confirm.
 7. **The cap.** Two committed restarts in six hours, shared with `manage.restart`, may be too few
    on a coordinator VM that also gets restarted remotely. Keep it until #55, as proposed? Owner.
-8. **An approval waiting before #954 lands.** Creative's confirmation has no caveat, and a
-   question the host re-notifies after the restart is still answerable; an approval it carried
-   through the agent's hook may not be (#954). Ship Update now with no caveat (the owner accepted
-   the downtime), add one line until #954 lands, or wait for #954? Proposed: ship with no caveat,
-   and #954 next. Creative and Product.
 
 ## Between the host and its app
 
