@@ -21,6 +21,7 @@ param relayPrincipalId string
 param tags object
 
 var container = 'roster'
+var devicesContainer = 'devices'
 
 var roles = {
   // Read, write and delete blobs: given on the one container only.
@@ -71,6 +72,14 @@ resource roster 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-
   properties: { publicAccess: 'None' }
 }
 
+// The signed device roster (docs/protocol/devices.md) is in a container of its own, outside the
+// lifecycle rule below: it is what an account's trust rests on, not a last-seen list.
+resource devices 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: devicesContainer
+  properties: { publicAccess: 'None' }
+}
+
 // An online host's roster is rewritten every ten minutes, so only an account none of whose
 // hosts has connected for half a year is ever old enough to go: its list of offline machines
 // goes with it, and comes back as they connect. Also what clears a smoke test's throwaway
@@ -86,7 +95,7 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
           enabled: true
           type: 'Lifecycle'
           definition: {
-            filters: { blobTypes: ['blockBlob'] }
+            filters: { blobTypes: ['blockBlob'], prefixMatch: ['roster/'] }
             actions: { baseBlob: { delete: { daysAfterModificationGreaterThan: 180 } } }
           }
         }
@@ -98,6 +107,16 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
 resource dataAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(roster.id, relayPrincipalId, roles.blobDataContributor)
   scope: roster
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
+    principalId: relayPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource devicesAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(devices.id, relayPrincipalId, roles.blobDataContributor)
+  scope: devices
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
     principalId: relayPrincipalId

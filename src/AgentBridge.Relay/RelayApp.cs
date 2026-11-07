@@ -45,6 +45,8 @@ public static class RelayApp
         var rosterStore = MachineRoster.CreateStore(options.Roster);
         builder.Services.AddSingleton(sp => new MachineRoster(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<MachineRoster>>(), rosterStore));
         builder.Services.AddHostedService<RosterWriter>();
+        var devicesStore = DeviceRoster.CreateStore(options.Roster);
+        builder.Services.AddSingleton(sp => new DeviceRoster(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<DeviceRoster>>(), devicesStore));
         builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => Volatile.Read(ref theHub)?.Online ?? 0));
         // The slim builder's console logger stays on the simple formatter whatever the configuration
         // says, so a deployment that asks for JSON lines (infra/ does) got plain text, silently.
