@@ -45,7 +45,7 @@ static partial class SelfTest
         var card = view?.Card;
         var list = view is null ? null : ById<ListView>(view, "Conversation");
         // The strip with every delegate in it, the finished ones unfolded, not six and "14 finished".
-        if (card is not null) { card.Delegates.FinishedOpen = true; }
+        if (card is not null) { card.Delegates.FinishedOpen = true; card.Delegates.EventsOpen = true; }
         int Delegates() => card?.Delegates.Strip.Count(i => i.IsDelegate) ?? 0;
         var drawn = card is not null && list is not null && await Until(() => card.History.Count >= Limits.History && list.Items.Count > 0 && ById<MarkdownView>(view!, "ResponseBlock") is { Children.Count: > 0 } && Delegates() >= DemoHost.HeavyDelegates && layout.ShowStrip && layout.ShowInspector, TimeSpan.FromSeconds(10));
         var data = new Dictionary<string, int>
@@ -95,7 +95,7 @@ static partial class SelfTest
         // After Reachable, which needs the last block off screen to begin with: this walk realises every block.
         var (unlisted, listRealised, listSeconds) = list is null ? ("measured: the response not drawn", 0, 0d) : await Listed(list);
         check(unlisted is null, $"gives a screen reader every block of the response as a list item numbered 1 to {list?.Items.Count} of {list?.Items.Count}, walked as a screen reader walks it, ItemContainer's FindItemByProperty for each next item and VirtualizedItem's Realize for one not yet realised ({listRealised} realised so, in {listSeconds:0.0} s), none -1, and the header and footer outside the set{Not(unlisted)}");
-        if (card is not null) { card.Delegates.FinishedOpen = false; }
+        if (card is not null) { card.Delegates.FinishedOpen = false; card.Delegates.EventsOpen = false; }
         static string Not(string? wrong) => wrong is null ? "" : $": not {wrong}";
 
         var report = new Dictionary<string, object?>

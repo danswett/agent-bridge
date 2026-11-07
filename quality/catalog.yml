@@ -116,6 +116,18 @@ suites:
     baseline: { tests: 122, skipped: 2, seconds: 13 }
     status: exists
 
+  - id: feedback-inbox
+    kind: component
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.FeedbackInbox.Tests
+    command: dotnet test tests/AgentBridge.FeedbackInbox.Tests -c Release
+    where: ci.yml product
+    status: exists
+
   - id: local-api
     kind: component
     ring: 0

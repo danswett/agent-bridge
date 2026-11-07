@@ -896,7 +896,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 }
 .delegate-event-mark { display: flex; align-items: center; justify-content: center; width: 16px; height: var(--type-meta-line); color: var(--ab-text2); }
 .delegate-event-text { min-width: 0; overflow-wrap: anywhere; }
-/* A run of more than three (D3): one line, its button, the chevron ending it inside its target
+/* A run of two or more (D3): one line, its button, the chevron ending it inside its target
    and focus ring, then the "still working" link after a 12 gap, each a target of its own
    (ui.md §9.1 A11). Too long for one line (a phone), the link wraps under the summary's words,
    and the icon stays on their first line: each target pads its first line to the target's
