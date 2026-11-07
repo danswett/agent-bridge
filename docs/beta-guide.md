@@ -98,8 +98,8 @@ conditions do not take away rights those licences grant or mandatory rights the 
 ## Getting help and sending feedback
 
 For help today, reply privately in the email or Teams conversation your invitation came in. The
-support team can read what you send, subject to that channel's handling and retention described
-above. Send only the minimum needed. Remove names, paths, prompts, code, tokens and sign-in
+support team can read what you send. How that channel handles and keeps it will be stated in the
+privacy notice once the facts above are published. Send only the minimum needed. Remove names, paths, prompts, code, tokens and sign-in
 codes, and review any screenshot or log before sending it. Do not post support content or
 personal information in public GitHub issues. We are not promising an in-app report preview in
 this build. If something fails, tell us the first step that failed. If it all worked, tell us
