@@ -30,6 +30,10 @@ const AGENT_DEFAULT = '';
 const sentence = (s) => (s && !/[.!?]$/.test(s) ? `${s}.` : s);
 const bytes = (s) => new TextEncoder().encode(s).length;
 
+// A launch still on its way: the one thing aria-busy says. A resume refused as held is done, though it
+// is drawn in the waiting form (progress), and nothing retries it.
+export const launchPending = (entry) => !!entry && (entry.state === 'sending' || entry.state === 'waiting');
+
 // What a launch's progress or outcome says. tone: progress | ok | warn | bad. session: the id of
 // the session it started, when known; a start without one has no card to open, so it says where
 // to find it.
@@ -55,6 +59,8 @@ export function describeLaunch(entry, { machineName, session = entry?.detail?.se
     case 'unconfirmed':
       return { text: `Launched${how}, but not confirmed${entry.reason ? `: ${sentence(entry.reason)}` : '. Check at the machine.'}`, tone: 'warn' };
     case 'busy':
+      // A resume the host holds back while its discovery is held (#1064): the waiting form, not a refusal.
+      if (entry.answer?.resume && /^Held:/.test(entry.reason ?? '')) { return { text: `${machineName || 'The machine'} is still finding its sessions. Try Launch again in a moment.`, tone: 'progress' }; }
       return { text: `Not launched: ${sentence(entry.reason ?? 'the machine is busy with another launch')} Try again in a moment.`, tone: 'warn' };
     case 'refused':
       return { text: `Not launched: ${sentence(entry.reason ?? 'the machine refused it')}`, tone: 'bad' };
@@ -552,7 +558,7 @@ export class LaunchPanel {
     return launch;
   }
 
-  #pending(entry) { return !!entry && (entry.state === 'sending' || entry.state === 'waiting'); }
+  #pending(entry) { return launchPending(entry); }
 
   async #press() {
     const target = this.#target;
@@ -865,7 +871,7 @@ export class LaunchPanel {
     // it again.
     if (e.status.textContent !== shown.text) { e.status.textContent = shown.text; }
     e.status.className = `answer-status launch-status${shown.tone ? ` ${shown.tone}` : ''}`;
-    this.root.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
+    this.root.setAttribute('aria-busy', launchPending(entry) ? 'true' : 'false');
     e.resend.hidden = entry?.state !== 'failed';
     e.resend.disabled = !!this.#target?.held;
     e.open.hidden = !(entry?.state === 'done' && session);

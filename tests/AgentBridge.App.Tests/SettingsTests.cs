@@ -610,6 +610,40 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Get_started_names_the_one_next_step_and_never_marks_CLI_sign_in_done()
+    {
+        AgentReadinessRow Row(AgentReadiness a) => new(a, canManage: true, canInstall: true, installOffered: true);
+        string Mark(IReadOnlyList<SetupStep> s, string id) => s.Single(x => x.Id == id).Mark;
+
+        var down = SetupGuide.Steps(false, [], false);
+        Assert.Equal(("Next", "Later"), (Mark(down, "bridge"), Mark(down, "install")));
+
+        var fresh = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.NeedsAction, installation: ReadinessState.Missing))], false);
+        Assert.Equal(("Done", "Next", "Later"), (Mark(fresh, "bridge"), Mark(fresh, "install"), Mark(fresh, "hooks")));
+        Assert.Contains("Install CLI on one of the agents below", fresh.Single(x => x.Id == "install").Detail);
+        Assert.Equal("Next, step 2 of 6, Install an agent's CLI. Choose Install CLI on one of the agents below.", fresh.Single(x => x.Id == "install").AccessibleName);
+
+        var installed = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.NeedsAction))], false);
+        Assert.Equal(("Done", "Next"), (Mark(installed, "install"), Mark(installed, "hooks")));
+
+        var setUp = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "An owned setup record exists and setup completed."))], true);
+        Assert.Equal(("Done", "Next", "Yours to check", "Done"), (Mark(setUp, "hooks"), Mark(setUp, "session"), Mark(setUp, "cli-signin"), Mark(setUp, "account")));
+
+        var working = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Working, hooksDetail: "owned setup record"))], false);
+        Assert.Equal("Done", Mark(working, "session"));
+
+        var heard = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record") with { LastHookHandledAt = DateTimeOffset.UtcNow })], false);
+        Assert.Equal("Done", Mark(heard, "session"));
+        Assert.All(heard, s => Assert.True(s.Settled));
+        Assert.Contains(installed, s => !s.Settled);
+
+        var one = SetupGuide.Steps(true, [
+            Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record")),
+            Row(Agent("codex", "Codex", ReadinessState.NeedsAction))], false);
+        Assert.Equal(("Done", "Next"), (Mark(one, "hooks"), Mark(one, "session")));
+    }
+
+    [Fact]
     public void A_set_up_agent_the_host_cannot_test_yet_offers_no_verb_and_says_it_is_not_tested_yet()
     {
         var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), canManage: true);
@@ -1041,6 +1075,77 @@ public sealed class SettingsTests : IAsyncLifetime
         var row = settings.Agents.Single();
         Assert.Equal("Set up", row.SetUpVerb);
         Assert.False(row.ShowSetUp);
+        // First run: the offer holds the Set up, so Get started points at it, not at "can't be changed".
+        var hooks = settings.SetupSteps.Single(s => s.Id == "hooks");
+        Assert.Equal("Next", hooks.Mark);
+        Assert.DoesNotContain("can't be changed", hooks.Detail);
+        Assert.Contains("Set up on Claude Code", hooks.Detail);
+    }
+
+    [Fact]
+    public async Task A_first_install_opens_Get_started_once_when_no_agent_is_set_up()
+    {
+        prefs = prefs with { GuidePending = true };
+        var wanted = 0;
+        var first = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        first.GuideWanted += () => Interlocked.Increment(ref wanted);
+
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+        await Wait.UntilAsync(() => wanted == 1, "Get started opened");
+        // Taken: later reports, and a restart's new page, do not pull the person back.
+        await HostNowSays(NeverSetUp("claude", "Claude Code", version: "1.2.4"));
+        var restarted = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        var again = 0;
+        restarted.GuideWanted += () => again++;
+        restarted.Refresh();
+
+        Assert.Equal(1, wanted);
+        Assert.Equal(0, again);
+        Assert.False(prefs.GuidePending);
+        first.Detach();
+        restarted.Detach();
+    }
+
+    [Fact]
+    public async Task An_upgrader_a_background_start_or_a_set_up_agent_never_opens_Get_started()
+    {
+        var wanted = 0;
+        // An upgrader: no first-run mark, so even a window that asks is not pulled to Settings.
+        var upgrader = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        upgrader.GuideWanted += () => wanted++;
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+        Assert.Equal(0, wanted);
+        upgrader.Detach();
+
+        // A start at sign-in does not ask, and leaves the mark for the launch that shows the window.
+        prefs = prefs with { GuidePending = true };
+        var background = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        background.GuideWanted += () => wanted++;
+        background.Refresh();
+        Assert.Equal(0, wanted);
+        Assert.True(prefs.GuidePending);
+
+        // Agents already set up: nothing to guide.
+        await HostNowSays(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record") with { Version = "1.2.9" });
+        var asked = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        asked.GuideWanted += () => wanted++;
+        asked.Refresh();
+        await Wait.UntilAsync(() => asked.SetupSteps.Single(s => s.Id == "hooks").Mark == "Done", "hooks connected");
+
+        Assert.Equal(0, wanted);
+        background.Detach();
+        asked.Detach();
+    }
+
+    [Fact]
+    public void Only_a_missing_settings_file_is_a_first_run()
+    {
+        var file = Path.Combine(app, "first-run-settings.json");
+        Assert.True(AppPreferences.IsFirstRun(file));
+
+        File.WriteAllText(file, "{ not json");
+        Assert.False(AppPreferences.IsFirstRun(file));
+        Assert.False(AppPreferences.Load(file).GuidePending);
     }
 
     [Theory]

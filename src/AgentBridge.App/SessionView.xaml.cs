@@ -592,12 +592,7 @@ public sealed partial class SessionView : UserControl
     }
     void OnOrphanClosed(InfoBar sender, InfoBarClosedEventArgs args) => Card?.DismissOrphan();
 
-    void OnCopyOrphan(object sender, RoutedEventArgs e)
-    {
-        var data = new DataPackage();
-        data.SetText(Card?.OrphanText ?? "");
-        Clipboard.SetContent(data);
-    }
+    void OnCopyOrphan(object sender, RoutedEventArgs e) => ClipboardText.Put(Card?.OrphanText ?? "");
 
     void OnEditing(object sender, RoutedEventArgs e) => Editing(true);
     void OnNotEditing(object sender, RoutedEventArgs e) => Editing(false);

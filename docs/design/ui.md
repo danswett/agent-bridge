@@ -1312,6 +1312,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
     (`truncated`) can't be answered from here either, as before. Leaving the session is never
     an answer: the row keeps its glyph until the host clears the question.
+    In PWA and Windows cards, the host's `answerAtMachineReason: "shape"` adds a second line,
+    exactly "This kind of question can only be answered at the machine.", in Needs you's text
+    colour, after "Answer at the machine · *machine*". Both lines are accessible text, not a live
+    region. No reason, or an unknown one, keeps today's single line; no client guesses the reason.
+    This does not change the row, attention or HA text.
   - **Resolved:** the card quietens, with no Needs you fill, and reads "Main agent asked"
     (or "Delegate *name* asked") over the question as it was shown. Below that:
     - with this device's answer record for the question, the record's progress and outcome as
@@ -1598,6 +1603,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     | Passed, stalled | `typed` on an idle session, then nothing for 10 s | *line*: Passed to the agent · not picked up yet | text2 | "Reply passed to the agent, not picked up yet" |
     | Still being delivered | a resend met the first copy in flight | *line*: the stage reached · still being delivered | text2 | "Reply still being delivered" |
     | Waiting for the machine | held on this device while the machine isn't connected | *line*: Waiting for *machine* · it goes when *machine* is back; Send's ring stands still | text2 | "Reply waiting for *machine*" |
+    | Waiting for discovery (#1064) | a resume the host holds back while its discovery is held (`busy`, "Held: …") | *line*: *machine* is still finding its sessions. Try Launch again in a moment. (two sentences, no "·"; words only: nothing is resent on its own, Launch stays enabled, and the line is announced politely once) | text2 | the line's words |
     | Not confirmed | result `unconfirmed` (host: a reply 60 s, an answer 15 s), or the client's 9 min | *line*: Sent, but not confirmed. Check the conversation before sending it again. (an answer: Sent, but not confirmed. Check the conversation.) | Needs you's text colour | the sentence |
     | Busy, stale | result `busy` or `stale` | *line*: today's ("Not sent: …") | Needs you's text colour | the words |
     | Refused, failed | result `refused`; the request failed | *line*: today's ("The machine refused this reply: …", "Couldn't send it: …") | Danger | the words |
@@ -1644,7 +1650,10 @@ machine, online ones first, then the account's offline machines (#213):
 - **Line 2:** at most two facts: how many sessions, and the version (with "(dev)" for a build
   from a working copy). A read-only machine says "View only", and a machine whose discovery is
   held says "Discovery held", in the version's place; one that is both says "Discovery held". It
-  says so while the hold stands, whether or not its banner was dismissed (#788). The host's reason
+  says so only once a hold has lasted two minutes, counted for each hold from when the client
+  first saw it: a shorter one (a routine start or end of discovery) changes nothing on the row,
+  one that clears takes the words away at once, and one that comes back counts from its own
+  start (#1064). The host's reason
   is never on the row: it is the line's tooltip and its accessible description, both reasons
   where there are two. No device id on the row.
 - **Inside the row, under its two lines, in its text column:** the machine's updates (what its
@@ -2024,6 +2033,13 @@ Collaboration (§6.7) keeps its own section, after Accounts, whose Devices it fo
 **Not built yet (#384 slice 5).** Today there is no guided setup: a machine is set up from
 Settings' page (§6.9), each agent from its row.
 
+**Interim (slice 1):** until the stepper lands, Settings > Agents shows a plain **Get started** list
+above the agent rows (§6.9). It reads the same readiness as the rows, names the one next step, and
+adds no host operation. "Sign in to the CLI itself" is always **Yours to check**, because the host
+cannot verify it yet (#691). The list hides once every step is Done, Yours to check or Optional. Each
+step is read to a screen reader with its state and position first, for example "Next, step 3 of 6,
+Connect its hooks". The stepper below replaces it.
+
 Settings with a guide. Six steps, in a stepper that **replaces Settings' own pane** while setup
 runs; the app rail stays, with Settings selected, so Sessions and Machines are one click away
 and setup never traps the person (decision 4). The steps, in order, with their boards
@@ -2162,9 +2178,9 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 
 **The machine notice** (`hello.machine.restore`, announced through `hello.changed`, #646)
 
-- **Where and how:** one banner per machine, in the same form as the Discovery held banner
-  (#293, #786): an informational InfoBar over every page, in the window's banner area (§7),
-  below that machine's Discovery held banner (Platforms, below, gives each client's place). It is
+- **Where and how:** one banner per machine: an informational InfoBar over every page, in the
+  window's banner area (§7), after the app banners (Platforms, below, gives each client's
+  place). It is
   closable.
 - **Content:** a title and the lines below, with no line limit: every failure and its reason is
   shown. A line whose list is empty is left out. The banner grows to fit, but the banner area as
@@ -2302,12 +2318,11 @@ arrives, as a `question`.
 
 **Platforms**
 
-- **Windows app:** InfoBar (Informational) in the window's banner area over every page, below
-  that machine's Discovery held InfoBar (§7, Windows: Banners); Continue a standard secondary
+- **Windows app:** InfoBar (Informational) in the window's banner area over every page, after
+  the app banners (§7, Windows: Banners); Continue a standard secondary
   Button; the toast through the app's ordinary notification path (§7).
 - **PWA:** the same notice as one of §7's app banners, at the top of the content above the page,
-  over every page, after the app banners §7 lists. The PWA has no Discovery held banner (it
-  says "Discovery held" on the machine's row, §6.6), so there is none to sit below. The restore
+  over every page, after the app banners §7 lists. The restore
   notice alone is an exception to §7's "no icon and no dismiss" app banners; every other PWA
   banner keeps §7's rule. The push through `sw.js`, kind `restored`.
 - **Apple (#260, owner welshofer):** note only. The same fields; the native form is that track's
@@ -2763,21 +2778,28 @@ they are un-parked.
   · 3 need you"). A question's toast follows the rules above: an approval's toast has
   Open only. Every toast is silent (#754): none plays Windows' default sound, and any sound
   comes back only as an owner-approved spec here first.
-- **Banners** sit over every page, `InfoBar`s in this order (#293):
+- **Banners** sit over every page, `InfoBar`s in this order (#293, #1064):
   - What stops the app from its job: the host not running, refusing the app, connecting, or
     view only. Warning, with no close button: it goes once that is put right. On waking from
     sleep or changing network, "connecting" is not raised for it (#950): during §6.1's 3-second
     grace nothing shows, and after it, if the link is still down, the connection strip replaces
     the list header row's content at the same height (§6.1, rules 3 and 4). A banner already
     showing when the app comes back stays put.
-  - "Discovery held: …" ([v1-sessions.md](../protocol/v1-sessions.md#discovery-held)), one per
-    held machine, its name first when there is more than one. Informational, with the
-    `InfoBar`'s close button, named "Dismiss Discovery held on *machine*" (§9.1 A1) and reached
-    by Tab. It hides that banner only, and only how it is shown: the host still holds, and is
-    told nothing. It stays hidden while that machine's hold has the same reason, and comes back
-    when the reason changes, when the hold clears and comes back, or when the app restarts;
-    dismissals are never saved. Focus goes on to what Tab reaches next: the next banner's close
-    button, or the page (§9.1 A4). Nothing is announced.
+  - **There is no "Discovery held" banner** (#1064). A hold is shown on the machine's row once it
+    has lasted two minutes (§6.6), and a resume it holds back says so in the reply line (§6.7).
+
+**The banner rule, in the PWA and the Windows app (#1064):** a banner is for a state that lasts.
+- **Grace:** a state that calls for a banner shows it only once it has stood for 3 seconds
+  (the same grace as §6.1's); one that ends sooner is never shown.
+- **Minimum:** once shown, a banner stays at least 10 seconds, even if its state ends sooner,
+  so it never flashes. If the state returns inside that time the banner simply stays.
+- **Motion:** a banner opens and closes by animating its height with the `toast` motion
+  (§10); under reduced motion it appears and goes at once. Toasts stay overlays and never
+  move the page.
+- **Which:** this governs the banners a state raises (the PWA's "can't update" and "this
+  device was replaced"; the Windows app's host-not-running, refusing, connecting and view-only
+  banner). A banner a person can close, or that carries an action the person asked for (an
+  update, a restore notice, a sign-in), is not held back by it.
 
 **macOS (SwiftUI, #260):**
 - **Sidebar:** a translucent source list (a Needs You · N filter item, Pinned, Sessions,

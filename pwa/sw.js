@@ -94,6 +94,9 @@ const network = (request) => fetch(request.url, { cache: 'no-cache', credentials
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin || !url.href.startsWith(self.registration.scope) || url.pathname.includes('/v1/')) { return; }
+  // The app is served at its origin's root (#393), where the spikes (/s2/, /s4/) and the old
+  // /app/ redirect page are also in scope: a navigation to any of those is theirs, not the app's.
+  if (e.request.mode === 'navigate' && url.pathname !== new URL(self.registration.scope).pathname) { return; }
   e.respondWith((async () => {
     const own = await caches.open(CACHE);
     // A navigation is the app's page, whatever its query says (?demo=1, ?host=…).
@@ -127,7 +130,9 @@ self.addEventListener('fetch', (e) => {
 // notification, even one that cannot be read: iOS revokes notifications from an app whose
 // pushes show nothing.
 // signIn (#800): a machine's sessions need sign-in; it alerts, as a question does.
-const KINDS = ['question', 'finished', 'resolved', 'signIn'];
+// group (#913): one notice for several questions on a machine, tagged <machine>:~needsyou and
+// withdrawn by a resolved under that tag; it alerts unless the host says silent.
+const KINDS = ['question', 'finished', 'resolved', 'signIn', 'group'];
 const CLASSES = ['needsYou', 'done', 'fyi'];
 const WITHDRAWN_TAG = 'agent-bridge-withdrawn';
 
@@ -172,6 +177,10 @@ function notice(message) {
     lang: text(n.lang) ?? 'en',
     data: { url: inApp(text(n.navigate)), kind, machine: text(d.machine), session: text(d.session), question: text(d.question) },
   };
+  // How many questions a group stands for, and a question's one reminder (#913): kept for the page.
+  if (cls) { options.data.class = cls; }
+  if (Number.isInteger(d.sessions) && d.sessions > 0) { options.data.sessions = d.sessions; }
+  if (d.reminder === true) { options.data.reminder = true; }
   if (tag) {
     // Every notice about a session replaces the one before it, never beside it. A newer question
     // alerts again; a finished turn (without a class, as before) too; a silent one changes quietly.
@@ -215,7 +224,9 @@ self.addEventListener('notificationclick', (e) => {
   const url = inApp(e.notification.data?.url);
   e.waitUntil((async () => {
     const open = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const client = open.find((c) => c.url.startsWith(self.registration.scope));
+    // The app's own page, not one of the spikes served under the same scope (#393).
+    const appPath = new URL(self.registration.scope).pathname;
+    const client = open.find((c) => c.url.startsWith(self.registration.scope) && new URL(c.url).pathname === appPath);
     if (client) {
       client.postMessage({ type: 'agent-bridge.open', url });
       return client.focus();

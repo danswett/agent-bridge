@@ -96,17 +96,9 @@ public sealed class MarkdownView : StackPanel
     }
 
     // Where Copy puts a block's text. The self-test swaps in its own, so a run never takes the
-    // clipboard from the person at the machine.
-    internal static Func<string, bool> PutText = text =>
-    {
-        var data = new DataPackage();
-        data.SetText(text);
-        Clipboard.SetContent(data);
-        // Kept after the app exits: a command copied, then the app closed, still pastes. A flush
-        // refused leaves it on the clipboard while the app runs, so the copy still counts.
-        try { Clipboard.Flush(); } catch (System.Runtime.InteropServices.COMException) { }
-        return true;
-    };
+    // clipboard from the person at the machine, except the one check of the real thing
+    // (SelfTest.Code.cs), which puts back what was there.
+    internal static Func<string, bool> PutText = ClipboardText.Put;
 
     void Render()
     {

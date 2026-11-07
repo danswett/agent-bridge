@@ -348,8 +348,12 @@ public sealed class HostManager
     // host is started again (by Quit, if quitting) and the error rethrown. One at a time: Settings
     // and the automatic updates may both try, and the second is refused (UpdateUnderWayException)
     // before its begin (what the new version announces) is recorded over the first's.
-    public async Task StopAndApplyAsync(Action begin, Action apply)
+    // preflight: names what already keeps the update from replacing the installation, or null; asked
+    // before anything is recorded or stopped, so an update that cannot finish costs no host stop
+    // (#1092: a service holding a file made a retry loop that dropped the relay every 3 minutes).
+    public async Task StopAndApplyAsync(Action begin, Action apply, Func<string?>? preflight = null)
     {
+        if (preflight is not null && await Task.Run(preflight) is { } blockers) { throw new UpdateBlockedException(blockers); }
         Task stop;
         lock (updating)
         {
