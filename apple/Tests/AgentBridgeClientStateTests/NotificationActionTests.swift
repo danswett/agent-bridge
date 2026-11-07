@@ -31,7 +31,7 @@ private func actionRequest(_ notice: BridgeSessionNotice, text: String? = nil) t
 
 @Test func notificationChoicesRequirePreviewsAndRejectFullFormsOtherAndDisabledApprovals() throws {
     #expect(try actionNotice(previews: false).actions.isEmpty)
-    #expect(try actionNotice(capabilities: ["sessions.answer"]).actions.isEmpty)
+    #expect(try actionNotice(capabilities: ["sessions.read", "sessions.approve"]).actions.isEmpty)
     #expect(try actionNotice(actionSession(allowOther: true)).actions.isEmpty)
     #expect(try actionNotice(actionSession(extraField: true)).actions.isEmpty)
     #expect(try actionNotice(actionSession(message: String(repeating: "long ", count: 100))).actions.isEmpty)
@@ -74,7 +74,7 @@ private func actionRequest(_ notice: BridgeSessionNotice, text: String? = nil) t
     }
     #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "other-account", capabilities: actionCaps, isLive: true) }
     #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "account-one", capabilities: actionCaps, isLive: false) }
-    #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "account-one", capabilities: ["sessions.answer"], isLive: true) }
+    #expect(throws: BridgeOperationError.self) { try BridgeNotificationActions.operation(request, current: current, scope: "account-one",     capabilities: ["sessions.read", "sessions.approve"], isLive: true) }
 }
 
 @Test func notificationRepliesRequireTheSameFinishedTurnAndNonemptyText() throws {
