@@ -13,7 +13,7 @@ on:
 env:
   # The PWAs' relay. The pages are served from here, not by the relay, so a relay operator
   # cannot change the code that holds the keys.
-  S4_RELAY: https://relay.bad-duck.com
+  S4_RELAY: https://relay.slipgates.com
   # Production's blob store (infra/regions/westus2.bicepparam, production.blobStorageName): the
   # app uploads large attachments straight to it, so its CSP names it.
   BLOB_ORIGIN: https://abblobprodwus2.blob.core.windows.net
