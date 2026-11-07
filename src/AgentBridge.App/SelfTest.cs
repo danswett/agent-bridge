@@ -734,7 +734,9 @@ static partial class SelfTest
         }
 
         window.ShowPage("settings");
-        var button = ById<Button>(window.SettingsPage, "SendFeedback");
+        // Settings was collapsed until now: its controls come only with the next layout pass.
+        Button? button = null;
+        await Until(() => (button = ById<Button>(window.SettingsPage, "SendFeedback")) is not null, TimeSpan.FromSeconds(10));
         check(button is { IsEnabled: true, Content: "Send feedback" }, "offers Send feedback in Settings");
         if (button is not null)
         {
