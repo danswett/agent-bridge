@@ -2152,6 +2152,121 @@ and setup never traps the person (decision 4). The steps, in order, with their b
   Install CLI's ring while an install runs, and both are still under reduced motion. There is
   no progress bar and no percentage.
 
+### 6.11 Settings › Agents: one readiness state per agent (#783)
+
+Decided by the owner on 2026-11-04 (D1–D7, each option A). This builds on #705, which adds
+per-row names and one verb per state. It refines how Settings (§6.9, #384) draws the agents on
+this machine and the host. The check rows of Readiness (§6.8, #384) are unchanged. Until #384's
+sections land, this section applies to the Windows app's current Settings page.
+
+Today each agent is about eight lines of equal weight with no mark, and every card carries Set
+up / Repair and Remove connection. You can't tell whether anything is needed. Now each agent has
+**one state, one mark, one headline and at most one verb**, and everything else is in Details.
+
+**The roll-up state** (D1, D2). Each installed agent's card shows exactly one of these:
+
+| State | Mark (§2.1) | Headline | Verb |
+|---|---|---|---|
+| Ready | `done` in `ready` | "Ready · last hook 3:01 PM" (or "· test session passed 3:01 PM") | None |
+| Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Run test session** (#716). Until it ships: no button, and a hint. Copilot CLI and Claude Code: "Start a session in it to confirm". Agency, whose hooks can't confirm it: "Agency can't be checked yet" |
+| Not set up | `needs` | "Not set up" | **Set up** |
+| Needs repair | `failed`, Danger | "Setup didn't finish" | **Repair hooks** |
+| Managed elsewhere | None; neutral secondary text, no status colour | "Read-only · *why*" ("another bridge profile owns its hooks", "this machine's bridge is older" or "set in this bridge's settings") | None |
+| Couldn't be checked | None; neutral secondary text, no status colour | "Hook ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or "Hook intake couldn't be checked · *why*" | None |
+| Can't check | None; neutral secondary text, no status colour | "Can't check · this machine's bridge is older" | None |
+| Setting up (while it runs) | `working`, Active | "Setting up…" | The pressed verb (Set up or Repair hooks) stays, busy (A4) |
+| Not installed | None | One quiet line in text3: "*Agent* · not installed" (D7) | **Install CLI** where the host can install it, as a subtle button on that line; otherwise "*Agent* · not installed · install it on this machine" and none. Installing, Cancel and "Install failed · *why*" follow [app-windows.md](../app-windows.md) |
+
+- **Ready needs evidence** (D2), the same rule as §6.8's Working. An agent is Ready when either:
+  - a hook from that agent was handled by the host's current run after the agent's last Set up
+    or Repair; or
+  - a test session passed (#716).
+
+  Agency shares Copilot CLI's hooks, so its hooks prove nothing about Agency. Agency is Ready
+  only from a passed test session.
+- **The other states also need evidence.** A bridge setup record, with this profile's hook
+  intake on and nothing heard yet, is Not tested yet, never Needs repair, so a healthy machine
+  never shows Repair on its rows. No setup record, or intake off for this profile, is Not set
+  up, with Set up, which turns intake on (#705). Four states come first, in this order,
+  whatever the record and intake say:
+  - hooks the host holds back (`blocked`) are Managed elsewhere;
+  - hooks the host reports `failed` with `hookSetup: unknown` are Couldn't be checked;
+  - `hookSetup: unknown` beside any other hooks comes only from an older host, and is Can't
+    check;
+  - an incomplete setup (`hookSetup: incomplete`, registration failed after the record was
+    written) is Needs repair, with Repair hooks.
+
+  Repair is offered only for `incomplete`. The host has no signal for hooks changed outside
+  Slipgates, so no card claims it. The three neutral states offer no Set up, Repair or Remove,
+  and a blocked row hides Install CLI.
+- **Sign-in and trust** are never shown as checked until the host can observe them. They stay
+  neutral rows in Details and don't affect the roll-up.
+
+**The `ready` colour** (D1; partly amends #384 decision 1, "No success colour"). There is one
+green role, `ready`:
+- dark #3FB950, with words in #56D364;
+- light #1A7F37;
+- WindowText in high contrast.
+
+It colours only the roll-up mark of each agent and of the host (Running). It is never used on
+a check row, a count, a badge or a notification. It is always beside its word ("Ready",
+"Running"), never colour alone. Check rows in Details keep §6.8's neutral Working. The role
+joins `tokens.json` with the implementation, measured like the other roles (§3).
+
+**The card.**
+- The first line is the mark, the agent's name and the headline, and the verb on the right if
+  there is one.
+- **Details** (§5.3; D4) is collapsed when the agent is Ready and open otherwise. It holds:
+  - the executable's path and version (the version shown once);
+  - the agent's home;
+  - the neutral check rows (hooks, sign-in, trust, last hook);
+  - **Run test session**, when Ready (as a secondary button);
+  - at its foot, **Remove bridge integration…** (D5), only when the host reports a setup to
+    remove (`hookSetup` `completed` or `incomplete`). It is hidden on Not set up and on the
+    neutral states, since the host refuses a removal without a setup.
+- **Remove bridge integration…** is a subtle button in Danger's text colour. It asks for
+  confirmation, naming the agent and saying what stays (the CLI, its sign-in and its sessions).
+  Cancel is the default. "Remove connection" is no longer on the card.
+- No verb is drawn disabled: a verb that doesn't apply is hidden. The one exception is A4's
+  busy verb: while its request runs, the pressed verb stays in place, focusable, with its
+  ring, says it's busy, and ignores presses.
+- **When the outcome lands** (here and on the host card below), the busy verb gives way to the
+  new state's verb. If focus was on it, focus moves to that verb, or to the card's headline
+  when the new state has none (Ready and the neutral states). If focus was elsewhere, it stays
+  there. Stop… returns focus from its confirmation to Stop…, which is then the busy verb.
+
+**The host** (D6) is a card spanning the full width above the agents:
+
+| State | Mark | Verbs |
+|---|---|---|
+| Running | `done` in `ready`, "Running · since 2:58 PM" | **Restart**, **Stop…** |
+| Stopped | `idle`, Neutral, "Stopped" | **Start** |
+| Starting or stopping | `working`, Active | The pressed verb (Start, Stop… or Restart) stays, busy (A4); the others are hidden |
+
+- **Stop…** asks for confirmation (sessions on this machine stop reporting). Cancel is the default.
+- The process id, the version and the profile move into the host card's Details.
+
+**Reflow** (D3). The page fills its window, and isn't a fixed column:
+
+| Window width | Layout |
+|---|---|
+| ≥ 1280 | Settings' section pane (240) and the page: the host card spanning the full width, then agent cards in a grid of up to three columns, each at least 340 wide (three at 2000, two at 1280) |
+| 760–1279 | Section pane (208) and the page: the grid falls to two columns, then one |
+| < 760 | The sections as a pivot at the top; one column |
+
+- The grid gap is 16 (§5.1).
+- Prose inside a card keeps to about 75 characters a line.
+- Cards in a row share a height only up to their first line; an open Details grows its own card.
+
+**Accessibility** (§9.1).
+- Each card is a group named "*Agent*, *state*, *headline*" (for example "Copilot CLI, Ready, last
+  hook 3:01 PM").
+- Each button names its agent ("Set up Claude Code", "Run test session, Agency", "Remove bridge
+  integration, Codex").
+- Details is a button with `aria-expanded` (UIA ExpandCollapse).
+- A state change is a polite per-row announcement ("Claude Code, Ready"), never an alert.
+- Every confirmation's default is Cancel.
+
 ### 6.12 Restored sessions (#780)
 
 **Not built yet:** planned for #780 Host B and its client slices; the field names here are the
