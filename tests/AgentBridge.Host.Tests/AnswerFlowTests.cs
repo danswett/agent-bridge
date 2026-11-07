@@ -1762,6 +1762,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Empty(injector.Attempts);
         Assert.Contains("check=bar@", (await AttemptLineAsync()));
     }
+
+    [Theory]
     // The question says "Now here"; the screen shows a form that says "Nowhere" (or
     // "enteraccept") in one place, in a row of its own, every other row the same. Read with
     // their spaces left out, the two read alike, and the keys went to a form that is not this
