@@ -128,6 +128,12 @@ public sealed record AppPreferences
     // The installed app's first run turned on starting at sign-in (the host's logon task and
     // the app's Run entry); after that they are the person's to turn off and stay off.
     public bool SetUp { get; init; }
+    // Set only by a first install (no settings file yet), cleared when Settings has opened on Get
+    // started (#384). Never set for an upgrader, whose file already exists.
+    public bool GuidePending { get; init; }
+
+    // A missing file is a first run. An unreadable one is not: it belongs to someone who has used the app.
+    public static bool IsFirstRun(string path) => !File.Exists(path);
     // Not now on the card for an agent installed after the bridge (#231): the version each agent
     // was dismissed at, by agent id. A different version is a new offer; the row's own Set up stays.
     public IReadOnlyDictionary<string, string>? AgentOffersDismissed { get; init; }

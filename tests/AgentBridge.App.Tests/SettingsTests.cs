@@ -1082,6 +1082,72 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Contains("Set up on Claude Code", hooks.Detail);
     }
 
+    [Fact]
+    public async Task A_first_install_opens_Get_started_once_when_no_agent_is_set_up()
+    {
+        prefs = prefs with { GuidePending = true };
+        var wanted = 0;
+        var first = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        first.GuideWanted += () => Interlocked.Increment(ref wanted);
+
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+        await Wait.UntilAsync(() => wanted == 1, "Get started opened");
+        // Taken: later reports, and a restart's new page, do not pull the person back.
+        await HostNowSays(NeverSetUp("claude", "Claude Code", version: "1.2.4"));
+        var restarted = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        var again = 0;
+        restarted.GuideWanted += () => again++;
+        restarted.Refresh();
+
+        Assert.Equal(1, wanted);
+        Assert.Equal(0, again);
+        Assert.False(prefs.GuidePending);
+        first.Detach();
+        restarted.Detach();
+    }
+
+    [Fact]
+    public async Task An_upgrader_a_background_start_or_a_set_up_agent_never_opens_Get_started()
+    {
+        var wanted = 0;
+        // An upgrader: no first-run mark, so even a window that asks is not pulled to Settings.
+        var upgrader = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        upgrader.GuideWanted += () => wanted++;
+        await WithAgents([NeverSetUp("claude", "Claude Code")]);
+        Assert.Equal(0, wanted);
+        upgrader.Detach();
+
+        // A start at sign-in does not ask, and leaves the mark for the launch that shows the window.
+        prefs = prefs with { GuidePending = true };
+        var background = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        background.GuideWanted += () => wanted++;
+        background.Refresh();
+        Assert.Equal(0, wanted);
+        Assert.True(prefs.GuidePending);
+
+        // Agents already set up: nothing to guide.
+        await HostNowSays(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record") with { Version = "1.2.9" });
+        var asked = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default") { OpenGuideAtFirstLaunch = true };
+        asked.GuideWanted += () => wanted++;
+        asked.Refresh();
+        await Wait.UntilAsync(() => asked.SetupSteps.Single(s => s.Id == "hooks").Mark == "Done", "hooks connected");
+
+        Assert.Equal(0, wanted);
+        background.Detach();
+        asked.Detach();
+    }
+
+    [Fact]
+    public void Only_a_missing_settings_file_is_a_first_run()
+    {
+        var file = Path.Combine(app, "first-run-settings.json");
+        Assert.True(AppPreferences.IsFirstRun(file));
+
+        File.WriteAllText(file, "{ not json");
+        Assert.False(AppPreferences.IsFirstRun(file));
+        Assert.False(AppPreferences.Load(file).GuidePending);
+    }
+
     [Theory]
     [InlineData("set up and not tested yet")]
     [InlineData("setup that did not finish")]
