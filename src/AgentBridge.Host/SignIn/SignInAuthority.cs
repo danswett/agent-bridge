@@ -3,26 +3,42 @@ using AgentBridge.Transport;
 
 namespace AgentBridge.Host.SignIn;
 
-internal sealed record SignInGrant(string Device, string Binding, TrustedPeerLease? Lease = null, string? Account = null);
+internal sealed record SignInGrant(string Device, string Binding, PinnedDevice? Pinned = null, string? Account = null);
 internal interface ISignInAuthority
 {
     SignInGrant? Current(IProtocolChannel channel);
     bool StillCurrent(SignInGrant grant);
+    // Whatever may have ended a grant: the service looks again at once.
+    event Action? Changed;
 }
 
-internal sealed class PersonSignInAuthority(TrustedPeerStore store, Func<bool> readOnly,
-    Func<SecureChannel, bool> canRead, Func<SecureChannel, bool> canWrite) : ISignInAuthority
+// The person pin (#972 slice 2): a device #55's roster pins as a person's, found by the channel's
+// full key and relay account, never by the kind the channel says it is. A #402 trusted-peer pin
+// no longer opens sign-in: where that enforcement is on, its person role is still needed for the
+// channel to act at all (personRole), but it is never enough. The grant is bound to the roster's
+// generation and add, so a removal or a re-add ends a flow at the service's next look.
+internal sealed class RosterSignInAuthority(IPersonDeviceRoster roster, Func<bool> readOnly, Func<SecureChannel, bool> personRole) : ISignInAuthority
 {
     public SignInGrant? Current(IProtocolChannel channel)
     {
-        if (channel is not SecureChannel secure || !secure.IsOpen || secure.PeerKind is not ("app" or "pwa")
-            || readOnly() || !canRead(secure) || !canWrite(secure) || secure.PeerStatic is not { } key
-            || store.Find(key, secure.Relay.AccountId) is not { Role: TrustedPeerStore.Person } lease
-            || !store.Current(lease, secure.Relay.AccountId)) { return null; }
-        return new(lease.PublicKey, $"{secure.Relay.AccountId}:{lease.Epoch}:{lease.Generation}", lease, secure.Relay.AccountId);
+        if (channel is not SecureChannel { IsOpen: true } secure || readOnly() || !personRole(secure)
+            || secure.PeerStatic is not { } key || secure.Relay.AccountId is not { Length: > 0 } account) { return null; }
+        try
+        {
+            if (roster.State != RosterState.Ready || roster.Find(key, account) is not { } device
+                || device.Id != Wire.DeviceId(key) || !PersonDevices.Qualifies(device) || !roster.StillPinned(device)) { return null; }
+            return new(device.Id, $"{account}:{device.Generation}:{device.AddHash}", device, account);
+        }
+        catch (Exception) { return null; }
     }
 
-    public bool StillCurrent(SignInGrant grant) => !readOnly() && grant.Lease is { } lease && store.Current(lease, grant.Account);
+    public bool StillCurrent(SignInGrant grant)
+    {
+        try { return !readOnly() && grant.Pinned is { } device && roster.State == RosterState.Ready && roster.StillPinned(device); }
+        catch (Exception) { return false; }
+    }
+
+    public event Action? Changed { add => roster.Changed += value; remove => roster.Changed -= value; }
 }
 
 internal sealed record SignInFailure(string Id, DateTimeOffset Since);
@@ -32,7 +48,7 @@ internal interface ISignInContextResolver
 {
     // Synchronous host-owned structured metadata only, never agent prose or CLI output.
     // An account without a structured identity stays null; request text only selects an
-    // already-known identity. No production implementation is registered yet.
+    // already-known identity. Production: HostSignInContextResolver.
     SignInContext? Resolve(AgentKind agent, string? account);
     SignInTarget? ResolveTarget(AgentKind agent, string? account);
 }

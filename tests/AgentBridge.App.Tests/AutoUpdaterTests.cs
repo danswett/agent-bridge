@@ -43,7 +43,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     ObservedUpdater? shared;
     // The app's UI thread, when a test watches what the updater posts there.
     IUiDispatcher? updaterUi;
-
+    // What the installation's blockers are, when a test makes a file there held (the preflight).
+    Func<string?>? preflight;
     sealed class Updater : IUpdater
     {
         public int Checks;
@@ -138,7 +139,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Elevated = () => false,
             Time = held,
         };
-        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi);
+        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, () => preflight?.Invoke());
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length && connection.Sessions.Complete, "the connection");
     }
 
@@ -1230,19 +1231,175 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await Wait.UntilAsync(() => prefs.LastUpdate is { Outcome: UpdateOutcome.Failed }, "the install failing", TimeSpan.FromSeconds(10));
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Complete, "the host back");
 
-        for (var i = 0; i < 30; i++)
+        for (var i = 0; i < 9; i++)
         {
             time.Advance(TimeSpan.FromMinutes(1));
             await auto.TickAsync();
         }
         Assert.Single(host.Sent(HostOps.Stop));
-        Assert.StartsWith("installing it failed", auto.State.Waiting);
+        Assert.StartsWith("update failed, retrying at", auto.State.Waiting);
 
         updater.ApplyFails = null;
         time.Advance(AutoUpdater.InstallAgainAfter);
         await auto.TickAsync();
         time.Advance(AutoUpdater.SettleFor);
         await Wait.UntilAsync(() => updater.Applied, "the install tried again an hour on", TimeSpan.FromSeconds(10));
+    }
+
+    // The failure's own retry, 1092: a service holding a file in the installation made every retry
+    // stop the host, to fail after it. Found before the host is stopped, it costs no stop at all,
+    // and each failure waits twice as long, to the cap, until one succeeds.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_file_held_in_the_installation_is_found_before_the_host_stops_and_each_retry_waits_longer_up_to_the_cap()
+    {
+        InstallBetweenTurns();
+        preflight = () => "Connected User Experiences and Telemetry (DiagTrack, pid 4242)";
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await Wait.UntilAsync(() => prefs.UpdateFailures == 1, "the first failure", TimeSpan.FromSeconds(10));
+
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.False(updater.Applied);
+        Assert.Equal(UpdateBackoff.First, prefs.UpdateRetryAt!.Value - time.GetUtcNow());
+        Assert.Contains(log, l => l.Contains("DiagTrack, pid 4242", StringComparison.Ordinal) && l.Contains("update failed, retrying at", StringComparison.Ordinal));
+        Assert.StartsWith("update failed, retrying at", auto.State.Waiting);
+
+        var wait = UpdateBackoff.First;
+        for (var failures = 2; failures <= 5; failures++)
+        {
+            time.Advance(wait);
+            await auto.TickAsync();
+            time.Advance(AutoUpdater.SettleFor);
+            await Wait.UntilAsync(() => prefs.UpdateFailures == failures, $"failure {failures}", TimeSpan.FromSeconds(10));
+            wait = prefs.UpdateRetryAt!.Value - time.GetUtcNow();
+            // The failure may be stamped before or after the settle advance above, so the time left is
+            // the backoff less at most that settle.
+            Assert.InRange(wait, UpdateBackoff.After(failures) - AutoUpdater.SettleFor, UpdateBackoff.After(failures));
+        }
+        Assert.InRange(wait, UpdateBackoff.Cap - AutoUpdater.SettleFor, UpdateBackoff.Cap);
+        Assert.Empty(host.Sent(HostOps.Stop));
+
+        preflight = null;
+        time.Advance(wait);
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await Wait.UntilAsync(() => updater.Applied, "the install once nothing holds a file", TimeSpan.FromSeconds(10));
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    // Update.exe failing ends this process and starts the old app again: the next try is kept in the
+    // preferences, so the restarted app does not install again at its first gap.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_retry_time_kept_by_an_earlier_run_holds_the_install_after_the_app_restarts()
+    {
+        InstallBetweenTurns();
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        prefs = prefs with { UpdateFailures = 3, UpdateRetryAt = time.GetUtcNow() + TimeSpan.FromMinutes(40) };
+
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor);
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.StartsWith("update failed, retrying at", auto.State.Waiting);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_retry_time_far_in_the_future_is_capped_once_so_it_stays_put_and_then_elapses()
+    {
+        InstallBetweenTurns();
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        var start = time.GetUtcNow();
+        prefs = prefs with { UpdateFailures = 3, UpdateRetryAt = start + TimeSpan.FromDays(3) };
+
+        await auto.TickAsync();
+        var capped = prefs.UpdateRetryAt;
+        var waiting = auto.State.Waiting;
+        Assert.Equal(start + UpdateBackoff.Cap, capped);
+        Assert.StartsWith("update failed, retrying at", waiting);
+
+        time.Advance(TimeSpan.FromMinutes(5));
+        await auto.TickAsync();
+        Assert.Equal(capped, prefs.UpdateRetryAt);
+        Assert.Equal(waiting, auto.State.Waiting);
+        Assert.False(updater.Applied);
+
+        time.Advance(UpdateBackoff.Cap);
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await Wait.UntilAsync(() => updater.Applied, "the install once the capped time has passed", TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_newer_release_is_not_held_by_the_backoff_of_the_release_that_failed()
+    {
+        InstallBetweenTurns();
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        prefs = prefs with { UpdateFailures = 3, UpdateRetryAt = time.GetUtcNow() + TimeSpan.FromMinutes(40), UpdateFailedRelease = "0.1.5" };
+
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.SettleFor);
+        await Wait.UntilAsync(() => updater.Applied, "the newer release installing at its first gap", TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public void A_holder_whose_path_cannot_be_read_or_that_is_this_process_is_not_a_blocker()
+    {
+        const string root = @"C:\Users\u\AppData\Local\AgentBridge\";
+        Assert.False(InstallHolder.Blocks(10, 99, null, root));
+        Assert.False(InstallHolder.Blocks(99, 99, @"C:\Windows\System32\svchost.exe", root));
+        Assert.False(InstallHolder.Blocks(10, 99, root + @"current\agent-bridge-host.exe", root));
+        Assert.True(InstallHolder.Blocks(10, 99, @"C:\Windows\System32\svchost.exe", root));
+    }
+
+    [Fact]
+    public void A_retry_time_further_off_than_the_cap_is_saved_as_the_cap_from_now_and_another_release_starts_its_count_again()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var p = new AppPreferences { UpdateFailures = 4, UpdateRetryAt = now + TimeSpan.FromDays(3), UpdateFailedRelease = "0.2.0" };
+
+        var capped = UpdateBackoff.Capped(p, now);
+        Assert.Equal(now + UpdateBackoff.Cap, capped.UpdateRetryAt);
+        Assert.Same(capped, UpdateBackoff.Capped(capped, now + TimeSpan.FromMinutes(5)));
+        Assert.Equal(now + UpdateBackoff.Cap, UpdateBackoff.RetryAt(capped, now, "0.2.0"));
+        Assert.Null(UpdateBackoff.RetryAt(capped, now, "0.3.0"));
+
+        UpdateBackoff.Failed(p, now, "0.3.0", out var retryAt);
+        Assert.Equal(now + UpdateBackoff.First, retryAt);
+    }
+
+    [Fact]
+    public void An_update_that_did_not_take_is_counted_and_names_what_holds_the_installation_and_one_that_took_clears_the_count()
+    {
+        prefs = prefs with { UpdatedFrom = "0.1.0" };
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, () => "svchost.exe (DiagTrack, pid 4242)");
+
+        Assert.Equal(1, prefs.UpdateFailures);
+        Assert.Equal(time.GetUtcNow() + UpdateBackoff.First, prefs.UpdateRetryAt);
+        Assert.Contains(log, l => l.Contains("DiagTrack, pid 4242", StringComparison.Ordinal) && l.Contains("update failed, retrying at", StringComparison.Ordinal));
+
+        prefs = prefs with { UpdatedFrom = "0.1.0" };
+        updater.InstalledVersion = "0.2.0";
+        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time);
+
+        Assert.Null(prefs.UpdateFailures);
+        Assert.Null(prefs.UpdateRetryAt);
+    }
+
+    [Fact]
+    public void The_backoff_doubles_to_the_cap_and_stays_there()
+    {
+        Assert.Equal(
+            [TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(20), TimeSpan.FromMinutes(40), UpdateBackoff.Cap, UpdateBackoff.Cap],
+            new[] { 1, 2, 3, 4, 500 }.Select(UpdateBackoff.After));
     }
 
     // "Download updates automatically" off stops the tick before anything installs: the devices

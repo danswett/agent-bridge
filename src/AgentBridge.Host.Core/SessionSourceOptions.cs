@@ -64,6 +64,16 @@ public sealed class SessionSourceOptions
     // escaped anything in, EscapedApproval.Confirm or .Machine, said on each as EscapedText.Approve.
     public string EscapedApproval { get; init; } = AgentBridge.Protocol.EscapedApproval.Confirm;
 
+    // The agents a person's device may sign in again on this machine (#972): the host's
+    // permissions.phoneSignIn, for the agents it has a sign-in adapter for. Their signInNeeded
+    // attention says signIn phone. None by default, when nothing claims a phone sign-in.
+    public IReadOnlyCollection<AgentBridge.Protocol.AgentKind> PhoneSignIn { get; init; } = [];
+
+    // And whether any device can do it now (#972 slice 2): one the machine's person-device roster
+    // pins. With nobody pinned no attention says phone either, so no client offers a Sign in that
+    // every device would be refused. Nobody by default.
+    public Func<bool> PhoneSignInPinned { get; init; } = () => false;
+
     // On first sight only this much of the end of a transcript is parsed. The rest is
     // skimmed for counts and the first user message, never parsed as JSON wholesale:
     // a Copilot events.jsonl of 18 MB is ordinary and some reach hundreds.
@@ -76,6 +86,13 @@ public sealed class SessionSourceOptions
     // A single transcript line longer than this is skipped rather than buffered. Tool
     // results can be megabytes; nothing the host shows needs a line this long.
     public int MaxLineBytes { get; init; } = 32 * 1024 * 1024;
+
+    // Where the key that seals session.history's cursors is kept (docs/protocol/v1-history.md, The
+    // cursor), so a client's cursor outlives the host's restarts. Null: a key for this run only.
+    public string? HistoryKeyFile { get; init; }
+
+    // How hard one session.history request may look; tests make them small.
+    internal Conversation.HistoryBudgets HistoryBudgets { get; init; } = new();
 
     // The defaults for the current user, as each agent resolves them: COPILOT_HOME,
     // CLAUDE_CONFIG_DIR and CODEX_HOME when set, else the dot folder in the profile. The

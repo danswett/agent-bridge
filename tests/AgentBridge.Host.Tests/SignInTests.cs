@@ -615,11 +615,230 @@ public sealed class SignInTests
         Assert.DoesNotContain(AgentSignIn.Capability, hello.Capabilities);
         var result = await service.HandleAsync(phone, AgentSignIn.Start, h.Request());
         Assert.Equal("refused", Json(result!).GetProperty("outcome").GetString());
-        using var key = P256KeyPair.Generate();
-        var store = new TrustedPeerStore(Path.Combine(h.Fixture.Root, "trust"), key.Public, () => "account", h.Time);
-        var authority = new PersonSignInAuthority(store, () => false, _ => true, _ => true);
+        var authority = new RosterSignInAuthority(new NoPersonRoster(), () => false, _ => true);
         Assert.Null(authority.Current(phone));
         Assert.Equal(0, h.Factory.Starts);
+    }
+
+    // #972: the machine's own permissions.phoneSignIn, read as serve reads config.json, is the only
+    // switch; and an agent needs an adapter that can run here as well (Windows, Copilot's .exe found).
+    [Theory]
+    [InlineData("{}", true, false)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":false}}", true, false)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":\"true\"}}", true, false)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":true}}", false, false)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":true}}", true, true)]
+    public async Task Sign_in_is_offered_and_started_only_where_the_machine_turns_it_on_and_an_adapter_exists(string config, bool adapter, bool offered)
+    {
+        var (settings, _) = HostSettings.Parse(config, HostSettings.FileName);
+        await using var h = await Harness.CreateAsync(phoneSignIn: PhoneSignInSetup.Agents(settings, adapter));
+        await using var signIn = PhoneSignInSetup.Create(settings, adapter, h.States, h.Authority, h.Resolver, h.Factory, () => false, h.Time);
+        var service = new SessionService(h.Source, new MachineInfo("host", "Host", "windows", "1.0")) { SignIn = signIn, SignInEntrypointApproved = signIn is not null };
+        var phone = h.Phone();
+
+        var hello = (HelloResult)(await service.HandleAsync(phone, Ops.Hello, Json(new { })))!;
+        var result = await service.HandleAsync(phone, AgentSignIn.Start, h.Request());
+
+        Assert.Equal(offered, hello.Capabilities.Contains(AgentSignIn.Capability));
+        Assert.Equal(offered ? "started" : "refused", Json(result is ChannelReply reply ? reply.Result : result!).GetProperty("outcome").GetString());
+        Assert.Equal(offered ? SignInWhere.Phone : null, h.Source.Get(Id)!.Attention!.SignIn);
+        if (result is ChannelReply started) { await started.Then(phone); await h.Factory.Started.Task.WaitAsync(Patience); }
+        Assert.Equal(offered ? 1 : 0, h.Factory.Starts);
+    }
+
+    // #972 slice 2: a machine with the switch on and Copilot's adapter, but nobody the roster pins,
+    // says nothing a device could take for a Sign in; it says phone once someone is pinned.
+    [Fact]
+    public async Task With_nobody_pinned_no_attention_says_phone_and_once_someone_is_it_does()
+    {
+        await using var h = await Harness.CreateAsync(phoneSignIn: [AgentKind.Copilot]);
+        h.Pinned = false;
+        await h.Source.RefreshAsync();
+        Assert.Null(h.Source.Get(Id)!.Attention!.SignIn);
+
+        h.Pinned = true;
+        await h.Source.RefreshAsync();
+        Assert.Equal(SignInWhere.Phone, h.Source.Get(Id)!.Attention!.SignIn);
+    }
+
+    // Trust's condition 4: a pin that goes ends the flow when the authority says so, not at the next
+    // tick (here there is none: the sweep timer never fires).
+    [Fact]
+    public async Task A_pin_that_goes_ends_the_flow_as_soon_as_the_authority_says_it_changed()
+    {
+        await using var h = await Harness.CreateAsync(manualSweeps: true);
+        var phone = h.Phone();
+        await h.Start(phone).Then(phone);
+        await h.Factory.Started.Task.WaitAsync(Patience);
+        h.Factory.Process.OutputPipe.Put(Frame(h.Time));
+        await phone.Code.Task.WaitAsync(Patience);
+
+        h.Authority.Denial = "removed from the roster";
+        h.Authority.Change();
+
+        await h.Factory.Process.Disposing.Task.WaitAsync(Patience);
+        Assert.Equal(0, h.Service.CodesHeld);
+    }
+
+    sealed class Roster : IPersonDeviceRoster
+    {
+        public RosterState State { get; set; } = RosterState.Ready;
+        public List<PinnedDevice> Devices { get; } = [];
+        public bool Throws;
+        public PinnedDevice? Find(byte[] key, string account) => null;
+        public IReadOnlyList<PinnedDevice> Pinned(string account) => Throws ? throw new IOException("unreadable") : Devices;
+        public bool StillPinned(PinnedDevice device) => Devices.Contains(device);
+        public event Action? Changed { add { } remove { } }
+    }
+
+    static PinnedDevice Device(string name, string kind = "phone", string presence = "key", string id = "0123456789abcdef0123456789abcdef") =>
+        new(id, kind, "iOS", name, presence, "7", "add-hash");
+
+    // What the app's Settings and a device's Machines page list: only devices the roster pins as a
+    // person's with a presence-proven key, by name, kind and platform; nobody unless it is read.
+    [Theory]
+    [InlineData(RosterState.None, false, "none")]
+    [InlineData(RosterState.Unreadable, false, "unreadable")]
+    [InlineData(RosterState.Ready, true, "unreadable")]
+    [InlineData(RosterState.Ready, false, "ready")]
+    public void Who_can_sign_in_lists_only_pinned_person_devices_and_nobody_on_doubt(RosterState state, bool throws, string said)
+    {
+        var roster = new Roster { State = state, Throws = throws };
+        roster.Devices.AddRange([Device("iPhone"), Device("Work laptop", "app", "webauthn", "fedcba9876543210fedcba9876543210"),
+            Device("Unproven", "pwa", "none"), Device("Another host", "host")]);
+
+        var view = PersonDevices.View(roster, "account", "fedcba9876543210fedcba9876543210");
+
+        Assert.Equal(said, view.State);
+        if (state == RosterState.Ready && !throws)
+        {
+            Assert.Equal([new SignInDevice("iPhone", "phone", "iOS"), new SignInDevice("Work laptop", "app", "iOS", true)], view.Devices);
+            var json = Json(view).GetRawText();
+            foreach (var secret in new[] { "0123456789abcdef", "fedcba9876543210", "add-hash", "webauthn", "\"7\"" }) { Assert.DoesNotContain(secret, json); }
+        }
+        else { Assert.Empty(view.Devices); }
+        Assert.Empty(PersonDevices.View(roster, null, null).Devices);
+    }
+    const string SyntheticToken = "gho_SYNTHETICTOKEN000000000000000000000";
+    const string SyntheticLogin = "synthetic-login";
+
+    static string CliCode(string code = SyntheticCode, string uri = "https://github.com/login/device") =>
+        $"To authenticate, visit {uri} and enter code {code}\n";
+
+    // The production adapter's process, over pipes this test writes as Copilot 1.0.105's login would.
+    sealed class CliFactory(TimeProvider time) : IPrivateSignInProcessFactory
+    {
+        public Pipe Out { get; } = new();
+        public Pipe Err { get; } = new();
+        public TaskCompletionSource<int> Exit { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool Aborted;
+        public Task<IPrivateSignInProcess> StartAsync(SignInTarget target, Func<bool> authorize, CancellationToken ct)
+        {
+            Started.TrySetResult();
+            return Task.FromResult<IPrivateSignInProcess>(new CopilotLoginProcess(Out, Err, Exit.Task,
+                () => { Aborted = true; Out.End(); Err.End(); Exit.TrySetResult(1); }, () => ValueTask.CompletedTask, time));
+        }
+        public void Finish(int exit) { Out.End(); Err.End(); Exit.TrySetResult(exit); }
+    }
+
+    [Fact]
+    public async Task Copilot_login_output_reaches_only_the_requesting_device_and_only_as_signin_code()
+    {
+        var on = HostSettings.Parse("{\"permissions\":{\"phoneSignIn\":true}}", HostSettings.FileName).Settings;
+        await using var h = await Harness.CreateAsync(phoneSignIn: [AgentKind.Copilot]);
+        var cli = new CliFactory(h.Time);
+        await using var service = PhoneSignInSetup.Create(on, copilotAdapter: true, h.States, h.Authority, h.Resolver, cli, () => false, h.Time)!;
+        var phone = h.Phone();
+        var observer = h.Phone("observer");
+        await Assert.IsType<ChannelReply>(service.Start(phone, h.Request())).Then(phone);
+        await cli.Started.Task.WaitAsync(Patience);
+
+        cli.Out.Put(CliCode() + "Waiting for authorization...\n");
+        cli.Err.Put($"Failed to open browser. Please visit https://github.com/login/device and enter the code {SyntheticCode} manually.\nGH_TOKEN={SyntheticToken}\n");
+        var code = await phone.Code.Task.WaitAsync(Patience);
+        cli.Out.Put($"Signed in successfully as {SyntheticLogin} (GitHub.com).\n");
+        cli.Finish(0);
+        var done = await phone.Done.Task.WaitAsync(Patience);
+
+        Assert.Equal(["flow", "agent", "userCode", "verificationUri", "expiresAt"], code.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(SyntheticCode, code.GetProperty("userCode").GetString());
+        Assert.Equal("https://github.com/login/device", code.GetProperty("verificationUri").GetString());
+        Assert.Equal("signedIn", done.GetProperty("outcome").GetString());
+        Assert.Empty(observer.Events);
+        var everywhere = phone.Events.Where(e => e.Name != AgentSignIn.Code).Select(e => e.Value.GetRawText())
+            .Concat(h.Logs).Append(Json(h.Source.Get(Id)!).GetRawText()).Append(code.GetRawText()).ToList();
+        foreach (var secret in new[] { SyntheticToken, SyntheticLogin })
+        {
+            Assert.DoesNotContain(everywhere, text => text.Contains(secret, StringComparison.Ordinal));
+        }
+        Assert.DoesNotContain(everywhere.Take(everywhere.Count - 1), text => text.Contains(SyntheticCode, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("order")]
+    [InlineData("unknown")]
+    [InlineData("lowercase")]
+    [InlineData("near-url")]
+    [InlineData("ansi")]
+    [InlineData("trailing")]
+    [InlineData("exit")]
+    public async Task Copilot_login_output_the_adapter_does_not_know_fails_closed_without_echoing_it(string variant)
+    {
+        var time = new FakeTimeProvider();
+        var cli = new CliFactory(time);
+        var shown = new List<PrivateSignInCode>();
+        var running = new PrivateSignInRunner(cli, time).RunAsync(new("store", AgentKind.Copilot, null),
+            (c, _) => { shown.Add(c); return Task.FromResult(true); }, CancellationToken.None, () => true);
+        await cli.Started.Task.WaitAsync(Patience);
+        var success = $"Signed in successfully as {SyntheticLogin}.\n";
+        cli.Out.Put(variant switch
+        {
+            "order" => "Waiting for authorization...\n" + CliCode() + success,
+            "unknown" => "Paste your authentication token: " + SyntheticToken + "\n",
+            "lowercase" => CliCode("test-0001") + "Waiting for authorization...\n" + success,
+            "near-url" => CliCode(uri: "https://github.com/login/device?next=" + SyntheticToken) + "Waiting for authorization...\n" + success,
+            "ansi" => "\u001b[1m" + CliCode() + "Waiting for authorization...\n" + success,
+            "trailing" => CliCode() + "Waiting for authorization...\n" + success + success,
+            _ => CliCode() + "Waiting for authorization...\n" + success,
+        });
+        cli.Finish(variant == "exit" ? 1 : 0);
+
+        Assert.Equal(variant == "exit" ? SignInOutcome.Failed : SignInOutcome.Refused, await running.WaitAsync(Patience));
+        Assert.True(cli.Aborted);
+        Assert.Equal(variant is "trailing" or "exit" ? 1 : 0, shown.Count);
+    }
+
+    [Fact]
+    public async Task The_production_adapter_starts_copilots_own_login_with_debug_logging_off_and_never_through_a_shell()
+    {
+        using var fixture = new Fixture();
+        var home = Path.GetFullPath(fixture.CopilotHome);
+        var exe = Path.Combine(fixture.Root, OperatingSystem.IsWindows() ? "copilot.exe" : "copilot");
+        var started = new List<System.Diagnostics.ProcessStartInfo>();
+        IPrivateSignInProcessFactory Adapter(string path) => new CopilotSignInAdapter(() => path, fixture.CopilotHome, fixture.Time, info => { started.Add(info); return null; });
+        var target = new SignInTarget(home, AgentKind.Copilot, null);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Adapter(exe).StartAsync(target, () => false, CancellationToken.None));
+        Assert.Empty(started);
+        // The CLI's own debug override, inherited from wherever the host was started.
+        Environment.SetEnvironmentVariable("COPILOT_DEBUG_BROWSER", "[\"synthetic-browser\"]");
+        try { await Assert.ThrowsAsync<InvalidOperationException>(() => Adapter(exe).StartAsync(target, () => true, CancellationToken.None)); }
+        finally { Environment.SetEnvironmentVariable("COPILOT_DEBUG_BROWSER", null); }
+        var info = Assert.Single(started);        Assert.Equal(exe, info.FileName);
+        Assert.Equal(["login", "--device-code", "--host", "https://github.com", "--log-level", "none"], info.ArgumentList);
+        Assert.False(info.UseShellExecute);
+        Assert.True(info.RedirectStandardInput && info.RedirectStandardOutput && info.RedirectStandardError);
+        Assert.Equal(home, info.Environment["COPILOT_HOME"]);
+        Assert.DoesNotContain(info.Environment.Keys, k => k.StartsWith("COPILOT_DEBUG", StringComparison.OrdinalIgnoreCase));
+
+        // Refused before anything starts: another store, or a shim needing a shell.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Adapter(exe).StartAsync(target with { Store = fixture.Root }, () => true, CancellationToken.None));
+        if (OperatingSystem.IsWindows())
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Adapter(Path.Combine(fixture.Root, "copilot.cmd")).StartAsync(target, () => true, CancellationToken.None));
+        }
+        Assert.Single(started);
     }
 
     sealed class Harness : IAsyncDisposable
@@ -636,13 +855,15 @@ public sealed class SignInTests
         public Recovery Recovery { get; } = new();
         public AgentSignInService Service = null!;
         public bool ReadOnly;
-        public static async Task<Harness> CreateAsync(TimeSpan? limit = null, bool manualSweeps = false)
+        // Whether the roster pins anyone (SessionSourceOptions.PhoneSignInPinned).
+        public bool Pinned = true;
+        public static async Task<Harness> CreateAsync(TimeSpan? limit = null, bool manualSweeps = false, IReadOnlyCollection<AgentKind>? phoneSignIn = null)
         {
             var h = new Harness();
             h.Events = h.Fixture.CopilotSession(Id, 100);
             h.Fixture.Processes.Run(AgentKind.Copilot, 100);
             Fixture.Append(h.Events, AuthError(2));
-            h.Source = h.Fixture.Source(log: h.Logs.Add);
+            h.Source = h.Fixture.Source(log: h.Logs.Add, phoneSignIn: phoneSignIn, phoneSignInPinned: () => h.Pinned);
             await h.Source.RefreshAsync();
             Assert.Equal(AttentionKind.SignInNeeded, h.Source.Get(Id)!.Attention!.Kind);
             h.Resolver = new(h.Source);
@@ -664,6 +885,8 @@ public sealed class SignInTests
         public string Binding = "epoch:1";
         public SignInGrant? Current(IProtocolChannel channel) => Denial is null && channel is Phone p ? new(p.PeerId, Binding) : null;
         public bool StillCurrent(SignInGrant grant) => Denial is null && grant.Binding == Binding;
+        public event Action? Changed;
+        public void Change() => Changed?.Invoke();
     }
     sealed class StateSource(ISessionSource inner) : ISessionSource
     {

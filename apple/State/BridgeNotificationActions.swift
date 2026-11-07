@@ -30,22 +30,24 @@ public enum BridgeNotificationActions {
         if kind == .finished {
             return capabilities.contains("sessions.reply") ? [.init(id: "reply", title: "Reply", kind: .reply)] : []
         }
-        // Option labels and one-click approvals need the question visible. Keeping
-        // previews off never places private choices or a blind approval on the lock screen.
+        // Option labels need the question visible. Keeping previews off never places
+        // private choices on the lock screen.
         guard showPreviews, let raw = session.question, let question = BridgeQuestion(json: raw),
               question.readOnlyReason(capabilities: capabilities, sessionAgent: session.agent) == nil else { return [] }
-        if question.fields.isEmpty, !question.isApproval {
+        // #826: the OS truncates a notification's body, so an approval never decides from one.
+        // It opens its question card; neither Approve Once nor Deny is offered.
+        if question.isApproval {
+            return []
+        }
+        if question.fields.isEmpty {
             return [.init(id: "answer", title: "Answer", kind: .answerText)]
         }
         guard question.fields.count == 1, let field = question.fields.first, field.kind == .choice,
               !field.allowOther, (1 ... 3).contains(field.options.count),
               Set(field.options.map(\.value)).count == field.options.count,
               field.options.allSatisfy({ !$0.label.isEmpty && $0.label.count <= 50 && !$0.label.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }) else { return [] }
-        if question.isApproval {
-            guard field.name == "decision", Set(field.options.map(\.value)) == ["approve", "deny"] else { return [] }
-        }
         return field.displayOptions.enumerated().map { index, option in
-            .init(id: "choice.\(index)", title: question.isApproval ? (option.value == "approve" ? "Approve Once" : "Deny") : option.label,
+            .init(id: "choice.\(index)", title: option.label,
                   kind: .choice(field: field.name, value: option.value))
         }
     }
@@ -68,6 +70,8 @@ public enum BridgeNotificationActions {
         case .choice, .answerText:
             guard current.question == request.notice.questionSnapshot, let raw = current.question,
                   let question = BridgeQuestion(json: raw) else { throw BridgeOperationError("The question changed. Review it in the session.") }
+            // A notification delivered by an older build may still carry Approve Once or Deny.
+            guard !question.isApproval else { throw BridgeOperationError("Not sent. Review the approval in the session.") }
             let values: [String: JSONValue]
             let text: String?
             if case let .choice(field, value) = request.action.kind {

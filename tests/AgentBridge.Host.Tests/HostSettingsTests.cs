@@ -157,6 +157,35 @@ public sealed class HostSettingsTests : IDisposable
 
     [Theory]
     [InlineData("{}", false)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":false}}", false)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":true}}", true)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":\"true\"}}", false)]
+    [InlineData("{\"version\":2,\"permissions\":{\"phoneSignIn\":true}}", false)]
+    [InlineData("{", false)]
+    public void Sign_in_from_devices_is_off_unless_the_machine_sets_it_true(string text, bool on)
+    {
+        Assert.False(HostSettings.Default.PhoneSignIn);
+        Assert.Equal(on, With(text).Settings.PhoneSignIn);
+    }
+
+    [Fact]
+    public void The_apps_switch_writes_sign_in_from_devices_beside_the_other_permissions()
+    {
+        With("{ \"permissions\": { \"remoteApproval\": false }, \"push\": { \"enabled\": false } }");
+
+        HostConfigFile.Patch(folder, null, null, phoneSignIn: true);
+        var (on, problem) = HostSettings.Load(folder);
+        HostConfigFile.Patch(folder, null, null, phoneSignIn: false);
+
+        Assert.Null(problem);
+        Assert.True(on.PhoneSignIn);
+        Assert.False(on.RemoteApproval);
+        Assert.False(on.Push);
+        Assert.False(HostSettings.Load(folder).Settings.PhoneSignIn);
+    }
+
+    [Theory]
+    [InlineData("{}", false)]
     [InlineData("{\"permissions\":{\"trustedPeers\":false}}", false)]
     [InlineData("{\"permissions\":{\"trustedPeers\":true}}", true)]
     [InlineData("{\"permissions\":{\"trustedPeers\":\"false\"}}", true)]

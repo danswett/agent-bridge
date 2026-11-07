@@ -1,6 +1,8 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/AgentBridge.App.Core/AgentBridge.App.Core.csproj" />
+    <Project Path="src/AgentBridge.FeedbackEnvelope/AgentBridge.FeedbackEnvelope.csproj" />
+    <Project Path="src/AgentBridge.FeedbackInbox/AgentBridge.FeedbackInbox.csproj" />
     <Project Path="src/AgentBridge.HomeAssistant/AgentBridge.HomeAssistant.csproj" />
     <Project Path="src/AgentBridge.Hook/AgentBridge.Hook.csproj" />
     <Project Path="src/AgentBridge.Hooks/AgentBridge.Hooks.csproj" />
@@ -23,6 +25,7 @@
     <Project Path="tests/AgentBridge.App.Tests/AgentBridge.App.Tests.csproj" />
     <Project Path="tests/AgentBridge.Benchmarks/AgentBridge.Benchmarks.csproj" />
     <Project Path="tests/AgentBridge.ConsoleEcho/AgentBridge.ConsoleEcho.csproj" />
+    <Project Path="tests/AgentBridge.FeedbackInbox.Tests/AgentBridge.FeedbackInbox.Tests.csproj" />
     <Project Path="tests/AgentBridge.HomeAssistant.Tests/AgentBridge.HomeAssistant.Tests.csproj" />
     <Project Path="tests/AgentBridge.Hooks.Tests/AgentBridge.Hooks.Tests.csproj" />
     <Project Path="tests/AgentBridge.Host.Core.Tests/AgentBridge.Host.Core.Tests.csproj" />

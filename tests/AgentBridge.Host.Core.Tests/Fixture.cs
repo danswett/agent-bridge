@@ -32,7 +32,7 @@ internal sealed class Fixture : IDisposable
     // dated about T0 while the clock reads an hour later, so each working session would read as
     // stalled.
     public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null, IReadOnlyList<string>? probeRoots = null) => new()
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null, IReadOnlyList<string>? probeRoots = null, IReadOnlyCollection<AgentKind>? phoneSignIn = null, Func<bool>? phoneSignInPinned = null) => new()
     {
         CopilotHome = CopilotHome,
         ClaudeHome = ClaudeHome,
@@ -50,11 +50,13 @@ internal sealed class Fixture : IDisposable
         NotRespondingAfter = stalledAfter ?? TimeSpan.MaxValue,
         NotRespondingBusyAfter = stalledAfter is { } after ? after * 3 : TimeSpan.MaxValue,
         UsageProbeRoots = probeRoots ?? [],
+        PhoneSignIn = phoneSignIn ?? [],
+        PhoneSignInPinned = phoneSignInPinned ?? (() => false),
     };
 
     public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null, IReadOnlyList<string>? probeRoots = null) =>
-        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead, stateFile: stateFile, codexRoots: codexRoots, stalledAfter: stalledAfter, probeRoots: probeRoots), Processes, Time, drivers);
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null, IReadOnlyList<string>? probeRoots = null, IReadOnlyCollection<AgentKind>? phoneSignIn = null, Func<bool>? phoneSignInPinned = null) =>
+        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead, stateFile: stateFile, codexRoots: codexRoots, stalledAfter: stalledAfter, probeRoots: probeRoots, phoneSignIn: phoneSignIn, phoneSignInPinned: phoneSignInPinned), Processes, Time, drivers);
 
     // session-state/<id>/ with workspace.yaml and, optionally, inuse.<pid>.lock. Returns
     // the events.jsonl path (not created).
@@ -410,6 +412,47 @@ internal static class Copilot
 
     public static string ShellCompleted(string shellId, int s) =>
         Event("system.notification", new { content = $"<system_notification>\nShell command \"Fixture\" (shellId: {shellId}) has completed successfully.\n</system_notification>", kind = new { type = "shell_completed", shellId, exitCode = 0, description = "Fixture" } }, s);
+}
+
+// A permission prompt as Copilot CLI 1.0.105 draws it (its Dialog component): a round frame the
+// screen's width, the title, a rule, the body's parts a blank row apart (a box's lines one to a
+// row in a box of their own), the question, a blank row, then the options. Lines are drawn as
+// given: a test wraps one by passing its rows.
+internal static class CopilotScreen
+{
+    public static string[] ShellOptions => ["\u276F 1. Yes", "  2. No, and tell Copilot what to do differently (Esc to stop)"];
+
+    public static string[] PathOptions => ["  1. Yes", "\u276F 2. Yes, and remember these paths for this session", "  3. No (Esc)"];
+
+    public static string[] Shell(string title, params string[] command) =>
+        Dialog(title, [(true, command)], "Do you want to run this command?", ShellOptions);
+
+    public static string[] Path(params string[] paths) =>
+        Dialog("Allow path access", [(false, [$"This action may read the following {(paths.Length == 1 ? "path" : "paths")} outside the paths currently allowed for this session."]), (true, paths)], "Do you want to allow this?", PathOptions);
+
+    public static string[] Dialog(string title, (bool Boxed, string[] Lines)[] body, string question, string[] options, int width = 120)
+    {
+        var inner = width - 2;
+        string Row(string content) => "\u2502" + (" " + content).PadRight(inner) + "\u2502";
+        var box = inner - 2;
+        var rows = new List<string> { "\u256D" + new string('\u2500', inner) + "\u256E", Row(title), Row(new string('\u2500', inner - 2)) };
+        foreach (var (boxed, lines) in body)
+        {
+            if (boxed)
+            {
+                rows.Add(Row("\u256D" + new string('\u2500', box - 2) + "\u256E"));
+                rows.AddRange(lines.Select(l => Row(("\u2502 " + l).PadRight(box - 1) + "\u2502")));
+                rows.Add(Row("\u2570" + new string('\u2500', box - 2) + "\u256F"));
+            }
+            else { rows.Add(Row(lines[0])); }
+            rows.Add(Row(""));
+        }
+        rows.Add(Row(question));
+        rows.Add(Row(""));
+        rows.AddRange(options.Select(Row));
+        rows.Add("\u2570" + new string('\u2500', inner) + "\u256F");
+        return [.. rows];
+    }
 }
 
 internal static class Claude

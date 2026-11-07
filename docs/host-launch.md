@@ -290,7 +290,9 @@ looks for the app's Stop marker before the record starts, and exits as it always
 resumes an agent until it has looked again with its pipe open, so a Stop pressed while it starts leaves
 what died offered (#986). With
 `sessions.restoreOnStart` off ([host-config.md](host-config.md)), nothing is restored, what went is
-said and nothing is kept owed, and what earlier starts kept owed is let go. Off only because
+said and nothing is kept owed, and what earlier starts kept owed is let go. (**Proposed, not built,
+#948:** a person may restore what this run said from a client, `restore.run`, for as long as the
+notice offers it; [restore-run.md](protocol/restore-run.md#what-changes-in-the-record).) Off only because
 `config.json` could not be read, nothing is restored but what died is kept owed, as when it is on.
 
 **For other callers** (#800, sessions an expired sign-in stopped): `ISessionRestorer.RestoreAsync`

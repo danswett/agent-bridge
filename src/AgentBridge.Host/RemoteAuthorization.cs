@@ -12,12 +12,15 @@ public sealed class RemoteAuthorization : IDisposable
     static readonly HashSet<string> PersonOperations =
     [
         .. Reads, Ops.SessionsFocus, Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop,
+        // A session's earlier turns: a person's devices only, never the HA connector's service role,
+        // whose connector-read profile is the latest exchange (docs/protocol/v1-history.md).
+        HistoryProtocol.Op,
         Ops.AttachmentStart, Ops.AttachmentChunk, Ops.AttachmentDiscard,
         Ops.PushSubscribe, Ops.PushUnsubscribe, Ops.PushList,
         LaunchProtocol.Options, LaunchProtocol.Launch, TrustProtocol.Answer,
         UsageProtocol.Get, UsageProtocol.Subscribe,
         UpdateProtocol.Get, UpdateProtocol.Subscribe, UpdateProtocol.Check, UpdateProtocol.Install,
-        AgentSignIn.Start, AgentSignIn.Cancel,
+        AgentSignIn.Start, AgentSignIn.Cancel, AgentSignIn.Devices,
         ManageProtocol.Get, ManageProtocol.Subscribe, ManageProtocol.Restart, ManageProtocol.HooksRepair,
         ManageProtocol.Stop, ManageProtocol.ConfigGet, ManageProtocol.ConfigSet, ManageProtocol.HaTokenSet,
     ];

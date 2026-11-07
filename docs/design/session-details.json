@@ -1,0 +1,174 @@
+{
+  "about": "The rows of a session's Details, in order (docs/design/ui.md §6.2, #1087). The one definition: the PWA's test (pwa/test/unit/details-rows.test.mjs) and the Windows app's (tests/AgentBridge.App.Tests/DetailsTableTests.cs) each draw every scenario's session and check the rows they get against it. A row with no value is left out. A value is exact (value) or a pattern (match) where the viewer's clock and locale decide the words. away: the session's machine is offline since then, which both tests set as a client does. mono marks the rows set in the mono face. The End session action follows the last row.",
+  "rows": [
+    { "row": "Status" },
+    { "row": "In this state" },
+    { "row": "Message" },
+    { "row": "Not responding since" },
+    { "row": "Driven by" },
+    { "row": "Agent" },
+    { "row": "Model" },
+    { "row": "Machine" },
+    { "row": "Repository" },
+    { "row": "Branch", "mono": true },
+    { "row": "Folder", "mono": true },
+    { "row": "Started" },
+    { "row": "Updated" },
+    { "row": "Background" },
+    { "row": "Turns" },
+    { "row": "Compactions" },
+    { "row": "Process", "mono": true },
+    { "row": "ID", "mono": true }
+  ],
+  "now": "2026-11-06T12:20:00Z",
+  "locale": "en-US",
+  "scenarios": [
+    {
+      "name": "every row present",
+      "machine": "Studio PC",
+      "session": {
+        "id": "5d0c7e52-4a3b-4f8e-9c11-2b6a8e41d7f3",
+        "agent": "copilot",
+        "title": "Plan the release",
+        "cwd": "C:\\Users\\dan\\repos\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "main",
+        "model": "claude-opus-5.5",
+        "status": "working",
+        "statusSince": "2026-11-06T12:08:00Z",
+        "startedAt": "2026-11-06T12:05:00Z",
+        "updatedAt": "2026-11-06T12:18:00Z",
+        "processId": 4312,
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:demo",
+        "activity": { "turnCount": 12, "compactions": 3, "background": { "agents": 2, "shells": 1 } },
+        "attention": {
+          "kind": "notResponding",
+          "since": "2026-11-06T11:59:00Z",
+          "lastEventAt": "2026-11-06T11:59:00Z",
+          "message": "The agent has not answered for 21 minutes."
+        }
+      },
+      "rows": [
+        { "row": "Status", "value": "Not responding" },
+        { "row": "In this state", "value": "for 12m" },
+        { "row": "Message", "value": "The agent has not answered for 21 minutes." },
+        { "row": "Not responding since", "match": "^\\d{1,2}[:.]\\d{2}" },
+        { "row": "Driven by", "value": "homeassistant:demo" },
+        { "row": "Agent", "value": "Copilot" },
+        { "row": "Model", "value": "claude-opus-5.5" },
+        { "row": "Machine", "value": "Studio PC" },
+        { "row": "Repository", "value": "danswett/agent-bridge" },
+        { "row": "Branch", "value": "main" },
+        { "row": "Folder", "value": "C:\\Users\\dan\\repos\\agent-bridge" },
+        { "row": "Started", "match": "^\\d{1,2}[:.]\\d{2}[^,]*$" },
+        { "row": "Updated", "value": "2m ago" },
+        { "row": "Background", "value": "2 background agents \u00b7 1 background command" },
+        { "row": "Turns", "value": "12 turns" },
+        { "row": "Compactions", "value": "3 compactions" },
+        { "row": "Process", "value": "pid 4312" },
+        { "row": "ID", "value": "5d0c7e52-4a3b-4f8e-9c11-2b6a8e41d7f3" }
+      ]
+    },
+    {
+      "name": "only what the session sent",
+      "machine": null,
+      "session": {
+        "id": "7a1e0b3c-claude-sparse",
+        "agent": "claude",
+        "status": "idle",
+        "statusSince": "2026-11-06T11:20:00Z",
+        "updatedAt": "2026-11-06T12:18:00Z",
+        "activity": {}
+      },
+      "rows": [
+        { "row": "Status", "value": "Idle" },
+        { "row": "Agent", "value": "Claude" },
+        { "row": "Updated", "value": "2m ago" },
+        { "row": "ID", "value": "7a1e0b3c-claude-sparse" }
+      ]
+    },
+    {
+      "name": "one of each, started another day, no compactions counted at zero",
+      "machine": "Studio PC",
+      "session": {
+        "id": "c3f9a210-codex-singular",
+        "agent": "codex",
+        "cwd": "/home/dan/work/api",
+        "branch": "feature/details",
+        "model": "gpt-5.6-sol",
+        "status": "working",
+        "statusSince": "2026-11-06T12:19:30Z",
+        "startedAt": "2026-11-04T12:00:00Z",
+        "updatedAt": "2026-11-06T12:19:55Z",
+        "activity": { "turnCount": 1, "compactions": 0, "background": { "agents": 0, "shells": 1 } }
+      },
+      "rows": [
+        { "row": "Status", "value": "Working" },
+        { "row": "In this state", "value": "for 30s" },
+        { "row": "Agent", "value": "Codex" },
+        { "row": "Model", "value": "gpt-5.6-sol" },
+        { "row": "Machine", "value": "Studio PC" },
+        { "row": "Branch", "value": "feature/details" },
+        { "row": "Folder", "value": "/home/dan/work/api" },
+        { "row": "Started", "match": "^[A-Za-z]{3} \\d{1,2}, \\d{1,2}[:.]\\d{2}" },
+        { "row": "Updated", "value": "just now" },
+        { "row": "Background", "value": "1 background command" },
+        { "row": "Turns", "value": "1 turn" },
+        { "row": "ID", "value": "c3f9a210-codex-singular" }
+      ]
+    },
+    {
+      "name": "its machine away while it works: the machine's words for Status, and no In this state, Driven by or Not responding since",
+      "machine": "Studio PC",
+      "away": { "since": "2026-11-06T12:15:00Z" },
+      "session": {
+        "id": "e8b2d4f6-copilot-away",
+        "agent": "copilot",
+        "model": "claude-opus-5.5",
+        "status": "working",
+        "statusSince": "2026-11-06T12:08:00Z",
+        "updatedAt": "2026-11-06T12:14:00Z",
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:demo",
+        "activity": { "turnCount": 4 },
+        "attention": {
+          "kind": "notResponding",
+          "since": "2026-11-06T12:00:00Z",
+          "lastEventAt": "2026-11-06T12:00:00Z",
+          "message": "The agent has not answered for 20 minutes."
+        }
+      },
+      "rows": [
+        { "row": "Status", "value": "Offline \u00b7 last seen 5m ago" },
+        { "row": "Message", "value": "The agent has not answered for 20 minutes." },
+        { "row": "Agent", "value": "Copilot" },
+        { "row": "Model", "value": "claude-opus-5.5" },
+        { "row": "Machine", "value": "Studio PC" },
+        { "row": "Updated", "value": "6m ago" },
+        { "row": "Turns", "value": "4 turns" },
+        { "row": "ID", "value": "e8b2d4f6-copilot-away" }
+      ]
+    },
+    {
+      "name": "its machine away while it is idle: no In this state either",
+      "machine": "Studio PC",
+      "away": { "since": "2026-11-06T12:15:00Z" },
+      "session": {
+        "id": "0a9c3e71-claude-away-idle",
+        "agent": "claude",
+        "status": "idle",
+        "statusSince": "2026-11-06T11:00:00Z",
+        "updatedAt": "2026-11-06T12:14:00Z",
+        "activity": {}
+      },
+      "rows": [
+        { "row": "Status", "value": "Offline \u00b7 last seen 5m ago" },
+        { "row": "Agent", "value": "Claude" },
+        { "row": "Machine", "value": "Studio PC" },
+        { "row": "Updated", "value": "6m ago" },
+        { "row": "ID", "value": "0a9c3e71-claude-away-idle" }
+      ]
+    }
+  ]
+}

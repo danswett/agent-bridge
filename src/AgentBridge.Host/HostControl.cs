@@ -24,6 +24,9 @@ public sealed class HostControlOptions
     public Func<RelayAccount?> Credential { get; init; } = () => null;
     // The device id the app beside this host gives when it reads the relay account (#801).
     public Action<string?>? LocalAppDevice { get; init; }
+    // Who can sign an agent in here from their device (#972), given the app's device id: read-only,
+    // for the app's Settings. Null where nothing says.
+    public Func<string?, SignInDevices>? SignInDevices { get; init; }
     public Func<Uri?> Relay { get; init; } = () => null;
     public Func<string?> AgentHaBridge { get; init; } = () => null;
     // What Home Assistant's refusals of this machine say now (HaAuthGuard.Problem), or null.
@@ -84,6 +87,8 @@ public sealed class HostControl
     SignInStatus signIn = new(SignInState.Idle);
     CancellationTokenSource? signInStop;
     long version;
+    // The device id the app beside this host gave last (host.relay.account), for its own row.
+    string? appDevice;
 
     public HostControl(HostControlOptions options, Action<string>? log = null)
     {
@@ -156,6 +161,7 @@ public sealed class HostControl
             DevBox = options.DevBox(),
             Agents = options.Agents?.Snapshot,
             AgentInstallation = options.AgentInstall?.Snapshot,
+            SignInDevices = options.SignInDevices?.Invoke(Volatile.Read(ref appDevice)),
         };
     }
 
@@ -167,7 +173,7 @@ public sealed class HostControl
 
     public static HostSettingsView Settings(HostSettings settings, string? name) =>
         new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null, settings.DevBox.KeepAwake,
-            settings.EscapedApproval, settings.EscapedApprovalDevices);
+            settings.EscapedApproval, settings.EscapedApprovalDevices, settings.PhoneSignIn);
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)
@@ -206,7 +212,10 @@ public sealed class HostControl
             case HostOps.Settings:
                 return Settings(Read<SettingsRequest>(data) ?? new SettingsRequest());
             case HostOps.RelayAccount:
-                options.LocalAppDevice?.Invoke(Read<RelayAccountRequest>(data)?.Device);
+                var device = Read<RelayAccountRequest>(data)?.Device;
+                options.LocalAppDevice?.Invoke(device);
+                // Its own row in Who can sign Copilot in says so from then on.
+                if (device is not null && TransferProtocol.IsDeviceId(device) && Interlocked.Exchange(ref appDevice, device) != device) { Changed(); }
                 return RelayAccount();
             case HostOps.Stop:
                 log("stopping: asked by the app");
@@ -268,7 +277,7 @@ public sealed class HostControl
             if (problem is not null) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {problem}; fix config.json first"); }
             if (saved.DevBox.KeepAwake != want) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {path} would not read back as {(want ? "on" : "off")}; fix its devBox section first"); }
         } : null;
-        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check);
+        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check, request.PhoneSignIn);
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.
         if (request.RemoteFolderTrust is { } trust && options.ApplyRemoteFolderTrust is { } apply)
@@ -288,7 +297,7 @@ public sealed class HostControl
             keep(keepAwake);
             lock (gate) { running = running with { DevBoxKeepAwake = keepAwake }; }
         }
-        log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(devices is not null ? $"; devices approved for folder trust: {(devices.Count == 0 ? "none" : string.Join(", ", devices.Select(d => d[..8])))}" : "")}{(request.DevBoxKeepAwake is { } k ? $"; Dev Box keep-awake {(k ? "on" : "off")}" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
+        log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(devices is not null ? $"; devices approved for folder trust: {(devices.Count == 0 ? "none" : string.Join(", ", devices.Select(d => d[..8])))}" : "")}{(request.DevBoxKeepAwake is { } k ? $"; Dev Box keep-awake {(k ? "on" : "off")}" : "")}{(request.PhoneSignIn is { } p ? $"; sign-in from devices {(p ? "on" : "off")} at the next start" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
         var now = Configured();
         Changed();
         return new SettingsResult(now, now != Volatile.Read(ref running));

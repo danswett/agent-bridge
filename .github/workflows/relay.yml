@@ -280,6 +280,13 @@ jobs:
         run: |
           dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
             --relay "$RELAY_URL" --origin "$PWA_ORIGIN" --expect-version "$GITHUB_SHA" --expect-push --wait 180
+      # The same app answers on the new name (#540). Set the variable RELAY_SLIPGATES_LIVE to
+      # true once infra/deploy.ps1 has bound it; before that this step would fail the promotion.
+      - name: Smoke test on relay.slipgates.com
+        if: vars.RELAY_SLIPGATES_LIVE == 'true'
+        run: |
+          dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
+            --relay https://relay.slipgates.com --origin "$PWA_ORIGIN" --expect-version "$GITHUB_SHA" --expect-push --wait 60
 
   rollback:
     if: vars.RELAY_DEPLOY == 'true' && inputs.rollback_to != ''

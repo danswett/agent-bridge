@@ -147,6 +147,9 @@ public sealed partial class SessionView : UserControl
         promptShownOpen = Card?.PromptOpen == true;
         Motion.Settle(PromptRule);
         Motion.Turn(PromptChevron, "Disclosure", promptShownOpen, instant: true);
+        eventsShownOpen = Card?.Delegates.EventsOpen == true;
+        Motion.Settle(EventsRule);
+        Motion.Turn(EventsChevron, "Disclosure", eventsShownOpen, instant: true);
     }
 
     // Show prompt (§5.3, Disclosure): the chevron turns, and what opens settles 4 down into a space
@@ -210,14 +213,14 @@ public sealed partial class SessionView : UserControl
 
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)
     {
-        if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; old.Delegates.ReplyWanted -= OnReplyWanted; }
+        if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; old.Delegates.ReplyWanted -= OnReplyWanted; old.Delegates.PropertyChanged -= OnDelegatesChanged; }
         // The box the person is typing in now belongs to the next session: the last one is no longer
         // being edited, which would otherwise keep holding its list's order (MainViewModel.Rearrange).
         if (old is not null) { old.Editing = false; old.WantsFocus = false; }
         if (card is not null) { card.Editing = ReplyBox.FocusState != FocusState.Unfocused; }
         if (card is not null)
         {
-            if (attached) { card.PropertyChanged += OnCardChanged; card.Delegates.ReplyWanted += OnReplyWanted; }
+            if (attached) { card.PropertyChanged += OnCardChanged; card.Delegates.ReplyWanted += OnReplyWanted; card.Delegates.PropertyChanged += OnDelegatesChanged; }
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(this, $"Session:{card.Id}");
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(this, card.Title);
         }
@@ -243,7 +246,7 @@ public sealed partial class SessionView : UserControl
     {
         if (attached) { return; }
         attached = true;
-        if (Card is { } c) { c.PropertyChanged += OnCardChanged; c.Delegates.ReplyWanted += OnReplyWanted; }
+        if (Card is { } c) { c.PropertyChanged += OnCardChanged; c.Delegates.ReplyWanted += OnReplyWanted; c.Delegates.PropertyChanged += OnDelegatesChanged; }
         answers.Start();
         SyncQuestion();
         ReceiptMarkView.Hushed(Bindings.Update);
@@ -258,7 +261,7 @@ public sealed partial class SessionView : UserControl
     {
         if (!attached) { return; }
         attached = false;
-        if (Card is { } c) { c.PropertyChanged -= OnCardChanged; c.Delegates.ReplyWanted -= OnReplyWanted; }
+        if (Card is { } c) { c.PropertyChanged -= OnCardChanged; c.Delegates.ReplyWanted -= OnReplyWanted; c.Delegates.PropertyChanged -= OnDelegatesChanged; }
         // The question goes with the view: its guard's timer has nothing left to let go of.
         guardTimer?.Stop();
         answers.Stop();
@@ -456,7 +459,110 @@ public sealed partial class SessionView : UserControl
 
     void OnDelegateEvent(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { Tag: string id }) { layout?.OpenDelegate(id); }
+        if (sender is FrameworkElement { Tag: string id } && id.Length > 0) { layout?.OpenDelegate(id); }
+    }
+
+    // The delegate events' fold (ui.md §6.4, Runs fold): its lines are drawn under a rule from the
+    // icon's centre, as the PWA's are.
+    public static Thickness RuleMargin(bool folded) => folded ? new(7, 4, 0, 0) : new(0);
+    public static Thickness RulePadding(bool folded) => folded ? new(16, 0, 0, 0) : new(0);
+    public static Thickness RuleThickness(bool folded) => folded ? new(1, 0, 0, 0) : new(0);
+
+    // A start line's "· 19m" comes after the name's link, a piece of its own: it is drawn as near the
+    // name as "back" is to the "·" in "reported back · 19m" (a space), not a whole piece away.
+    public static Thickness AgeMargin(string? after) => after is ['·', ..] ? new(-2.5, 0, 0, 0) : new(0);
+
+    // The fold opened or closed (Disclosure, §5.3): the chevron turns, and the lines settle in 4
+    // down into a space opened at once; closing is at once but for the chevron turning back.
+    bool eventsShownOpen;
+    void DiscloseEvents()
+    {
+        if (Card is not { } c || c.Delegates.EventsOpen == eventsShownOpen) { return; }
+        eventsShownOpen = c.Delegates.EventsOpen;
+        Motion.Turn(EventsChevron, "Disclosure", eventsShownOpen);
+        if (eventsShownOpen) { Motion.Enter(EventsRule, "Disclosure", new System.Numerics.Vector2(0, -1)); }
+        else { Motion.Settle(EventsRule); }
+    }
+
+    void OnDelegatesChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        var all = string.IsNullOrEmpty(e.PropertyName);
+        if (all || e.PropertyName is nameof(DelegatesViewModel.HasFold) or nameof(DelegatesViewModel.HasFoldLink)) { KeepFoldFocus(); }
+        if (all || e.PropertyName == nameof(DelegatesViewModel.EventsOpen)) { DiscloseEvents(); }
+    }
+
+    // Focus on the fold's button or its "still working" link as that link goes (§9.1 A4): while the
+    // fold stays, to its button; if the fold goes too, to the first delegate's name. Read as the
+    // change arrives, before the collapsed control is let go of.
+    void KeepFoldFocus()
+    {
+        if (Card is not { } c || XamlRoot is null) { return; }
+        var focused = FocusManager.GetFocusedElement(XamlRoot);
+        if (!ReferenceEquals(focused, EventsToggle) && !ReferenceEquals(focused, EventsWorking)) { return; }
+        var d = c.Delegates;
+        if (d.HasFold && (d.HasFoldLink || ReferenceEquals(focused, EventsToggle))) { return; }
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (d.HasFold) { EventsToggle.Focus(FocusState.Programmatic); }
+            else { FocusFirstDelegate(10); }
+        });
+    }
+
+    // Its line is drawn a pass after the fold goes (the lines were hidden, and one changed words in
+    // place), so it is looked for again for a moment. A line with no name to go to (two started
+    // within a minute are one "Started 2 delegates" line) sends focus where those delegates are
+    // listed, the strip or the Delegates tab, rather than leave it with nothing.
+    async void FocusFirstDelegate(int tries)
+    {
+        if (!NamedLines())
+        {
+            DelegatesPlace()?.Focus(FocusState.Programmatic);
+            return;
+        }
+        for (var i = 0; i < tries; i++)
+        {
+            if (FirstDelegateLink(EventsRule) is { } link && link.Focus(FocusState.Programmatic)) { return; }
+            await Task.Delay(60);
+        }
+    }
+
+    // Whether any line names a delegate to go to: two started within a minute are one "Started 2
+    // delegates" line, with no name.
+    bool NamedLines() => Card?.Delegates.Events.Any(l => l.HasName) == true;
+
+    // Where the delegates are listed, for focus to go to when no line has a name: the strip at three
+    // panes, else the Delegates tab.
+    Control? DelegatesPlace()
+    {
+        if (DelegateStrip.Visibility == Visibility.Visible && DelegateStrip.ContainerFromIndex(0) is Control item) { return item; }
+        return Tabs.Visibility == Visibility.Visible && DelegatesTab.Visibility == Visibility.Visible ? DelegatesTab : null;
+    }
+
+    // The same, as the framework moves focus off a control it has hidden (§9.1 A4): said as it
+    // moves, so it lands where the fold's rule says and not on whatever is next.
+    bool RedirectFoldFocus(GettingFocusEventArgs e)
+    {
+        if (Card is not { } c) { return false; }
+        var from = e.OldFocusedElement;
+        var onFold = ReferenceEquals(from, EventsToggle) || ReferenceEquals(from, EventsWorking);
+        var d = c.Delegates;
+        if (!onFold || (d.HasFold && (d.HasFoldLink || ReferenceEquals(from, EventsToggle)))) { return false; }
+        if (d.HasFold) { return ReferenceEquals(e.NewFocusedElement, EventsToggle) || e.TrySetNewFocusedElement(EventsToggle); }
+        if (!NamedLines()) { return DelegatesPlace() is { } place && e.TrySetNewFocusedElement(place); }
+        if (FirstDelegateLink(EventsRule) is { } first) { return e.TrySetNewFocusedElement(first); }
+        FocusFirstDelegate(10);
+        return false;
+    }
+
+    static HyperlinkButton? FirstDelegateLink(DependencyObject root)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is HyperlinkButton { Visibility: Visibility.Visible } link) { return link; }
+            if (FirstDelegateLink(child) is { } found) { return found; }
+        }
+        return null;
     }
 
     // "Ask main agent to stop it" filled the reply box: the person reads it there, at its end, and
@@ -486,12 +592,7 @@ public sealed partial class SessionView : UserControl
     }
     void OnOrphanClosed(InfoBar sender, InfoBarClosedEventArgs args) => Card?.DismissOrphan();
 
-    void OnCopyOrphan(object sender, RoutedEventArgs e)
-    {
-        var data = new DataPackage();
-        data.SetText(Card?.OrphanText ?? "");
-        Clipboard.SetContent(data);
-    }
+    void OnCopyOrphan(object sender, RoutedEventArgs e) => ClipboardText.Put(Card?.OrphanText ?? "");
 
     void OnEditing(object sender, RoutedEventArgs e) => Editing(true);
     void OnNotEditing(object sender, RoutedEventArgs e) => Editing(false);

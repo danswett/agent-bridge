@@ -35,6 +35,42 @@
                 <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Settings" />
                 <InfoBar Severity="Error" Title="That didn't work" IsClosable="False" IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}" Message="{x:Bind ViewModel.Error, Mode=OneWay}" />
                 <ProgressBar IsIndeterminate="True" Visibility="{x:Bind local:Ui.Show(ViewModel.Busy), Mode=OneWay}" />
+
+                <!-- An agent installed after the bridge (#231; ui.md §6.9): a card per agent, never a toast, a
+                     push or a count. It holds the agent's only Set up while it shows; Not now hides it and the
+                     Settings item's dot at this version. It never takes focus where it appears. -->
+                <ItemsControl x:Name="OfferList" ItemsSource="{x:Bind ViewModel.AgentOffers, Mode=OneWay}" IsTabStop="False" AutomationProperties.AutomationId="AgentOffers">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="core:AgentOffer">
+                            <local:AgentOfferGroup
+                                AutomationProperties.Name="{x:Bind Name}"
+                                AutomationProperties.AutomationId="{x:Bind GroupId}"
+                                AutomationProperties.LiveSetting="Polite">
+                                <Border Background="{ThemeResource AbSubtle}" BorderBrush="{ThemeResource AbStroke}" BorderThickness="1" CornerRadius="{StaticResource AbRadiusCard}" Padding="16" Margin="0,0,0,8">
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Text="{x:Bind Text}" TextWrapping="Wrap" />
+                                        <local:WrapRow Spacing="8">
+                                            <Button
+                                                Style="{StaticResource AccentButtonStyle}"
+                                                Content="Set up"
+                                                Tag="{x:Bind Id}"
+                                                IsEnabled="{x:Bind CanSetUp}"
+                                                Click="OnSetUpAgent"
+                                                AutomationProperties.Name="{x:Bind SetUpName}"
+                                                AutomationProperties.AutomationId="{x:Bind SetUpId}" />
+                                            <Button
+                                                Content="Not now"
+                                                Tag="{x:Bind Id}"
+                                                Click="OnNotNowAgent"
+                                                AutomationProperties.Name="{x:Bind NotNowName}"
+                                                AutomationProperties.AutomationId="{x:Bind NotNowId}" />
+                                        </local:WrapRow>
+                                    </StackPanel>
+                                </Border>
+                            </local:AgentOfferGroup>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
     
                 <!-- The host: the background program that watches this machine's agent sessions. -->
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="{x:Bind local:SettingsView.HostSection}" />
@@ -83,9 +119,20 @@
                     AutomationProperties.AutomationId="HostAtSignIn"
                     IsOn="{x:Bind ViewModel.StartAtSignIn, Mode=TwoWay}" />
 
+                <StackPanel Spacing="4" AutomationProperties.AutomationId="GetStarted" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowSetupSteps), Mode=OneWay}">
+                    <TextBlock Style="{StaticResource AbSectionTitle}" Text="Get started" AutomationProperties.HeadingLevel="Level2" />
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.SetupSteps, Mode=OneWay}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="core:SetupStep">
+                                <TextBlock TextWrapping="Wrap" Text="{x:Bind Line}" AutomationProperties.Name="{x:Bind AccessibleName}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Agents on this machine" AutomationProperties.HeadingLevel="Level2" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" AutomationProperties.AutomationId="AgentsState" Text="{x:Bind ViewModel.AgentsState, Mode=OneWay}" />
-                <Button Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
+                <Button x:Name="CheckAgentsButton" Content="Check agents again" AutomationProperties.AutomationId="CheckAgents" Click="OnCheckAgents" IsEnabled="{x:Bind ViewModel.CanCheckAgents, Mode=OneWay}" />
                 <ItemsControl x:Name="AgentList" ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" AutomationProperties.AutomationId="AgentReadiness">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="core:AgentReadinessRow">
@@ -218,6 +265,38 @@
                 <TextBlock
                     Style="{StaticResource AbSecondaryText}"
                     Text="Off: Copilot's Approve once and Deny are answered only in the agent's own window. Questions are still answered anywhere. A change applies when the host restarts." />
+                <ToggleSwitch
+                    Header="Let my devices sign Copilot in on this machine"
+                    AutomationProperties.AutomationId="PhoneSignIn"
+                    IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}"
+                    IsOn="{x:Bind ViewModel.PhoneSignIn, Mode=TwoWay}" />
+                <TextBlock
+                    Style="{StaticResource AbSecondaryText}"
+                    Text="When Copilot needs signing in again, a device pinned as yours here can start Copilot's own sign-in and is shown the one-time code to enter at github.com/login/device. While it runs, this machine opens a browser and copies the code. Off by default. A change applies when the host restarts." />
+                <!-- Who can sign Copilot in here (#972, ui.md 6.9): read-only, only while the switch is on.
+                     No Add or Remove yet, and no disabled button for either. -->
+                <StackPanel Spacing="4" AutomationProperties.AutomationId="SignInDevices" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowSignInDevices), Mode=OneWay}">
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Devices that can sign Copilot in" />
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.SignInDevices, Mode=OneWay}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="core:SignInDeviceRow">
+                                <StackPanel Margin="0,0,0,4">
+                                    <TextBlock AutomationProperties.AutomationId="SignInDevice" TextWrapping="Wrap" Text="{x:Bind Name}" />
+                                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Detail}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock
+                        TextWrapping="Wrap"
+                        AutomationProperties.AutomationId="SignInDevicesEmpty"
+                        Text="{x:Bind ViewModel.SignInDevicesEmpty, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Some(ViewModel.SignInDevicesEmpty), Mode=OneWay}" />
+                    <TextBlock
+                        Style="{StaticResource AbSecondaryText}"
+                        Text="{x:Bind ViewModel.SignInDevicesNote, Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Some(ViewModel.SignInDevicesNote), Mode=OneWay}" />
+                </StackPanel>
                 <ToggleSwitch
                     Header="Answer folder-trust questions from my devices"
                     AutomationProperties.AutomationId="RemoteFolderTrust"

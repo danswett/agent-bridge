@@ -112,10 +112,13 @@ public sealed class SessionService
     }
     readonly ManageService? manage;
 
-    // Framework only: no production auth factory/entrypoint is registered. Both gates
-    // remain off until Engineering approves the agent-owned private login path.
+    // sessions.signin (#972): set only where the machine's permissions.phoneSignIn is on and an
+    // adapter exists for the agent (PhoneSignInSetup). Off by default: nothing is offered.
     internal SignIn.AgentSignInService? SignIn { get; init; }
-    internal bool SignInEntrypointApproved { get; init; } = AgentSignIn.EnabledByDefault;
+    internal bool SignInEntrypointApproved { get; init; }
+    // signin.devices (#972 slice 2): who can sign an agent in here, read-only, through the relay, from
+    // the machine's person-device roster, given the asking device's id. Offered with sign-in itself.
+    internal Func<string?, SignInDevices>? SignInDevices { get; init; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -182,6 +185,8 @@ public sealed class SessionService
             case AgentSignIn.Cancel:
                 return SignInEntrypointApproved && SignIn is not null ? await SignIn.CancelAsync(channel, data)
                     : new { outcome = "refused", reason = "agent sign-in is not enabled" };
+            case AgentSignIn.Devices when DevicesOffered(channel):
+                return SignInDevices!(((SecureChannel)channel).PeerStatic is { } peer ? Wire.DeviceId(peer) : null);
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
             // Notifications turned off on this machine (push.enabled), or never set up: a device
@@ -226,9 +231,21 @@ public sealed class SessionService
                 return await SubscribeAsync(channel, data);
             case Ops.SessionsFocus:
                 return Focus(channel, data);
+            case HistoryProtocol.Op when source.ServesHistory:
+                return await HistoryAsync(data);
             default:
                 return null;
         }
+    }
+
+    // session.history (docs/protocol/v1-history.md), read strictly as every request a client sends:
+    // a request with a field missing, of the wrong type or out of range fails as a request.
+    async Task<HistoryResult> HistoryAsync(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.history needs a session id"); }
+        var request = data.Deserialize<HistoryRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.history needs a session id");
+        if (HistoryProtocol.Check(request) is { } problem) { throw new ArgumentException(problem); }
+        return await source.HistoryAsync(request.Id, request.Before, request.Limit ?? HistoryLimits.DefaultTurns);
     }
 
     // A channel has one subscription. A second subscribe (a client recovering from a gap)
@@ -363,7 +380,7 @@ public sealed class SessionService
         // A confirmation is checked as coming from the device on the other end of a channel through
         // the relay, and from nowhere else: on this machine's pipe it is none, and refused as such.
         var confirmed = channel is SecureChannel secure && EscapedApprovals is { } escaped ? escaped.For(secure.PeerId, request) : null;
-        var result = await answers.AnswerAsync(request, watch: watch, confirmed: confirmed);
+        var result = await answers.AnswerAsync(request, watch: watch, confirmed: confirmed, sender: channel.PeerId);
         // Typed from this device: it needs no notification that the question was answered.
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
@@ -508,10 +525,15 @@ public sealed class SessionService
         catch (Exception e) when (e is IOException or ObjectDisposedException or InvalidOperationException or OperationCanceledException) { }
     }
 
+    bool DevicesOffered(IProtocolChannel channel) => SignInEntrypointApproved && SignIn is not null && SignInDevices is not null && channel is SecureChannel;
+
     List<string> Offered(IProtocolChannel channel)
     {
         List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus];
         if (SignInEntrypointApproved && SignIn?.Offered(channel) == true) { offered.Add(AgentSignIn.Capability); }
+        if (DevicesOffered(channel)) { offered.Add(AgentSignIn.DevicesCapability); }
+        // Who may read history is narrowed by the channel's caller (LocalApi, RemoteAuthorization).
+        if (source.ServesHistory) { offered.Add(HistoryProtocol.Capability); }
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }

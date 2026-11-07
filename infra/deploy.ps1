@@ -13,7 +13,9 @@ Production is left alone unless -Production is given. That is the cutover (docs/
 
 An app with a customDomain in the parameter file gets it in steps, as DNS allows: nothing
 until the CNAME and asuid TXT records exist (the script prints both), then the hostname on
-the app, then an Azure-managed certificate bound with SNI.
+the app, then an Azure-managed certificate bound with SNI. extraCustomDomains are further
+hostnames on the same app (relay.slipgates.com next to relay.bad-duck.com): each steps on its own and
+serves directly, so old clients keep working and a name still waiting for DNS never unbinds another.
 
 .EXAMPLE
 ./infra/deploy.ps1 -WhatIf
@@ -198,8 +200,7 @@ function Get-DnsAnswer([string]$name, [string]$type) {
     if ($r.PSObject.Properties['Answer']) { return @($r.Answer | ForEach-Object { ([string]$_.data).Trim('"').TrimEnd('.') }) }
     return @()
 }
-function Get-DomainState($cfg) {
-    $domain = if ($cfg.PSObject.Properties['customDomain']) { [string]$cfg.customDomain } else { '' }
+function Get-HostnameState($cfg, [string]$domain) {
     if (-not $domain) { return 'none' }
     $envName = Get-ParamValue 'environmentName'
     $envJson = az containerapp env list --subscription $Subscription -g $ResourceGroup --query "[?name=='$envName'] | [0]" -o json
@@ -215,13 +216,27 @@ function Get-DomainState($cfg) {
     Write-Host "  TXT   asuid.$domain = $verification"
     return 'none'
 }
-function Set-DomainStep([string]$productionState, [string]$stagingState) {
-    $env:RELAY_PRODUCTION_DOMAIN_STATE = if ($productionState -eq 'ready') { 'added' } else { $productionState }
-    $env:RELAY_STAGING_DOMAIN_STATE = if ($stagingState -eq 'ready') { 'added' } else { $stagingState }
+function Get-DomainState($cfg) {
+    Get-HostnameState $cfg $(if ($cfg.PSObject.Properties['customDomain']) { [string]$cfg.customDomain } else { '' })
+}
+# Extra hostnames (customDomains beyond the first) each get their own step, so a name still
+# waiting for DNS never holds back, or unbinds, one that is already serving.
+function Get-ExtraDomainStates($cfg) {
+    $extra = if ($cfg.PSObject.Properties['extraCustomDomains']) { @($cfg.extraCustomDomains) } else { @() }
+    @($extra | ForEach-Object { Get-HostnameState $cfg ([string]$_) })
+}
+function Step-Forward([string]$state) { if ($state -eq 'ready') { 'added' } else { $state } }
+function Set-DomainStep([string]$productionState, [string]$stagingState, [string[]]$productionExtra = @(), [string[]]$stagingExtra = @()) {
+    $env:RELAY_PRODUCTION_DOMAIN_STATE = Step-Forward $productionState
+    $env:RELAY_STAGING_DOMAIN_STATE = Step-Forward $stagingState
+    $env:RELAY_PRODUCTION_EXTRA_DOMAIN_STATES = ($productionExtra | ForEach-Object { Step-Forward $_ }) -join ','
+    $env:RELAY_STAGING_EXTRA_DOMAIN_STATES = ($stagingExtra | ForEach-Object { Step-Forward $_ }) -join ','
 }
 $productionDomain = if ($Production) { Get-DomainState $productionCfg } else { 'none' }
 $stagingDomain = Get-DomainState $stagingCfg
-Set-DomainStep $productionDomain $stagingDomain
+$productionExtra = if ($Production) { Get-ExtraDomainStates $productionCfg } else { @() }
+$stagingExtra = Get-ExtraDomainStates $stagingCfg
+Set-DomainStep $productionDomain $stagingDomain $productionExtra $stagingExtra
 
 if ($WhatIf) {
     # The preview of the deployment actually requested: -BaseOnly never reaches the apps.
@@ -322,7 +337,9 @@ if ($BaseOnly) {
 # Pass 1 may just have created the environment, which is what DNS has to point at.
 $productionDomain = if ($Production) { Get-DomainState $productionCfg } else { 'none' }
 $stagingDomain = Get-DomainState $stagingCfg
-Set-DomainStep $productionDomain $stagingDomain
+$productionExtra = if ($Production) { Get-ExtraDomainStates $productionCfg } else { @() }
+$stagingExtra = Get-ExtraDomainStates $stagingCfg
+Set-DomainStep $productionDomain $stagingDomain $productionExtra $stagingExtra
 
 Write-Host "pass 2: apps$(if ($Production) { ' (including production)' } else { ' (staging only)' })"
 $env:RELAY_DEPLOY_APPS = 'true'
@@ -330,10 +347,14 @@ $out = az deployment group create --subscription $Subscription -g $ResourceGroup
 
 # A managed certificate can only be issued for a hostname already on the app: pass 2 put it
 # there, so pass 3 issues the certificate and binds it.
-if ($productionDomain -eq 'ready' -or $stagingDomain -eq 'ready') {
+function Get-Bound([string]$state) { if ($state -eq 'ready') { 'bound' } else { $state } }
+if ((@($productionDomain, $stagingDomain) + $productionExtra + $stagingExtra) -contains 'ready') {
     Write-Host "pass 3: managed certificates (a few minutes)"
-    Set-DomainStep $(if ($productionDomain -eq 'ready') { 'bound' } else { $productionDomain }) $(if ($stagingDomain -eq 'ready') { 'bound' } else { $stagingDomain })
+    Set-DomainStep (Get-Bound $productionDomain) (Get-Bound $stagingDomain) @($productionExtra | ForEach-Object { Get-Bound $_ }) @($stagingExtra | ForEach-Object { Get-Bound $_ })
     $out = az deployment group create --subscription $Subscription -g $ResourceGroup -n "relay-stamp-domains-$Region" -f $template -p $paramFile --query properties.outputs -o json | ConvertFrom-Json
 }
 Write-Host "staging:    https://$($out.stagingFqdn.value)$(if ($env:RELAY_STAGING_DOMAIN_STATE -eq 'bound') { " and https://$($out.stagingCustomDomain.value)" })"
-if ($Production) { Write-Host "production: https://$($out.productionFqdn.value)$(if ($env:RELAY_PRODUCTION_DOMAIN_STATE -eq 'bound') { " and https://$($out.productionCustomDomain.value)" })" }
+if ($Production) {
+    $extraUrls = @($out.productionExtraCustomDomains.value) | Where-Object { $_ } | ForEach-Object -Begin { $i = 0 } -Process { if (($env:RELAY_PRODUCTION_EXTRA_DOMAIN_STATES -split ',')[$i++] -eq 'bound') { " and https://$_" } }
+    Write-Host "production: https://$($out.productionFqdn.value)$(if ($env:RELAY_PRODUCTION_DOMAIN_STATE -eq 'bound') { " and https://$($out.productionCustomDomain.value)" })$($extraUrls -join '')"
+}

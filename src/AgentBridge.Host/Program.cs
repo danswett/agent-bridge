@@ -13,6 +13,7 @@ using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Host.Delivery.Windows;
+using AgentBridge.Host.SignIn;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
@@ -100,6 +101,16 @@ var (intakeState, intakeProblem) = intakeFolder is not null && Directory.Exists(
 // A migrated installation's registrations are read where its runtime is, wherever that is.
 string[] WithIntake(IReadOnlyList<string> roots, string folder) =>
     intakeState is null ? [.. roots] : [.. roots.Prepend(Path.Combine(intakeState.RuntimeRoot, folder)).Distinct(StringComparer.OrdinalIgnoreCase)];
+var agentLocator = new AgentLocator();
+// Copilot's executable for sign-in from devices (#972), found once as launching finds it, and only
+// where permissions.phoneSignIn asks: neither offered nor said on a session where it could not start.
+var signInCopilot = settings.PhoneSignIn && OperatingSystem.IsWindows() && Launchers.Find("copilot") is { } copilotLauncher
+    && agentLocator.Find(copilotLauncher, settings.Launch.Agent(copilotLauncher.Id)) is { } copilotFound && CopilotSignInAdapter.Runnable(copilotFound)
+    ? copilotFound : null;
+// The person pin for sign-in from devices (#972 slice 2): #55's person-device roster, of the relay
+// account serve signs in with. None until Trust's roster lands, so nobody is pinned.
+IPersonDeviceRoster personRoster = new NoPersonRoster();
+Func<string?> rosterAccount = () => null;
 var options = new SessionSourceOptions
 {
     // A migrated installation's agent homes, where its hooks were re-pointed, unless told otherwise.
@@ -114,12 +125,15 @@ var options = new SessionSourceOptions
         .OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase)],
     CopilotRemoteApproval = settings.RemoteApproval,
     EscapedApproval = settings.EscapedApproval,
+    PhoneSignIn = PhoneSignInSetup.Agents(settings, signInCopilot is not null),
+    PhoneSignInPinned = () => PersonDevices.Any(personRoster, rosterAccount()),
     Log = command == "serve" ? Log : null,
     // Only serve keeps what it listed for its next start (#147); no other command reads or writes it.
     StateFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "sessions-listed.json") : null,
+    // session.history's cursors outlive a restart of serve (docs/protocol/v1-history.md).
+    HistoryKeyFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "history-cursor.key") : null,
 };
 var pretty = new JsonSerializerOptions(ProtocolJson.Options) { WriteIndented = !Flag("--compact") };
-var agentLocator = new AgentLocator();
 
 switch (command)
 {
@@ -497,6 +511,19 @@ async Task<int> ServeAsync(HostHandover handover)
     // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
     // Assistant's Install there.
     var updates = new UpdateService(HostVersion(), Log) { ReadOnly = ServeReadOnly, OfferedReadOnly = OfferedReadOnly };
+    // Signing an agent in again from a person's pinned device (#972, sessions.signin): only where
+    // permissions.phoneSignIn is on, and only for an agent with an adapter here. Never read-only.
+    // The pin is a device the person-device roster pins (RosterSignInAuthority); a #402 trusted-peer
+    // person pin is no longer enough, though where that enforcement is on a channel still needs one.
+    rosterAccount = () => identity.Account?.AccountId;
+    await using var signIn = PhoneSignInSetup.Create(settings, signInCopilot is not null, source,
+        new RosterSignInAuthority(personRoster, () => ServeReadOnly() is not null, c => trustedPeers.HasRole(c, TrustedPeerStore.Person)),
+        new HostSignInContextResolver(source, options.CopilotHome),
+        new CopilotSignInAdapter(() => signInCopilot, options.CopilotHome),
+        () => ServeReadOnly() is not null);
+    Log(signIn is not null ? $"sign-in from devices is on for Copilot (permissions.phoneSignIn); {CopilotDeviceCommand.SideEffects} while it runs"
+        : settings.PhoneSignIn ? "sign-in from devices is set (permissions.phoneSignIn) but off: it needs Windows and Copilot's .exe, found as launching finds it"
+        : "sign-in from devices is off (permissions.phoneSignIn)");
     // host.restart's and manage.restart's one way out, also the committed-departure watchdog's (#805
     // N1): probes settled first (#238), and a stop asked for meanwhile is never turned into a restart.
     // Remote management hears of the handover (bound below, once it exists), so a remote restart a stop
@@ -528,6 +555,9 @@ async Task<int> ServeAsync(HostHandover handover)
         EscapedApprovals = escapedApprovals,
         Updates = updates,
         Restore = () => restore.Notice,
+        SignIn = signIn,
+        SignInEntrypointApproved = signIn is not null,
+        SignInDevices = self => PersonDevices.View(personRoster, rosterAccount(), self),
         Manage = manage,
     };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
@@ -626,6 +656,8 @@ async Task<int> ServeAsync(HostHandover handover)
         AgentInstall = agentInstall,
         Lifecycle = lifecycle,
         LocalAppDevice = manage.NoteLocalApp,
+        // Only while this host runs sign-in from devices: a switch changed since applies at the next start.
+        SignInDevices = signIn is null ? null : self => PersonDevices.View(personRoster, rosterAccount(), self),
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -653,6 +685,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // A pass, or keep-awake turned on or off, changes what the app's Settings shows.
     if (keepAwake is not null) { keepAwake.Changed += control.Refresh; }
     haAuth.Changed += control.Refresh;
+    // The roster changing changes who the app's Settings lists (#972).
+    personRoster.Changed += control.Refresh;
     LocalServer? local = null;
     try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers), Log); }
     catch (EndpointInUseException e)

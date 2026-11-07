@@ -238,7 +238,7 @@ public sealed class PushFlowTests : IAsyncLifetime
     {
         public bool Available => true;
 
-        public async Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null)
+        public async Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null, IEscapedConfirmation? confirmed = null, string? sender = null)
         {
             await t.AnsweredAtTheMachineAsync(request.Question);
             return new AnswerResult(AnswerOutcome.Delivered);

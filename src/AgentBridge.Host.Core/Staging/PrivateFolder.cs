@@ -2,6 +2,8 @@ using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 
+// In Host.Core, under its first user's namespace, so the app's update hand-over (App.Core's
+// PackageHandoff, #984) makes its folder private the same way.
 namespace AgentBridge.Host.Delivery.Staging;
 
 // A folder only this user can open, for files on their way to an agent and for the shadow

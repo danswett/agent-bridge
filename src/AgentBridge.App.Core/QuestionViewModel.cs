@@ -239,10 +239,21 @@ public sealed partial class QuestionViewModel : Observable
         };
     }
 
-    public Question Question { get; }
+    public Question Question { get; private set; }
     public string Id => Question.Id;
     public bool Approval => Question.Kind == QuestionKind.Approval;
     public string Heading => Approval ? "Permission requested" : "Waiting on you";
+    // Copilot asked several permissions at once and shows them one at a time, this one first
+    // (#690): each is its own question, so an answer to this one never reaches the next.
+    public string? Queue => Approval && Question.Waiting is > 1 and var n ? $"1 of {n} permissions waiting" : null;
+
+    internal void UpdateWaiting(int? waiting)
+    {
+        if (Question.Waiting == waiting) { return; }
+        Question = Question with { Waiting = waiting };
+        Raise(nameof(Queue));
+    }
+
     // An approval's text with anything not drawn where it runs, and its right-to-left letters, as
     // visible escapes (#220): a host escapes them, and an older one's prompt is drawn so too. The card
     // draws it exactly as written, as one block nothing in it is read as Markdown in (#323,
@@ -262,9 +273,13 @@ public sealed partial class QuestionViewModel : Observable
     {
         "truncated" => $"Part of this question didn't fit in the message from the machine, so it can't be answered from here. Answer at the machine{at}.",
         "approvalOff" => $"Approving permission prompts from the app and other devices is turned off on this machine (Settings). Answer at the machine{at}.",
+        "atMachine" when AtMachineExplanation is not null => string.IsNullOrEmpty(machine) ? "Answer at the machine" : $"Answer at the machine · {machine}",
         "atMachine" => $"This prompt can only be answered at the machine{at}.",
         _ => $"This machine isn't taking answers from the app right now. Answer at the machine{at}.",
     };
+
+    public string? AtMachineExplanation => Why == "atMachine" && Question.AnswerAtMachineReason == "shape"
+        ? "This kind of question can only be answered at the machine." : null;
 
     // A prompt answered at the machine shows what it asks, not choices nobody can make here.
     public bool ShowReadOnlyFields => !Answerable && Fields.Count > 0 && Why is not ("atMachine" or "approvalOff");
@@ -527,6 +542,12 @@ public sealed partial class QuestionViewModel : Observable
         }
         var text = OutcomeText[outcome](at);
         if (outcome == "refused" && e.Reason is { } r) { text = $"The machine refused this answer: {r}."; }
+        // A reason with fixed words of its own, the same in every client (#908).
+        if (outcome == "refused" && e.Result is { ValueKind: JsonValueKind.Object } result && result.TryGetProperty("code", out var c)
+            && c.ValueKind == JsonValueKind.String && c.GetString() is { } code && AnswerReasons.Known(code))
+        {
+            text = AnswerReasons.NotSent + AnswerReasons.Text(code);
+        }
         if (outcome == "unconfirmed" && e.Reason is { } u) { text += $" ({u})"; }
         return Said(outcome, text, outcome == "refused" ? Tone.Bad : Tone.Warn);
     }
@@ -537,6 +558,7 @@ public sealed partial class QuestionViewModel : Observable
     // updated to refuse what it used to offer (#220), or a budget that had to cut it.
     public static bool SaysTheSame(Question a, Question b) =>
         a.Kind == b.Kind && a.Message == b.Message && a.Truncated == b.Truncated && a.AnswerAtMachine == b.AnswerAtMachine && a.Agent == b.Agent
+        && a.AnswerAtMachineReason == b.AnswerAtMachineReason
         && SameEscaped(a.Escaped, b.Escaped)
         && a.Fields.Count == b.Fields.Count && a.Fields.Zip(b.Fields).All(p => SameField(p.First, p.Second));
 
@@ -549,7 +571,7 @@ public sealed partial class QuestionViewModel : Observable
 
     static bool SameField(Field a, Field b) =>
         a.Name == b.Name && a.Type == b.Type && a.Title == b.Title && a.Description == b.Description
-        && a.AllowOther == b.AllowOther && a.Required == b.Required && a.Default?.GetRawText() == b.Default?.GetRawText()
+        && a.AllowOther == b.AllowOther && a.OtherUnavailable == b.OtherUnavailable && a.Required == b.Required && a.Default?.GetRawText() == b.Default?.GetRawText()
         && (a.Options ?? []).SequenceEqual(b.Options ?? []);
 
     // Whether this client may answer, and if not, why (pwa/js/answers.js, answerability).
@@ -659,6 +681,10 @@ public sealed partial class FieldViewModel : Observable
     public string TypeLabel => TypeLabels[spec.Type];
     public bool Required => spec.Required == true;
     public bool AllowOther => spec.AllowOther == true && spec.Type is FieldType.Choice or FieldType.Multi;
+    // Other the agent offers and this machine cannot send yet (#908): shown, disabled, with this
+    // sentence under the choices and as their description. Null when Other is offered or absent.
+    public string? OtherUnavailable => !AllowOther && spec.Type is FieldType.Choice && AnswerReasons.Known(spec.OtherUnavailable)
+        ? AnswerReasons.Text(spec.OtherUnavailable!) : null;
     public ObservableCollection<OptionViewModel> Options { get; }
 
     public bool OtherChosen

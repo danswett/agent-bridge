@@ -66,9 +66,15 @@ internal sealed class AgentSignInService : IAsyncDisposable
         this.recovery = recovery; this.runner = runner; this.readOnly = readOnly;
         this.time = time ?? TimeProvider.System;
         timer = this.time.CreateTimer(_ => _ = SweepAsync(), null, TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(250));
+        // A pin that went (a roster removal, heard from another host too) ends its flows now, not at
+        // the next tick (Trust's condition 4 on #972).
+        authority.Changed += OnAuthorityChanged;
     }
 
-    public bool Enabled { get; init; } = AgentSignIn.EnabledByDefault;
+    void OnAuthorityChanged() => _ = SweepAsync();
+
+    // Off unless PhoneSignInSetup turns it on from the machine's permissions.phoneSignIn (#972).
+    public bool Enabled { get; init; }
     public TimeSpan Limit { get; init; } = TimeSpan.FromMinutes(10);
     public TimeSpan ReattachGrace { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan Kept { get; init; } = TimeSpan.FromMinutes(10);
@@ -457,6 +463,7 @@ internal sealed class AgentSignInService : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         disposed = true;
+        authority.Changed -= OnAuthorityChanged;
         timer.Dispose();
         Flow[] flows;
         lock (gate) { flows = active.Values.ToArray(); }

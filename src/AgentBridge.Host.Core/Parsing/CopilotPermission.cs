@@ -36,9 +36,17 @@ namespace AgentBridge.Host.Core.Parsing;
 // host finds them on the session's screen to know the prompt there is this one, and holds
 // those rows with the options when it types, so a prompt for something else drawn in the
 // same place, with the same options, stops the key.
+//
+// While other requests wait too, Copilot draws one of them, and a probe is too little to say
+// which (#690): a probe is a piece of agent-written text, and another request's text can hold
+// it. Dialog is then what Copilot's dialog for this prompt must show, row for row, to be taken
+// for it (null for a kind whose dialog the host does not know), and Drawn every piece of text
+// Copilot was given for it, as written, with any property name that is unsafe (CopilotDialogs).
 public sealed record CopilotPermissionPrompt(string RequestId, string? ToolCallId, string Kind, string Message, string Digest, string? AtMachine)
 {
     public IReadOnlyList<string> Probes { get; init; } = [];
+    public CopilotDialog? Dialog { get; init; }
+    public IReadOnlyList<string> Drawn { get; init; } = [];
 
     // Where Message holds the host's own escapes (ShownText.RevealMarked), for EscapedText.Marks.
     public IReadOnlyList<(int Start, int Length)> Marks { get; init; } = [];
@@ -50,6 +58,110 @@ public sealed record CopilotPermissionPrompt(string RequestId, string? ToolCallI
         var at = id.LastIndexOf('#');
         return at <= 0 || at == id.Length - 1 ? null : (id[..at], id[(at + 1)..]);
     }
+}
+
+// What Copilot CLI 1.0.105 draws for a permission prompt inside its dialog's frame, above the
+// options: its title, a rule, the body's parts a blank row apart (each plain text, or lines in a
+// box of their own), and its question. Read from its renderer: the Dialog component (a round
+// frame, the title, then a rule) holding the shell prompt (the command in a box, then "Do you
+// want to run this command?") or the path prompt ("Allow path access": what it may do, the paths
+// in a box, the read-only directories in another, then "Do you want to allow this?").
+public sealed record CopilotDialog(string Title, IReadOnlyList<CopilotDialogPart> Body, string Question);
+
+// Boxed: Lines are drawn one to a row, as written, in a box; else Lines[0] is text, wrapped.
+public sealed record CopilotDialogPart(bool Boxed, IReadOnlyList<string> Lines);
+
+// What decides, while several permission prompts wait, whether one can be told from the others on
+// the session's screen (#690). The host lists a prompt as answerable only when its answer could
+// be typed (SessionTracker), and types only then (CopilotPermissionScreen).
+public static class CopilotDialogs
+{
+    // Whether two dialogs could draw the same: as a screen shows them (Visible), every box alike,
+    // and the text between two boxes alike as one, once all white space is gone. A box wraps a long
+    // line hard at its width, so one line on two rows reads like two lines, and trailing white
+    // space is not drawn. Text is wrapped without trimming (1.0.105's `Kve(…, {trim: false, hard:
+    // true})`), so a run of spaces as wide as the dialog draws a row of nothing, which reads as the
+    // gap between two parts: a warning of "x", 250 spaces and "y" draws as "x\n\ny" does, and
+    // counted as one part against two, the screen read for one approved the other (Trust review of
+    // #769). Where the text between boxes breaks into parts is never compared, only what it says.
+    public static bool Alike(CopilotDialog a, CopilotDialog b) =>
+        Squeeze(a.Title) == Squeeze(b.Title) && Squeeze(a.Question) == Squeeze(b.Question) && Segments(a).SequenceEqual(Segments(b));
+
+    // The body as boxes and the text between them, each squeezed; text of nothing but white space
+    // draws nothing, so is left out.
+    static IEnumerable<(bool Boxed, string Text)> Segments(CopilotDialog dialog)
+    {
+        string? text = null;
+        foreach (var part in dialog.Body)
+        {
+            if (!part.Boxed) { text = (text ?? "") + Squeeze(string.Concat(part.Lines)); continue; }
+            if (text is { Length: > 0 }) { yield return (false, text); }
+            text = null;
+            yield return (true, Squeeze(string.Concat(part.Lines)));
+        }
+        if (text is { Length: > 0 }) { yield return (false, text); }
+    }
+
+    // Whether a part drawn as text holds a run of spaces that can wrap onto a row of its own, which
+    // the screen cannot tell from the gap between two parts, so this dialog would not be found on
+    // its own screen. Eight is narrower than any dialog Copilot draws.
+    public static bool Unfindable(CopilotDialog dialog) =>
+        dialog.Body.Any(p => !p.Boxed && p.Lines.Any(l => l.Contains(WideGap, StringComparison.Ordinal)));
+
+    const string WideGap = "        ";
+
+    // The dialog as a screen can show it, which is how it is read there (CopilotPermissionScreen):
+    // a part drawn as text is the runs of its rows between blank ones, each read as a part of its
+    // own, and one of nothing but white space draws nothing at all. Counted as written, a warning of
+    // white space alone made two requests that draw the same, one with it and one without, compare
+    // unlike, and the screen read for one approved the other (Copilot review of #769); Alike now
+    // compares the text between boxes whole. A box is drawn with its edges whatever it holds, so is
+    // kept as it is.
+    public static CopilotDialog Visible(CopilotDialog dialog) => dialog with
+    {
+        Body = [.. dialog.Body.SelectMany(p => p.Boxed ? [p] : Runs(p.Lines.Count > 0 ? p.Lines[0] : "").Select(run => new CopilotDialogPart(false, [run])))],
+    };
+
+    // Text's runs of lines that are not blank, each joined back together.
+    static IEnumerable<string> Runs(string text)
+    {
+        var run = new List<string>();
+        foreach (var line in text.Split('\n'))
+        {
+            if (line.Trim().Length > 0) { run.Add(line); continue; }
+            if (run.Count > 0) { yield return string.Join('\n', run); run.Clear(); }
+        }
+        if (run.Count > 0) { yield return string.Join('\n', run); }
+    }
+
+    // Text that could draw a part of Copilot's own frame (a line-drawing character), be drawn
+    // other than as given (a tab), or hide what is drawn (ShownText.Misleads).
+    public static bool Unsafe(string text) => text.Any(c => c is >= '\u2500' and <= '\u257F' or '\t') || AgentBridge.Protocol.ShownText.Misleads(text);
+
+    // Whether the first of several waiting prompts can be told from the others on screen: Copilot
+    // draws it first, its dialog is known, every other has something drawn to check it against,
+    // nothing given for any of them is unsafe, and none would draw the same. As delivery checks it
+    // (CopilotPermissionScreen.Crowded), so nothing is listed as answerable that it refuses.
+    public static bool Identifiable(CopilotPermissionPrompt mine, IEnumerable<CopilotPermissionPrompt> others)
+    {
+        var rest = others.ToList();
+        if (rest.Any(o => DrawOrder(o.Kind) < DrawOrder(mine.Kind))) { return false; }
+        if (mine.Dialog is not { } dialog || Unfindable(dialog) || mine.Drawn.Any(Unsafe)) { return false; }
+        return rest.All(o => o.Drawn.Count > 0 && !o.Drawn.Any(Unsafe) && (o.Dialog is not { } theirs || !Alike(dialog, theirs)));
+    }
+
+    // Which waiting prompt Copilot CLI 1.0.105 draws. It keeps a queue for each sort of prompt,
+    // each in the order asked, and takes each queue's first as that queue's current one at once
+    // (cli-main.js `GCn`: permissionRequestQueue, hookPermissionQueue, pathConfirmationQueue,
+    // urlConfirmationQueue, filled by the permission handler by kind). Of the current ones, it
+    // draws the permission request (shell, edit, read, MCP, tool, anything else) before a hook's,
+    // a hook's before a path's, and a path's before a URL's (`cxo`: `if(r)` … `if(l)` … `if(p)` …
+    // `if(g)`), whichever was asked first. So the earliest waiting request is drawn only when none
+    // waiting draws ahead of it: a path request asked before a shell one is drawn after it. Listed
+    // as answerable then, its controls could never deliver (Quality's review of #769).
+    public static int DrawOrder(string kind) => kind switch { "hook" => 1, "path" => 2, "url" => 3, _ => 0 };
+
+    static string Squeeze(string text) => string.Concat(text.Where(c => !char.IsWhiteSpace(c)));
 }
 
 public static partial class CopilotPermission
@@ -64,6 +176,14 @@ public static partial class CopilotPermission
     // and Windows' default line ending would end every line of a tool's arguments in its escape.
     static readonly JsonWriterOptions Indented = new() { Indented = true, NewLine = "\n", Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
+    // The tool call a permission.requested event's data is for, as Describe reads it
+    // (promptRequest's, else permissionRequest's) without describing the request: attributing
+    // every request a transcript holds needs no more, and describing each one formats and hashes
+    // what it would run (#510 review, Copilot 4484009896).
+    public static string? ToolCallId(JsonElement data) =>
+        (Json.Obj(data, "promptRequest") is { } prompt ? Json.Str(prompt, "toolCallId") : null)
+        ?? (Json.Obj(data, "permissionRequest") is { } permission ? Json.Str(permission, "toolCallId") : null);
+
     // data: a permission.requested event's data. promptRequest is what the CLI draws, so it is
     // preferred; older builds wrote only permissionRequest, whose shell kind is the commands
     // prompt.
@@ -75,7 +195,7 @@ public static partial class CopilotPermission
         if (request is null || (prompt ?? permission) is not { } p) { return null; }
         var kind = Json.Str(p, "kind") ?? "";
         if (prompt is null && kind == "shell") { kind = "commands"; }
-        var toolCallId = Json.Str(p, "toolCallId") ?? (permission is { } q ? Json.Str(q, "toolCallId") : null);
+        var toolCallId = ToolCallId(data);
 
         string? atMachine = null;
         var message = Message(kind, p);
@@ -86,6 +206,11 @@ public static partial class CopilotPermission
             atMachine = "a request to run outside Copilot's sandbox";
         }
 
+        // Rewritten text (half a surrogate pair, or a U+FFFD) would give prompts that differ only there
+        // one id and hide what an escape check needed to see: held at the machine, its id over the prompt as written.
+        var lossy = Json.IsLossy(data) ? p.GetRawText() : null;
+        if (lossy is not null) { atMachine = "text this host cannot show exactly"; }
+
         message ??= Fallback(p, kind);
         // What a person reads must be what runs. A bidi control or a zero-width character is drawn
         // somewhere other than where it runs (or not at all), and right-to-left letters reorder
@@ -95,7 +220,95 @@ public static partial class CopilotPermission
         // escape is six characters or more, so escaping all of it first could make it six times that
         // before the question cut it (QuestionMapper.Approval, which says when it was cut).
         var (shown, marks) = ShownText.RevealWithinMarked(message, Limits.QuestionMessage, rightToLeft: true);
-        return new CopilotPermissionPrompt(request, toolCallId, kind, shown, Digest(kind, message, p, atMachine is not null), atMachine) { Probes = Probes(kind, p), Marks = marks };
+        return new CopilotPermissionPrompt(request, toolCallId, kind, shown, Digest(kind, message, p, atMachine is not null, lossy), atMachine)
+        {
+            Probes = Probes(kind, p),
+            Marks = marks,
+            Dialog = lossy is null && prompt is { } drawn ? Dialog(kind, drawn) : null,
+            // A request with rewritten text is held at the machine and cannot be read back as strings.
+            Drawn = lossy is not null ? [] : [.. Strings(prompt, kind), .. Strings(permission, kind)],
+        };
+    }
+
+    // The dialog Copilot draws for the prompt as its promptRequest describes it; null for a kind
+    // whose dialog is not known here, or one drawn with more than the request says (a sandbox
+    // bypass).
+    static CopilotDialog? Dialog(string kind, JsonElement p)
+    {
+        static List<string> Each(JsonElement p, string name) =>
+            Json.Arr(p, name) is { } list ? [.. list.EnumerateArray().Select(e => e.ValueKind == JsonValueKind.String ? e.GetString() : null).OfType<string>()] : [];
+        static CopilotDialogPart Text(string text) => new(false, [text]);
+        switch (kind)
+        {
+            case "commands" when Json.Str(p, "fullCommandText") is { } command && Json.Bool(p, "requestSandboxBypass") != true:
+                {
+                    List<CopilotDialogPart> body = [];
+                    if (Json.Str(p, "warning") is { Length: > 0 } warning) { body.Add(Text(warning)); }
+                    body.Add(new CopilotDialogPart(true, command.Split('\n')));
+                    return new CopilotDialog(Json.Str(p, "intention") ?? "", body, "Do you want to run this command?");
+                }
+            case "path":
+                {
+                    var paths = Each(p, "paths");
+                    var directories = Each(p, "readOnlyDirectories");
+                    if (paths.Count == 0) { return null; }
+                    var access = Json.Str(p, "accessKind") switch { "read" => "read", "write" => "write", _ => "read or write" };
+                    List<CopilotDialogPart> body =
+                    [
+                        Text($"This action may {access} the following {(paths.Count == 1 ? "path" : "paths")} outside the paths currently allowed for this session."),
+                        new(true, paths),
+                    ];
+                    if (access == "read" && directories.Count > 0)
+                    {
+                        var one = directories.Count == 1;
+                        body.Add(Text($"File-tool read-only access covers {(one ? "this directory" : "these directories")} and {(one ? "its" : "their")} descendants:"));
+                        body.Add(new CopilotDialogPart(true, directories));
+                    }
+                    return new CopilotDialog("Allow path access", body, "Do you want to allow this?");
+                }
+            default:
+                return null;
+        }
+    }
+
+    // Every string in a request, at any depth: the most a dialog could draw of it. Left out are only
+    // the request's own fields no dialog draws as written, where the request itself has them: its
+    // kind and tool call id, and a path request's access kind, which its dialog draws as fixed
+    // words. Left out by name at every depth, an argument named accessKind holding bidi text was
+    // never checked, and an approval beside it was delivered (Engineering's GPT delta of #769).
+    // And every property name, at any depth, that is unsafe (CopilotDialogs.Unsafe): Copilot's MCP
+    // and custom-tool dialogs can draw an argument's name as well as its value, and read by value
+    // alone a name holding a frame or hidden character went unchecked (#769). Only an unsafe one is
+    // kept, so a request with nothing else drawn still has nothing to check the screen against.
+    static List<string> Strings(JsonElement? request, string kind)
+    {
+        var found = new List<string>();
+        if (request is { } r) { Walk(r, top: true); }
+        return found;
+
+        bool Own(JsonProperty p) => p.Value.ValueKind == JsonValueKind.String
+            && (p.Name is "kind" or "toolCallId" || (p.Name == "accessKind" && kind == "path"));
+
+        void Walk(JsonElement e, bool top)
+        {
+            switch (e.ValueKind)
+            {
+                case JsonValueKind.String:
+                    if (e.GetString() is { Length: > 0 } s) { found.Add(s); }
+                    break;
+                case JsonValueKind.Object:
+                    foreach (var p in e.EnumerateObject())
+                    {
+                        if (CopilotDialogs.Unsafe(p.Name)) { found.Add(p.Name); }
+                        if (top && Own(p)) { continue; }
+                        Walk(p.Value, top: false);
+                    }
+                    break;
+                case JsonValueKind.Array:
+                    foreach (var item in e.EnumerateArray()) { Walk(item, top: false); }
+                    break;
+            }
+        }
     }
 
     static List<string> Probes(string kind, JsonElement p)
@@ -109,7 +322,7 @@ public static partial class CopilotPermission
             "commands" => [Start(Json.Str(p, "fullCommandText"))],
             "write" => [Last(Json.Str(p, "fileName"))],
             "read" => [Last(Json.Str(p, "path"))],
-            "path" => Json.Arr(p, "paths") is { } paths ? paths.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => Last(e.GetString())) : [],
+            "path" => Json.Arr(p, "paths") is { } paths ? paths.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => Last(Json.Text(e))) : [],
             "url" => [Uri.TryCreate(Json.Str(p, "url"), UriKind.Absolute, out var u) ? u.Host : Start(Json.Str(p, "url"))],
             "mcp" => [Json.Str(p, "toolTitle"), Json.Str(p, "toolName")],
             "custom-tool" => [Json.Str(p, "toolName")],
@@ -138,7 +351,7 @@ public static partial class CopilotPermission
                 return Join("Allow **read**?", intention, Fence(path));
             case "path" when Json.Arr(p, "paths") is { } list:
                 {
-                    var paths = list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList();
+                    var paths = list.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => Json.Text(e)).ToList();
                     if (paths.Count == 0) { return null; }
                     var access = Json.Str(p, "accessKind") is { Length: > 0 } a ? a : "path";
                     return Join($"Allow **{Plain(access)}** access?", Fence(string.Join('\n', paths)));
@@ -317,7 +530,7 @@ public static partial class CopilotPermission
     // a NUL first, which the ordinary form never has, then each part with its length. Appended as
     // text after the message, "\n\0at-machine" could be written by the message itself: a custom
     // tool described as "run\n\0at-machine" had the id of "run" run outside the sandbox.
-    static string Digest(string kind, string message, JsonElement p, bool atMachine)
+    static string Digest(string kind, string message, JsonElement p, bool atMachine, string? lossy = null)
     {
         var named = Named.Select(name => (name, raw: Json.Str(p, name))).Where(x => x.raw is { } raw && ShownText.Misleads(raw)).ToList();
         string identity;
@@ -330,6 +543,7 @@ public static partial class CopilotPermission
             Part(message);
             Part(atMachine ? "at-machine" : "");
             foreach (var (name, raw) in named) { Part(name); Part(raw!); }
+            if (lossy is not null) { Part("lossy"); Part(lossy); }
             identity = b.ToString();
         }
         return IdentityHash(identity);

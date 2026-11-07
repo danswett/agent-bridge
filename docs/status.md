@@ -1,13 +1,15 @@
 # Status, plan and handoff
 
-**Start here** if you are picking this project up with no prior context, whether you are a
-person or an agent. This page says where the project is, what runs where, what comes
-next, and how the work is done. Keep it current: update it in the same PR as any change
-that moves the project along (a merge that closes a stage, a machine migrated, a
-decision made).
+**New contributor or fresh agent session? Start with [CONTRIBUTING.md](../CONTRIBUTING.md).**
+This page supplies project context, dated snapshots and links to current role holders.
+The [contributor workflow](contributor-workflow.md) owns durable coordination procedures;
+canonical issues and PRs hold current assignments and exact-head evidence.
+Keep this page current when a change moves the project along, and retain explicit
+dates on historical snapshots rather than treating them as current assignments.
 
-*Last updated: 2026-11-05, Pacific (product decisions of 11-04 and 11-05, including the no-RDP
-tenet). Older implementation and machine snapshots below retain their stated dates.*
+*Last updated: 2026-11-06, Pacific (contributor entry path, #1045; product decisions of
+11-04 and 11-05, including the no-RDP tenet). Older implementation and machine snapshots
+below retain their stated dates.*
 
 **Product tenet (owner, 2026-11-04): you never have to RDP into a machine.** Anything that can
 only be fixed or diagnosed at the machine is a product gap: it is labelled `needs-rdp` and
@@ -15,6 +17,8 @@ prioritised by [#696](https://github.com/danswett/agent-bridge/issues/696) rule 
 
 | Read next | For |
 |---|---|
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | The first-contribution path for people and their agents |
+| [Contributor workflow](contributor-workflow.md) | Canonical records, ownership, participation, readiness and handoffs |
 | [#696](https://github.com/danswett/agent-bridge/issues/696) | The order of work: epics, Now/Next/Later and intake rules. The Project's **Epic** and **Horizon** fields index it |
 | [design.md](design.md) | The master plan and architecture: goals, protocol, security, relay, host, apps, roadmap (§10), risks |
 | [parity.md](parity.md) | Every agent-ha-bridge feature mapped to this product, with evidence or an issue |
@@ -97,7 +101,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 | Area | State |
 |---|---|
 | Spikes S1–S6 | Done. S7 (macOS), S8 (corporate policy, parked) and S9 (relay at scale) not started |
-| Protocol v1 | sessions, answer, reply, attachments, stop, usage, launch, transfer, blobs, roster, update, folder trust. Specs in `docs/protocol/` |
+| Protocol v1 | sessions, answer, reply, attachments, stop, usage, launch, transfer, blobs, feedback upload (#739), roster, update, folder trust. Specs in `docs/protocol/` |
 | Host (`agent-bridge-host`) | Read-only core, delivery (answers, replies, attachments, stop, launch, resume), worktree reclaim, hook intake, discovery holds, management refused from agent sessions, migrate and rollback, shadow comparison |
 | Windows app | Local and remote machines, Launch page, transfers, toasts, folder trust, Settings, self-update (installs when the host is idle), remote update, Copy button on code blocks |
 | PWA | Cards, answers, replies, attachments, launch, stop, usage, push, All machines view, Machines fold, folder trust, remote update, Copy button on code blocks |
@@ -149,82 +153,23 @@ remain routing references until every active destination is verified.
 
 #### Operational sources of truth
 
-| Record | Owns |
-|---|---|
-| Canonical issue | Scope, acceptance criteria, priority, accepted implementation owner, dependencies and next action |
-| Implementation PR | Exact head, CI, actual review, finding dispositions, unresolved threads and readiness evidence for Quality |
-| GitHub Project views, once configured | Filterable indexes over those issues and PRs; not a second plan or evidence of acceptance |
-| #170 root/index, after verified cutover | Current roles, operating rules and links; not a repeated whole-project inventory or per-PR queue |
-| Repository docs and approved designs | Durable architecture, roadmap and decisions; not a minute-by-minute activity log |
-
-A suggested owner is **unclaimed** until explicitly accepted. Link the acceptance
-receipt; preserve existing delegates and contributor branch ownership. A shared
-GitHub account, an unverified checkbox, silence or an old ready packet is not a new acceptance.
-If the next action requires owner input, state the precise decision; do not relabel an
-already-approved requirement as blocked on design.
-
-Keep cross-track dependencies on their canonical issues. Put readiness and
-merge/rebase requests on the PR for Quality. Every head change needs fresh CI and
-an actual Copilot review on that exact head. Only an **independent** review may
-use a bounded delta: the previously reviewed commit must be a proved ancestor of
-the new head, and the independent reviewer must explicitly clear that delta at the
-new head. A rebase without that ancestry needs a full independent review; neither
-old CI nor an old Copilot review is inherited. Safety, trust, security and required
-checks remain gates. Quality's
-[current operating receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924)
-allows ready PRs while main CI is pending, but pauses merges while main is red until
-green or reverted; it does not waive final-head PR gates.
-
-The minute collector retains the full event journal, including failed/partial reads
-as unknown. The consumer reconciles it into the canonical records and publishes
-**material changes**, not repeated inventory dumps. Archive old coordination
-snapshots with their cutoffs, keep their history and links, and explicitly supersede
-old authority instructions during a handoff. Do not remove the old tracker until all
-active rows have a verified destination; a Project-permission failure is not an empty
-queue or a completed migration.
+The authoritative [record map](contributor-workflow.md#operational-sources-of-truth),
+[ownership procedure](contributor-workflow.md#claiming-work),
+[review evidence](contributor-workflow.md#readiness-and-review-evidence) and
+[handoff procedure](contributor-workflow.md#handoffs) now live in the contributor
+workflow. This heading remains for existing links; it is not a second policy copy.
 
 #### Running Shiproom
 
-The [public Shiproom hub](https://github.com/danswett/agent-bridge/issues/689)
-links coordinator check-ins and blocker acknowledgments to the existing
-[private Project](https://github.com/users/danswett/projects/1).
-Shiproom owns coordination, Project health, deadlines and escalation only.
-TPM retains issue triage, deduplication and the single collector; implementation,
-design and Quality retain their existing authorities. Authors may still arm
-their own exact-head auto-merge under AGENTS.md. Shiproom is not a merge grant,
-a second implementation coordinator or completion of the #170 index cutover.
+The authoritative [Shiproom procedure](contributor-workflow.md#running-shiproom)
+now lives in the contributor workflow; current dispatch remains on
+[#689](https://github.com/danswett/agent-bridge/issues/689).
+Moving the procedure does not change accepted roles, operating obligations or the
+incomplete #170 cutover. See [participation](contributor-workflow.md#participation)
+before assuming a standing coordinator role.
 
-Active agent coordinators explicitly acknowledge the protocol and post a first
-check-in before adoption is recorded. A coordinator acknowledges a delivered blocker
-or ACK request within 5 minutes. Each check-in names lane and current session,
-its permalink, the reused recurring mechanism, canonical current work, actual
-blockers (or none), named needed responder, next deliverable and next due time in
-Pacific. Keep one standing roll-up per lane, linking canonical issues and PRs rather
-than copying the backlog. Missing owners remain pending until acceptance is proved.
-Keep contributor branches and delegates with their existing owners. A human
-contributor has no imposed cadence outside an explicitly accepted work window;
-public receipts work without private Project access.
-
-| Interval | Shiproom action |
-|---|---|
-| 5 minutes after a delivered blocker/ACK request | Obtain an explicit acknowledgment; escalate a missed deadline once |
-| 15 minutes after the last explicit check-in | Coordinator check-in due |
-| 20 minutes after the last explicit check-in | Mark the heartbeat stale |
-| 30 minutes after the last explicit check-in | Escalate to the named responsible coordinator/TPM |
-| Immediately | Escalate P0 or unsafe routing to the actual responsible authority |
-
-Preserve the actual blocked reason and needed responder. A sent message, generic
-issue `updatedAt`, mirror write or unchanged activity response is not a check-in or
-acceptance. Project `Heartbeat receipt`, `Next due PT`, `Needs from` and `Ack state`
-fields index this evidence; `Accepted owner` and `Owner receipt` require actual acceptance.
-An inactive optional HA or Apple lane does not block unrelated native delivery.
-
-The dedicated Shiproom session runs a narrow one-minute SLA tick with its own
-persisted control state, consuming only new retained collector events from its
-activation cursor. Reuse an appropriate coordinator timer instead of duplicating
-one. Inspect control/source health before lengthy research. Session-local timers
-do not survive a stopped CLI or reboot: report gaps and restore coverage explicitly.
-Source outages mean unknown visibility, not idle work or missed consent.
+<details>
+<summary>Historical handoff and resumption notes (2026-11-02; not current assignments)</summary>
 
 The following handoff/resumption notes are **historical, 2026-11-02**; use canonical
 issues and PRs for current heads, owners and gates:
@@ -259,6 +204,8 @@ Historical native publication work under #317, superseded by #387's redirect:
 - #319 still gates writer cutover on the replacement integration/card and
   disposable-HA handover/rollback verification. No live HA or legacy-install
   changes during development; no cleanup under #389 before that gate.
+
+</details>
 
 ## 3. Shadow gate (#40)
 
@@ -346,7 +293,7 @@ took over from f7ba0bcc when DEV-VM1 began migrating. Quality now owns all merge
 | | #659 | Motion: nothing pops in or out. Arriving items fade in as neighbours ease aside (`shift`), leaving items fade as their slot eases closed, disclosures ease their space, values cross-fade (`value`), and bursts coalesce with a scroll anchor and "N new". **Decided by the owner 2026-11-04**, every recommended option (D1–D6), including #605's departure, the #489 prompt line and #677's banner space | Spec: #667 (ui.md §5.3, tokens `shift` and `value`; proposal, prototype and boards in `docs/design/proposals/659-no-pop-motion`). Builds: #684 (Windows app), #685 (PWA) |
 | | #600 | Reply and answer progress: one receipt under the box or on the question card, updated in place (Sending… / Sent / Passed to the agent / Up next / Delivered). **Decided by the owner 2026-11-04**, every recommended option (D1–D7: plain words, 400 ms quiet window and dwell, 3/5/10 s stalls, no timings in the UI, ring plus check badge, text2, older hosts unchanged); follow-ups settled 09:10 PT (#477): the `check` icon badge, "You answered · value", older hosts get the same waiting words and Delivered (superseding D7); **revised on re-review the same day to "quiet unless something's wrong"** (#617): Send's ring is the only in-flight signal, Send cross-fades to a check for about 1 s on Delivered, a line appears only for exceptions, stages are still spoken, and the check badge is dropped | Spec: #617 (normative in ui.md §6.5, with §5.3, §6.4, §8, §9; proposal and boards in `docs/design/proposals/600-reply-progress`). Builds on both clients after the host side, #598 / PR #611 |
 | | #167 | App icon (#167's last deliverable) | **Done**: #278. Windows and the PWA are generated from `tokens.json` `appIcon`. The SVG sources for macOS, iOS and Android are in `design/app-icon`, and their catalogs come with P5 and P8. Three proportions not on the design board need the owner's eye (#170) |
-| | #231 | Settings: each agent's state and "Set up" (UI half) | Not started; waits for the backend half (track A) |
+| | #231 | Settings: each agent's state and "Set up" (UI half) | Slice 1, the card and grey dot for an agent installed after the bridge, with Set up and Not now per agent and version, is in review (Windows app only, on today's one-page Settings). Not started: the sectioned Overview and Agents panes, Repair, Install… and the PWA's read-only view |
 | | #181 | Monospace: **Slipgates Mono** (was Agent Bridge Mono; our OFL build of Iosevka, `design/fonts/slipgates-mono`), decided 2026-11-01 | Bundled in both clients (U3). Rebuilt at a normal 600 width for #295, and with Medium and Vietnamese for #544 |
 | | #544 | Text face: **Slipgates Sans** (our tuned OFL Inter, `design/fonts/slipgates-sans`), decided 2026-11-03 | Generated into the PWA, Windows, Apple and Android outputs (#557). Device checks to follow |
 | | #183 | Light-theme `needs` glyph and `text3` fail contrast | Fixed in #188 |
@@ -412,7 +359,7 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #200: live Claude and Codex readings from the agents themselves (in review; needs an independent review, and E1 to E14 against the build on a disposable VM).
 - **Design:**
   - #20 and #84: sub-agents on the card. The design is [design/subagents.md](design/subagents.md), with §8 answered by the owner on 2026-11-01. The host and protocol for Copilot are S1 (#173); Claude and Codex are #174, HA and shadow #175, the clients #176. agent-ha-bridge keeps its card as it is (the latest writer's text): a known, intentional difference from the HA connector's main-agent-only card, labelled by the shadow;
-  - #55: device approval with a matching code. Until then a device's kind is self-declared to the relay, which folder trust and remote update both rely on;
+  - #55: device approval with a matching code. Until then a device's kind is self-declared to the relay, which folder trust and remote update both rely on. Design decided by the owner on 2026-11-04 (all ten §11 decisions, option (a)), not yet built: [design/device-approval.md](design/device-approval.md);
   - #164 to #168: UI.
 
 ## 7. History
@@ -564,6 +511,7 @@ agent-ha-bridge releases from this work:
 | 11-04 | Times: the product UI shows the viewer's local time, adding the zone where another machine's time could be misread; "Pacific" applies to repository text (AGENTS.md) |
 | 11-04 | The P0 feature freeze ends at 23:08 PT: #212, #209, #662 and #220 are closed, and Migration starts ([#696](https://github.com/danswett/agent-bridge/issues/696#issuecomment-6651880884)) |
 | 11-04 | Phone session header (#620), signed off with every recommended option, then revised by the owner on 11-05:<br>• At rest (11-05): the title at most two lines, one meta line, and the tabs on their own row, 152 pt on a 390 × 844 phone. There is no delegate strip on a phone: the Delegates tab carries the running count and the `needs` glyph, and questions stay in the conversation.<br>• Scrolling down slides it up under a 48 pt bar (Back, the glyph, the title on one line, More), following the finger near the top.<br>• Mid-conversation, 64 pt up brings it back and 32 pt down sends it away.<br>• The bar keeps the `needs` glyph while a session waits on you.<br>• The reply area (11-05, #935): on a phone the box starts at one line and grows to six; while a question waits, a one-line notice links to it; while reading, it compacts to a 48 pt bar on the header's 32/64 counts, the end shows it in full, and it never expands over the focused control.<br>• From 760 and in the Windows app, nothing changes.<br>Spec in ui.md §6.2 and the `collapse` motion (#629); built by #631; reasoning in docs/design/proposals/620-compact-header.md |
+| 11-04 | Device approval (#55, #391): every decision in design/device-approval.md §11 is option (a): approved person's devices sign the roster under seniority, probation and confirmation; hosts approved by mutual codes; only presence-proven devices approve or act as a person; an unapproved device sees only "pending approval"; reset with no recovery key; the devices in use now enroll with mutual codes; one presence-proven Remove for a machine; `app`, `pwa` and `phone` are a person's kinds; freshness with `selfAttest` off |
 | 11-05 | Remote Other on Copilot forms matches the terminal (#876). #510 may ship a time-limited interim without Other on Copilot lists, with the reason shown, until #908 lands. Schema-less and legacy-choice questions: the card says why now, remote support follows (#887) |
 | 11-05 | Lab recordings (#736) sign in with dedicated lab-only accounts per agent, kept in the lab's Key Vault and provisioned by the owner |
 | 11-05 | Agent messaging (#912): a standing coordination grant (an owner-approved daily group whose members message each other unattended) replaces hourly G windows for coordinators, subject to a security review; delegate isolation (Q47) accepted for now, revisited after three `delegate-tools` cases; 17 other gating recommendations accepted |

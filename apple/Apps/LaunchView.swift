@@ -352,7 +352,7 @@ struct LaunchView: View {
             }
         } catch {
             if generation == loadGeneration, selected == machineID {
-                self.error = error.localizedDescription
+                self.error = BridgeShownError.sentence(for: error)
             }
         }
         if generation == loadGeneration, selected == machineID {
@@ -400,6 +400,6 @@ struct LaunchView: View {
                 await store.performLaunch(operation, on: target)
                 removeSubmittedAttachments(on: target)
             }
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = BridgeShownError.sentence(for: error) }
     }
 }

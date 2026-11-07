@@ -719,6 +719,31 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal((0, 0), (Volatile.Read(ref stops), Volatile.Read(ref probeHolds)));
     }
 
+    // #292: a session's earlier turns are the person's to read, from the app or another process of
+    // theirs; an agent on the pipe reads the latest exchange and is neither offered nor given more.
+    [Fact]
+    public async Task An_agent_on_the_pipe_is_refused_a_sessions_history_that_the_app_and_the_users_other_processes_read()
+    {
+        foreach (var kind in new[] { CallerKind.App, CallerKind.Other })
+        {
+            callers.Current = new FixedCallerGuard(new Caller(kind, "a reader"));
+            var reader = await ConnectAsync();
+            Assert.Contains(HistoryProtocol.Capability, (await reader.HelloAsync()).Capabilities);
+            var page = await reader.CallAsync<HistoryResult>(HistoryProtocol.Op, new { id = Id });
+            Assert.Equal("go", page.Turns!.Single().Prompt!.Text);
+            Assert.True((await reader.CallAsync<HistoryResult>(HistoryProtocol.Op, new { id = "gone" })).Missing);
+            var malformed = await Assert.ThrowsAsync<HostErrorException>(() => reader.CallAsync(HistoryProtocol.Op, new { id = Id, limit = 51 }));
+            Assert.Equal($"limit must be 1 to {HistoryLimits.MaxTurns}", malformed.Message);
+        }
+
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.Agent, "pid 4242, inside the copilot session 77777777"));
+        var agent = await ConnectAsync();
+        Assert.DoesNotContain(HistoryProtocol.Capability, (await agent.HelloAsync()).Capabilities);
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => agent.CallAsync(HistoryProtocol.Op, new { id = Id }));
+        Assert.Equal("refused: this connection is from pid 4242, inside the copilot session 77777777; reading a session's history is for the person, from the app or a phone", refused.Message);
+        lock (logged) { Assert.Contains("local pipe: refused session.history from pid 4242, inside the copilot session 77777777", logged); }
+    }
+
     [Fact]
     public async Task The_hosts_own_command_line_may_restart_it_to_migrate_but_manage_nothing_else()
     {

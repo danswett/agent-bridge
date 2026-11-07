@@ -15,7 +15,10 @@ of it (`sessions.attach`, see [Attachments](#attachments)), can end a session
 with the app closed (`push`, see [Notifications](#notifications)). It can also launch or
 resume a session (`sessions.launch`, in [v1-launch.md](v1-launch.md)). Files too large for
 the channel go through the relay's blob store (`sessions.attach.blob`, in
-[blobs.md](blobs.md)).
+[blobs.md](blobs.md)). A session's earlier turns are paged back with `session.history`
+(`sessions.history`, in [v1-history.md](v1-history.md)).
+History cursors can become stale as new turns push them outside the current newest-500 window;
+clients restart paging without `before` and merge by turn id.
 
 ## Rules for every message
 
@@ -105,6 +108,11 @@ with the wrong type):
 | `TransferResult` | | `blob`, `size`, `sha256`, `agent`, `launcher`, `files` |
 | `ManageCommand` (#801) | | `command` |
 | `ManageHaTokenRequest` (#801, held until #55) | | `command`, `secret` |
+| `HistoryResult` ([v1-history.md](v1-history.md)) | `before`, `start` | |
+| `HistoryTurn` | `id` | `prompt` |
+| `HistoryPrompt` | | `from` |
+| `HistoryPart` | `id` | `outcome` |
+| `DelegateEvent` | `agent` | |
 
 So, for example, a session with no `status` reads as `idle`, one whose `title` is a number has
 no title, and a `ToolCall` with no `id` is left out of `history`. A question whose `message` is a
@@ -267,7 +275,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 | `offered` | The sessions that died, newest first, at most 20: `id`, `agent`, `title`, `midTurn: true` if a turn was running when it went, `questionLost: true` if a question or approval was waiting in it, which went with it. Never the question's words, a prompt or a response. The notice stays within 8 KiB as JSON: past that, titles are shortened (to 60 bytes), then dropped, then the last names are left out and counted in `offeredMore`; the counts, `cause` and the times are never trimmed. The `restored` notification is made from the same notice |
 | `offeredMore` | How many more died than `offered` names: past 20, or left out to keep the notice within 8 KiB. Absent when none |
 
-Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. A client that does not know `restore` ignores it. It names sessions, so a peer that may not read them (one pinned as a `host`, [trusted peers](../host-config.md#trusted-peers-disposable-host-foundation)) is not told it.
+Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. **Proposed, not built (#948):** a person's device may also restore every session the notice names in one confirmed press, `restore.run` ([restore-run.md](restore-run.md)), through the same path a start-up restore takes. A client that does not know `restore` ignores it. It names sessions, so a peer that may not read them (one pinned as a `host`, [trusted peers](../host-config.md#trusted-peers-disposable-host-foundation)) is not told it.
 
 **Changes (`hello.changed`).** What hello says changes without a new connection: agent-ha-bridge starting or stopping (G5) takes answering, replying, stopping and launching away or gives them back, with `readOnly`; `update` comes and goes. A client used to ask hello again every 10 s to see it, on every connection: about 36 hellos a minute at a host from the account's other machines' Windows apps (#640). Of a host that offers `hello.changed`, a client asks `{ "changes": true }` in its hello, and from then on, for as long as that channel is open, the host sends the event
 
@@ -282,6 +290,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | Capability | Ops |
 |---|---|
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
+| `sessions.history` | `session.history`: a session's earlier turns, a page at a time, for the conversation pane ([v1-history.md](v1-history.md)). Offered to a person's devices and the app; never to the HA connector or an agent on the pipe |
 | `sessions.patch` | `sessions.subscribe` takes `patch` and `since`: live changes as `session.patch`, only what changed ([Patches](#patches-sessionpatch)), and a reconnect to the same run of the host sent only the sessions that changed meanwhile ([Resuming](#resuming-without-a-snapshot)). Without it, or without asking, a client gets whole upserts and whole snapshots as before |
 | `hello.changed` | `hello` takes `{ "changes": true }`, and the host then sends `hello.changed` on that channel when its `readOnly` or capabilities change ([Changes](#hello)). Without it, a client asks hello again to see a change |
 | `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). Without it, or until a client says, every change goes at once |
@@ -301,6 +310,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.transfer` | `session.launch` takes a `transfer`: a session that ended on another of the account's machines, brought here and resumed as a copy ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.transfer.serve` | `session.transfer`, host to host: this machine hands its ended sessions to the account's other machines on a command a person's device signed ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.restore` | `hello`'s `machine.restore`: what a reboot or a crash took, offered to resume ([What went](#hello)), and the `restored` notification ([Notifications](#notifications)). Without it, a client says nothing of sessions that went
+| `sessions.restore.run` | **Proposed, not built (#948).** `restore.run`: a person's device restores the sessions `machine.restore` offers, after a confirmation ([restore-run.md](restore-run.md)). Offered with `sessions.restore` and `sessions.launch`, only to a person's device (through the relay as `pwa` or `app`, or the app on the pipe), and never on a read-only machine (G5). Without it, a client says the sessions can be restored at the machine |
 | `update` | `update.get`, `update.subscribe`, `update.check`, `update.install`: the machine's updates, seen and asked for from a person's other devices, installed by its Windows app ([v1-update.md](v1-update.md)). Through the relay only, and never by a read-only machine |
 | `manage` | `manage.get`, `manage.subscribe`, `manage.restart`: a person's device restarts this host, each press a command it signed for this machine, leaving only through #805's quiet lease ([host-lifecycle.md](../host-lifecycle.md)); with `manage.hooks`, `manage.hooks.repair` repairs the hooks of an agent this installation set up (#801). Through the relay only, to a `pwa` or `app` device that is not this machine's own app, never by a read-only machine or one with `permissions.remoteManage` off. `manage.stop`, `manage.config.*` and `manage.haToken.set` are defined but refused `needs-roster` until the signed device roster (#55), and their capabilities are never offered. See [Managing a machine](#managing-a-machine) |
 
@@ -618,9 +628,10 @@ and JavaScript's `trim()` is applied (so `"   "`, `"\u0085"` and `"\u001b "` ali
 nothing records no answer, and blank text might be recorded trimmed to nothing.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
-Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
-anything but `delivered`, and `timings` for a request that asked for progress
-([Progress](#progress)):
+Result: `{ "outcome": "<outcome>", "reason": "<text>", "stage": "<stage>", "code": "<code>" }`,
+with `reason` present for anything but `delivered`, `stage` only on `unconfirmed` (below),
+`code` only on a `refused` whose reason is one of the [answer reasons](#answer-reasons), and
+`timings` for a request that asked for progress ([Progress](#progress)):
 
 | `outcome` | Meaning | Typed? |
 |---|---|---|
@@ -633,6 +644,39 @@ anything but `delivered`, and `timings` for a request that asked for progress
 A client treats an outcome it doesn't know as `unconfirmed`, never as `delivered`. The
 session's next `session.upsert` shows the question gone whatever the outcome.
 
+An `unconfirmed` answer also carries `stage`, how far it is known to have got
+([#467](https://github.com/danswett/agent-bridge/issues/467)):
+
+| `stage` | Meaning |
+|---|---|
+| `typed` | The keys were typed into the prompt and the session has recorded nothing for that question since. It may not have been submitted: Copilot's form once took an answer's last Enter as a new line in its text field |
+| `recorded` | The session recorded an answer to that very question, but not the one typed (or the call ended in an error) |
+
+### Answer reasons
+
+Some reasons a client says in fixed words of its own, the same in every client: on a field, as
+`otherUnavailable`, and on a refusal, as its `code` beside a `reason` that is the same
+sentence (so a client that knows neither still says why). A client that doesn't know a code
+reads it as absent: no disabled Other, and the `reason` as usual.
+
+| Code | Sentence | A client shows |
+|---|---|---|
+| `otherNotSendable` | "Your own answer can't be sent from here yet. Pick an option, or answer at the machine." | On a field: Other, its label unchanged, disabled, and the sentence as one muted line under the choices and as their accessible description. On a refusal: "Not sent · " and the sentence |
+
+`otherNotSendable` is a **temporary exception to #876** ("offer Other exactly when the CLI
+does"), decided by Product for #510: Copilot CLI 1.0.105 offers Other on a lone option list,
+but the host cannot yet prove that its pinned input box is empty. The read-only preparation
+in [#908](https://github.com/danswett/agent-bridge/issues/908) does not remove this exception
+or enable typing ([host answers](../host-answers.md)).
+
+Accepted by the session is `delivered`, never a stage. A stage a client does not know reads as
+`typed`; an older host sends none. A repeat of a request whose outcome was `unconfirmed`
+reads the session's record of that same question again, typing nothing: an answer recorded
+since (submitted at the machine, or recorded late) comes back `delivered`, and from then on
+stays so, and one recorded differently comes back `recorded`. It never answers a newer
+question. A client may therefore send the same request again after a reconnect, within the
+10 minutes the host remembers it, to learn what came of a `typed` answer.
+
 Typing into a live session is a single writer's job, and the host serializes it: one
 answer or reply per session at a time (`busy` otherwise), checked against the transcript
 immediately before typing and confirmed by identity, never by clock, after.
@@ -643,12 +687,29 @@ half-typed prompt holds, and a second answer would land on top of the first. Onl
 attempt that typed nothing (the session's console could not be reached) leaves the prompt
 answerable. A host records the attempt before the first key, and refuses when it cannot.
 
+The same answer sent again for such a prompt under a different request UUID by the **same
+sender** (a phone that was reloaded keeps its UUIDs in memory only) is that request sent
+again, not a second attempt: while the host still has the first answer in memory, it gets the
+first outcome and nothing is typed. An `unconfirmed` one is read again from the session as
+above, however long after, so it becomes `delivered` once the session has recorded it; while
+nothing is recorded it stays `unconfirmed`, with a reason that says only that nothing was
+typed again because the request repeats an answer already typed once; that holds for every
+repeat of an unconfirmed answer, under its own UUID or another, and whatever its stage (which
+still says how far the first got). A request UUID belongs to the sender, session and question it
+was first admitted for: replayed by another sender, or under another question, it is a request
+of its own, and nothing of the first's outcome or progress is given. Only a *different* answer, or the same words from **another sender**,
+is `refused` for a prompt already typed into, and the two are refused alike, so that no
+sender can learn what a first answer said by guessing it. A sender is the channel's peer (a
+device); the host has no person-level identity, so a second device of the same person gets the
+plain refusal. A host that restarted has forgotten the first answer, and refuses any second
+request for the prompt, as the record of attempts alone does.
+
 What a host answers, by agent. agent-ha-bridge is the baseline; answering Copilot
 permission prompts goes beyond it, at the user's request:
 
 | Agent | Prompt | `kind` | Answered | `delivered` when |
 |---|---|---|---|---|
-| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
+| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes, for a form the host can read on screen; free text, and a form it cannot, is `answerAtMachine` ([host answers](../host-answers.md)). Not with Other words for now: a lone list has `otherUnavailable` (`otherNotSendable`, a temporary exception to #876), since the host cannot yet prove its pinned box empty | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
 | Copilot CLI | Permission request for a shell command, path access, a file edit or read, a URL, an MCP tool or a custom tool | `approval` | Yes, with `sessions.approve`: approve once or deny, nothing that grants more | Its `permission.completed` for that request records `approved` (approve), or `denied-interactively-by-user` with no message or `cancelled` followed by the session's abort of the turn (deny) |
 | Copilot CLI | Any other permission request (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read, or any on a host with `permissions.remoteApproval` off | `approval` | No: `answerAtMachine` | |
 | Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
@@ -680,10 +741,15 @@ drawn where it runs is a visible escape (`\u202E`, or `\u{E0041}` past the first
 characters such as bidi controls and zero-width spaces and joiners, controls other than newline
 and tab, private-use and unassigned code points, unpaired surrogates, U+2028 and U+2029, and
 every default-ignorable code point; so is every right-to-left letter (`\u05D0`), which reorders
-what is drawn around it without any control. Approve once is still offered for such a prompt:
-the owner's "escape and allow" rule (#253, decision 3). The digest stays over the original text
+what is drawn around it without any control. Approve is still offered for such a prompt, as the
+owner's "escape and allow" rule has it (#253, decision 3), now only through the escaped-command
+confirmation ([Escaped approvals](#escaped-approvals), #803), and not while other permission
+requests wait, when the listed one is `answerAtMachine` (below, #690). The digest stays over the original text
 (and over a tool's name as written, where it held such a character or right-to-left letters, and
-over whether the prompt is answered at the machine at all), so a prompt holding a real U+202E and
+over whether the prompt is held at the machine for a reason the request itself gives: a kind no
+host drives, details that cannot be read, or a request to run outside the sandbox). It is not over
+`answerAtMachine` set for any other reason, `permissions.remoteApproval` off or another request
+waiting that it cannot be told from (#690), which can clear under the same `id`. So a prompt holding a real U+202E and
 one holding the six characters `\u202E` never share an id. An ordinary prompt's digest is a hash of
 `<kind>\n<message>`; one with more to it, or with a NUL in its message, is hashed in a
 length-prefixed form starting with a NUL, so no message can spell another prompt's identity (a
@@ -725,10 +791,36 @@ not go on to try something else unattended. The session is then idle, and a repl
 it what to do instead. A deny takes no text, so nothing can be typed into the prompt's
 message box.
 
-Immediately before typing, the host checks the transcript (that request still waiting and
-reading as shown, and no other prompt waiting that the screen could be showing instead),
-then reads the session's screen and finds the option by its label, never by its position,
-under rows showing what the prompt is for, and checks the transcript again. The key goes
+Copilot can have several permission requests waiting at once, one for each of a batch of
+parallel tool calls, and draws one of them at a time. The host lists the earliest still
+waiting, with `waiting` saying how many there are, and the next as a new question once it is
+answered. Immediately before typing, the host checks the transcript (that request still
+waiting and reading as shown, and no `ask_user` waiting beside it), then reads the session's
+screen and finds the option by its label, never by its position, under rows showing what the
+prompt is for, and checks the transcript again. While others wait, the screen, not the order
+asked, says which request is shown, identified positively as Copilot CLI 1.0.105 draws it:
+no waiting request holds a line-drawing character, a tab or a character drawn other than as
+it runs, in a value or a property name (an argument's name included); the options are inside one round frame whose top edge is on screen; every row in it
+above the options is this request's dialog (its title, the rule, each part of its body, a
+box's lines one to a row exactly as given, and its question) and nothing else; and the
+request is the earliest still waiting, with no other waiting request that would be drawn the
+same once all white space is gone. Only shell and path prompts are identified so. Copilot
+draws a waiting shell or other request first, then a hook's, then a path request, then a URL
+request, each in the order asked, so the earliest is drawn only when nothing waiting draws
+ahead of it: a path request asked before a shell one is `answerAtMachine` until the shell one
+is answered. A listed prompt that cannot be told apart so is `answerAtMachine` while that holds:
+another waiting request is drawn ahead of it, its kind is not shell or path, its own text has a
+run of spaces that can wrap onto a blank row, any waiting request's text (its own included)
+holds a line-drawing character, a tab, or a character a host shows escaped or a reference to
+one (`&#x202E;`), another waiting
+request has nothing drawn to check the screen against (a read naming no path), or another
+would be drawn the same. So an approval listed with `escaped` while others wait is
+`answerAtMachine`, Deny included, until it waits alone (unless its only escapes are in a path
+request's access kind, which its dialog never draws as written): the confirmation below is not
+offered for it. It is answerable again under the same `id` once it can be told apart. Otherwise
+the answer is `refused`, naming the other where its dialog is the one drawn ("the machine is
+showing a different permission (path access, request ed05e9d7)"), and the key is held from
+the frame's top edge. It is never retargeted to the request on screen. The key goes
 only if those rows and the options, and which is highlighted, still read the same at the
 moment it is typed.
 `permissions.remoteApproval` in the host's own settings turns this off on a machine
@@ -740,6 +832,13 @@ An approval holding a character a host shows as an escape (a bidi control, a zer
 hidden character, a control but newline and tab, a right-to-left letter; #220) carries
 `escaped`, set by the host from what it actually escaped (#803). Clients never infer it from
 `\u` text, which an agent can write itself.
+
+A Copilot permission prompt listed with `escaped` while other permission requests wait is
+`answerAtMachine` until it waits alone, since the host cannot tell such text apart on the
+session's screen, unless its only escapes are in a path request's access kind
+([Copilot permission prompts](#copilot-permission-prompts), #690): everything
+below gives way to that, so no client offers the confirmation or Deny for it, Home Assistant's
+Deny included, and a `session.answer` for it is `refused`.
 
 ```json
 "escaped": { "shown": "<64 hex>", "marks": [[12, 6], [40, 6]], "approve": "confirm" }
@@ -1584,29 +1683,86 @@ running (`working`); the main agent idle with background agents or commands stil
 and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
 was.
 
-### Disabled phone sign-in framework (#800 slice 2)
+### Phone sign-in (#800 slice 2, enabled per machine by #972)
 
-`sessions.signin` is **not advertised**. Neither production sign-in entrypoint nor
-credential-status adapter is registered. Direct `signin.start` and `signin.cancel`
-requests return `refused`. The internal, fake-tested framework is gated off by default;
-enabling a fake backend in a test does not enable deployed hosts.
+`sessions.signin` is **off by default** and turned on **per machine**, by the machine's own
+`config.json`: `permissions.phoneSignIn: true` ([host-config.md](../host-config.md#phone-sign-in)),
+set from the Windows app's Settings ("Let my devices sign Copilot in on this machine", a
+`host.settings` change over the local pipe, which an agent session may not make) or by
+`agent-bridge-host config set permissions.phoneSignIn true` at the machine. It is read when the host
+starts. A host advertises `sessions.signin`, and says `signIn: "phone"` on a session's
+`signInNeeded` attention, only while it is on **and** the host has an adapter that can run for
+that agent: today Copilot alone, on Windows alone, with Copilot's `.exe` found when the host
+started. Off, or for another agent, `signin.start` and
+`signin.cancel` return `refused` and no attention says `phone`. Devices cannot change the setting
+yet; that waits for #801's settings path. The capability is offered only to a channel the
+person authority below accepts: a device the machine's **device roster pins as a person's**. And
+no attention says `phone` while the roster pins nobody (#972 slice 2), so no client offers a Sign
+in every device would be refused; a client still offers it only with the capability.
 
-The eventual agent-owned entrypoint is subject to captured-output/privacy admission.
-Engineering approved unpatched `copilot login --device-code` conditionally: **the machine
-opens a browser and copies the code**. No production runner is included here, no live
-sign-in was attempted, and there is no replacement OAuth client or installed-CLI patch.
-An approved adapter must suppress CLI debug logging with a supported option, preserve
-the CLI's persistence/organization-policy checks, and keep both output streams private.
-The prepared, unexecuted launch contract uses
-`copilot login --device-code --host https://github.com --log-level none`,
-with host-resolved absolute executable/home, private redirected streams, no shell,
-and inherited token variables removed by name without examining their values.
-The installed CLI declares `none` as a supported level and forwards it into login.
-This launch specification is not a process factory; the output adapter still needs
-the routed, redacted capture. Upstream follow-up:
+**The person pin (#972 slice 2).** The pin is #55's signed roster entry
+([device-approval.md](../design/device-approval.md)), read from the machine's verified copy of
+the account's roster through one interface, `IPersonDeviceRoster`: `State` (`None`, `Ready`
+or `Unreadable`), `Find(key, account)`, `Pinned(account)`, `StillPinned(device)` and
+`Changed`. Trust's #55 slice A implements it on its verifier; until then the host's is
+`NoPersonRoster`, which pins nobody, so **no device is offered sign-in on any machine yet**. A
+device is pinned only when all of these hold (Trust's conditions on #972, 6700902097):
+
+* the roster is `Ready`. `None` and `Unreadable` both pin nobody, and `StillPinned` is false on
+  any doubt, a stale roster (device-approval.md §6.3) included;
+* `Find` matches the channel's full static key and relay account, and its device id is that
+  key's. The roster's own kind (`app`, `pwa` or `phone`, `RosterKinds.IsPerson`) and presence
+  (`key` or `webauthn`) decide; **the channel's self-declared kind is never an input**;
+* the device is past probation and confirmed (§3.4): one that isn't is not returned at all;
+* the machine is not read-only, and, where `trustedPeers` enforcement is on, the channel's
+  trusted-peer role is `person`. **A #402 trusted-peer `person` pin no longer opens sign-in**:
+  it is still needed there for the channel to act at all, and never enough.
+
+A grant is bound to the roster entry's `generation` and `add` hash, which change when the
+device is removed or added again. `Changed` fires on every change, a removal heard from another
+host included, and the host looks at every flow at once, as well as every 250 ms: a flow whose
+device is no longer pinned ends `cancelled` and its code is purged, and a re-added device is a
+new grant that never joins the old flow.
+
+* `signin.devices {}` (capability `signin.devices`, **new**) returns who can sign an agent in on
+  this machine, read-only: `{state: "none" | "ready" | "unreadable", devices: [{name, kind,
+  platform, thisDevice?}]}`, from the same roster and the same rules, `thisDevice: true` on the
+  asking device's own entry. Never a device id, key, generation or presence; the name and
+  platform are the roster's (the enrollee's words), with control characters removed. Offered
+  through the relay only, wherever `sessions.signin` itself is turned on (whether or not the
+  asking device is pinned), and only to a `person` role where `trustedPeers` enforcement is on:
+  `service` and `host` peers are refused it. A device shows it on its Machines page (ui.md §6.6);
+  the app beside the host has the same in its status (`signInDevices`,
+  [local-pipe.md](local-pipe.md)). Nothing adds or removes a device here: adding is #55's
+  enrollment, and removing a single device waits for #55's Remove.
+
+Copilot's adapter (`CopilotSignInAdapter`) runs the CLI's own `copilot login --device-code`,
+unpatched, under Engineering's conditional approval (#800 6648319937): **the machine opens a
+browser and copies the code**. There is no replacement OAuth client and no installed-CLI patch.
+It runs `copilot login --device-code --host https://github.com --log-level none` (the CLI's
+supported option, so login never writes its default debug log), with the host-resolved absolute
+`.exe` (never a `.cmd` shim, which would need a shell), `COPILOT_HOME` set to the host's own
+Copilot home, standard input closed (so the CLI's plaintext-storage question is answered no and
+its keychain persistence and organization-policy checks stand), inherited token variables and
+`COPILOT_DEBUG*` overrides removed by name without examining their values, and the process and
+anything it starts in a Windows job that ends them together (a browser the login started fresh
+closes when the flow ends). Both output streams stay in the
+host process: standard error is drained and discarded by the runner, and standard output is
+read only by the adapter, which turns the CLI's own lines into the private runner's frames:
+
+| CLI line (1.0.105), in this order and nothing else | Frame |
+|---|---|
+| `To authenticate, visit <verificationUri> and enter code <userCode>` | `code`, with the URL and code checked as below |
+| `Waiting for authorization...` | none |
+| `Signed in successfully as <account>.` (printed only once the credential is stored and the organization policy allows it) | `done`, `persisted` and `policyAllowed` true; the account text is discarded |
+
+Any other line, a line out of order or one over the runner's limits ends the flow `refused`,
+without saying what it was; a nonzero exit is `failed`. The CLI prints no expiry, so the code's
+`expiresAt` is the host's own 10-minute flow deadline, shorter than GitHub's 15-minute device
+codes. Upstream follow-up for a no-browser, no-clipboard mode:
 [github/copilot-cli#5358](https://github.com/github/copilot-cli/issues/5358).
 
-The framework's request/event contract (not yet offered to clients) is:
+The request/event contract is:
 
 `account`, `signIn` and `recovery` are structured host metadata, never copied or inferred
 from CLI prose, messages or displayed account strings. An account with no structured
@@ -1644,19 +1800,19 @@ fields fail closed. Recovery values come only from the host's typed lifecycle.
   Send deadlines cancel the underlying encrypted send as well as its wait, including
   terminal delivery and receipt replay. Lifetime expiry reports `expired` whether the
   worker or sweep observes it first; explicit cancellation before expiry stays `cancelled`.
-* Current pinned **person**, session-read **and** write authority are all required.
-  A self-claimed `app`/`pwa` kind is insufficient even when the transitional trust
-  enforcement switch is off. Service/host roles, revoked/regranted generations,
-  read-only G5 machines and unapproved/default configurations get no capability.
+* A current roster **person** pin (above) is required, and, where trusted-peer enforcement is
+  on, a `person` role too. A self-claimed kind is never an input. Service/host roles,
+  removed/re-added roster entries, a roster that is absent, unreadable or stale, read-only G5
+  machines and unapproved/default configurations get no capability.
 
 The private runner accepts **adapter frames, not guessed Copilot console fixtures**:
 one strict JSON line with exactly `kind: "code"`, `userCode`, `verificationUri`,
 `expiresAt`, then a `done` line with exactly `kind`, `outcome: "signedIn"`,
 `persisted: true`, `policyAllowed: true`, and successful process exit. Duplicate,
-unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. Native
-expiry metadata is required and capped by the host deadline. Stdout/stderr never enter
-the generic command runner or a logger; errors expose only constant outcomes. There
-is deliberately no concrete process factory until the entrypoint gate passes.
+unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. The
+adapter supplies `expiresAt` (above) and the runner caps it at the host deadline.
+Stdout/stderr never enter the generic command runner or a logger; errors expose only
+constant outcomes. The only concrete process factory is Copilot's adapter above.
 
 `signin.done signedIn` sets **pending**, not recovered: `signInNeeded` remains until
 the existing parser sees real main-agent model output after the latest auth failure.
@@ -1669,10 +1825,9 @@ credential scope. There is no status provider, credential-file inspection or aut
 probe. Even proof from another matching session only makes this session pending:
 its own real main-model reply is required to clear its attention.
 Dead-session resume/reload is an interface dependency on **#780 Host B**; the supplied
-stub starts/types nothing and claims no resumed session ids. No signed-in push is
-emitted by this framework.
-Advertising also waits for perf-A's follow-up to suppress ordinary "finished" pushes
-on auth failure (review 4476391166); that notification fix is not part of this slice.
+stub starts/types nothing and claims no resumed session ids, so `signin.done` lists none in
+`resumed` or `continue` yet. No signed-in push is emitted. Ordinary "finished" pushes on an
+auth failure are already suppressed (#845, with #841).
 
 ### Attention
 
@@ -1774,9 +1929,9 @@ that turn's error, or "Copilot stopped with an error." when no error was read be
 turn. Clients, HA and a `finished` push therefore never carry any of the agent's error text.
 
 Claude Code and Codex send none yet: their records are read only once a real, redacted sample of
-each has been captured. `account`, `signIn`, `recovery`, the per-machine
-roll-up in `hello`, the `signIn` and `signedIn` notices and the `sessions.signin` capability
-(relaying the agent's own device-code sign-in to a person's device) follow in later slices of
+each has been captured. `recovery`, `signIn` (`phone`, [above](#phone-sign-in-800-slice-2-enabled-per-machine-by-972)),
+the `signIn` notice and the `sessions.signin` capability are in place for Copilot; `account`, the
+per-machine roll-up in `hello` and the `signedIn` notice follow in later slices of
 #800; their shape is in [#800](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6646501884),
 and this section grows with each.
 ### Driver
@@ -1826,6 +1981,8 @@ session left under an agent's control still says so while it is idle. It says so
 | `userMessage` | string? | The latest user message, at most 2 KiB |
 | `userMessageFrom` | `"person"` \| `"schedule"` \| `"agent"` \| `"other"`? | **New (#489).** Who wrote `userMessage` when it was not the person typing: `schedule`, a prompt the agent's own scheduler sent; `agent`, one another agent sent, including a reply an agent sent through the bridge (`driver: agent` for the turn it started); `other`, anything else that is not someone typing. Absent means the person, and so does `person`. An unknown value reads as `other`, never as the person's. Absent whenever `userMessage` is |
 | `userMessageLabel` | string? | **New (#489).** A short plain-text label for a `userMessageFrom` that is not the person's, at most 64 bytes: a schedule's number (`"4"`, shown as "Scheduled prompt · #4"). Absent whenever `userMessage` is |
+| `turn` | string? | **New (#292).** The id of the latest turn, which `userMessage`, `reasoning`, `currentTool` and `question` belong to: the same id [`session.history`](v1-history.md#live-turns-and-history) gives it, so a client merging live activity with history pages draws it once. Absent before the first prompt, when the host could not read where the latest turn began, and after a record that may have started a turn but could not be read, until the next readable prompt. Never trimmed by the session budget |
+| `responseTurn` | string? | **New (#292).** The id of the turn the main agent's own latest reply (`own.response`, else `response`) was written in: `turn` once the latest turn has replied, an earlier turn's until then, so a client never draws the last turn's reply under a new prompt ([v1-history.md](v1-history.md#live-turns-and-history)). Absent with no such reply or when its turn is not known. Never trimmed |
 | `turnCount` | number? | User prompts whose turn has finished: the prompts sent, less one while a turn is still in progress (`working` or `waiting`). Not the agent's own model rounds: Copilot writes `assistant.turn_end` after every round of tool calls, and those are not counted |
 | `compactions` | number? | Context compactions so far |
 | `background` | Background? | Work the session started that is still running after its own turn. Absent when there is none |
@@ -1901,9 +2058,11 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `fields` | Field[] | In order. Empty for a plain message |
 | `askedAt` | time | |
 | `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
-| `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once. It still has its fields, so a client can say what it asks, but a client shows no controls for it, says to answer it at the machine ("Waiting on you · answer at the machine", ui.md §2.2), and a `session.answer` for it is `refused` |
-| `escaped` | object? | An approval the host showed any character of as an escape: `shown`, `marks` and `approve` ([Escaped approvals](#escaped-approvals)). Approve on it takes the escaped-command confirmation; Deny does not. Absent when nothing was escaped |
+| `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once, or a Copilot permission request listed while others wait that the host cannot tell from them on the session's screen ([Copilot permission prompts](#copilot-permission-prompts)). That last can clear under the same `id` once it can be told apart, so a client reads the flag afresh on every update rather than once per question. It still has its fields, so a client can say what it asks, but a client shows no controls for it, says to answer it at the machine ("Waiting on you · answer at the machine", ui.md §2.2), and a `session.answer` for it is `refused` |
+| `answerAtMachineReason` | string? | Optional, display-only reason, not an answering capability. `"shape"` accompanies `answerAtMachine: true` only for a Copilot `ask_user` with no fields after reading its schema, or with a present, non-null `choices` (the legacy format, including an empty list or blank string beside a valid schema). PWA and Windows cards then show "Answer at the machine · *machine*" followed by "This kind of question can only be answered at the machine.", both in Needs you's text colour and accessible reading order, without a live region. Absent, malformed or unknown reasons keep the client's existing single line; clients never infer a reason from fields. Read afresh on every update, even with the same question `id`. Row status, attention, HA wording, `otherUnavailable`, delivery refusals and answer guards are unchanged |
+| `escaped` | object? | An approval the host showed any character of as an escape: `shown`, `marks` and `approve` ([Escaped approvals](#escaped-approvals)). Approve on it takes the escaped-command confirmation; Deny does not. Neither goes when it is also `answerAtMachine`, as one listed while other Copilot permissions wait usually is ([Copilot permission prompts](#copilot-permission-prompts), #690). Absent when nothing was escaped |
 | `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land. And while a permission prompt or a sub-agent's question waits beside it, the session's own Copilot `ask_user` is `answerAtMachine` too, since the CLI may be showing the other one; a host also checks the transcript for a pending permission prompt just before typing an answer |
+| `waiting` | int? | How many permission prompts the session has waiting, this one included, when more than one is (#690). Copilot asks one for each of a batch of parallel tool calls and shows them one at a time; the host lists the earliest still waiting, so this is always the first of them. A client says so ("1 of 4 permissions waiting"). The next comes as a new question with its own `id` once this one is answered, so an answer to this one never reaches it. Absent with one |
 
 ### Field
 
@@ -1915,6 +2074,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `type` | `"choice"` \| `"multi"` \| `"boolean"` \| `"text"` \| `"number"` | `choice` takes one of `options`, `multi` any number of them |
 | `options` | Option[]? | For `choice` and `multi` |
 | `allowOther` | bool? | `choice` and `multi` also accept free text |
+| `otherUnavailable` | string? | A reason code: the agent offers Other here and this machine can't send it yet ([Answer reasons](#answer-reasons)). Only where `allowOther` is not `true`. Display only: a client shows Other disabled, with the reason's sentence; it never enables Other or changes what an answer may hold |
 | `default` | any? | |
 | `required` | bool? | |
 | `constraints` | FieldConstraints? | What the agent's schema allows of the value (#766). Absent when it says nothing a host checks |
@@ -1948,9 +2108,26 @@ and `"  ab"` is 4 characters typed and 2 trimmed. A host checks the text it woul
 breaks flattened. A field whose constraints a host cannot check exactly (a bound JavaScript would
 hold as another number, a length that is not a whole number, a pattern it cannot read as
 JavaScript does, or patterns past the 250 ms one question's patterns share), or whose pre-filled
-default breaks them (checked so too), makes its question `answerAtMachine`. So does a `required`
-`text` field whose pre-filled default is blank (non-empty, but blank as above): that default
-is the only answer it can be given from another device, and it is refused as blank. So does a
+default breaks them (checked so too), makes its question `answerAtMachine`. So does a `text`
+field, required or not, whose pre-filled default is blank (non-empty, but blank as above, or
+nothing but what shows as nothing, as free text is judged: `"\u200B"`, `"\u2800"`, `"\u0301"`):
+that default is the only answer it can be given from another device, a client leaves blank text
+out of an answer, and a required field's is refused as blank. A default with something visible
+in it, such as `"a\u200Bb"`, is answered as usual. So does a `text` or `number` field
+whose pre-filled default no answer can match: a `text` field's that is not a string, holds half
+a surrogate pair (a client sends it as U+FFFD) or is longer than `text` takes (4 KiB), a
+`number` field's that is `null`, not plainly a number, or one JavaScript would hold as another
+number; a form whose smallest answer exceeds 16 KiB in the largest envelope a host takes (a
+256-character session id, a request id, `progress`), counting each pre-filled `text` or `number`
+default (a number as the number it holds, written the longer of the ways JavaScript and .NET
+write it), and every other default and every required field
+at its smallest (a required `number` at 0, or at the number nearest 0 that its bounds,
+`multipleOf` and `integer` allow, past an exclusive bound; a required `text`
+at its `minLength`, which past 4 KiB no answer can meet); and a form with
+half a surrogate pair anywhere in its schema, which a host cannot read. Required `text` that
+must match a `pattern` or `format` is counted at its `minLength` (or one character): a host
+does not solve a pattern for its shortest match, so such a form may be offered and its answer
+refused as larger than 16 KiB, before any key. So does a
 `choice` whose schema, or a `multi` whose `items`, has text constraints. A client checking a
 `pattern` reads it as JavaScript does, without flags: `\d` and `\w` are ASCII.
 
