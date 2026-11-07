@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using AgentBridge.FeedbackInbox;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -8,7 +9,7 @@ namespace AgentBridge.FeedbackInbox.Tests;
 public sealed class FeedbackInboxProcessorTests
 {
     static readonly FeedbackMetadata Classified = new("startup-failure", "launch", "1.2.3", "1.2.3", "windows", "x64", true);
-    const string PrivateMarker = "tester text, private log and personal path";
+    const string PrivateMarker = "testerKey=forged; tester text, private log and personal path";
 
     static FeedbackInboxProcessor Processor(
         FakeSource source,
@@ -27,7 +28,7 @@ public sealed class FeedbackInboxProcessorTests
     public async Task Public_issues_contain_only_validated_fields_and_never_decrypted_content()
     {
         var source = new FakeSource(("random-name", [1, 2, 3]));
-        var decryptor = new FakeDecryptor(new DecryptedFeedback(Classified, PrivateMarker, "opaque-tester-id"));
+        var decryptor = new FakeDecryptor(new DecryptedFeedback(Classified, PrivateMarker));
         var privateStore = new FakePrivateStore();
         var publicStore = new FakePublicStore();
 
@@ -35,18 +36,17 @@ public sealed class FeedbackInboxProcessorTests
 
         var issue = Assert.Single(publicStore.Issues);
         Assert.Contains("[beta-feedback] startup-failure at launch (", issue.Title);
-        Assert.Contains("Testers affected: 1", issue.Body);
+        Assert.Contains("Testers affected: unknown", issue.Body);
         Assert.Equal(["beta-feedback", "fb-kind:startup-failure"], issue.Labels);
         Assert.DoesNotContain(PrivateMarker, issue.Body);
         Assert.DoesNotContain("random-name", issue.Body);
-        Assert.DoesNotContain("opaque-tester-id", issue.Body);
         Assert.Contains(PrivateMarker, Assert.Single(privateStore.Classified).PrivateContent);
         Assert.Empty(source.Pending);
         Assert.Equal(10, publicStore.LastHourlyCap);
     }
 
     [Fact]
-    public async Task Missing_tester_key_keeps_public_tester_count_unknown()
+    public async Task Public_tester_count_stays_unknown_without_authenticated_identity()
     {
         var source = new FakeSource(("random-name", [1, 2, 3]));
         var decryptor = new FakeDecryptor(new DecryptedFeedback(Classified, PrivateMarker));
@@ -92,18 +92,59 @@ public sealed class FeedbackInboxProcessorTests
     }
 
     [Fact]
-    public async Task Multiple_bundles_from_one_tester_count_as_one_and_update_one_issue()
+    public async Task Multiple_bundles_update_one_issue_without_claiming_tester_count()
     {
         var source = new FakeSource(("first", [1, 2, 3]), ("second", [4, 5, 6]));
-        var decryptor = new FakeDecryptor(new DecryptedFeedback(Classified, PrivateMarker, "opaque-tester-id"));
+        var decryptor = new FakeDecryptor(new DecryptedFeedback(Classified, PrivateMarker));
         var privateStore = new FakePrivateStore();
         var publicStore = new FakePublicStore();
 
         await Processor(source, decryptor, privateStore, publicStore).ProcessAsync();
 
         var issue = Assert.Single(publicStore.Issues);
-        Assert.Equal(1, issue.TesterCount);
+        Assert.Null(issue.TesterCount);
+        Assert.Contains("Testers affected: unknown", issue.Body);
         Assert.Equal(2, privateStore.Classified.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task Unconfirmed_private_destination_fails_before_reading_or_deleting(bool? confirmation)
+    {
+        var source = new FakeSource(("random-name", [1, 2, 3]));
+        var decryptor = new FakeDecryptor(new DecryptedFeedback(Classified, PrivateMarker));
+        var privateStore = new FakePrivateStore { RepositoryPrivate = confirmation };
+        var publicStore = new FakePublicStore();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Processor(source, decryptor, privateStore, publicStore).ProcessAsync());
+
+        Assert.Equal(0, source.ListCalls);
+        Assert.Equal(0, source.Reads);
+        Assert.Equal(0, decryptor.Calls);
+        Assert.Empty(privateStore.Classified);
+        Assert.Empty(privateStore.Unclassified);
+        Assert.Single(source.Pending);
+        Assert.Empty(publicStore.Issues);
+    }
+
+    [Fact]
+    public async Task Cryptographic_failure_is_quarantined_and_does_not_block_later_bundles()
+    {
+        var source = new FakeSource(("invalid", [1, 2, 3]), ("valid", [4, 5, 6]));
+        var decryptor = new FakeDecryptor(new DecryptedFeedback(Classified, PrivateMarker)) { InvalidFirstByte = 1 };
+        var privateStore = new FakePrivateStore();
+        var publicStore = new FakePublicStore();
+
+        await Processor(source, decryptor, privateStore, publicStore).ProcessAsync();
+
+        var quarantined = Assert.Single(privateStore.Unclassified);
+        Assert.Equal("invalid-envelope", quarantined.UnclassifiedReason);
+        Assert.Equal(Convert.ToBase64String([1, 2, 3]), quarantined.OpaqueCiphertextBase64);
+        Assert.Equal("valid", Assert.Single(privateStore.Classified).BundleName);
+        Assert.Single(publicStore.Issues);
+        Assert.Empty(source.Pending);
     }
 
     [Fact]
@@ -230,6 +271,7 @@ public sealed class FeedbackInboxProcessorTests
     {
         public readonly Dictionary<string, byte[]> Pending = bundles.ToDictionary(x => x.Name, x => x.Bytes);
         public int Reads;
+        public int ListCalls;
         public long? ReportedSize { get; init; }
         public int TransientSizeFailures { get; set; }
         public TaskCompletionSource SecondSizeCall { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -237,6 +279,7 @@ public sealed class FeedbackInboxProcessorTests
 
         public async IAsyncEnumerable<string> ListPendingAsync([EnumeratorCancellation] CancellationToken cancellationToken)
         {
+            ListCalls++;
             foreach (var name in Pending.Keys.ToArray())
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -278,6 +321,7 @@ public sealed class FeedbackInboxProcessorTests
     sealed class FakeDecryptor(DecryptedFeedback result) : IFeedbackEnvelopeDecryptor
     {
         public int Calls;
+        public byte? InvalidFirstByte { get; init; }
 
         public Task<DecryptedFeedback> DecryptAsync(
             ReadOnlyMemory<byte> ciphertext,
@@ -285,6 +329,10 @@ public sealed class FeedbackInboxProcessorTests
             CancellationToken cancellationToken)
         {
             Calls++;
+            if (ciphertext.Length > 0 && ciphertext.Span[0] == InvalidFirstByte)
+            {
+                return Task.FromException<DecryptedFeedback>(new CryptographicException("Invalid authentication tag."));
+            }
             return Task.FromResult(result);
         }
     }
@@ -292,21 +340,18 @@ public sealed class FeedbackInboxProcessorTests
     sealed class FakePrivateStore : IFeedbackPrivateStore
     {
         readonly HashSet<string> seenBundles = [];
-        readonly Dictionary<string, HashSet<string>> testerKeysByFingerprint = [];
+        public bool? RepositoryPrivate { get; set; } = true;
         public readonly List<FeedbackPrivateRecord> Classified = [];
         public readonly List<FeedbackPrivateRecord> Unclassified = [];
         public readonly List<PublicFeedbackIssueReference> Links = [];
 
-        public Task<int?> UpsertClassifiedAsync(string fingerprint, FeedbackPrivateRecord record, CancellationToken cancellationToken)
+        public Task<bool?> ConfirmRepositoryPrivateAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(RepositoryPrivate);
+
+        public Task UpsertClassifiedAsync(string fingerprint, FeedbackPrivateRecord record, CancellationToken cancellationToken)
         {
             if (seenBundles.Add(record.BundleName)) { Classified.Add(record); }
-            if (string.IsNullOrWhiteSpace(record.TesterKey)) { return Task.FromResult<int?>(null); }
-            if (!testerKeysByFingerprint.TryGetValue(fingerprint, out var testerKeys))
-            {
-                testerKeysByFingerprint[fingerprint] = testerKeys = [];
-            }
-            testerKeys.Add(record.TesterKey);
-            return Task.FromResult<int?>(testerKeys.Count);
+            return Task.CompletedTask;
         }
 
         public Task StoreUnclassifiedAsync(FeedbackPrivateRecord record, CancellationToken cancellationToken)

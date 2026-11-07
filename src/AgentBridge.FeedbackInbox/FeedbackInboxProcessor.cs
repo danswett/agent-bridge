@@ -23,7 +23,7 @@ public sealed record FeedbackMetadata(
     string Architecture,
     bool Actionable);
 
-public sealed record DecryptedFeedback(FeedbackMetadata? Metadata, string PrivateContent, string? TesterKey = null);
+public sealed record DecryptedFeedback(FeedbackMetadata? Metadata, string PrivateContent);
 
 public sealed record FeedbackPrivateRecord(
     string BundleName,
@@ -32,8 +32,7 @@ public sealed record FeedbackPrivateRecord(
     string Summary,
     string? PrivateContent,
     string? OpaqueCiphertextBase64,
-    string? UnclassifiedReason,
-    string? TesterKey = null);
+    string? UnclassifiedReason);
 
 public sealed record PublicFeedbackIssue(
     string Fingerprint,
@@ -92,8 +91,9 @@ public sealed class FeedbackInboxTransientException(string message, Exception? i
 
 public interface IFeedbackPrivateStore
 {
-    // Must be idempotent by bundle name and count distinct opaque tester keys, or return null if unavailable.
-    Task<int?> UpsertClassifiedAsync(string fingerprint, FeedbackPrivateRecord record, CancellationToken cancellationToken);
+    // True only when the configured destination is explicitly confirmed private; false or null fails closed.
+    Task<bool?> ConfirmRepositoryPrivateAsync(CancellationToken cancellationToken);
+    Task UpsertClassifiedAsync(string fingerprint, FeedbackPrivateRecord record, CancellationToken cancellationToken);
     Task StoreUnclassifiedAsync(FeedbackPrivateRecord record, CancellationToken cancellationToken);
     Task LinkPublicIssueAsync(string fingerprint, PublicFeedbackIssueReference issue, CancellationToken cancellationToken);
 }
@@ -131,6 +131,10 @@ public sealed class FeedbackInboxProcessor(
         {
             throw new InvalidOperationException("Feedback inbox limits must be positive.");
         }
+        if (await privateStore.ConfirmRepositoryPrivateAsync(cancellationToken) is not true)
+        {
+            throw new InvalidOperationException("The private feedback repository is not confirmed private.");
+        }
 
         await foreach (var name in source.ListPendingAsync(cancellationToken))
         {
@@ -163,7 +167,7 @@ public sealed class FeedbackInboxProcessor(
             {
                 decoded = await decryptor.DecryptAsync(ciphertext.Value, keys, cancellationToken);
             }
-            catch (FeedbackEnvelopeException)
+            catch (Exception exception) when (exception is FeedbackEnvelopeException or CryptographicException)
             {
                 await SaveUnclassifiedAsync(name, "invalid-envelope", null, ciphertext.Value, cancellationToken);
                 await source.DeleteAsync(name, cancellationToken);
@@ -180,14 +184,12 @@ public sealed class FeedbackInboxProcessor(
             var fingerprint = Fingerprint(metadata);
             var receivedAt = time.GetUtcNow();
             var summary = Summary(metadata);
-            var record = new FeedbackPrivateRecord(
-                name, receivedAt, fingerprint, summary, decoded.PrivateContent, null, null, decoded.TesterKey);
-            var testerCount = await privateStore.UpsertClassifiedAsync(fingerprint, record, cancellationToken);
-            if (testerCount is <= 0) { throw new InvalidOperationException("The private feedback store returned an invalid tester count."); }
+            var record = new FeedbackPrivateRecord(name, receivedAt, fingerprint, summary, decoded.PrivateContent, null, null);
+            await privateStore.UpsertClassifiedAsync(fingerprint, record, cancellationToken);
 
             if (metadata.Actionable)
             {
-                var issue = CreatePublicIssue(metadata, fingerprint, testerCount);
+                var issue = CreatePublicIssue(metadata, fingerprint);
                 var reference = await publicIssues.UpsertAsync(issue, options.MaxNewIssuesPerHour, cancellationToken);
                 if (reference is null) { continue; }
                 await privateStore.LinkPublicIssueAsync(fingerprint, reference, cancellationToken);
@@ -261,7 +263,7 @@ public sealed class FeedbackInboxProcessor(
     static string Summary(FeedbackMetadata m) =>
         $"Beta feedback reports {m.ErrorType} at {m.Stage} ({m.OperatingSystem}/{m.Architecture}).";
 
-    static PublicFeedbackIssue CreatePublicIssue(FeedbackMetadata m, string fingerprint, int? testerCount)
+    static PublicFeedbackIssue CreatePublicIssue(FeedbackMetadata m, string fingerprint)
     {
         var prefix = fingerprint[..8];
         var title = $"[beta-feedback] {m.ErrorType} at {m.Stage} ({prefix})";
@@ -274,7 +276,7 @@ public sealed class FeedbackInboxProcessor(
             $"- Host version: `{m.HostVersion ?? "unknown"}`",
             $"- OS: `{m.OperatingSystem}`",
             $"- Architecture: `{m.Architecture}`",
-            $"- Testers affected: {testerCount?.ToString() ?? "unknown"}",
+            "- Testers affected: unknown",
             $"- Fingerprint: `{fingerprint}`");
         return new PublicFeedbackIssue(
             fingerprint,
@@ -286,7 +288,7 @@ public sealed class FeedbackInboxProcessor(
             m.HostVersion,
             m.OperatingSystem,
             m.Architecture,
-            testerCount,
+            null,
             ["beta-feedback", $"fb-kind:{m.ErrorType}"]);
     }
 }
