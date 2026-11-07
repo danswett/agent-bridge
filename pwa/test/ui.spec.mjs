@@ -131,6 +131,37 @@ test('a machine where agent-ha-bridge runs is shown read-only with its reason, a
   await expect(q.locator('.read-only-machine')).toHaveText(`This machine is read-only from the phone: ${reason}.`);
 });
 
+test('only the host shape reason adds a quiet explanation after the at-machine line, including same-id updates', async ({ page }) => {
+  await openDemo(page);
+  const prompt = {
+    id: 'legacy-887', kind: 'form', message: 'Keep the old witness format?', askedAt: later(), answerAtMachine: true,
+    fields: [{ name: 'answer', type: 'choice', options: [{ value: 'Yes' }, { value: 'No' }], allowOther: true, required: true }],
+  };
+  await upsert(page, COPILOT, { question: prompt, updatedAt: later() });
+  const q = (await open(page, COPILOT)).locator('.question');
+  const rowStatus = await row(page, COPILOT).locator('.row-status').innerText();
+  for (const reason of [null, 'future', 'shape', null]) {
+    await upsert(page, COPILOT, { question: { ...prompt, answerAtMachineReason: reason }, updatedAt: later() });
+    await expect(q.locator('button, input, select, textarea, .fields')).toHaveCount(0);
+    await expect(q.locator('.read-only-why')).toHaveText(reason === 'shape'
+      ? 'Answer at the machine · Demo machine' : 'This prompt can only be answered at the machine on Demo machine.');
+    await expect(q.locator('.at-machine-explanation')).toHaveCount(reason === 'shape' ? 1 : 0);
+    if (reason === 'shape') {
+      const line = q.locator('.at-machine-explanation');
+      await expect(line).toHaveText('This kind of question can only be answered at the machine.');
+      await expect(q).toMatchAriaSnapshot(`
+        - heading "Main agent asks" [level=4]
+        - paragraph: Keep the old witness format?
+        - note: Answer at the machine · Demo machine
+        - paragraph: This kind of question can only be answered at the machine.
+      `);
+      expect(await line.evaluate((e) => e.closest('[aria-live], [role="alert"], [role="status"]'))).toBeNull();
+      expect(await colourOf(line)).toBe(await role(page, 'needs-text'));
+    }
+    await expect(row(page, COPILOT).locator('.row-status')).toHaveText(rowStatus);
+  }
+});
+
 // The status glyph and words (docs/design/ui.md §2), which replaced the coloured edges and glows.
 // A row's glyph: the one named for a screen reader, as the row reads (ui.md §9).
 const glyphOf = (page, id) => row(page, id).locator('.row-main .glyph');

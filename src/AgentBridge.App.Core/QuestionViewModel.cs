@@ -273,9 +273,13 @@ public sealed partial class QuestionViewModel : Observable
     {
         "truncated" => $"Part of this question didn't fit in the message from the machine, so it can't be answered from here. Answer at the machine{at}.",
         "approvalOff" => $"Approving permission prompts from the app and other devices is turned off on this machine (Settings). Answer at the machine{at}.",
+        "atMachine" when AtMachineExplanation is not null => string.IsNullOrEmpty(machine) ? "Answer at the machine" : $"Answer at the machine · {machine}",
         "atMachine" => $"This prompt can only be answered at the machine{at}.",
         _ => $"This machine isn't taking answers from the app right now. Answer at the machine{at}.",
     };
+
+    public string? AtMachineExplanation => Why == "atMachine" && Question.AnswerAtMachineReason == "shape"
+        ? "This kind of question can only be answered at the machine." : null;
 
     // A prompt answered at the machine shows what it asks, not choices nobody can make here.
     public bool ShowReadOnlyFields => !Answerable && Fields.Count > 0 && Why is not ("atMachine" or "approvalOff");
@@ -554,6 +558,7 @@ public sealed partial class QuestionViewModel : Observable
     // updated to refuse what it used to offer (#220), or a budget that had to cut it.
     public static bool SaysTheSame(Question a, Question b) =>
         a.Kind == b.Kind && a.Message == b.Message && a.Truncated == b.Truncated && a.AnswerAtMachine == b.AnswerAtMachine && a.Agent == b.Agent
+        && a.AnswerAtMachineReason == b.AnswerAtMachineReason
         && SameEscaped(a.Escaped, b.Escaped)
         && a.Fields.Count == b.Fields.Count && a.Fields.Zip(b.Fields).All(p => SameField(p.First, p.Second));
 
