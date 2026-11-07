@@ -94,6 +94,9 @@ const network = (request) => fetch(request.url, { cache: 'no-cache', credentials
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin || !url.href.startsWith(self.registration.scope) || url.pathname.includes('/v1/')) { return; }
+  // The app is served at its origin's root (#393), where the spikes (/s2/, /s4/) and the old
+  // /app/ redirect page are also in scope: a navigation to any of those is theirs, not the app's.
+  if (e.request.mode === 'navigate' && url.pathname !== new URL(self.registration.scope).pathname) { return; }
   e.respondWith((async () => {
     const own = await caches.open(CACHE);
     // A navigation is the app's page, whatever its query says (?demo=1, ?host=…).

@@ -5,7 +5,9 @@ through the relay. Plain ES modules and CSS, no framework, no build step, nothin
 CDN: the page's Content-Security-Policy allows scripts and styles from this site only,
 and network access to the relay only.
 
-Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`.
+Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`. It moves to
+<https://app.slipgates.com/> (#393) when the repository variable `PAGES_APP_AT_ROOT` is `true`: the app is then the
+site's root, and `/app/` redirects to it. The tests serve the app at `/`, as it will be there.
 Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
 
 It shows sessions, their activity and their pending questions, answers those questions

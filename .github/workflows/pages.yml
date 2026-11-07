@@ -2,6 +2,8 @@ name: Pages
 
 # Publishes the spikes' browser self-tests, so they can be run on real devices (an
 # iPhone's Safari in particular) without any server: https://danswett.github.io/agent-bridge/
+# From the move to https://app.slipgates.com/ (#393) the PWA is the site's root and the spikes stay
+# under /s2/ and /s4/.
 on:
   push:
     branches: [main]
@@ -15,6 +17,9 @@ env:
   # Production's blob store (infra/regions/westus2.bicepparam, production.blobStorageName): the
   # app uploads large attachments straight to it, so its CSP names it.
   BLOB_ORIGIN: https://abblobprodwus2.blob.core.windows.net
+  # Repository variable PAGES_APP_AT_ROOT=true puts the PWA at the site's root, for app.slipgates.com
+  # (docs/app-domain.md). Unset, the site is as it was: the PWA at /app/.
+  APP_AT_ROOT: ${{ vars.PAGES_APP_AT_ROOT }}
 
 # Each job gets its own: the build runs the PWA's packages, so it holds no token that could publish
 # (#650); the deploy publishes what the build made, and runs nothing from the repository.
@@ -43,7 +48,17 @@ jobs:
         run: npm ci --prefix pwa --ignore-scripts --no-audit --no-fund
       - name: Assemble site
         run: |
-          mkdir -p _site/s2 _site/s4
+          # The product PWA. Its build writes config.js and the same policy, with no inline styles
+          # allowed; the tests run against this exact output. It goes first: the build clears its
+          # output directory. APP_AT_ROOT is set only for the move to app.slipgates.com (#393), when
+          # the PWA takes the site's root; until then it stays at /app/, where installed apps are.
+          if [ "$APP_AT_ROOT" = 'true' ]; then app=_site; else app=_site/app; fi
+          node pwa/tools/build-site.mjs --out "$app" --relay "$S4_RELAY" --blob-origin "$BLOB_ORIGIN"
+          grep -q 'Content-Security-Policy' "$app/index.html"
+          grep -q "$BLOB_ORIGIN" "$app/index.html"
+          grep -q "$S4_RELAY" "$app/config.js"
+          grep -qF "$S4_RELAY" "$app"/bundle/main-*.js
+          mkdir -p _site/s2 _site/s4 _site/app
           cp spikes/s2-noise-interop/web/* _site/s2/
           cp spikes/s4-relay/web/* _site/s4/
           cp spikes/s2-noise-interop/web/noise-p256.js _site/s4/
@@ -54,14 +69,18 @@ jobs:
           csp="default-src 'self'; script-src 'self'; connect-src 'self' $S4_RELAY $relay_ws; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'"
           sed -i "s|<meta charset=\"utf-8\">|<meta charset=\"utf-8\">\n  <meta http-equiv=\"Content-Security-Policy\" content=\"$csp\">|" _site/s4/index.html
           grep -q 'Content-Security-Policy' _site/s4/index.html
-          # The product PWA, at /app/. Its build writes config.js and the same policy,
-          # with no inline styles allowed; the tests run against this exact output.
-          node pwa/tools/build-site.mjs --out _site/app --relay "$S4_RELAY" --blob-origin "$BLOB_ORIGIN"
-          grep -q 'Content-Security-Policy' _site/app/index.html
-          grep -q "$BLOB_ORIGIN" _site/app/index.html
-          grep -q "$S4_RELAY" _site/app/config.js
-          grep -qF "$S4_RELAY" _site/app/bundle/main-*.js
-          cat > _site/index.html <<'EOF'
+          if [ "$APP_AT_ROOT" = 'true' ]; then
+            # The old address, danswett.github.io/agent-bridge/app/, is redirected here by Pages
+            # and arrives at /app/: send it on to the app, keeping a deep link's query and fragment.
+            cat > _site/app/index.html <<'EOF'
+          <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Slipgates has moved</title>
+          <p>Slipgates is now at <a href="/">app.slipgates.com</a>.</p>
+          <script src="redirect.js"></script>
+          EOF
+            printf "location.replace('/' + location.search + location.hash);\n" > _site/app/redirect.js
+          else
+            cat > _site/index.html <<'EOF'
           <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
           <title>agent-bridge</title>
           <h1>agent-bridge</h1>
@@ -71,7 +90,7 @@ jobs:
           <li><a href="s4/">S4: the spike PWA, through the relay to your hosts (test data only)</a></li>
           </ul>
           EOF
-      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+          fi      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: _site
 

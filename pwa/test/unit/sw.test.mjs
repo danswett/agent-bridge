@@ -316,6 +316,13 @@ test('a release\'s own files come from its cache, with nothing asked of the netw
   assert.deepEqual(sw.fetched, []);
 });
 
+test('a page of another site under the same scope is left to the browser, never answered with the app', async () => {
+  const sw = cachingWorker({ [CURRENT]: { [scope]: 'page' } });
+  assert.equal(await sw.get(`${scope}s4/`, 'navigate'), undefined);
+  assert.equal(await sw.get(`${scope}app/?demo=1`, 'navigate'), undefined);
+  assert.deepEqual(sw.fetched, []);
+});
+
 test('a file that is not the release\'s own is served as kept, and fetched again for next time', async () => {
   const sw = cachingWorker({ [CURRENT]: { [`${scope}js/ui/glyph.js`]: 'kept' } });
   assert.equal((await sw.get(`${scope}js/ui/glyph.js`)).body, 'kept');
