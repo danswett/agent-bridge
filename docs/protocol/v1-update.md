@@ -181,7 +181,7 @@ commit, which needed no accepted work in flight. Update now takes the lease as
 `SelfInitiatedGraceful`, purpose `Update`. **No update takes the lease today:** the app's
 Install, Restart to update and Install between turns stop the host over the pipe
 (`host.stop`), and nothing uses `DeparturePurpose.Update` yet; Update now is its first consumer
-([open question 1](#open-questions)).
+([settled decision 1](#settled-decisions)).
 
 **Supersedes Q-O7 for updates only.** #801's restart rule is that a restart "is refused at once
 when the lease cannot be had, never forced, never carried out later" (owner, Q-O7; ManageService,
@@ -391,7 +391,7 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
    download and waits for the next quiet moment ([After the press](#the-confirmation)), never
    going on sessions nobody confirmed it for.
 3. The app asks the host to leave: one app-only pipe op (proposed `host.update.depart`,
-   `{ "request" }`), the seam #819's installs will use too ([open question 1](#open-questions)). The
+   `{ "request" }`), the step #870 owns, which #819's installs move to later ([settled decision 1](#settled-decisions)). The
    host takes #805's lease, purpose `Update`, waiting up to 10 s. If an answer, a reply or a stop
    is being typed or delivered, it doesn't get it; it tries again, up to 6 times (about a
    minute), then refuses `not-quiet`, having interrupted nothing. **With the lease held, it
@@ -431,11 +431,17 @@ so an update that hangs is never hidden. A reconnect clears it.
 
 That transport isn't built yet (`UnnegotiatedPlannedStateTransport`), and #805 lets only a
 person's `RemoteRestart` and `RemoteStop` leave on a `Legacy` receipt without it; an automatic
-update never may. **Open question 2:** may a signed Update now take `Legacy` too, until the
-transport lands? Proposed yes, since a person pressed it and is watching, as for
-`manage.restart`. Meanwhile the clients bridge the gap themselves: a machine whose last
-`update.state` was `installing` with `requestNow` is shown "Restarting to update…" for 90 s after its
-channel closes, then Offline as usual.
+update never may. **Until it lands, a signed Update now leaves on a `Legacy` receipt too, as a
+remote restart does** (SRE, settled decision 2), and no automatic update ever does. That
+replaces only the announcement: the quiet lease, the check against the person's confirmation
+and the shared cap, checked when it commits, all stay. `Legacy` sends no planned state, so the
+host writes one fixed line to its own log, "restart for update: *from* to *to*, asked from
+*device*", and the owner's other devices get the quiet notice above; relay and fleet monitoring
+already expect a drop from a remote restart, so no false offline alert. **Switch-over:** once
+#815's planned announcement is negotiated, Update now announces through it (`reason: update`)
+and the `Legacy` path for Update now is deleted in that same PR. Meanwhile the clients bridge
+the gap themselves: a machine whose last `update.state` was `installing` with `requestNow` is
+shown "Restarting to update…" for 90 s after its channel closes, then Offline as usual.
 
 ### Questions and answers across the restart
 
@@ -490,8 +496,11 @@ so they need one too.
    signed-command check as `ManageService` (one shared gate, not a copy), counts the restart cap
    with it, computes `busy`, and passes `now` asks to the app. The app-only departure op takes
    the lease, announces and commits; the `Update` purpose's conditions are registered at
-   composition (read-only and `remoteManage`, the sign-in entrypoint, another profile's host),
-   whichever of this or #870 lands first. `ManageService`'s header comment changes from "never
+   composition (read-only and `remoteManage`, the sign-in entrypoint, another profile's host).
+   The #870 lane owns the departure step's contract and Daily owns the Update now caller; a
+   change to the step is reviewed in both PRs together (SRE, decision 1). `LifecycleCoordinator`
+   grants `Legacy` to a person-signed `Update` departure as it does to `RemoteRestart`, never to
+   an automatic one, and host-lifecycle.md says so (decision 2). `ManageService`'s header comment changes from "never
    forced, never carried out later (owner, Q-O7)" to "never forced; a restart is never carried
    out later (owner, Q-O7); an update a person asks for now (#1159, owner 2026-11-07) waits for
    its download and up to a minute for the lease, and goes over no turn nobody confirmed: if the
@@ -541,6 +550,21 @@ Order: 1, then 2, then 3 and 4 together.
 
 ### Settled decisions
 
+1. **One departure step with #819** (SRE, 2026-11-07, on #1161): "agree with your proposal. Only
+   Update now uses the shared departure step until the announcement exists, and automatic
+   updates keep their current path. Ownership: the #870 lane owns the step's contract. Daily owns
+   the Update now caller. If the step changes, both PRs get reviewed together." Automatic
+   installs (Restart to update, Install, Install between turns) move to the step only once
+   #815's planned announcement exists, since they may never take `Legacy`.
+2. **Announcing the old way until the planned announcement exists** (SRE, 2026-11-07, on #1161):
+   "Update now may announce the old way (as a remote restart does) until the planned-update
+   announcement exists." Its conditions: the restart "still counts against the shared cap of 2
+   in 6 hours, checked when the update commits"; "It still waits for the #805 quiet lease or the
+   person's confirmation. The old announcement replaces only the announcement, never the quiet
+   check"; "Mark the announcement so it can be traced to an update, if the old way allows a
+   reason. If it cannot, record a 'restart for update' line in the host's own log"; and "When
+   the planned announcement lands, switch over and delete the old path in the same PR."
+   Specified in [Announced as planned](#announced-as-planned-498).
 3. **A machine that turns busy during the download** (Product, 2026-11-07, on #1161): "finish the
    download but do NOT install. The phone shows 'Update ready - waiting for the current turn to
    finish'. It installs at the next quiet moment, or the person presses Update now again and sees
@@ -548,11 +572,6 @@ Order: 1, then 2, then 3 and 4 together.
    discard the download." Specified in [The confirmation](#the-confirmation) (After the press)
    and [What the person sees](#what-the-person-sees); the line is written with the middle dot
    of the existing "Update ready · waiting for a question to be answered".
-8. **A question or approval waiting before #954 lands** (Product, 2026-11-07, on #1161): "Warn
-   about a waiting approval or question even before #954 lands: if the bridge knows of one, the
-   confirmation names it; if it cannot tell, treat the machine as busy and show the
-   confirmation. Err toward warning." Specified in [What the person sees](#what-the-person-sees)
-   and [Questions and answers across the restart](#questions-and-answers-across-the-restart).
 6. **The op's shape** (Connection, 2026-11-07, on #1161): use `now` on `update.install` as
    drafted, not a new signed op. Connection's conditions: "the SignedCommand must bind the
    request uuid, the target version and the `now` flag, so a plain Install cannot be replayed
@@ -562,22 +581,16 @@ Order: 1, then 2, then 3 and 4 together.
    `update.*`. Specified in [Ops](#ops) (the request only inside the signature, so an older
    host refuses), [The press](#the-press) (what the signature binds) and
    [Going](#going-the-lease-and-the-departure) step 3 (the check when the host acts).
+8. **A question or approval waiting before #954 lands** (Product, 2026-11-07, on #1161): "Warn
+   about a waiting approval or question even before #954 lands: if the bridge knows of one, the
+   confirmation names it; if it cannot tell, treat the machine as busy and show the
+   confirmation. Err toward warning." Specified in [What the person sees](#what-the-person-sees)
+   and [Questions and answers across the restart](#questions-and-answers-across-the-restart).
 
 ### Open questions
 
-Numbered as first raised; 3, 6 and 8 are settled above.
+Numbered as first raised; 1, 2, 3, 6 and 8 are settled above.
 
-1. **One departure seam with #819.** #870 (#819's host-only convergence draft) also has to
-   leave through `Update`; which lands the pipe op and the `Update` registrations, and does
-   every app-started install (Restart to update, Install, Install between turns) move to it in
-   the same slice, or only Update now first? Proposed: whichever lands first owns it; only Update
-   now uses it until #815's negotiated transport lands, since an automatic update may not take a
-   `Legacy` receipt and would otherwise be refused `announce-failed` on every machine, freezing
-   the fleet (#819 made worse); the other installs move once the transport is there. Engineering
-   and SRE.
-2. **`Legacy` announcement for Update now** until #815's transport lands (above). Without a yes
-   here, or the transport, every Update now is refused `announce-failed`, so slice 1 is not
-   useful until one of them. SRE.
 4. **An answer's outcome across the restart.** Persist the first-outcome record with the attempt
    ledger, so a retry after the restart is told "delivered" or "unconfirmed" rather than the
    ledger's refusal; or wait longer than 3 s at the departure for answer results to reach their
