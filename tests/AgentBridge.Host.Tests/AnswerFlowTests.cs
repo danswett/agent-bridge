@@ -2996,6 +2996,49 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains("resume=uncancelled", await AttemptLineAsync());
     }
 
+    [Theory]
+    // The prompt recorded in the transcript and the session listed again (Codex review on
+    // a174e20b): a main agent's approval is then listed as the session's question, a helper's
+    // leaves the form listed as answered at the machine. Either way the form is still asked,
+    // under the prompt, and is resumed once the prompt is answered.
+    [InlineData(null)]
+    [InlineData("helper")]
+    public async Task A_part_answered_form_waits_out_a_recorded_permission_prompt_and_is_finished_after_it(string? agent)
+    {
+        Serve(Answerer(resume: true, resumeWait: TimeSpan.FromSeconds(5)));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        var prompt = false;
+        injector.OnInject = () =>
+        {
+            if (!prompt && Enters() == 1)
+            {
+                prompt = true;
+                Fixture.Append(events, Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, second++, agent),
+                    Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], second++, agent));
+            }
+            if (Enters() == 2) { Fixture.Append(events, Recorded("q2", TwoPicked)); }
+        };
+        injector.Screen = () => prompt ? PermissionPrompt : FieldsScreen(TwoNames);
+        var ch = await OpenAsync();
+
+        var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        await Wait.UntilAsync(() => prompt, "the permission prompt over the form", Patience);
+        await source.RefreshAsync();
+        Assert.True(source.Get(Id)?.Question is { Id: not "q2" } or { AnswerAtMachine: true });
+        await Task.Delay(TimeSpan.FromMilliseconds(800));
+        Assert.False(answering.IsCompleted);
+        // Answered at the machine: the form is listed again, and the rest of it goes.
+        Fixture.Append(events, Copilot.PermissionDone("r1", "c9", "approved", second++), Copilot.ToolDone("c9", second++));
+        prompt = false;
+        await source.RefreshAsync();
+        var result = await answering;
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, Enters());
+        Assert.False(Escaped());
+        Assert.Contains("resume=resumed resumes=1", await AttemptLineAsync());
+    }
+
     [Fact]
     public async Task A_reset_form_asked_again_exactly_is_answered_afresh_once_for_the_same_card()
     {

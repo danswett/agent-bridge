@@ -672,7 +672,7 @@ public sealed class AnswerService : ISessionAnswerer
                 await gate.WaitToTypeAsync();
                 try
                 {
-                    if (StillAsked() is { } why)
+                    if (Waits() is { } why)
                     {
                         // A permission prompt over the form may be answered meanwhile; anything else
                         // means the question is no longer there to finish.
@@ -710,7 +710,7 @@ public sealed class AnswerService : ISessionAnswerer
             InjectionResult escaped;
             try
             {
-                if (StillAsked() is { } why)
+                if (Waits() is { } why)
                 {
                     trace.Resume(why == AnotherPrompt ? CopilotAnswerTrace.ResumeHeld : CopilotAnswerTrace.ResumeGone);
                     return new(went, why, null, false);
@@ -762,6 +762,30 @@ public sealed class AnswerService : ISessionAnswerer
             }
             trace.Resume(CopilotAnswerTrace.ResumeStale);
             return new(went, null, Stale(Retired("the session did not ask it again")), false);
+        }
+
+        // What keeps a part-answered form from being resumed or reset now: AnotherPrompt while
+        // the transcript records a permission prompt pending over this very call, still open and
+        // the only question asked (Codex review on a174e20b). Refreshed, the session's listing
+        // then shows that approval as its question, or this form as answered at the machine,
+        // both of which StillAsked reads as the question gone, abandoning the recovery for good;
+        // once the prompt is answered the listing shows the form again. Otherwise StillAsked.
+        string? Waits()
+        {
+            try
+            {
+                if (probe.Active() is null && asked is not null && asked.Read() is { Readable: true, Answer: null, SessionEnded: false }
+                    && waiting.Read() is { Readable: true, Replaced: false, PendingPermissions: > 0 } prompts
+                    && prompts.Asks!.Contains(question.Id) && prompts.Asks!.All(id => id == question.Id))
+                {
+                    return AnotherPrompt;
+                }
+            }
+            catch (Exception e)
+            {
+                log($"the check of {Short(session.Id)} for a prompt over its form failed: {e.GetType().Name}: {e.Message}");
+            }
+            return StillAsked();
         }
 
         // Whether the transcript positively says this question's call is over: answered, the

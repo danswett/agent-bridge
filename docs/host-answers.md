@@ -227,7 +227,10 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     entered: the form is reset instead. A field whose keys may have gone in part, or whose
     walk went and never settled, or a pass whose keys were cut short, has nothing to check
     that by, and is not resumed, but is still given the whole wait before any Esc. A permission prompt
-    over the form is waited out; the question no longer asked ends it. What a resume checks is
+    over the form is waited out, read from the transcript (a pending permission over this
+    still-open call, no other question asked), even while the session's listing shows that
+    approval as its question or the form as answered at the machine; the question no longer
+    asked ends it. What a resume checks is
     kept in memory for that delivery only, never the answer's words on disk: after a host
     restart, a resent answer finds the prompt in the attempt ledger and types nothing.
   * Before the first key goes into a text or number field, on a first pass and a resume alike
