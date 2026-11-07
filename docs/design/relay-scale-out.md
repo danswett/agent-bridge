@@ -17,6 +17,8 @@ Recommendations:
 3. **Measure before building.** SRE runs the staging load test in section 7 once #1134's telemetry is merged and exported. The scale-out trigger is the measured per-replica ceiling, with an alert at 60 percent of it.
 4. **Ship through the rings** (section 10) with one-step rollback, starting with staging at two replicas before production ever runs more than one.
 
+5. **Plan for many regions from the start** (section 11): a relay stamp per region, devices connect to the nearest, and the directory is a replicated, routing-only store, so relay compute can run anywhere without degradation.
+
 Nothing here is approved to build. The owner decides after the load test and the review of this note.
 
 ## 2. What the relay keeps in memory today, and why
@@ -202,14 +204,94 @@ This follows the pipeline in `docs/relay-deploy.md` (build, scan, staging with s
 
 Rules for every ring: one change at a time; no step skipped; the no-backplane mode stays until the owner retires it, so rollback never needs code that is not already running; every production step needs explicit owner approval (#55).
 
-## 11. Open questions
+## 11. Global expansion: many regions
 
-1. Owner: is a second replica for availability wanted ahead of the capacity threshold?
-2. Owner and SRE: on backplane loss, stay up degraded (the default here) or fail readiness?
-3. SRE: confirm the pass criteria and that staging can use many source addresses.
-4. Messaging Lead: measured concurrent sockets per user, from #1134 production data once exported.
-5. Engineering: split the backplane work into a directory PR and a bus PR (section 4)?
+Owner requirement (2026-11-07): the design must let relay compute run anywhere in the world without degradation. Stateless-first still rules: a region is a disposable pool of replicas, and the only durable things are the shared directory and existing storage.
 
-## 12. Out of scope
+### Topology: regional relays, not one global tier
+
+A single global relay tier means every device pays the distance to wherever it sits. Instead, run a **relay stamp per region** (the existing stamp shape: Container App, Key Vault, storage, App Insights; today only West US 2). A device connects to the nearest healthy region through a global entry point (DNS latency or geo routing, or Azure Front Door with WebSocket support; the choice is for SRE and is not decided here). Each regional stamp is independently deployable and scalable, and holds sockets only for devices connected to it.
+
+Why not one global tier: sockets are long-lived and latency-sensitive, so compute must be near the device. Why not region-pinned accounts (sticky by region): it brings back the pet-replica problem at region scale, and a user who travels or whose phone and host sit on different continents would be penalised.
+
+### The routing store across regions
+
+The directory (device to region and replica) has to be readable from every region. Options:
+
+| Option | How | Trade-off |
+| --- | --- | --- |
+| Per-region directory plus cross-region lookup | Each region keeps its own directory; to find a peer, ask the other regions in parallel | No global store and no global single point of failure. Lookup cost grows with region count; mitigated by caching the answer for the life of the peer's socket. |
+| Globally replicated store (Redis active geo-replication, or a multi-region document store) | One logical directory, written locally, replicated asynchronously | Fast reads everywhere. Replication lag means a stale answer for a moment after a device moves, so a sender must tolerate "not there" and retry. Conflicts need last-writer-wins with expiry. |
+| Home region per account, recorded in a small global map | Account maps to a home region that holds its directory | Short, stateless lookup (one tiny read-mostly record). The home is routing metadata, not where sockets must live; sockets stay nearest. A home outage needs the failover below. |
+
+Recommendation: **start with a globally replicated directory holding only opaque keys and expiries, with regional caches**, because it keeps replicas stateless and needs no home election. Re-evaluate per-region directories with parallel lookup if replication cost or lag measures badly. The directory remains routing metadata only (section 9).
+
+### Cross-region frames and latency
+
+Device A connects to its nearest region, peer B to another. A frame goes A, regional relay, backplane or inter-region link, B's region relay, B. This adds one inter-region round trip, tens to a couple hundred milliseconds depending on distance. Same-region peers (the common case: a person's own host, phone and app are usually near each other) pay nothing extra.
+
+Rules:
+- Deliver locally when the peer is local; use the cross-region path only when the directory says the peer is elsewhere.
+- One path per sender and target keeps ordering (section 5).
+- Frames cross regions encrypted in transit on the platform's private or TLS links; the relay still does not read payloads.
+- Set a latency budget for cross-region forwarding (proposed: p95 under inter-region round trip plus 100 ms) and alert on exceeding it.
+- A cross-region bus is one more thing to size. Prefer a regional bus per region plus a thin inter-region forwarder, over one global bus, so a distant region's slowness cannot slow local delivery.
+
+### Data residency and privacy
+
+- Metrics, logs and directory entries stay counts, sizes and opaque keys only (section 9); no account, device, address or name.
+- Frame payloads are transit-only. Cross-region forwarding means a payload may pass through another region. Where a residency rule (for example the EU) forbids that, the account's peers must be reachable without leaving the zone, so offer **residency zones**: a set of regions (for example EU) whose directory and bus never replicate outside the zone, and cross-zone delivery is either refused or an explicit opt-in. Zones are a policy for the owner to set; the design only needs to keep the directory and bus partitionable by zone.
+- Stored data (blob store, machine roster) is per-region storage today. Decide per zone where an account's blobs and roster live; the roster is rebuilt from the host on connect, so it is the easier one to keep zone-local.
+- Telemetry per region goes to that region's App Insights and rolls up by counts only.
+- Each new region repeats the secrets rule: its own Key Vault and managed identity, nothing in the repository.
+
+### Regional failure and failover
+
+- **Region down.** Its devices reconnect through the global entry point to the next-nearest healthy region within their backoff window (as in section 5, but across a larger pool). Their directory entries expire or are overwritten on reconnect. Peers in the failed region are unreachable until their devices reconnect elsewhere, which is the same recovery as replica loss.
+- **Capacity of the survivor.** Failover is only safe if the neighbour can absorb the load. Plan each region with enough headroom for a failed neighbour (for example, size so that losing the largest neighbour keeps every survivor under its alert level), and cap reconnect rates so a failover does not become a storm. The load test measures this (below).
+- **Directory loss or partition.** Each region keeps serving its own sockets and its local peers; cross-region delivery degrades and alerts, as in the backplane-loss case. The relay must not fail readiness on this alone (open question 3 covers the exception).
+- **Entry point loss.** The global entry point is a new shared dependency; it must itself be multi-region and have a documented manual override (DNS at Cloudflare today, per `docs/relay-deploy.md`).
+
+### Per-region capacity and rollout rings
+
+- **Capacity.** Each region has its own min, max and alert (60 percent of that region's measured ceiling), by the section 6 rules. Start a new region at min 2, max 3. Region size follows measured concurrent sockets per region, not a global figure.
+- **Rings across regions.** Staging remains one stamp (West US 2) for the code. New code rolls to production regions in order: the least busy region first, then the others one at a time, then the busiest, with a soak in each and one-step rollback per region (the same digest rollback, region by region). Never deploy all regions at once; never deploy a region while another is degraded.
+- **Adding a region** is its own ring: stamp built from the existing Bicep (a new `regions/<name>.bicepparam`), empty traffic, synthetic probes from nearby, then a small share of devices through the entry point, then full. Every step needs owner approval (#55).
+- **Version skew.** During a rollout two regions run different relay versions and can exchange frames. Cross-region frames and directory entries must therefore stay compatible across adjacent versions; that is a rule for the backplane PR and a check in ring 2.
+
+### Cost
+
+- Compute scales with sockets, and a region's minimum of 2 replicas is a fixed cost, so each region costs a floor even when quiet. Open a region only when its measured or forecast user count justifies the floor; below that, devices use the nearest existing region.
+- Backplane: a directory and bus in each region, plus replication if the directory is global. The smallest managed tier is a fixed monthly cost per region.
+- Inter-region data transfer is billed per byte, which is why local delivery is preferred and why same-region peers are the common case. The load test records cross-region bytes per second so cost can be forecast from counts, not content.
+- The monthly budget alert and the max replica cap (section 6) apply per region; add a regional budget for each new region.
+
+### What the load test must also measure
+
+Add to section 7, once a second region exists on staging (a throwaway second staging stamp, never production):
+
+| Measure | Why |
+| --- | --- |
+| Cross-region forwarding latency p50, p95, p99, by region pair | Checks the latency budget and the claim that same-region peers are unaffected |
+| Directory read and write latency, and replication lag | Sizes the staleness window and cache expiry |
+| Cross-region frames and bytes per second | Cost forecast and the cross-region link capacity |
+| Reconnect rate and time to healthy after killing a whole region | Validates failover and the headroom rule |
+| Per-region ceiling at two and three regions, for devices and frames per second | Checks that a region's ceiling does not drop when peers are elsewhere |
+| Frame loss and ordering violations during a region drill | Confirms the ordering rule and the "undeliverable, not lost silently" behaviour |
+| Behaviour with an adjacent-version pair | Version skew during rollout |
+| Entry-point routing: which region a probe lands in and failover time | Validates nearest-region routing |
+
+Drive devices from probes placed near each region where possible. All figures remain counts, sizes and percentiles by region, never by account or device.
+
+## 12. Open questions
+
+1. Owner: which regions, and which residency zones, are in scope first? The design supports many; the first two or three set the cost floor.
+2. Owner: is a second replica for availability wanted ahead of the capacity threshold?
+3. Owner and SRE: on backplane loss, stay up degraded (the default here) or fail readiness?
+4. SRE: confirm the pass criteria and that staging can use many source addresses.
+5. Messaging Lead: measured concurrent sockets per user, from #1134 production data once exported.
+6. Engineering: split the backplane work into a directory PR and a bus PR (section 4)?
+
+## 13. Out of scope
 
 Any code, infra or app-setting change; deploying or scaling the relay; alert definitions (SRE follows up); moving the relay off Container Apps.
