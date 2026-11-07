@@ -1287,6 +1287,68 @@ Check 'Packages cannot substitute metadata, omit declared terms or escape their 
     }
 }
 
+Check 'Offline upstream notices preserve exact bytes and refuse unpinned packages, metadata or notice material' {
+    foreach ($case in 'valid', 'archive', 'metadata', 'notice', 'version', 'unreviewed') {
+        Reset
+        . (Join-Path $PSScriptRoot 'app-notices.ps1')
+        $publish = Join-Path $scratch 'publish'
+        $repositoryRoot = Join-Path $scratch 'notice-repository'
+        $packageRoot = Join-Path $scratch 'notice-packages'
+        $folder = Join-Path $packageRoot 'notice.curated' '1.0.0'
+        $upstream = Join-Path $repositoryRoot 'build' 'notices' 'notice.curated' '1.0.0'
+        foreach ($directory in $folder, $upstream, (Join-Path $publish 'Assets' 'Fonts')) {
+            New-Item -ItemType Directory -Force $directory | Out-Null
+        }
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..' 'LICENSE') -Destination (Join-Path $repositoryRoot 'LICENSE')
+        @{ libraries = @{ 'Notice.Curated/1.0.0' = @{ type = 'package' } } } |
+            ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $publish 'app.deps.json')
+        $nuspec = Join-Path $folder 'notice.curated.nuspec'
+        $archive = Join-Path $folder 'notice.curated.1.0.0.nupkg'
+        $notice = Join-Path $upstream 'license.txt'
+        $provenancePath = Join-Path $upstream 'provenance.json'
+        $metadata = "<package><metadata><id>Notice.Curated</id><version>1.0.0</version><license type=`"expression`">BSD-2-Clause</license><repository type=`"git`" url=`"https://github.com/example/notice`" commit=`"$commit`" /></metadata></package>"
+        Set-Content -LiteralPath $nuspec $metadata
+        Set-Content -LiteralPath $archive 'Exact archive fixture bytes, hashed but never unpacked or executed.'
+        [IO.File]::WriteAllBytes($notice, [Text.Encoding]::UTF8.GetBytes("Copyright fixture`nVerbatim terms and disclaimer. `n"))
+        $provenance = @{
+            schemaVersion = 1; packageId = 'Notice.Curated'; packageVersion = '1.0.0'
+            licenseExpression = 'BSD-2-Clause'; packageSha512 = (Get-FileHash $archive -Algorithm SHA512).Hash.ToLowerInvariant()
+            repositoryUrl = 'https://github.com/example/notice'; repositoryCommit = $commit
+            noticeFile = 'license.txt'; noticeSourceUrl = "https://github.com/example/notice/blob/$commit/license.txt"
+            noticeSha256 = (Get-FileHash $notice -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        $expectedNotice = [Convert]::ToBase64String([IO.File]::ReadAllBytes($notice))
+        switch ($case) {
+            'archive' { Add-Content -LiteralPath $archive 'changed' }
+            'metadata' { Set-Content -LiteralPath $nuspec ($metadata.Replace('BSD-2-Clause', 'MIT')) }
+            'notice' { Add-Content -LiteralPath $notice 'changed' }
+            'version' { $provenance.packageVersion = '1.0.1' }
+        }
+        $provenance | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $provenancePath
+        if ($case -eq 'unreviewed') { Remove-Item -LiteralPath $provenancePath }
+        $failure = $null
+        try { New-AppNotices $repositoryRoot $publish '0.1.600' 'win-x64' $commit $packageRoot }
+        catch { $failure = $_.Exception.Message }
+        if ($case -eq 'valid') {
+            Assert ($null -eq $failure) "reviewed upstream notice refused: $failure"
+            $manifest = Get-AppNotices $publish '0.1.600' 'win-x64'
+            $bundled = Join-Path $publish 'ThirdPartyNotices' 'packages' 'Notice.Curated' '1.0.0'
+            Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $bundled 'license.txt'))) -ceq $expectedNotice) 'upstream notice bytes changed'
+            Assert ((Get-FileHash (Join-Path $bundled 'provenance.json')).Hash -ceq (Get-FileHash $provenancePath).Hash) 'upstream provenance bytes changed'
+            Assert ($manifest.packages[0].files.Count -eq 2) 'upstream notice or provenance omitted from the hashed inventory'
+        } else {
+            $expected = switch ($case) {
+                'archive' { '*upstream notice package hash mismatch*' }
+                'metadata' { '*upstream notice provenance does not identify*' }
+                'notice' { '*upstream notice hash mismatch*' }
+                'version' { '*upstream notice provenance does not identify*' }
+                'unreviewed' { '*has no restored notice files*' }
+            }
+            Assert ($failure -like $expected) "wrong or missing upstream refusal for $case`: $failure"
+        }
+    }
+}
+
 Check 'SBOM licences preserve custom terms and existing fields without guessing unrelated licences' {
     Reset
     New-PpPublished

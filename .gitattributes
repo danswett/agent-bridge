@@ -1,0 +1,2 @@
+# Preserve the audited upstream notice verbatim, including whitespace and line endings.
+build/notices/markdig/0.43.0/license.txt -text -whitespace

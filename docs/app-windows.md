@@ -1119,6 +1119,13 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   those files, including the existing font OFLs, to the build version, architecture and commit.
   Dependency identities come from the published `.deps.json` files, not a global cache sweep.
   Missing package metadata, declared licence files or all notice material fails packing.
+  An expression-only package with no notice files may use reviewed, offline material in
+  `build/notices/<lowercase-id>/<version>/`: `provenance.json` must match its exact package
+  identity, declared SPDX expression and repository URL/commit, the restored `.nupkg` SHA-512,
+  and the upstream notice's SHA-256. The notice and provenance are bundled verbatim and hashed;
+  no network lookup or SPDX-only fallback is allowed. Markdig 0.43.0 supplies its upstream
+  BSD-2-Clause notice this way. Different versions, unreviewed packages or changed material
+  fail closed; this does not assert licence compatibility or invitation clearance.
   A pack-only signing operation verifies this bundle without regenerating it or requiring
   restored packages on the credential-bearing signer.
   CI checks the actual portable and full-package entries, and the silently installed copy,

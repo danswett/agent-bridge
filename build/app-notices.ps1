@@ -1,5 +1,5 @@
 # Distribution notices and their evidence, shared by packing and CI. Reads restored package
-# metadata and verbatim notice files; it downloads nothing and makes no compatibility decision.
+# metadata and restored or pinned upstream notice files; it downloads nothing and makes no compatibility decision.
 #Requires -Version 7
 
 function Get-AppNoticePath([string]$Root, [string]$Relative) {
@@ -114,11 +114,43 @@ function New-AppNotices(
             } | ForEach-Object FullName)
         if ($licenseType -eq 'file') { $legal += Get-AppNoticePath $folder $licenseValue }
         $legal = @($legal | Sort-Object -Unique)
-        if (-not $legal) { throw "$id/$packageVersion has no restored notice files; supply its exact-version copyright/licence material before packing" }
+        $legalRoot = $folder
+        if (-not $legal) {
+            $provenanceRelative = "build/notices/$($id.ToLowerInvariant())/$($packageVersion.ToLowerInvariant())/provenance.json"
+            if (-not (Test-Path -LiteralPath (Join-Path $RepositoryRoot $provenanceRelative) -PathType Leaf)) {
+                throw "$id/$packageVersion has no restored notice files; supply its exact-version copyright/licence material before packing"
+            }
+            $provenancePath = Get-AppNoticePath $RepositoryRoot $provenanceRelative
+            $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json -AsHashtable
+            $repository = $metadata.SelectSingleNode('*[local-name()="repository"]')
+            if ($provenance['schemaVersion'] -ne 1 -or $provenance['packageId'] -ine $id -or
+                $provenance['packageVersion'] -cne $packageVersion -or $licenseType -cne 'expression' -or
+                -not $licenseValue -or $provenance['licenseExpression'] -cne $licenseValue -or
+                $provenance['packageSha512'] -cnotmatch '^[0-9a-f]{128}$' -or
+                $provenance['noticeSha256'] -cnotmatch '^[0-9a-f]{64}$' -or
+                $provenance['repositoryCommit'] -cnotmatch '^[0-9a-f]{40}$' -or
+                -not $provenance['repositoryUrl'] -or -not $provenance['noticeSourceUrl'] -or
+                -not $repository -or $repository.GetAttribute('type') -cne 'git' -or
+                $repository.GetAttribute('url') -cne $provenance['repositoryUrl'] -or
+                $repository.GetAttribute('commit') -cne $provenance['repositoryCommit']) {
+                throw "upstream notice provenance does not identify $id/$packageVersion and its declared licence/repository"
+            }
+            $archive = Get-AppNoticePath $folder "$($id.ToLowerInvariant()).$($packageVersion.ToLowerInvariant()).nupkg"
+            if ((Get-FileHash -LiteralPath $archive -Algorithm SHA512).Hash.ToLowerInvariant() -cne $provenance['packageSha512']) {
+                throw "upstream notice package hash mismatch: $id/$packageVersion"
+            }
+            $legalRoot = Split-Path $provenancePath
+            $notice = Get-AppNoticePath $legalRoot $provenance['noticeFile']
+            if ((Get-FileHash -LiteralPath $notice -Algorithm SHA256).Hash.ToLowerInvariant() -cne $provenance['noticeSha256']) {
+                throw "upstream notice hash mismatch: $id/$packageVersion"
+            }
+            $legal = @($notice, $provenancePath)
+            $index.Add("`nPinned upstream notice for $id/$($packageVersion): $($provenance['noticeSourceUrl'])")
+        }
         if (-not $licenseValue) { Write-Warning "$id/$packageVersion has no declared licence; its bundled notices are not licence clearance" }
         $packageFiles = @(foreach ($source in $legal) {
-                $relative = [IO.Path]::GetRelativePath($folder, $source) -replace '\\', '/'
-                $source = Get-AppNoticePath $folder $relative
+                $relative = [IO.Path]::GetRelativePath($legalRoot, $source) -replace '\\', '/'
+                $source = Get-AppNoticePath $legalRoot $relative
                 $destination = "ThirdPartyNotices/packages/$id/$packageVersion/$relative"
                 $target = Join-Path $Publish ($destination -replace '/', [IO.Path]::DirectorySeparatorChar)
                 New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
@@ -174,14 +206,14 @@ function Add-AppSbomLicences([string]$Publish, [string]$Version, [string]$Runtim
     if ($bom.bomFormat -cne 'CycloneDX' -or -not $bom.components) { throw 'expected a populated CycloneDX SBOM' }
     $matched = 0
     foreach ($component in $bom.components) {
-        if ($component.purl -and $component.purl -cnotmatch '^pkg:nuget/') { continue }
+        if ($component['purl'] -and $component['purl'] -cnotmatch '^pkg:nuget/') { continue }
         $name = $component.name -replace '^runtimepack\.', ''
         $key = "$name/$($component.version)".ToLowerInvariant()
         if ($projects.ContainsKey($key)) {
             $matched++
-            if (-not $component.licenses) {
+            if (-not $component['licenses']) {
                 $path = Get-AppNoticePath $Publish 'LICENSE.txt'
-                $component.licenses = @(@{ license = @{
+                $component['licenses'] = @(@{ license = @{
                             name = 'Project licence (LICENSE.txt)'
                             text = @{ contentType = 'text/plain'; encoding = 'base64'; content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) }
                         } })
@@ -189,14 +221,14 @@ function Add-AppSbomLicences([string]$Publish, [string]$Version, [string]$Runtim
             continue
         }
         if (-not $packages.ContainsKey($key)) {
-            if (-not $component.licenses) { Write-Warning "SBOM licence remains UNKNOWN: $key; no matching distribution identity" }
+            if (-not $component['licenses']) { Write-Warning "SBOM licence remains UNKNOWN: $key; no matching distribution identity" }
             continue
         }
         $matched++
-        if ($component.licenses) { continue }
+        if ($component['licenses']) { continue }
         $package = $packages[$key]
         if ($package.licenseType -eq 'expression' -and $package.licenseValue) {
-            $component.licenses = @(@{ expression = $package.licenseValue })
+            $component['licenses'] = @(@{ expression = $package.licenseValue })
         } elseif ($package.licenseType -eq 'file') {
             $packageRoot = Join-Path $Publish "ThirdPartyNotices/packages/$($package.id)/$($package.version)"
             $path = Get-AppNoticePath $packageRoot $package.licenseValue
@@ -210,7 +242,7 @@ function Add-AppSbomLicences([string]$Publish, [string]$Version, [string]$Runtim
                 '.pdf' { 'application/pdf'; break }
                 default { 'application/octet-stream' }
             }
-            $component.licenses = @(@{ license = @{
+            $component['licenses'] = @(@{ license = @{
                         name = "$($package.id) $($package.version) package licence"
                         text = @{ contentType = $contentType; encoding = 'base64'; content = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) }
                     } })
