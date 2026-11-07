@@ -131,6 +131,7 @@ public sealed class EnrollmentApprover
     // What the person typed at A, from N's screen. Code 2 is shown only after a match.
     public CodeResult EnterCode1(string input)
     {
+        if (_code1Matched) { return CodeResult.Match; }
         if (_transcript is null || Over()) { return _ended ? CodeResult.Ended : CodeResult.Wrong; }
         if (_lockout.IsBlocked(_pendingId)) { return CodeResult.Locked; }
         if (Enrollment.Matches(Enrollment.Code1(_transcript), input))
@@ -147,11 +148,11 @@ public sealed class EnrollmentApprover
     }
 
     // Code 2, for the person to type at N: only after code 1 matched.
-    public string? Code2Shown => _code1Matched && _transcript is not null ? Enrollment.Shown(Enrollment.Code2(_transcript)) : null;
+    public string? Code2Shown => _code1Matched && !Over() && _transcript is not null ? Enrollment.Shown(Enrollment.Code2(_transcript)) : null;
 
     // The value the signed add's `approval.transcript` carries: only after code 1 matched, and the
     // approver still has to see N's `ok` (§4.2 step 6) before it signs.
-    public byte[]? TranscriptToSign => _code1Matched ? _transcript : null;
+    public byte[]? TranscriptToSign => _code1Matched && !Over() ? _transcript : null;
 
     bool Over()
     {
@@ -177,6 +178,7 @@ public sealed class EnrollmentJoiner
     readonly DateTimeOffset _expires;
     readonly byte[] _nN;
     byte[]? _transcript;
+    bool _committed;
     bool _codeMatched;
     bool _ended;
 
@@ -191,12 +193,17 @@ public sealed class EnrollmentJoiner
     }
 
     // The commitment to send first; null while joining is locked.
-    public byte[]? Commit() => _lockout.IsBlocked(Attempt) ? null : Enrollment.Commit(_h, _nN);
+    public byte[]? Commit()
+    {
+        if (_lockout.IsBlocked(Attempt)) { return null; }
+        _committed = true;
+        return Enrollment.Commit(_h, _nN);
+    }
 
     // A → N: the offer. Returns the reveal (N's nonce); N then shows code 1.
     public byte[]? OnOffer(byte[] nA)
     {
-        if (_transcript is not null || Over() || nA.Length != Enrollment.NonceBytes) { return null; }
+        if (!_committed || _transcript is not null || _lockout.IsBlocked(Attempt) || Over() || nA.Length != Enrollment.NonceBytes) { return null; }
         _transcript = Enrollment.Transcript(_account, _h, nA, _nN);
         return _nN;
     }
@@ -206,6 +213,7 @@ public sealed class EnrollmentJoiner
     // What the person typed at N, from the approver's screen.
     public CodeResult EnterCode2(string input)
     {
+        if (_codeMatched) { return CodeResult.Match; }
         if (_transcript is null || Over()) { return CodeResult.Ended; }
         if (_lockout.IsBlocked(Attempt)) { return CodeResult.Locked; }
         if (Enrollment.Matches(Enrollment.Code2(_transcript), input))
@@ -228,6 +236,7 @@ public sealed class EnrollmentJoiner
     {
         var body = newest.Body;
         return _codeMatched
+            && !Over()
             && _transcript is not null
             && body.Op == EntryOp.Add
             && body.By == approverId
