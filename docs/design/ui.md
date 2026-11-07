@@ -122,6 +122,12 @@ longer be so. It shows the `failed` glyph (a host unreachable, §2.1) and, in se
 "Offline · last seen 2m ago" once the machine has left the relay's presence, or "Reconnecting…"
 while it is listed but its link is down; rule 7's overlay does not apply. A row's line 2 is
 "Offline · *machine*". Nothing on it can be acted on (§6.1, "A machine away").
+- **Not during a return's grace (#950).** For 3 s after the app comes back to the screen, every
+  row looks as it last did: no `failed` glyph and no "Reconnecting…", though nothing on it can
+  be acted on until its machine's list is whole (§6.1, "Coming back to the app"). Only once the
+  grace has run out does a machine that isn't back show these away states, changing the glyph
+  and words in place. Before #950 they showed from the first moment the link was down, so a
+  reconnect of under a second flashed every row red.
 
 A message from an external agent held for you (§6.7) is a pending question on its target
 session: rule 1 applies, Needs you counts it, and the status reads "Waiting on you · message
@@ -308,6 +314,28 @@ style (§4.2).
 and the brand assets, which move from the interim Inter Tight in a follow-up to #558. Windows' title bar keeps the system caption style, as Fluent
 does.
 
+### 4.4 Text size (PWA)
+
+The PWA's Settings has **Text size**: Smaller, Default and Larger, a row of three toggle buttons
+under "On this device only." It is for a person whose device draws the ramp too big or too small
+(a tablet in landscape gets the desktop ramp of §4.3), and it is the web's stand-in for the
+system text size the native apps already follow.
+
+- **Scale:** Smaller is 0.9×, Larger is 1.15×, and Default is §4.3 exactly. Every role, its line
+  height and anything sized in `rem` scale together, so the ramp keeps its proportions. No role
+  goes under 11 px (§4.2's floor for mono, held for every role here).
+- **What doesn't scale:** text fields stay 16 px at every size, because Safari zooms the page
+  into a field set smaller. Icons, spacing and hit targets stay as they are; only a width set
+  in `rem` to hold its text grows with that text.
+- **Per device:** the choice is kept in this browser's storage, never synced to the person's
+  other devices or to a machine. Default keeps nothing.
+- **Before the first paint:** the stored choice is applied before the page is drawn, so the
+  app never opens at one size and then jumps to another.
+- **Narrow phones:** a page title never breaks inside a word. Where the Sessions title, Sort and
+  the icons don't fit on one line (under 370 px, or 390 px at Larger), the header takes the list
+  pane's two lines: the title and Sort, then the count and the icons, so Tab's order is still
+  the order drawn (§9.1).
+
 ## 5. Space, shape, layout and motion
 
 ### 5.1 Spacing and radius
@@ -489,11 +517,11 @@ easing in, its duration out, and how far it travels.
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
 | Send and Answer | The reply box; a question card | Send, Send answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button that sent it (Send or Send answer, never an option, #773) shows the platform's progress ring, which stops with the request. Decided, not yet built (#600; builds in #616, #625): the ring is the only in-flight signal (§6.5), turning while the request is open and still while this device waits for a machine that isn't connected. Delivered, the ring cross-fades to the `check` icon, which holds about 1 s and cross-fades back to the button's rest glyph; the button never changes size or fill. An exception's line (§6.5) fades in place in the room reserved for it under the box, or on the question card, and fades out in place when it goes; nothing pops and nothing below it moves. Today both clients show Sending…, Sending again… and "Delivered. The session has your reply." for a reply, and "Delivered. The session has your answer." for a question card's answer. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
-| Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
+| Toast and banner | In-app toasts; banners such as a new version being ready (a machine going offline is never a banner, §6.1, #950) | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
 | Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session; Jump to latest is chosen (§6.4), which scrolls to the end as the person asked, scrolled back or not | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
-| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
+| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle; an order change arriving during a return's grace (§6.1, #950) | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
 | Collapse | A phone's session header (§6.2, #620) | Scrolling the conversation up 64 or down 32 in one direction, mid-conversation; a tap on the bar's title; focus moving into the header | The header slides down over the conversation, or back up under the bar. The conversation never moves. Near the top there is no motion of its own: the header rides with the scroll | `collapse`: standard, standard | PWA: the tokens on transform. Apple: the large title's own collapse. Android: the top app bar's scroll behaviours | Cross-fade |
 
 **Not in the design:**
@@ -558,7 +586,9 @@ Sections, top to bottom:
    - A session that needs sign-in is never counted in N nor shown by the filter: the sign-in
      banner owns it (§6.13, owner decision 2026-11-05). Its row still says so where it lives.
    - A question on a machine that is away, or back but not yet confirmed by its next full list,
-     is neither counted in N nor shown by the filter, nor raised as a notification (#269).
+     is neither counted in N nor shown by the filter, nor raised as a notification (#269). The
+     exception is a return's 3 s grace (#950, "Coming back to the app", rule 6): N and the
+     filter's rows stay as they were, with the question held, until the grace is over.
    - **Look:** the `needs` glyph (`idle` at none), then "Needs you · N". It is a control, so it
      takes the platform's button styling and never a status colour. Pressed, it has the
      selection's look (the quiet fill, the 3×16 Bridge pill, semibold words) and, at its
@@ -611,11 +641,12 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 **A machine away (#269).** A host's relay link drops now and then (a restart, an update, a
 network blip), often for under a minute. While its machine has left the relay's presence, and the
 client's own relay link is up on the same account:
-- Its rows stay where they are, read as stale (§2.2), and so do the session open, its machine tab,
-  your order and pins.
+- Its rows stay where they are, read as stale (§2.2; after a return, only once the grace below has
+  run out), and so do the session open, its machine tab, your order and pins.
 - Nothing on them can be done: answering, Approve once and Deny, replying, attaching, End session,
   and launching or resuming on that machine are disabled. Their questions leave Needs you, the
-  badges and notifications.
+  badges and notifications (after a return, once the grace below is over). In an offline machine's session, the reply box and the question say
+  why in place of their actions (§6.4, §6.5; #950).
 - Back again, they can be acted on only once the machine's next full list (its snapshot) has
   confirmed that the session and its question still exist, never on the copy kept meanwhile. A
   session that ended meanwhile goes to Ended then, and a question that ended never becomes
@@ -625,6 +656,76 @@ client's own relay link is up on the same account:
   again once that list is whole (#427).
 - After **15 minutes** away its rows go, and the machine is listed as offline (§6.6). It goes at
   once when it is forgotten, when the client is signed out or refused, or when the account changes.
+
+**Coming back to the app (#950).** A phone suspends the PWA when it leaves the screen, and its
+links drop; coming back, they reconnect, usually in well under a second. Coming back is calm:
+the list keeps what it last knew while it catches up, it stays honest about what can't be done
+yet, and connection news shows only when it is news. These are interaction rules; the visual
+language doesn't change. Decided 2026-11-05 (Creative; Product accepted rules 1–7), with rule 8
+added the same evening; the timeline is drawn in
+[proposals/950-calm-return.md](proposals/950-calm-return.md).
+1. **A 3-second grace.** It starts when the app comes back to the screen: the PWA's
+   `visibilitychange` to visible, `pageshow` from the back/forward cache, or `online`; the
+   Windows app waking from sleep or changing network. While it lasts, every row, the open
+   session and its machine tab look exactly as they last did: no `failed` glyph, no
+   "Reconnecting…", no strip and no banner. Anything that arrives updates in place, and an order
+   change uses §5.3's Reorder motion.
+2. **The hold still applies, at once.** As in "A machine away" (#427), nothing on a session is
+   acted on until its machine's full list is whole again. Its controls are `aria-disabled` at
+   once, so a screen reader is never told a held action works. They are drawn disabled only once
+   the hold has lasted 600 ms. A press before then does nothing and shows "Updating…" in text2
+   under that control, never a toast. Opening a session and reading it work throughout.
+3. **A quiet cue only when it's news.** If any machine's list is still not whole 1 s after the
+   return, the title row shows "Updating…" in text2, in a fixed slot beside the title. It
+   doesn't move, isn't announced, and goes the moment every list is whole. A return that
+   finishes in under 1 s changes nothing on screen. On the PWA desktop and in the Windows app,
+   the list pane's own header row (the one holding the Sessions heading) plays the phone title
+   row's part, and the slot is at its end. Neither the slot nor the strip ever goes above the
+   list or into the window chrome.
+4. **When the grace runs out (3 s),** a machine that isn't back shows the away states on its rows
+   (§2.2): the glyph and words change in place. If the client's own link is still down, the
+   connection strip replaces the title row's content (the list header row's, on a desktop and
+   in the Windows app), at the same height (§7). It is announced once, politely. The Windows
+   app does the same, and no longer raises its "connecting" banner for this case.
+5. **Nothing pushes the rows.** There are no "Connecting…" rows above the sessions, ever. A
+   machine with no kept list says so in the same fixed slot ("Connecting to 2 machines…"), never
+   as rows. Banners already showing when the app comes back stay put. A new connection banner is
+   never inserted above the list.
+6. **A real outage reads as it always has** once the grace is over, including the 15-minute
+   rule above. During the grace, rule 1 wins for what is drawn: a held question keeps its row,
+   in the list and under Needs you's filter, and N (and so the badges) doesn't change, though
+   the question is held at once (`aria-disabled`, rule 2). Once the grace is over, a machine
+   still away has today's behaviour: its questions leave Needs you, the badges and
+   notifications. Notifications follow the hold as they do now.
+7. **Platforms:** the PWA first. The Windows app takes rules 1–5 on waking from sleep, with the
+   same 3 s. Apple and Android take them through §7 when they are un-parked.
+8. **A machine's connection news is never a sentence over the list.** Offline, Connecting,
+   Opening a channel and Couldn't reach all go from above the list (the PWA's lines from
+   `hostNote()`, #396).
+   - Inside an offline machine's session, the reply box and the question say why, in text2, in
+     place of their usual actions: "*machine* is offline · you can answer once it's back" (§6.4,
+     §6.5). If focus was on a control the line replaces, focus moves to the line, which takes
+     `tabindex="-1"`. It isn't announced separately: its words are what is read as focus lands.
+     Focus never drops to the page.
+   - The machine tab and the Machines page (§6.6) carry the machine's own state.
+   - Only an error the person can act on (Couldn't reach, unsupported) shows, in rule 3's fixed
+     slot, on one line, naming the machine ("Couldn't reach *machine*"). While it shows,
+     "Updating…" doesn't. With more than one, the slot shows the first in machine order, plus
+     "and N more" if that fits the line.
+
+| Time after the return | Rows, open session, machine tab | A held session's controls | Title row's slot | Connection strip |
+|---|---|---|---|---|
+| 0 (return) | As they last were; anything arriving updates in place | `aria-disabled` until the machine's list is whole; drawn as they were. A press does nothing and shows "Updating…" under the control | Empty | None |
+| Every list whole before 1 s | Fresh data, in place | Back to normal | Never shown | None |
+| 600 ms, hold still on | As they last were | Drawn disabled | Empty | None |
+| 1 s, any list not whole | As they last were | Drawn disabled | "Updating…", or "Connecting to N machines…" for machines with no kept list; an actionable error ("Couldn't reach *machine*") in their place. It goes when every list is whole | None |
+| 3 s, grace over | A machine not back: the away states (§2.2), in place. The rest as they are | Disabled as §6.1 says; an offline machine's session says why (rule 8) | As at 1 s, unless the strip has replaced the title row's content | Only if the client's own link is down: in the title row (or list header row), at its height, announced once, politely |
+
+Through the grace, Needs you's N, its filter's rows and the badges stay as they were (rule 6).
+On the PWA desktop and in the Windows app, "title row" is the list pane's header row (rule 3).
+
+The owner may change the 3 s grace; the 1 s cue and the 600 ms point stand with it unless the
+owner changes them too.
 
 **Row anatomy (two lines):**
 - **Leading:** the status glyph, aligned to line 1.
@@ -659,8 +760,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     place among the tabs shown, the last of the others giving way to it.
   - **A long name** is cut short with "…" at `layout.windows.machineTab` (128 px). A tab's tooltip and
     accessible name are the whole name and the machine's state: "Build server · 3 sessions", with
-    "· View only" for a read-only machine (§6.6), "connecting…" while it connects, and "offline"
-    while it is away ("A machine away").
+    "· View only" for a read-only machine (§6.6), "connecting…" while it connects, "offline"
+    while it is away ("A machine away"), and "bridge isn't running" once its host is gone (§6.14).
   - **Keyboard:** the arrows move through the tabs shown, Tab goes on to More, and Enter or Space
     opens its menu. Touch and the mouse reach More as any button.
   - It holds at the narrowest list (264, §5.2) and in one column. The PWA's tabs still scroll
@@ -710,8 +811,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Mid-conversation,** 64 up in one direction brings the whole header back over the
     conversation (`collapse`), and 32 down sends it away. The count restarts when the
     direction changes, so reading back and forth changes nothing. A tap on the bar's title
-    brings it back, and the top always shows it in full. The reply area does the mirror image
-    (§6.5, #935), so the two never both take full room mid-conversation.
+    brings it back, and the top always shows it in full.
   - **Only the person's own scrolling counts:** a finger, a wheel, a trackpad, the keys or the
     scroll bar. A scroll the app makes (to a question, a restored position) and a response
     growing below leave the header as it was, except on a screen shorter than twice the
@@ -724,9 +824,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **While the session waits on you,** the bar's glyph is `needs` on its disc.
   - **The title stays the one h2.** The bar's copy is drawn, not read; the status is read from
     the meta line. Nothing is announced. Focus moving into the header brings it back, and it
-    stays while focus is there. Focus the app puts on the title as a session opens (#707)
-    doesn't hold it: the person's own scrolling folds it as usual. The conversation's scroll padding is what the header covers
-    plus 8, so focus never lands under it. Tab order is Back, More, the tabs, then
+    stays while focus is there, until a press on the conversation. Focus the app puts on the
+    title as a session opens (#707) doesn't hold it: the person's own scrolling folds it as
+    usual. The conversation's scroll padding is what the header covers plus 8, so focus
+    never lands under it. Tab order is Back, More, the tabs, then
     the conversation. The tabs are one tab stop, on the selected tab; Left and Right move
     and select, wrapping, and Home and End go to the first and last.
   - **Reduced motion:** coming back and going are a cross-fade with no travel; near the top
@@ -1047,7 +1148,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
       an option", "Enter a number"), and the error is said once (§9.2). It is absent where
       the card can't be answered here (`answerAtMachine`, `truncated`, resolved, a
       collaborator's read-only view, §6.7) and while a sent answer's outcome forbids sending
-      another (§6.5). While its machine is away it stays, disabled, as §6.1's controls do. Why
+      another (§6.5). While its machine is away it stays, disabled, as §6.1's controls do; once
+      that machine is offline, the card says "*machine* is offline · you can answer once it's
+      back" in text2 in place of its actions, and focus on an action it replaces moves to that
+      line (§6.1, #950 rule 8). Why
       visible and not hidden until complete: the rule that a button which doesn't apply is
       absent, not disabled (A7), is about actions that do nothing in the current state, and
       an open question's Send answer always applies. Hidden until complete, the card's only
@@ -1348,6 +1452,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   question first. Go to the question". The link is a scroll the app makes to the question
   (§6.2: it leaves the header as it was) and puts focus on its first choice. With the notice,
   the reply area is 99 at rest on a phone.
+- **While its machine is offline** (§6.1, #950 rule 8), the box says why in text2, in place of
+  its usual actions: "*machine* is offline · you can answer once it's back". Focus on a control it
+  replaces moves to the line (§6.1, rule 8). During a return's hold, its controls are held as
+  §6.1's rule 2 says.
 - **Platform styling:**
   - Windows and the PWA: a card with a 2 px Bridge bottom edge.
   - macOS: a capsule field.
@@ -1466,11 +1574,31 @@ machine, online ones first, then the account's offline machines (#213):
   where there are two. No device id on the row.
 - **Inside the row, under its two lines, in its text column:** the machine's updates (what its
   app found, how the last update ended, Check and Install) and, for an offline machine, Forget.
+  Its update line shows a "Needs you" line from the host (#800) in any phase, in the host's words.
+  While the six-hour backstop skips for a question waiting (below), it reads exactly
+  "Update ready · waiting for a question to be answered", never "answer at the machine".
   Every action is the same small secondary button. Check for updates, for every machine at once,
   sits under the rows in the same column.
+- **When an update is ready** (owner decision on #689, 6674007815; Product, 6674016765; Creative,
+  6674096426): a per-machine setting, a two-choice picker, never a toggle. Each choice carries its
+  note.
+  - **Restart to update**, *For a machine you use*: the default, for a new install and any machine
+    not set. A release downloads in the background and waits for the person's Restart to update
+    (#516); after six hours it says "Needs you", at most daily.
+  - **Install between turns**, *For a machine agents use*: the owner sets it on dev boxes and VMs
+    until #384's machine role exists. The update installs by itself at the first moment no session
+    on the machine has a turn running or a question waiting, once its sessions are read (a few
+    seconds), with no two-minute wait. The six-hour backstop installs on a machine that never goes
+    quiet, over a turn running, but an update never strands a waiting question: while one waits, or
+    whether one does can't be told, the backstop skips, and the machine says so ("Update ready ·
+    waiting for a question to be answered", and "Needs you" in its log, at most daily).
+  - Set in the Windows app's Settings for now. On the phone it is a row in that machine's Settings,
+    the current choice in text2; tapping it opens the same two choices with their notes (#801).
 - **A machine away (§6.1):** listed once, as offline ("Offline", and "Last seen 2m ago" on line
   2), with Forget, both while its rows are kept and after they have gone. A client whose relay
   keeps no roster lists it so only while its rows are kept.
+- **A machine whose bridge isn't running (§6.14, proposed):** still "Offline" on line 1, and
+  line 2 says "Bridge isn't running · since *time*" in place of "Last seen…".
 
 ### 6.7 Collaborators (#519)
 
@@ -1699,7 +1827,8 @@ machine's name, Relay and sign-in, "Agents on this machine" (each agent's row, b
 devices" with the two answer toggles of Workspaces and trust, this app's toggles, and the
 Host log. The host section's "Restore sessions after a reboot or crash" switch (§6.12) is
 **Not built yet (#780)**. The sectioned pane below, its table and the card for an agent
-installed later are **Not built yet (#384 slice 5)**.
+installed later are **Not built yet (#384 slice 5)**. The PWA's Settings also has Text size
+(§4.4), on this device only.
 
 **An agent's row today** (the creative director's #784 words; #705's per-row names and
 verbs). Every state is words on the row, with at most one verb:
@@ -1715,12 +1844,12 @@ verbs). Every state is words on the row, with at most one verb:
 - **Set up, not yet tested:** an agent whose hooks are set up but that no new session has
   tested yet reads "Not tested yet" (#705), never Ready.
 - **A host the app can't act on:** "Read-only · *reason*" when the host reports `blocked`
-  (for example "Read-only · this machine's host is older", in the one word every row uses for
-  it, #959); "Hook ownership couldn't be checked · *reason*" (or "Hook intake couldn't be
+  (for example "Read-only · this machine's bridge is older": a person never sees "host", #959,
+    #1022);  "Hook ownership couldn't be checked · *reason*" (or "Hook intake couldn't be
   checked · *reason*") when the hooks have
   failed and their `hookSetup` is `unknown`, the reason being one of access denied, file in use
   or couldn't read ("Can't check" alone when the host gives neither); and "Can't check · this
-  machine's host is older" only when `hookSetup` is `unknown` and the hooks are neither blocked
+  machine's bridge is older" only when `hookSetup` is `unknown` and the hooks are neither blocked
   nor failed, since a current host sends `unknown` only with those. All three are `text2`, with
   no status colour and no verb, and never fall back to Ready, Not set up or Needs repair.
 
@@ -1915,7 +2044,7 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 - **Where:** text on the row's line 2 (§6.1), as one of its two facts. The other fact is the
   usual one, so it follows the facts-on-a-line rules (#214).
 - **Text:** "Restored after a reboot · 03:12" when `cause` is `reboot`, and "Restored after the
-  host restarted · 03:12" when it is `crash`. The time is `restored.at` in the client's time
+  bridge restarted · 03:12" when it is `crash`. The time is `restored.at` in the client's time
   format, as every time on the row is.
 - **Form:** the row's existing secondary text tokens. No new glyph, no colour, no badge. The
   status glyph still says what the session is doing (§2.2), which is idle.
@@ -1936,7 +2065,7 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   phone); past that, the area scrolls inside itself. Every notice's full text and buttons stay
   reachable by keyboard and screen reader, and the page under the banners is never pushed out of
   view.
-  - Title: "*machine* restarted after a reboot at 03:12" (`cause: reboot`) or "*machine*'s host
+  - Title: "*machine* restarted after a reboot at 03:12" (`cause: reboot`) or "*machine*'s bridge
     restarted at 03:12" (`cause: crash`), from `at`. With `signedInAt`, the reboot title ends
     "… · restored when you signed in at 08:40".
   - "Restored *n* sessions" (`restored`).
@@ -1955,7 +2084,8 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   machine's `sessions.restoreOnStart` is off (`offered`), the notice still says what died, and
   the "Restored …" line reads instead "*n* sessions can be restored at the machine". It offers no
   button: restoring happens at the machine. Under G5 that stays so; with the setting merely off,
-  a Restore button with a confirmation, from any client, is #948.
+  a Restore button with a confirmation, from any client, is #948 (PROPOSED below: *Restore from
+  a client*).
 - **Dismissal:** per device, as #786's: closing it hides it on this device only, it is not saved
   across app restarts, and it comes back only if the host sends a new notice. Its close button is
   named "Dismiss restore notice on *machine*".
@@ -1981,7 +2111,7 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
   again after a failure with no outcome, reuse the same `request`, so the host types it at most
   once and returns the first outcome. Only Try again after a `busy` or `refused` outcome sends a
   **new** `request`, because the host remembers each outcome for ten minutes and would only
-  repeat it. `unconfirmed` is never retried: the receipt says to check at the machine, as §6.5's
+  repeat it. `unconfirmed` is never retried: the receipt says to check the conversation, as §6.5's
   does. While it is in
   flight the button is disabled and keeps focus (A4).
 - **In the conversation:** shown as the person's own message, exactly as a typed reply is. It is
@@ -1995,12 +2125,19 @@ A restored session always opens idle. Nothing is typed into it, and nothing is s
 
 - One per machine per start, and only if something died. The host decides; a client never adds
   one per session.
-- **Text:** title "*machine* restarted", body "Restored *n* sessions · *m* need you" when there
+- **Text:** title "*machine* restarted" after a reboot, "*machine* · the bridge stopped" after a
+  crash ("bridge", never "host", Creative #1022), body "Restored *n* sessions · *m* need you" when there
   are lost questions or failures, else "Restored *n* sessions". When offered only: "*n* sessions
   can be restored at the machine".
 - **Sound:** none. Decision #764 keeps sound for pending questions and approvals only, so this
   notice is silent on every platform. The push payload sets `notification.silent: true`, so an
-  older service worker that shows kind `restored` as a `question` stays silent too.
+  older service worker that shows kind `restored` as a `question` stays silent too. **Except
+  (#970, proposed):** a restore notice that replaces a "bridge isn't running" alert, on that
+  alert's tag, alerts as Needs you does, with the question sound, never silently: the person
+  still has something to answer (§6.14).
+- **Withdrawal:** #780 withdraws no restore push today. If it ever does, it withdraws on
+  whichever tag the notice went on, and once withdrawn nothing about a replaced gone alert comes
+  back (§6.14).
 - **Opening it** opens the machine's session list, with the notice over it.
 - An older service worker shows kind `restored` as a `question`; that is accepted.
 
@@ -2022,7 +2159,7 @@ arrives, as a `question`.
 
 | | Reboot (`cause: reboot`) | Host crash (`cause: crash`) |
 |---|---|---|
-| Restored, idle | Mark "Restored after a reboot · 03:12"; counted in the notice | Mark "Restored after the host restarted · 03:12"; counted |
+| Restored, idle | Mark "Restored after a reboot · 03:12"; counted in the notice | Mark "Restored after the bridge restarted · 03:12"; counted |
 | Restored mid-turn (`midTurn`) | Mark; Continue above the reply box; "mid-turn" line | Same |
 | Offered only (G5 or setting off; `offered`) | No mark (nothing started); notice "*n* sessions can be restored at the machine" | Same |
 | Failed (`failed`) | No mark; notice "Couldn't be restored: *title* (*reason*)" | Same |
@@ -2043,8 +2180,8 @@ arrives, as a `question`.
 
 | Use | Text |
 |---|---|
-| Row mark | "Restored after a reboot · *time*" / "Restored after the host restarted · *time*" |
-| Notice title | "*machine* restarted after a reboot at *time*" / "*machine*'s host restarted at *time*" |
+| Row mark | "Restored after a reboot · *time*" / "Restored after the bridge restarted · *time*" |
+| Notice title | "*machine* restarted after a reboot at *time*" / "*machine*'s bridge restarted at *time*" |
 | Signed in | "restored when you signed in at *time*" |
 | Restored | "Restored *n* sessions"; "Can continue: *title*, *title*"; "*n* were mid-turn" |
 | Offered | "*n* sessions can be restored at the machine" |
@@ -2053,7 +2190,7 @@ arrives, as a `question`.
 | Loop | "*n* sessions weren't restored again because they died within 10 minutes" |
 | Close | "Dismiss restore notice on *machine*" |
 | Button | "Continue" (name "Continue *title*") |
-| Push | "*machine* restarted" / "Restored *n* sessions · *m* need you" |
+| Push | "*machine* restarted" (reboot) / "*machine* · the bridge stopped" (crash); "Restored *n* sessions · *m* need you" |
 | Toggle | "Restore sessions after a reboot or crash" |
 
 **Platforms**
@@ -2071,6 +2208,90 @@ arrives, as a `question`.
 - **Home Assistant:** read only. `sensor.agent_bridge_<machine>_restore` (state: the last restore
   time; attributes: the notice), a `restored` attribute on each session's status sensor, and one
   persistent notification per restore. No Continue in Home Assistant.
+
+**Restore from a client (#948): PROPOSED, for Creative**
+
+**Not built, and not decided.** Design first: the words are placeholders for Creative, and the
+host's side is [restore-run.md](../protocol/restore-run.md) (`restore.run`, capability
+`sessions.restore.run`). Nothing here changes the notice above until it is accepted. Folder trust
+stays a person's at the machine (#947).
+
+- **When the notice offers it:** the notice names sessions in `offered`; its `why` is `off` or
+  `pending` (decided, Product P2 on #1033); the machine's hello offers
+  `sessions.restore.run`; and the machine is not read-only. Otherwise the Offered line stays
+  "*n* sessions can be restored at the machine", with no button: under G5, on a host or a channel
+  that can't act (an older host, a device the host doesn't take as a person's), in Home Assistant,
+  and when the notice names none (all in `offeredMore`).
+- **The line and the button:** the Offered line reads "*n* sessions weren't restored: restoring
+  after a reboot or crash is off on *machine*" (`off`) or "*n* sessions can be restored" (`pending`), and
+  after it a secondary button, "Restore…" (named "Restore sessions on *machine*", A1). Never in a
+  row, a card, a push or a toast.
+- **The confirmation** (a dialog; Platforms below):
+  - Title: "Restore *n* sessions on *machine*?"
+  - Line: "Each opens idle, where it stopped. Nothing is typed into them."
+  - The list: the notice's named sessions in its order, at most 5, one a line, then "and *m*
+    more" for the rest it names. Each title is drawn as a title is everywhere (§6.3: cleaned as a
+    name an agent picks is, #263, with hidden and bidi characters shown as visible escapes), on one
+    line with an ellipsis
+    at the dialog's width; one with no title reads "*Agent* session" ("Copilot session"). After it,
+    in secondary text, what the notice says of it: "· was mid-turn", "· a question was lost", "·
+    stopped again soon after its last restore" (`loop`).
+  - With `offeredMore`: "*k* more aren't listed here. Resume them from Launch."
+  - Buttons: "Restore *n*" (primary) and "Cancel". Focus starts on **Cancel**, since this acts on
+    another machine (restore-run.md C3). Escape and the dialog's close are Cancel.
+- **What Restore sends:** `restore.run` with every id the confirmation listed, the notice's `at` as
+  `offer`, a fresh `request` and `progress: true`. One press, one request; a lost response is sent
+  again with the same `request` after 90 s with no frame; a new press after a `busy` or `refused`
+  takes a new one.
+- **While it runs:** the Offered line reads "Restoring *i* of *n*…", from the progress frames, and
+  the button shows §5.3's ring, disabled and keeping focus (A4). Closing the notice doesn't stop
+  it. As each session leaves the offer the host tells every device (`hello.changed`), so another
+  device's notice shrinks with it; a press there meanwhile is `busy`: "A restore is under way from
+  another device."
+- **After** (each line on this device only, until the notice changes or is dismissed):
+  - **All restored** (`restored`): the Offered line and the button go, and the notice's "Restored
+    *n* sessions" line counts them, with "Can continue: …" for those mid-turn, as at start. The
+    rows get their restored mark from the host as at start.
+  - **Partly** (`partial`): "Restored *a* of *n*", then a line for each that didn't start:
+    "Couldn't be restored: *title* (*reason*)" (`refused`, `failed`), "Not tried: *title*
+    (*reason*)" (`busy`) or "Started, not confirmed: *title*. Check at the machine."
+    (`unconfirmed`). With any still offered, the button comes back as "Try again…", which confirms
+    again with what is left.
+  - **None** (`none`): "Couldn't restore any of the *n* sessions", then the same lines.
+  - **Refused** (the whole request): "Couldn't restore: *reason*", the host's words. The offer is as
+    it was. If the reason is that the machine became read-only, hello takes the capability away
+    and the line goes back to "… can be restored at the machine".
+  - **Busy** (the whole request): "Couldn't restore now: *reason*. Try again in a moment."
+- **Never automatic:** no client presses Restore on start, on reconnect or on a timer.
+
+| State | Offered line | Button |
+|---|---|---|
+| Can act (`sessions.restore.run`, not read-only) | "*n* sessions weren't restored: …" / "*n* sessions can be restored" | "Restore…" |
+| G5, or a client that can't act | "*n* sessions can be restored at the machine" | None |
+| Running | "Restoring *i* of *n*…" | Ring, disabled |
+| All restored | Gone; "Restored *n* sessions" | None |
+| Partly or none | "Restored *a* of *n*" / "Couldn't restore any …", and a line each | "Try again…" while any is offered |
+| Refused or busy | "Couldn't restore: *reason*" / "Couldn't restore now: …" | As before the press |
+
+**Accessibility** (§9.1): the button's name says the machine (A1). The dialog is modal, its title
+its name, focus kept inside it and starting on Cancel; closing it returns focus to the button
+(A3, A4). The notice's live region says "Restoring *n* sessions on *machine*" once when it starts,
+and the outcome once when it ends, never each step (A6). Reduced motion: no animation but the ring's
+own (A10).
+
+**Platforms:** Windows app, a ContentDialog, the button a standard secondary Button in the InfoBar.
+PWA, the app's own confirmation dialog, as End session's. Apple (#260): note only. Home Assistant:
+none, read only as today.
+
+| Use | Text (PROPOSED, for Creative) |
+|---|---|
+| Offered, can act | "*n* sessions weren't restored: restoring after a reboot or crash is off on *machine*" / "*n* sessions can be restored" |
+| Button | "Restore…" (name "Restore sessions on *machine*"); after a partial run "Try again…" |
+| Confirmation | "Restore *n* sessions on *machine*?"; "Each opens idle, where it stopped. Nothing is typed into them."; "and *m* more"; "*k* more aren't listed here. Resume them from Launch." |
+| List facts | "was mid-turn", "a question was lost", "stopped again soon after its last restore" |
+| Confirmation buttons | "Restore *n*", "Cancel" |
+| Running | "Restoring *i* of *n*…"; announced "Restoring *n* sessions on *machine*" |
+| Outcomes | "Restored *a* of *n*"; "Couldn't restore any of the *n* sessions"; "Not tried: *title* (*reason*)"; "Started, not confirmed: *title*. Check at the machine."; "Couldn't restore: *reason*"; "Couldn't restore now: *reason*. Try again in a moment."; "A restore is under way from another device." |
 
 ### 6.13 Sign-in needed, agent errors and Not responding (#800)
 
@@ -2113,7 +2334,9 @@ that survives a failed turn never hides the error behind "Delegating".
   "· *reason*", the reason is the host's categorised reason in plain words, from a known set.
   Raw text from the machine or the CLI is never shown, verbatim or trimmed: it belongs in
   diagnostics (#802). A line with no reason from that set reads without one ("Sign-in
-  refused").
+  refused"). The set for a refused start, by the host's reason: "too many requests, try again
+  later", "another sign-in is under way", "too many sign-ins waiting on this machine" and "not
+  available from this device".
 
 **Machine banner** (one per machine, agent and account, rolled up from the sessions' `attention`)
 
@@ -2123,7 +2346,10 @@ that survives a failed turn never hides the error behind "Delegating".
 - Title: "*Agent* on *machine* needs sign-in" plus "· @*account*" when known. Line 2: "*n*
   sessions affected: *A*, *B*" ("1 session affected: *A*" for one). Each title is a link that
   opens that session; there is no separate line of titles. The titles come from the client's own
-  records (never from text in the record).
+  records (never from text in the record), each drawn as a host's sentence is: revealed (a hidden
+  or right-to-left character as its escape) and at most 120 characters. A link keeps its comma,
+  so no line starts with one, and each is a target at least 32px tall with a pointer and 44px on
+  touch, the height of its line box (§9.1 A11).
 - One button, **Sign in**, only with the capability and `signIn: phone`. Without the capability
   there is no button and no instruction: a missing capability doesn't prove the agent can't sign
   in from a device.
@@ -2136,6 +2362,12 @@ that survives a failed turn never hides the error behind "Delegating".
   "Needs sign-in" with no button and no instruction, never phone sign-in and never "at the
   machine".
 - Not dismissible while it lasts: it goes by itself once every affected session is recovered.
+- **Opened from a sign-in push** (`?host=<id>&signin=<agent>`, #969): the PWA shows that machine's
+  sessions list (from another page, or in place of a session open over the list on a phone), and
+  once its list is whole puts focus on that agent's banner's action (Sign in, or its line when
+  there is nothing to press there). If no session for that agent still needs sign-in, the machine
+  shows as it is, with nothing said; an agent the client doesn't know is ignored. The link picks a
+  banner and nothing more.
 - States (each client's adapter maps them from the sessions' `attention` and `recovery`, and
   the sign-in request it started):
 
@@ -2174,7 +2406,8 @@ count, and its row to "Needs sign-in". Sessions that confirm leave the count one
   - "Expires *time*", in the device's own time zone and time format, as every time in the app.
   - Buttons: **Copy** is the one primary, on every client: copying the code is the step that
     moves a phone's sign-in forward, and Open follows it. Open and Cancel are secondary. Focus
-    starts on Cancel, and Escape is Cancel. Nothing is copied or opened without a press.
+    starts on Cancel, and Escape is Cancel. In the app, Copy is also the sheet's default: Enter
+    copies the code (but on Open or Cancel, whose own Enter presses them). Nothing is copied or opened without a press.
 - **A URL not on the allowlist, or a malformed code:** the sheet shows "This sign-in code
   couldn't be shown." with **Try again** (a new request) and Cancel. No link and no raw text,
   and it doesn't send the person to the machine: that's only for the host's `signIn: machine`.
@@ -2251,6 +2484,127 @@ never adds a count to it; the count, and for Home Assistant the sessions' names,
   the pattern above: the plain title, and "*n* sessions: *A*, *B*" as its message. Never the code
   or URL, and no Sign in.
 
+### 6.14 A machine whose bridge isn't running (#970)
+
+**Proposed; not built.** The words are Creative's and the design is confirmed by Product, on #1022 (6691202710, 6691211514). When a machine's host
+has stopped, nothing on it can tell the person: pushes, toasts and Home Assistant notices all
+come from the host. The relay outlives it, so the relay decides when a host is gone, and both
+clients say so from the relay's presence (`presence.known[].offline.gone`,
+[host-gone.md](../protocol/host-gone.md)). The design is Product's
+([#800 6676984805](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6676984805)).
+
+**When it shows.** Only once the relay sets `gone`: the host went without announcing it, with
+evidence that the bridge stopped while the machine is up, and it hasn't come back within
+5 minutes, which leaves time for #805 to restart it first. So:
+
+| The machine | What the clients show |
+|---|---|
+| Its host went less than 5 minutes ago | What §6.1's "A machine away" shows now: "Reconnecting…", then "Offline · last seen…" |
+| Its host announced the departure: an update, a restart, a stop, sleep, shut down, a reboot, sign-out (#805) | #805's planned state, never this |
+| It went silent (switched off, asleep, off the network) and nothing shows the bridge stopped | "Offline", as now, and no push or toast, even with work in flight (Product, #1022: we can't truthfully say the bridge stopped) |
+| Its host is gone | This section |
+
+It goes as soon as the host is listed online again, and when the machine is forgotten or the
+account changes.
+
+**On the Machines page (§6.6).** The machine's row stays an offline row, with line 2 saying why:
+
+- Line 1: the machine icon, the name, and "Offline", as any offline row.
+- Line 2: "Bridge isn't running · since *time*", in place of "Last seen…". The since time is
+  `gone.since`, when the host first went in this episode, which is earlier than "last seen"
+  when it came back briefly in between. The name isn't repeated: it is on line 1 (every element
+  has a purpose).
+- Inside the row: Forget, as for any offline machine, and nothing else yet. When #801's remote
+  restart exists it adds its one action here and on the banner, in #801's words. Never an
+  instruction to go to the machine, now or later.
+
+**On the machine tab (§6.1).** A banner at the top of the session list, above Needs you, in the
+place and style of §6.13's machine banner: "*machine*'s bridge isn't running · since *time*".
+One per machine; it shows with that machine's tab chosen and with All. Not dismissible while it
+lasts; it goes by itself when the host is back. No button until #801's. The tab's tooltip and
+accessible name, and its entry in the "N more" menu, read "*machine* · bridge isn't running".
+The machine's rows keep §2.2's away treatment ("Offline · last seen…") until §6.1's 15 minutes
+take them; the banner says why, so the rows don't repeat it.
+
+**Never claim an agent state we can't see.** Nothing in the line, the row or the banner says
+what the sessions are doing: the host was the only thing that could see them, and it's gone.
+The agents may well still be running at the machine. Nor does any of it say why the host
+stopped ("crashed", "killed"): the relay can't know.
+
+**Time.** "since *time*" is when the relay saw the host go (`gone.since`), in the viewer's local
+time zone and time format, as every time in the app (§6.4): "since 8:31 AM" today; "since
+yesterday, 11:02 PM"; "since Tue, 11:02 PM" within the last week; "since Nov 3, 11:02 PM"
+before that. No zone is added: it is one instant shown in the viewer's own zone, not another
+machine's clock. The tooltip and accessible name give the full date and time ("since Friday,
+November 6, 8:31 AM").
+
+**Tone.** Plain and calm, a fact rather than an alarm: the machine is named, the state is said,
+and there is no exclamation, no "error" and no blame. The banner is informational, never the
+`failed` colour (§3): nothing went wrong with what the person did.
+
+**The push and the toast.** One notice, only if any agent there, a delegate included, was
+working or waiting when the host went (the host arms it in advance; the relay sends it, v1-sessions.md
+[Host gone](../protocol/v1-sessions.md#host-gone-970)). A machine that's simply off, with nothing
+in flight, notifies nothing.
+
+| | Title | Body |
+|---|---|---|
+| Push (PWA), toast (Windows app) | "*machine*'s bridge isn't running" | "It stopped while sessions there were working or waiting on you." |
+| When the host is back with nothing to restore (push only, silent, replacing the one above) | "*machine*'s bridge is running again" | "You can reach its sessions again." |
+
+- **One notice on return, never two** (Creative, #1022). If the bridge's return brings §6.12's
+  restore notice (sessions went with it, whatever the cause), that notice replaces the alert in
+  place, on the same tag, and "…is running again" is never sent: it would say the sessions can
+  be reached when some were lost. "…is running again" goes only when there is nothing to
+  restore: once the bridge has been back 2 minutes and its restore check has found nothing. A
+  device the alert didn't reach gets the restore notice as today. The Windows app toasts once
+  per episode, even if the bridge flaps, and removes its gone toast once the bridge has been back
+  2 minutes, or replaces it with the restore toast, so that is the only one left. The mechanism is
+  in host-gone.md ("When the host comes back").
+  - The restore notice that replaces the alert **alerts** as Needs you does today, with the
+    question sound, never silently: the person still has something to answer.
+  - Once §6.12's withdrawal takes the restore notice away, nothing about the alert comes back:
+    the alert was replaced, not stacked.
+
+- **Tier:** Needs you: it interrupts, with the question sound, sent once per episode (#913).
+  It doesn't count in Needs you's N, its filter or the app badge: N counts questions and
+  approvals only (owner decision, 2026-11-05), and nothing on a session row fixes this. #805's
+  rule for a machine offline unexpectedly still governs every machine that isn't gone
+  ([v1-sessions.md](../protocol/v1-sessions.md#notification-class-913), "What a host classes
+  today"); this section governs one that is.
+- **Once.** One per machine per episode, at most one an hour per machine and three a day per
+  account, shared with #805's no-return notice. A device on screen gets it too: the banner is
+  easy to miss on another tab.
+- **The body** is sealed by the host before it went, so it never carries the time, a count or
+  a session's name (any of them could be stale). The notification's own time says when it came.
+- **Opening it** opens the client on that machine's tab, with the banner.
+- **The Windows app** gets no Web Push: it raises the same toast once from the relay's presence
+  (`gone.alert`), which the relay sets whenever work was in flight, whether or not any browser
+  was subscribed. The app on the machine whose host died alerts the same way, as any other
+  client.
+- **Home Assistant:** nothing new. Its connector runs inside the host, so it can't say this.
+
+**Accessibility (§9.1).** The banner is a polite live region, announced once per machine and
+episode (A6). The row's accessible name reads "*machine*, offline, bridge isn't running since
+*full time*". Every state is told by its words, not its colour.
+
+**Copy**
+
+| Use | Text |
+|---|---|
+| Machines row, line 2 | "Bridge isn't running · since *time*" |
+| Banner | "*machine*'s bridge isn't running · since *time*" |
+| Machine tab tooltip and "N more" entry | "*machine* · bridge isn't running" |
+| Push and toast title | "*machine*'s bridge isn't running" |
+| Push and toast body | "It stopped while sessions there were working or waiting on you." |
+| Push when back with nothing to restore (silent) | "*machine*'s bridge is running again"; "You can reach its sessions again." |
+
+**Platforms**
+
+- **Windows app and PWA:** the row on the Machines page, and the banner at the top of the
+  session list (in the list's header in the app), as §6.13's.
+- **Apple (#260):** note only. The same fields; the native form is that track's decision.
+
 ## 7. Platform shells
 
 **Notifications, on every client (#253):** a question still pending after 2 s is notified
@@ -2278,6 +2632,12 @@ question, as choosing its row does.
   push an hour at most, with a count and no text ("3 agent messages are waiting"), which opens
   Needs you.
 
+**Coming back to the app, on every client (#950):** §6.1's "Coming back to the app" rules hold
+where each client comes back: the PWA first, on returning to the screen or a network change; the
+Windows app, rules 1–5, on waking from sleep, with the same 3 s grace and the slot and strip in
+the list pane's header row, never in the title bar; Apple and Android when
+they are un-parked.
+
 **Windows (WinUI 3):**
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
   and a centred search box. System caption buttons.
@@ -2298,7 +2658,11 @@ question, as choosing its row does.
   comes back only as an owner-approved spec here first.
 - **Banners** sit over every page, `InfoBar`s in this order (#293):
   - What stops the app from its job: the host not running, refusing the app, connecting, or
-    view only. Warning, with no close button: it goes once that is put right.
+    view only. Warning, with no close button: it goes once that is put right. On waking from
+    sleep or changing network, "connecting" is not raised for it (#950): during §6.1's 3-second
+    grace nothing shows, and after it, if the link is still down, the connection strip replaces
+    the list header row's content at the same height (§6.1, rules 3 and 4). A banner already
+    showing when the app comes back stays put.
   - "Discovery held: …" ([v1-sessions.md](../protocol/v1-sessions.md#discovery-held)), one per
     held machine, its name first when there is more than one. Informational, with the
     `InfoBar`'s close button, named "Dismiss Discovery held on *machine*" (§9.1 A1) and reached
@@ -2341,6 +2705,10 @@ question, as choosing its row does.
   platforms' controls.
 - **Desktop:** the Windows layout with a 56 px web app bar in place of the title bar (mark,
   name, search, machines online, account).
+  - **Coming back (#950):** the list pane's header row (the Sessions heading) holds the fixed
+    slot at its end, and the connection strip replaces that row's content at the same height,
+    as the phone's title row does (§6.1, rules 3 and 4). Neither ever goes into the web app bar
+    or above the list.
 - **Phone:**
   - a 24/32 title row with Search and New, and the sort menu between them;
   - machine tabs;
@@ -2348,6 +2716,12 @@ question, as choosing its row does.
     is the way to Launch.
   - The app bar comes back only as a strip while the connection has news (connecting,
     reconnecting, paused, an error), and as the search row while searching.
+    - **The strip replaces the title row's content, at the same height** (#950), so nothing below it
+      moves. After a return it shows only once §6.1's 3-second grace has run out with this
+      client's own link still down, and it is announced once, politely. A machine's own news
+      is never the strip's: it is on its rows, its tab and the Machines page (§6.1, rule 8).
+      Before #950 the strip and connection lines were inserted above the list, and the rows
+      jumped down and back up on every return.
 - **App banners** sit at the top of the content, above the page, one card each (`card` fill,
   `stroke2`), with no icon and no dismiss, in this order:
   - "A new version of the app is ready." · Reload (primary). A release is offered only once it
@@ -2373,6 +2747,11 @@ question, as choosing its row does.
   agent or machine has it. Rows don't move while it narrows the list.
 - **A folder-trust question** waiting on a machine that takes no launches puts a Needs you dot on
   the way to Launch (the rail's Launch, the phone's New).
+- **A launch not confirmed whose session registers late** (#891, #896) says "Session started." in
+  its status, on Launch for that machine only. The PWA follows one such launch per machine, and the
+  app follows one launch in all. A launch whose outcome names no session (a Codex's) is not
+  followed until the host names it (#983), and a start whose session isn't known (no card to open)
+  says "Session started. Open it from the list."
 - **Under the sessions,** one line of each agent's fullest usage leads to Usage.
 - **Usage names the account** (#225), on every group and every figure ("GitHub Copilot ·
   danswett 12%"), in full: two of one agent's accounts differ by nothing else. Short of room the
@@ -2468,7 +2847,7 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   - Agent rows today (#784, #705): "Not installed"; "Not installed · install it on this
     machine"; "Installing…"; "Install failed · *reason*"; "Read-only · *reason*"; "Hook
     ownership couldn't be checked · *reason*"; "Hook intake couldn't be checked · *reason*";
-    "Can't check · this machine's host is older"; "Not tested yet". Actions: Install CLI, Cancel
+    "Can't check · this machine's bridge is older"; "Not tested yet". Actions: Install CLI, Cancel
     (named "Cancel CLI installation"); the consent dialog's Install CLI and runtimes.
   - Version lines (#231): "We couldn't read *Agent*'s version. Setup may not work; we'll
     check it afterwards."; "Update *Agent* to set it up".
@@ -2508,6 +2887,15 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   an answer). Delivered is Send's check, never a line or a badge. Older hosts use the same
   words, less the stages they don't report. Never "typed", "queued", "injected", "in the
   terminal" or "Sending again…". Never "answered" before the host confirms.
+- **Return words (#950):** "Updating…" (the title row's cue, and under a held control pressed);
+  "Connecting to N machines…" (the same slot, for machines with no kept list); "*machine* is
+  offline · you can answer once it's back" (the reply box and the question). An error the person
+  can act on (Couldn't reach, unsupported) is one line in the same slot, naming the machine
+  ("Couldn't reach *machine*", with "and N more" when there are others and it fits), in place of
+  "Updating…".
+  Never a sentence over the list about a machine's connection: no "*machine* is offline. Its
+  sessions are as it last sent them…", "Connecting to *machine*…" or "Opening an end-to-end
+  encrypted channel to *machine*…" there.
 
 ## 9. Accessibility
 
@@ -2575,6 +2963,12 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   every failure says itself in words. Under reduced motion the ring is still, the ring, the
   check and the rest glyph swap over `crossFade`, and a line fades in over `crossFade`
   instead of rising; the quiet window and the announcement limit still apply.
+- **Coming back to the app (#950, §6.1):** a held control is `aria-disabled` from the moment
+  of the return, before it is drawn disabled at 600 ms, so it is never said to work while it is
+  held. The "Updating…" cue is never announced. The connection strip, if the grace runs out with
+  the client's own link down, is announced once, politely. When an offline machine's line
+  replaces a focused control (rule 8), focus moves to the line (`tabindex="-1"`), whose words
+  are read as focus lands, with no separate announcement; focus never drops to the page.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
@@ -2711,3 +3105,7 @@ First-run setup and Settings (#384, §6.8–§6.10) are drawn on the Proposal #3
 step, every Settings section, the compact layout, high contrast, the PWA phone's read-only view
 and the readiness states ([proposals/384-first-run/](proposals/384-first-run/), on one
 [contact sheet](proposals/384-first-run/contact-sheet.png)).
+
+Coming back to the app (#950, §6.1) changes when things show, not how they look, so it has no
+boards: its timeline and the captures its build must show are in
+[proposals/950-calm-return.md](proposals/950-calm-return.md).

@@ -83,7 +83,7 @@ public partial class App : Application
 
         // One updater for Settings and the automatic updates alike, observed so that what either
         // does is what the account's other devices are told (#51).
-        var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile));
+        var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile, manager.Layout.ProfileFolder));
         IAppAtSignIn atSignIn = installed ? new RunKey(Paths.Exe) : new NoRunKey();
         var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay) { LogTo = AppLog.Write };
 
@@ -201,7 +201,18 @@ public partial class App : Application
         if (!options.Demo && updater.InstalledVersion is not null)
         {
             AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write);
-            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others);
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui);
+            // The banner's Restart to update, and Settings' (#516): the updater's changes come on
+            // whichever thread made them.
+            var appUpdate = AppUpdateViewModel.For(autoUpdater);
+            autoUpdater.StateChanged += () => ui.Post(appUpdate.Changed);
+            updater.Changed += () => ui.Post(settings.UpdatesChanged);
+            main.AppUpdate = appUpdate;
+            // One restart, with one state, whichever control starts it (Creative, 6676653935).
+            settings.ShareRestart(appUpdate);
+            // When an update is ready, changed in Settings, is acted on and said to the devices at once.
+            var updates = autoUpdater;
+            settings.PreferencesChanged += () => _ = updates.TickAsync();
             updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
             updateTimer.Tick += (_, _) => _ = autoUpdater.TickAsync();
             updateTimer.Start();
@@ -289,7 +300,9 @@ public partial class App : Application
             RelayAccount? now = null;
             if (local.Can(HostOps.Capability))
             {
-                try { now = await local.CallAsync<RelayAccount>(HostOps.RelayAccount, ct: ct); }
+                // Says this app's own device id, so its host refuses that key through the relay
+                // (#801): this app manages its own machine from Settings.
+                try { now = await local.CallAsync<RelayAccount>(HostOps.RelayAccount, new RelayAccountRequest(Wire.DeviceId(identity.Key.Public)), ct: ct); }
                 catch (HostErrorException) { }
             }
             Volatile.Write(ref last, now);

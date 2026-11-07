@@ -2,7 +2,7 @@
 // a real one does (session.launch): it refuses what it does not offer, in its words, and a
 // started session arrives as any other, with the panel jumping to its card.
 import { test, expect } from '@playwright/test';
-import { go, view } from './nav.mjs';
+import { go, row, view } from './nav.mjs';
 
 const RESUMABLE = '7d3c1a2e-5b6f-4c8d-9e0a-1b2c3d4e5f60';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -40,6 +40,19 @@ test.afterEach(async ({ page }) => {
 
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+  // Only a receipt keeps two lines' room in a narrow box: Launch's status is the line it says
+  // (#941 review: the receipt's room had spread to it, 20.6 px to 41.2 px).
+  test('a one-line launch status takes one line', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    const lines = await status(page).evaluate((el) => {
+      el.textContent = 'Session started.';
+      return el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).fontSize);
+    });
+    expect(lines).toBeGreaterThan(1);
+    expect(lines).toBeLessThan(2);
+  });
 
   test('a launch sends every setting and the whole prompt, then jumps to the new session\'s card', async ({ page }) => {
     await openDemo(page);
@@ -91,6 +104,21 @@ test.describe('on a phone', () => {
     expect(sent.workspace).toBeUndefined();
     await expect(view(page, RESUMABLE)).toBeInViewport();
     await expect(field(page, 'resume').locator(`option[value="${RESUMABLE}"]`)).toHaveCount(0);
+  });
+
+  test('a start whose outcome names no session says to open it from the list, and opens nothing (#973)', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'started', session: null });
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+
+    await expect(status(page)).toHaveText('Session started in a new worktree. Open it from the list.');
+    await expect(panel(page)).toHaveAttribute('data-launch', 'started');
+    await expect(panel(page).locator('.launch-open')).toBeHidden();
+    await expect(field(page, 'prompt')).toHaveValue('');
+    await page.waitForTimeout(1000);
+    await expect(page.locator('.session-view:visible')).toHaveCount(0);
   });
 
   test('an agent that starts only on a first message is not launched without one, and nothing is sent', async ({ page }) => {
@@ -341,6 +369,51 @@ test.describe('a folder-trust question', () => {
     await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
     await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.trustLog.length)).toBe(1);
     await expect(field(page, 'prompt')).toHaveValue('');
+  });
+
+  test('a Trust whose session started while the app was hidden opens its card only once the app is shown again (#973)', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+    await page.waitForTimeout(1000);
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+      Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    await page.waitForTimeout(1000);
+    await expect(panel(page)).toBeVisible();
+    await expect(page.locator('.session-view:visible')).toHaveCount(0);
+
+    await page.evaluate(() => { delete document.visibilityState; delete document.hidden; document.dispatchEvent(new Event('visibilitychange')); });
+    await expect(page.locator('.session-view:visible')).toHaveCount(1);
+  });
+
+  test('a Trust whose session started after Launch was left for Settings opens nothing there (#973)', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
+    await page.waitForTimeout(1000);
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await go(page, 'settings');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+    await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.trustLog.length)).toBe(1);
+    await page.waitForTimeout(1000);
+    await expect(page.locator('[data-route="settings"]')).toBeVisible();
+    await expect(page.locator('.session-view:visible')).toHaveCount(0);
   });
 
   test('a question this panel\'s launch did not meet, trusted, leaves the first message being written', async ({ page }) => {
@@ -834,5 +907,120 @@ test.describe('a folder-trust question', () => {
     await expect(card(page).getByRole('button')).toHaveCount(0);
     await expect(panel(page).locator('.launch-note')).toHaveText(/^Sessions can't be started on Demo machine now: agent-ha-bridge is running/);
     await expect(launchButton(page)).toBeHidden();
+  });
+});
+
+// A machine kept busy, and a launch it could not confirm, followed until they end (#896, as the
+// Windows app does since #891): its busy listed again, and the launch said to have started once
+// its session registers, with its first message gone and its card opened only on Launch.
+test.describe('a launch followed after it was not confirmed', () => {
+  test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+
+  const LATE = '3e9a7c51-0b2d-4f6e-8a1c-5d7e9f0b2c4a';
+  const unconfirmed = { outcome: 'unconfirmed', reason: 'the session started, but it did not confirm it was ready within 60 seconds', session: LATE };
+  // The launched session registering on the demo machine, as a host's session.upsert.
+  const register = (page, agent) => page.evaluate(({ id, agent: a }) => {
+    const at = new Date().toISOString();
+    window.agentBridgeDemo.upsert({ id, agent: a, title: 'Add pagination.', cwd: 'C:\\Users\\demo\\repos\\agent-bridge', status: 'working', statusSince: at, startedAt: at, updatedAt: at, processId: 4200, activity: { userMessage: 'Add pagination.', turnCount: 1 } });
+  }, { id: LATE, agent });
+  const listings = (page) => page.evaluate(() => window.agentBridgeDemo.calls.filter((c) => c === 'launch.options').length);
+
+  test('its session registering on Launch for that machine says it started, clears its first message and opens its card', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, unconfirmed);
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
+    await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
+
+    await register(page, 'codex');
+    await expect(view(page, LATE)).toBeInViewport();
+    await expect(status(page)).toHaveText('Session started in a new worktree.');
+    await expect(status(page)).toHaveClass(/\bok\b/);
+    await expect(panel(page)).toHaveAttribute('data-launch', 'started');
+    await expect(field(page, 'prompt')).toHaveValue('');
+    // Said once: the machine listed again redraws the status, but leaves its words alone.
+    await page.evaluate(() => {
+      window.__statusChanges = 0;
+      new MutationObserver((m) => { window.__statusChanges += m.length; })
+        .observe(document.querySelector('#launch .launch-status'), { childList: true, characterData: true, subtree: true });
+    });
+    await page.evaluate(() => window.agentBridgeDemo.launchPanel.refresh());
+    await expect(status(page)).toHaveText('Session started in a new worktree.');
+    expect(await page.evaluate(() => window.__statusChanges)).toBe(0);
+  });
+
+  test('its session registering while elsewhere changes its status and first message quietly, and opens nothing', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, unconfirmed);
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
+    await go(page, 'sessions');
+
+    await register(page, 'codex');
+    await expect(row(page, LATE)).toBeVisible();
+    // Still the list: no card was pushed over it.
+    await expect(page.locator('[data-route="sessions"]')).toBeVisible();
+    await expect(view(page, LATE)).toBeHidden();
+
+    await go(page, 'launch');
+    await expect(status(page)).toHaveText('Session started in a new worktree.');
+    await expect(field(page, 'prompt')).toHaveValue('');
+    await expect(view(page, LATE)).toBeHidden();
+  });
+
+  test('a Copilot session registering proves nothing: the launch stays not confirmed, with its first message', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, unconfirmed);
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
+
+    await register(page, 'copilot');
+    await expect(row(page, LATE)).toHaveCount(1);
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
+    await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
+    await expect(view(page, LATE)).toBeHidden();
+  });
+
+  // Which session a launch naming none started is not guessed (#973): it waits for the host to
+  // name it (#983).
+  test('a Codex launch that named no session stays not confirmed when a new Codex session registers in its folder (#973)', async ({ page }) => {
+    await openDemo(page);
+    await openPanel(page);
+    await script(page, { outcome: 'unconfirmed', reason: 'the session started, but it did not confirm it was ready within 60 seconds' });
+    await field(page, 'agent').selectOption('codex');
+    await field(page, 'workspace').selectOption('agent-bridge');
+    await field(page, 'prompt').fill('Add pagination.');
+    await launchButton(page).tap();
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
+
+    await register(page, 'codex');
+    await expect(row(page, LATE)).toHaveCount(1);
+    await page.waitForTimeout(2000);
+    await expect(status(page)).toHaveText(/^Launched in a new worktree, but not confirmed/);
+    await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
+    await expect(panel(page).locator('.launch-open')).toBeHidden();
+    await expect(page.locator('.session-view:visible')).toHaveCount(0);
+  });
+
+  test('a busy machine is listed again when a session registers on it, and its busy goes', async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, busy: 'a session this machine launched is still starting' }; });
+    await openPanel(page);
+    const busy = panel(page).locator('.launch-busy');
+    await expect(busy).toHaveText('Demo machine is busy: a session this machine launched is still starting.');
+    const before = await listings(page);
+
+    await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.launchOptions = { ...h.launchOptions, busy: null }; });
+    await register(page, 'codex');
+    await expect.poll(() => listings(page)).toBeGreaterThan(before);
+    await expect(busy).toBeHidden();
   });
 });

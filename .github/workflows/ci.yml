@@ -1141,11 +1141,37 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
+      # Renders of the demo for design review (pwa/test/renders): captures, not checks, so they
+      # never fail the job, and they are kept whatever the tests did. Design signs a state off
+      # against what the product draws, and nothing runs on an owner's machine, so CI draws them.
+      # Chromium alone: the engine that emulates forced colours.
+      - name: Renders of the demo
+        if: ${{ !cancelled() && matrix.project == 'chromium' && hashFiles('pwa/test/renders/*.render.mjs') != '' }}
+        continue-on-error: true
+        run: npx playwright test --config playwright.renders.config.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() && matrix.project == 'chromium' }}
+        with:
+          name: pwa-renders
+          path: pwa/renders/
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
           path: pwa/test-results
+          retention-days: 7
+      # The sign-in captures test/sign-in.spec.mjs takes in Chromium (#800, #963), for Creative to
+      # look at on every run, not only a failed one.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() && matrix.project == 'chromium' }}
+        with:
+          name: pwa-captures
+          path: |
+            pwa/test-results/**/signin-*.png
+            !pwa/test-results/**/attachments/**
+          if-no-files-found: warn
           retention-days: 7
 
   pwa-e2e:
@@ -1207,6 +1233,16 @@ jobs:
         with:
           name: pwa-test-results-e2e
           path: pwa/test-results
+          retention-days: 7
+      # The sign-in link's capture (test/e2e/e2e.spec.mjs, #969), for Creative on every run.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: pwa-captures-e2e
+          path: |
+            pwa/test-results/**/signin-*.png
+            !pwa/test-results/**/attachments/**
+          if-no-files-found: warn
           retention-days: 7
 
   quality-gate:

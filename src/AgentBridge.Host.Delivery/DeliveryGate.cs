@@ -94,6 +94,8 @@ public sealed class DeliveryGate
         internal TimeSpan Lifetime { get; }
         internal bool Committed { get; private set; }
         internal bool Committing { get; private set; }
+        // Monotonic and lock-free: Started and Lifetime never change.
+        internal bool LifetimeElapsed => owner.time.GetElapsedTime(Started) >= Lifetime;
         internal event Action? Expired;
         internal void NotifyExpired() => Expired?.Invoke();
 

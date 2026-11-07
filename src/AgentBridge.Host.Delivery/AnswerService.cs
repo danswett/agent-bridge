@@ -125,7 +125,7 @@ public sealed class AnswerService : ISessionAnswerer
         this.log = log ?? (_ => { });
         this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
         requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor, this.gate, Busy);
-        ledger = new AttemptLedger(options.AttemptLedgerPath, options.Time);
+        ledger = new AttemptLedger(options.AttemptLedgerPath, options.Time, this.log);
     }
 
     public bool Available => options.PlatformSupported && probe.Recent() is null;
@@ -181,7 +181,7 @@ public sealed class AnswerService : ISessionAnswerer
         {
             // Only reached before anything was typed: each agent's path owns its own
             // failures once a key may have gone.
-            return Refused($"the host could not answer: {e.Message}");
+            return Failed(AnswerOutcome.Refused, $"answer {key.ToString()[..8]} to {Short(request.Id)} failed before typing", e);
         }
     }
 
@@ -294,7 +294,7 @@ public sealed class AnswerService : ISessionAnswerer
         log($"typed into {Short(session.Id)} (pid {pid}): {plan.Keys.Describe()} -> {typed.Status} {typed.Detail}");
         if (Settle(typed, attempt) is { } settled) { return settled; }
         try { return await ConfirmAsync(transcript, question.Id, from, plan, timeline); }
-        catch (Exception e) { return Unconfirmed($"the answer was typed but could not be checked ({e.Message}); check at the machine"); }
+        catch (Exception e) { return Failed(AnswerOutcome.Unconfirmed, $"the answer typed into {Short(session.Id)} could not be checked", e); }
     }
 
     // Watches the transcript, from where it stood before the keys went, for the answer to
@@ -322,13 +322,13 @@ public sealed class AnswerService : ISessionAnswerer
                 {
                     timeline.Recorded(record.At);
                     var (matched, reason) = CopilotVerifier.Check(plan, record);
-                    return matched ? Delivered(timeline) : Unconfirmed($"{reason}; check at the machine");
+                    return matched ? Delivered(timeline) : Unconfirmed(reason);
                 }
             }
-            else if (state.SessionEnded) { return Unconfirmed("the session ended before it recorded an answer; check at the machine"); }
+            else if (state.SessionEnded) { return Unconfirmed("the session ended before it recorded an answer"); }
             else if (elapsed >= options.ConfirmTimeout)
             {
-                return Unconfirmed($"the session did not record an answer within {options.ConfirmTimeout.TotalSeconds:0} seconds; check at the machine");
+                return Unconfirmed($"the session did not record an answer within {options.ConfirmTimeout.TotalSeconds:0} seconds");
             }
             await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
         }
@@ -381,8 +381,8 @@ public sealed class AnswerService : ISessionAnswerer
 
             ConsoleScreen screen;
             try { screen = await injector.ReadScreenAsync(pid); }
-            catch (Exception e) { return Refused($"the host could not read the session's screen ({e.Message}); answer at the machine"); }
-            if (screen.Rows is not { } rows) { return Refused(screen.Problem ?? "the host could not read the session's screen; answer at the machine"); }
+            catch (Exception e) { return Failed(AnswerOutcome.Refused, $"could not read the screen of {Short(session.Id)} for permission {Short(requestId)}", e); }
+            if (screen.Rows is not { } rows) { return Refused(DeliveryReasons.Of(screen.Problem ?? "the host could not read the session's screen; answer at the machine")); }
             var (choice, problem) = CopilotPermissionScreen.Locate(rows, approve, pending.Probes);
             if (choice is null) { return Refused($"{problem}; answer at the machine"); }
             // Again after the screen was read: what is on it is this request only if this
@@ -405,7 +405,7 @@ public sealed class AnswerService : ISessionAnswerer
         log($"typed {decision} into {Short(session.Id)} (pid {pid}) for permission {Short(requestId)}: {keys.Describe()} -> {typed.Status} {typed.Detail}");
         if (Settle(typed, attempt) is { } settled) { return settled; }
         try { return await ConfirmPermissionAsync(transcript, requestId, from, approve, timeline); }
-        catch (Exception e) { return Unconfirmed($"the {decision} was typed but could not be checked ({e.Message}); check at the machine"); }
+        catch (Exception e) { return Failed(AnswerOutcome.Unconfirmed, $"the {decision} typed into {Short(session.Id)} could not be checked", e); }
     }
 
     async Task<AnswerResult> ConfirmPermissionAsync(string transcript, string requestId, long from, bool approve, DeliveryTimeline timeline)
@@ -428,12 +428,12 @@ public sealed class AnswerService : ISessionAnswerer
                     await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
                     continue;
                 }
-                return Unconfirmed($"Copilot recorded the request as {(kind.Length == 0 ? "answered" : kind)}{(result.Feedback ? " with a message" : "")}, not {(approve ? "approved" : "denied")}; check at the machine");
+                return Unconfirmed($"Copilot recorded the request as {(kind.Length == 0 ? "answered" : kind)}{(result.Feedback ? " with a message" : "")}, not {(approve ? "approved" : "denied")}");
             }
-            if (result.SessionEnded) { return Unconfirmed("the session ended before it recorded an answer; check at the machine"); }
+            if (result.SessionEnded) { return Unconfirmed("the session ended before it recorded an answer"); }
             if (options.Time.GetElapsedTime(started) >= options.ConfirmTimeout)
             {
-                return Unconfirmed($"the session did not record an answer within {options.ConfirmTimeout.TotalSeconds:0} seconds; check at the machine");
+                return Unconfirmed($"the session did not record an answer within {options.ConfirmTimeout.TotalSeconds:0} seconds");
             }
             await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
         }
@@ -483,7 +483,7 @@ public sealed class AnswerService : ISessionAnswerer
         log($"typed into {Short(session.Id)} (pid {pid}): {plan.Keys.Describe()} -> {typed.Status} {typed.Detail}");
         if (Settle(typed, attempt) is { } settled) { return settled; }
         try { return await ConfirmClaudeAsync(session.Id, pid, transcript, question.Id, from, plan, timeline); }
-        catch (Exception e) { return Unconfirmed($"the answer was typed but could not be checked ({e.Message}); check at the machine"); }
+        catch (Exception e) { return Failed(AnswerOutcome.Unconfirmed, $"the answer typed into {Short(session.Id)} could not be checked", e); }
     }
 
     // Watches the transcript for the call's tool_result. Claude can end on a review screen
@@ -502,12 +502,12 @@ public sealed class AnswerService : ISessionAnswerer
             if (state.Answer is { } record)
             {
                 var (matched, reason) = ClaudeVerifier.Check(plan, record);
-                return matched ? Delivered(timeline) : Unconfirmed($"{reason}; check at the machine");
+                return matched ? Delivered(timeline) : Unconfirmed(reason!);
             }
-            if (state.Interrupted) { return Unconfirmed("the question was interrupted at the machine before Claude recorded an answer; check at the machine"); }
+            if (state.Interrupted) { return Unconfirmed("the question was interrupted before Claude recorded an answer"); }
             if (elapsed >= options.ConfirmTimeout)
             {
-                return Unconfirmed($"the session did not record an answer within {options.ConfirmTimeout.TotalSeconds:0} seconds; check at the machine");
+                return Unconfirmed($"the session did not record an answer within {options.ConfirmTimeout.TotalSeconds:0} seconds");
             }
             if (!reviewed && elapsed >= options.ClaudeReviewAfter)
             {
@@ -579,7 +579,7 @@ public sealed class AnswerService : ISessionAnswerer
             // exactly its id, so it is what the person confirmed (#958). What may have changed
             // meanwhile is the confirmation's own standing: a device taken off the list, or its lifetime.
             if (EscapedRefusal(question, request, confirmed) is { } unconfirmed) { return Refused(unconfirmed); }
-            if (marker.Attempted) { return Refused("agent-ha-bridge has already typed an answer into this approval, and it is never typed again; check at the machine"); }
+            if (marker.Attempted) { return Refused("agent-ha-bridge has already typed an answer into this approval, and it is never typed again"); }
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, keys, timeline);
@@ -588,7 +588,7 @@ public sealed class AnswerService : ISessionAnswerer
 
         log($"typed {decision} into {Short(session.Id)} (pid {pid}): {keys.Describe()} -> {typed.Status} {typed.Detail}");
         if (Settle(typed, attempt) is { } settled) { return settled; }
-        return Unconfirmed($"typed {decision}, but Codex records nothing that says how an approval was answered, so it cannot be confirmed; check at the machine");
+        return Unconfirmed($"typed {decision}, but Codex records nothing that says how an approval was answered, so it cannot be confirmed");
     }
 
     // The session's process is still the live agent process and may be typed into.
@@ -609,7 +609,8 @@ public sealed class AnswerService : ISessionAnswerer
         try { result = await injector.InjectAsync(pid, keys); }
         catch (Exception e)
         {
-            result = new InjectionResult(InjectionStatus.Interrupted, $"the injector failed while typing ({e.Message})");
+            log($"the injector failed while typing into pid {pid}: {e.GetType().Name}: {e.Message}");
+            result = new InjectionResult(InjectionStatus.Interrupted, DeliveryReasons.CouldNotDeliver);
         }
         timeline?.InjectEnd();
         // A question holds the session, so it was not working.
@@ -625,9 +626,9 @@ public sealed class AnswerService : ISessionAnswerer
         {
             case InjectionStatus.NothingTyped:
                 ledger.Release(attempt);
-                return Refused(typed.Detail);
+                return Refused(DeliveryReasons.Of(typed.Detail));
             case InjectionStatus.Interrupted:
-                return Unconfirmed($"{typed.Detail}; part of the answer may have reached the session, so check at the machine");
+                return Unconfirmed(typed.Detail == DeliveryReasons.CouldNotDeliver ? typed.Detail : $"{typed.Detail}; part of the answer may have reached the session");
             default:
                 return null;
         }
@@ -647,6 +648,14 @@ public sealed class AnswerService : ISessionAnswerer
     };
 
     static string Short(string id) => id.Length > 8 ? id[..8] : id;
+
+    // What went wrong goes to the host's log only: the person is given fixed words, never an
+    // exception's text (#802, #995).
+    AnswerResult Failed(AnswerOutcome outcome, string what, Exception e)
+    {
+        log($"{what}: {e.GetType().Name}: {e.Message}");
+        return new(outcome, DeliveryReasons.CouldNotDeliver);
+    }
 
     static AnswerResult Refused(string reason) => new(AnswerOutcome.Refused, reason);
     static AnswerResult Stale(string reason) => new(AnswerOutcome.Stale, reason);

@@ -98,10 +98,24 @@ public sealed class SessionService
     // update.*, through the relay only, and never on a read-only machine (UpdateService).
     public UpdateService? Updates { get; init; }
 
-    // Framework only: no production auth factory/entrypoint is registered. Both gates
-    // remain off until Engineering approves the agent-owned private login path.
+    // manage.*, through the relay only, from a person's device (ManageService, #801). Given one,
+    // this binds its restart's eligibility to the #800 sign-in below: a restart would cancel a
+    // pending sign-in (Connection, Q-C8 on #886), so none commits while that entrypoint is on.
+    public ManageService? Manage
+    {
+        get => manage;
+        init
+        {
+            manage = value;
+            value?.Eligibility?.BindSignIn(() => SignIn is not null && SignInEntrypointApproved);
+        }
+    }
+    readonly ManageService? manage;
+
+    // sessions.signin (#972): set only where the machine's permissions.phoneSignIn is on and an
+    // adapter exists for the agent (PhoneSignInSetup). Off by default: nothing is offered.
     internal SignIn.AgentSignInService? SignIn { get; init; }
-    internal bool SignInEntrypointApproved { get; init; } = AgentSignIn.EnabledByDefault;
+    internal bool SignInEntrypointApproved { get; init; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -198,6 +212,8 @@ public sealed class SessionService
                 return await usage.HandleAsync(channel, op, data);
             case UpdateProtocol.Get or UpdateProtocol.Subscribe or UpdateProtocol.Check or UpdateProtocol.Install when Updates is not null:
                 return await Updates.HandleAsync(channel, op, data);
+            case var manage when ManageProtocol.Ops.Contains(manage) && Manage is not null:
+                return await Manage.HandleAsync(channel, op, data);
             case Ops.SessionsList:
                 return source.List(String(data, "cursor"));
             case Ops.SessionGet:
@@ -515,6 +531,7 @@ public sealed class SessionService
         if (answers?.Available == true && channel is SecureChannel peer && EscapedApprovals?.Offers(peer.PeerId) == true) { offered.Add(EscapedApproval.Capability); }
         if (Updates?.Offered(channel) == true) { offered.Add(UpdateProtocol.Capability); }
         if (Restore is not null) { offered.Add(RestoreProtocol.Capability); }
+        if (Manage is not null) { offered.AddRange(Manage.Offered(channel)); }
         // Transfers are signed by a device through the relay, and go through its blob store.
         if (transfers is not null && channel is SecureChannel)
         {

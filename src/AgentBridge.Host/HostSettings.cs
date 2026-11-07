@@ -55,6 +55,10 @@ namespace AgentBridge.Host;
 // list is absent. "machine": Approve only at the machine; Deny still goes from anywhere. A value
 // that cannot be read is "machine", and a list that cannot be read approves no device; each is said.
 //
+// permissions.phoneSignIn (#972): whether a person's pinned device may run an agent's own
+// device-code sign-in on this machine (sessions.signin, docs/protocol/v1-sessions.md). Off when
+// absent. A value that is not true or false turns everything off, as remoteApproval's does.
+//
 // version: the schema's. A file from a newer schema is not guessed at: both are off.
 public sealed record HostSettings(bool RemoteApproval)
 {
@@ -92,8 +96,14 @@ public sealed record HostSettings(bool RemoteApproval)
 
     public bool ReadOnly { get; init; }
     public bool TrustedPeers { get; init; }
+    // permissions.remoteManage: a person's device may restart this host and repair its hooks
+    // through the relay (docs/protocol/v1-sessions.md, "Managing a machine"; #801). On unless turned off here; the one
+    // switch that takes the whole feature back.
+    public bool RemoteManage { get; init; } = true;
 
     public bool RestoreOnStart { get; init; } = true;
+    // permissions.phoneSignIn: off unless set true.
+    public bool PhoneSignIn { get; init; }
     // permissions.escapedApproval: EscapedApproval.Confirm or .Machine.
     public string EscapedApproval { get; init; } = AgentBridge.Protocol.EscapedApproval.Confirm;
 
@@ -115,7 +125,7 @@ public sealed record HostSettings(bool RemoteApproval)
     static HostSettings Off => Default with
     {
         RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, ReadOnly = true,
-        Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RestoreOnStart = false, RestoreKept = true,
+        Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true, RemoteManage = false, RestoreOnStart = false, RestoreKept = true,
         EscapedApproval = AgentBridge.Protocol.EscapedApproval.Machine, EscapedApprovalDevices = [],
     };
 
@@ -227,6 +237,30 @@ public sealed record HostSettings(bool RemoteApproval)
                         JsonValueKind.True => true,
                         JsonValueKind.False => false,
                         _ => throw new JsonException("permissions.trustedPeers is not true or false"),
+                    },
+                };
+            }
+            if (permissions.TryGetProperty("remoteManage", out var manage) && manage.ValueKind != JsonValueKind.Null)
+            {
+                settings = settings with
+                {
+                    RemoteManage = manage.ValueKind switch
+                    {
+                        JsonValueKind.True => true,
+                        JsonValueKind.False => false,
+                        _ => throw new JsonException("permissions.remoteManage is not true or false"),
+                    },
+                };
+            }
+            if (permissions.TryGetProperty("phoneSignIn", out var phone) && phone.ValueKind != JsonValueKind.Null)
+            {
+                settings = settings with
+                {
+                    PhoneSignIn = phone.ValueKind switch
+                    {
+                        JsonValueKind.True => true,
+                        JsonValueKind.False => false,
+                        _ => throw new JsonException("permissions.phoneSignIn is not true or false"),
                     },
                 };
             }

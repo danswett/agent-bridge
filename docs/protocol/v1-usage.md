@@ -353,7 +353,9 @@ E4). So the host never kills a probe:
   had its answers and its grace, at most 11 minutes, before it stops the host; a host that cannot
   say, or is still busy then, is not stopped (nor ended) at all. An update waits
   for it however long it has waited already, a forced one at six hours too. A host restarting
-  itself (`host.restart`) waits the same way, at most 90 s, before it starts its replacement. A
+  itself (`host.restart`, or `manage.restart` from a person's device) waits the same way, at most
+  90 s, before it starts its replacement; stopped meanwhile (Ctrl+C, the OS, the app's Stop), it
+  just stops, and starts none (#886). A
   host stopped by anything else holds its probes and waits for the answers and the grace, at most
   90 s from the stop. Before an update the app also holds and waits for every other profile's host
   running from the package, which Velopack ends too: each is held again every round, so no hold

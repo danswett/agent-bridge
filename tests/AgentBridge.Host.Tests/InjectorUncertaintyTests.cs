@@ -21,11 +21,14 @@ public sealed class InjectorUncertaintyTests
         var time = new FakeTimeProvider();
         var gate = new DeliveryGate(time);
         var injector = new UncertainInjector();
+        var logged = new List<string>();
         var replies = new ReplyService(gate, source, fixture.Processes, new NoBridge(), new NoGuard(), injector,
-            new ReplyOptions { CopilotHome = fixture.CopilotHome, PlatformSupported = true, PreRead = false });
+            new ReplyOptions { CopilotHome = fixture.CopilotHome, PlatformSupported = true, PreRead = false }, l => { lock (logged) { logged.Add(l); } });
         var result = await replies.ReplyAsync(new ReplyRequest { Id = id, Request = Guid.NewGuid().ToString(), Text = "continue" });
         Assert.True(injector.Attempted);
-        Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
+        // #995, #802: the exception's words go to the host's log, never to the person.
+        Assert.Equal(new ReplyResult(AnswerOutcome.Unconfirmed, "the machine couldn't deliver it"), result);
+        lock (logged) { Assert.Contains(logged, l => l.Contains("worker termination could not be confirmed", StringComparison.Ordinal)); }
         var coordinator = new LifecycleCoordinator(gate, new DepartureConditions(), time: time);
         Assert.Equal(QuietBlockedReason.JournalUncertain,
             (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart)).Reason);

@@ -30,17 +30,26 @@ public sealed class SettingsTests : IAsyncLifetime
         public Exception? ApplyFails;
         public Exception? DownloadFails;
         public bool Applied;
-        public string? Ready { get; private set; }
+        public string? Found = "0.2.0";
+        public string? Ready { get; set; }
         public string? InstalledVersion => "0.1.0";
-        public Task<string?> CheckAsync() => CheckFails is { } e ? Task.FromException<string?>(e) : Task.FromResult<string?>("0.2.0");
+        public Task<string?> CheckAsync() => CheckFails is { } e ? Task.FromException<string?>(e) : Task.FromResult(Found);
+        // The percentages a download reports, as Velopack's do; by default only its end.
+        public int[] Steps = [100];
         public Task DownloadAsync(Action<int> progress)
         {
             if (DownloadFails is { } e) { return Task.FromException(e); }
-            progress(100);
+            foreach (var p in Steps) { progress(p); }
             Ready = "0.2.0";
             return Task.CompletedTask;
         }
-        public void ApplyAndRestart() { OnApply?.Invoke(); if (ApplyFails is { } e) { throw e; } Applied = true; }
+        public void ApplyAndRestart(string version)
+        {
+            OnApply?.Invoke();
+            if (ApplyFails is { } e) { throw e; }
+            if (Ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded"); }
+            Applied = true;
+        }
     }
 
     sealed class AtSignIn : IAppAtSignIn
@@ -358,7 +367,7 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal("Installed, version 1.2.3", row.Installation);
         Assert.Contains("Explicit hook setup", row.Checks);
         Assert.Contains("Sign-in has not been verified", row.Checks);
-        Assert.Contains("No hook observed", row.HookActivity);
+        Assert.Equal("No hook seen since the bridge started.", row.HookActivity);
 
         host.On(HostOps.AgentsRefresh, _ =>
         {
@@ -399,6 +408,15 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(settings.HasError);
         Assert.True(settings.CanCheckAgents);
         Assert.Contains(true, enabled);
+    }
+
+    [Fact]
+    public async Task A_page_that_cannot_reach_this_machines_bridge_says_to_connect_to_it()
+    {
+        await using var connecting = new HostConnection(_ => new TaskCompletionSource<AgentBridge.Transport.IClientChannel>().Task, ui);
+        var page = new SettingsViewModel(connecting, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+
+        Assert.Equal("Connect to this machine's bridge to check its agents.", page.AgentsState);
     }
 
     [Fact]
@@ -449,7 +467,7 @@ public sealed class SettingsTests : IAsyncLifetime
         await Wait.UntilAsync(() => settings.Agents.SingleOrDefault()?.Installation.Contains("2.3.4") == true && settings.RestartRequired, "the readiness and restart the setup left",
             why: () => $"installation {settings.Agents.SingleOrDefault()?.Installation ?? "none"}, restart required {settings.RestartRequired}");
         Assert.Empty(host.Sent(HostOps.Restart));
-        Assert.Equal("Set up · restart the host, then start a new session to check it", settings.Agents.Single().Status);
+        Assert.Equal("Set up · restart the bridge, then start a new session to check it", settings.Agents.Single().Status);
         Assert.Contains("Trust and a new session have not been verified", settings.Agents.Single().Checks);
         Assert.False(settings.HasError);
     }
@@ -463,7 +481,7 @@ public sealed class SettingsTests : IAsyncLifetime
 
         await settings.SetUpAgentAsync("claude");
 
-        Assert.Equal("Set up · restart the host, then start a new session to check it", settings.Agents.Single().Status);
+        Assert.Equal("Set up · restart the bridge, then start a new session to check it", settings.Agents.Single().Status);
         Assert.Equal("fixture post-setup scan failed", settings.Error);
         Assert.Empty(host.Sent(HostOps.Restart));
     }
@@ -478,7 +496,7 @@ public sealed class SettingsTests : IAsyncLifetime
 
         Assert.Equal("Hook setup incomplete: fixture partial work", settings.Error);
         // The row says why from a known set; the command's own text stays in the page's error and the log.
-        Assert.Equal("Setup failed · the host couldn't finish it", settings.Agents.Single().Status);
+        Assert.Equal("Setup failed · the machine couldn't finish it", settings.Agents.Single().Status);
         Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
         Assert.Empty(host.Sent(HostOps.Restart));
         Assert.False(settings.Busy);
@@ -511,7 +529,7 @@ public sealed class SettingsTests : IAsyncLifetime
 
     [Theory]
     [InlineData("Hook setup incomplete: C:\\Users\\dana\\.codex\\agent-ha-bridge-owner.json is a legacy registration; use Migrate", "Setup failed · an older bridge's hooks are there; migrate them first")]
-    [InlineData("agent-ha-bridge is active or cannot be checked (running); use Migrate instead", "Setup failed · this machine's host is older")]
+    [InlineData("agent-ha-bridge is active or cannot be checked (running); use Migrate instead", "Setup failed · this machine's bridge is older")]
     [InlineData("Hook setup incomplete: C:\\Users\\dana\\.codex\\agent-bridge-owner.json belongs to another installation; it was left alone", "Setup failed · another bridge profile owns its hooks")]
     [InlineData("Hook setup incomplete: Access to the path 'C:\\Users\\dana\\.codex\\config.toml' is denied.", "Setup failed · access denied")]
     [InlineData("Hook setup incomplete: this profile belongs to a migration; use migration status or rollback", "Setup failed · this profile is being migrated")]
@@ -556,7 +574,7 @@ public sealed class SettingsTests : IAsyncLifetime
     const string Unreadable = "Hook ownership could not be checked: Access to the path is denied.";
     const string InUse = "Hook ownership could not be checked: The process cannot access the file because it is being used by another process.";
     // `hookSetup` unknown beside hooks a current host would have said it of (#784's words).
-    const string OlderHost = "Can't check · this machine's host is older";
+    const string OlderHost = "Can't check · this machine's bridge is older";
 
     [Theory]
     [InlineData(ReadinessState.Missing, "Fixture hooks.", "Set up")]
@@ -674,10 +692,10 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine", "Read-only · this machine's host is older")]
+    [InlineData("Hook setup is unavailable while this host is read-only: agent-ha-bridge is running for this user; answer at the machine", "Read-only · this machine's bridge is older")]
     [InlineData("Another bridge profile owns this agent's hook setup. Do not overwrite its registrations.", "Read-only · another bridge profile owns its hooks")]
-    [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "Read-only · set in this host's settings")]
-    [InlineData("Hook setup is unavailable while this host is read-only: this host's config.json has a problem, so it takes nothing from other devices; answer at the machine", "Read-only · set in this host's settings")]
+    [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine", "Read-only · set in this bridge's settings")]
+    [InlineData("Hook setup is unavailable while this host is read-only: this host's config.json has a problem, so it takes nothing from other devices; answer at the machine", "Read-only · set in this bridge's settings")]
     public void Hooks_held_back_from_this_app_say_read_only_and_why_with_no_install_or_verb(string detail, string words)
     {
         var row = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Blocked, installation: ReadinessState.Missing, hooksDetail: detail), canManage: true, canInstall: true);
@@ -694,6 +712,28 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_failed_install_or_setup_blames_the_bridge_only_for_its_state_and_the_machine_for_what_it_could_not_do()
+    {
+        const string readOnly = "CLI installation is unavailable while this host is read-only: answer at the machine";
+
+        Assert.Equal("this bridge is read-only", AgentWords.InstallFailure(readOnly));
+        Assert.Equal("the machine couldn't install it", AgentWords.InstallFailure("something nobody foresaw"));
+        Assert.Equal("Setup failed · this bridge is read-only", AgentWords.SetupFailed(false, null, readOnly));
+        Assert.Equal("Setup failed · the machine couldn't finish it", AgentWords.SetupFailed(false, null, "something nobody foresaw"));
+    }
+
+    [Theory]
+    [InlineData("Hook setup is unavailable while this host is read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine")]
+    [InlineData("Version command not run while the host is read-only: this host's config.json has a problem, so it takes nothing from other devices; answer at the machine")]
+    public void The_bridges_own_read_only_sentence_is_matched_but_never_shown_as_it_arrives(string wire)
+    {
+        var shown = AgentWords.Plain(wire);
+
+        Assert.DoesNotContain("host", shown, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("this bridge's settings", shown);
+    }
+
+    [Fact]
     public void A_check_whose_reason_the_status_line_gives_says_only_the_fact_and_others_keep_their_words()
     {
         const string why = "agent-ha-bridge is running for this user; answer at the machine";
@@ -701,9 +741,9 @@ public sealed class SettingsTests : IAsyncLifetime
             with { VersionCheck = new(ReadinessState.Blocked, $"Version command not run while the host is read-only: {why}") });
         var olderHost = new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.NeedsAction, hooksDetail: "Explicit hook setup is needed.", setup: HookSetupState.Unknown));
 
-        Assert.Equal("Read-only · this machine's host is older", readOnly.Status);
+        Assert.Equal("Read-only · this machine's bridge is older", readOnly.Status);
         Assert.StartsWith("Version: Not checked\nHooks: Not checked\n", readOnly.Checks, StringComparison.Ordinal);
-        Assert.Equal("Can't check · this machine's host is older", olderHost.Status);
+        Assert.Equal("Can't check · this machine's bridge is older", olderHost.Status);
         Assert.Contains("Hooks: Explicit hook setup is needed.", olderHost.Checks);
     }
 
@@ -793,7 +833,7 @@ public sealed class SettingsTests : IAsyncLifetime
         outcome = new AgentSetupResult(false, "Hook setup incomplete: fixture partial work", true);
         await settings.SetUpAgentAsync("agency");
 
-        Assert.Equal("Setup failed · the host couldn't finish it", Row("agency").Status);
+        Assert.Equal("Setup failed · the machine couldn't finish it", Row("agency").Status);
         await settings.CheckAgentsAsync();
         Assert.Equal("Repair", Row("copilot").SetUpVerb);
         Assert.Equal("Repair", Row("agency").SetUpVerb);
@@ -819,7 +859,7 @@ public sealed class SettingsTests : IAsyncLifetime
 
         Assert.Single(host.Sent(HostOps.AgentsRefresh));
         Assert.Equal("Repair", settings.Agents.Single().SetUpVerb);
-        Assert.Equal("Removal failed · the host couldn't finish it", settings.Agents.Single().Status);
+        Assert.Equal("Removal failed · the machine couldn't finish it", settings.Agents.Single().Status);
         Assert.Equal("Removal incomplete: the Codex plugin is still installed.", settings.Error);
     }
 
@@ -870,15 +910,15 @@ public sealed class SettingsTests : IAsyncLifetime
     public void On_a_host_from_before_hook_setup_a_row_says_it_cant_check_and_offers_nothing_even_after_its_own_setup_failed()
     {
         var failed = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn, setup: HookSetupState.Unknown), canManage: true,
-            note: new("Setup failed · the host couldn't finish it", Tone.Bad));
+            note: new("Setup failed · the machine couldn't finish it", Tone.Bad));
         var quiet = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn, setup: HookSetupState.Unknown), canManage: true);
 
         Assert.Equal((null, false, false), (failed.SetUpVerb, failed.CanSetUp, failed.ShowRemove));
-        Assert.Equal("Setup failed · the host couldn't finish it", failed.Status);
+        Assert.Equal("Setup failed · the machine couldn't finish it", failed.Status);
         Assert.Equal((null, false, false), (quiet.SetUpVerb, quiet.CanSetUp, quiet.ShowRemove));
         Assert.Equal(OlderHost, quiet.Status);
         Assert.Equal(Tone.None, quiet.StatusTone);
-        Assert.False(quiet.Keeps(new("Setup failed · the host couldn't finish it", Tone.Bad)));
+        Assert.False(quiet.Keeps(new("Setup failed · the machine couldn't finish it", Tone.Bad)));
     }
 
     [Fact]
@@ -895,7 +935,7 @@ public sealed class SettingsTests : IAsyncLifetime
         host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
 
         await settings.SetUpAgentAsync("copilot");
-        Assert.Equal("Setup failed · the host couldn't finish it", settings.Agents.Single().Status);
+        Assert.Equal("Setup failed · the machine couldn't finish it", settings.Agents.Single().Status);
         Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
         await settings.CheckAgentsAsync();
 
@@ -987,7 +1027,7 @@ public sealed class SettingsTests : IAsyncLifetime
         }
         finally { release.TrySetResult(); await pending; }
 
-        Assert.Equal("Repaired · restart the host, then start a new session to check it", Row("claude").Status);
+        Assert.Equal("Repaired · restart the bridge, then start a new session to check it", Row("claude").Status);
         Assert.Equal(Tone.Ok, Row("claude").StatusTone);
         Assert.Equal("", Row("copilot").Status);
         Assert.Equal(Tone.None, Row("copilot").StatusTone);
@@ -1189,6 +1229,22 @@ public sealed class SettingsTests : IAsyncLifetime
 
         Assert.False(host.Sent(HostOps.Settings)[0].GetProperty("remoteApproval").GetBoolean());
         await Wait.UntilAsync(() => settings.RestartRequired && !settings.RemoteApproval, "the restart offer");
+    }
+
+    [Fact]
+    public async Task Sign_in_from_devices_is_off_until_turned_on_through_the_host_and_then_offers_a_restart()
+    {
+        host.On(HostOps.Settings, _ => new SettingsResult(new HostSettingsView(true, PhoneSignIn: true), RestartRequired: true));
+        await Connected();
+        Assert.False(settings.PhoneSignIn);
+
+        settings.PhoneSignIn = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "host.settings");
+        host.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, PhoneSignIn: true), RestartRequired = true };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+
+        Assert.True(host.Sent(HostOps.Settings)[0].GetProperty("phoneSignIn").GetBoolean());
+        await Wait.UntilAsync(() => settings.RestartRequired && settings.PhoneSignIn, "the restart offer");
     }
 
     [Fact]
@@ -1723,6 +1779,378 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_release_downloaded_in_the_background_is_offered_in_Settings_as_Restart_to_update_without_a_check_there()
+    {
+        await Connected();
+        // The background download, through the updater Settings shares.
+        await updater.DownloadAsync(_ => { });
+        settings.UpdatesChanged();
+
+        Assert.True(settings.UpdateAvailable);
+        Assert.Equal("Version 0.2.0 is ready. Restart to update.", settings.UpdateStatus);
+        await settings.InstallUpdateAsync();
+
+        Assert.Null(settings.Error);
+        Assert.True(updater.Applied);
+    }
+
+    [Fact]
+    public async Task Settings_Restart_to_update_takes_the_apps_own_path_and_says_why_it_was_refused()
+    {
+        await Connected();
+        const string why = "another profile's host (pid 77) runs from this installation";
+        var asked = 0;
+        settings.RestartDownloaded = _ => { asked++; return Task.FromResult<string?>(why); };
+        await updater.DownloadAsync(_ => { });
+
+        await settings.InstallUpdateAsync();
+
+        Assert.Equal(1, asked);
+        // No banner shows it here, so this line does, once, as a status (Creative, 6677102646).
+        Assert.Null(settings.Error);
+        Assert.Equal("The update didn't install because another bridge profile is running from this installation.", settings.UpdateStatus);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    public async Task Up_to_date_from_an_earlier_check_gives_way_to_a_release_downloaded_in_the_background_since()
+    {
+        await Connected();
+        updater.Found = null;
+        await settings.CheckForUpdatesAsync();
+        Assert.Equal("Up to date (0.1.0).", settings.UpdateStatus);
+
+        await updater.DownloadAsync(_ => { });
+        settings.UpdatesChanged();
+
+        Assert.True(settings.UpdateAvailable);
+        Assert.Equal("Version 0.2.0 is ready. Restart to update.", settings.UpdateStatus);
+    }
+
+    [Fact]
+    public async Task A_release_Settings_said_was_ready_and_replaced_in_the_background_since_is_no_longer_offered()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        await settings.CheckForUpdatesAsync();
+        Assert.Equal("Version 0.2.0 is ready. Restart to update.", settings.UpdateStatus);
+
+        // A background check found a newer release, whose download has not finished.
+        updater.Ready = null;
+        settings.UpdatesChanged();
+
+        Assert.False(settings.UpdateAvailable);
+        Assert.Equal("Version 0.2.0 is no longer the newest; check for updates again.", settings.UpdateStatus);
+    }
+
+    [Fact]
+    public async Task A_release_the_person_said_Not_now_to_and_replaced_in_the_background_since_is_no_longer_offered()
+    {
+        await Connected();
+        settings.RestartDownloaded = _ => Task.FromResult<string?>(AutoUpdater.NotNow);
+        await updater.DownloadAsync(_ => { });
+        await settings.CheckForUpdatesAsync();
+        await settings.InstallUpdateAsync(_ => Task.FromResult(false));
+
+        updater.Ready = null;
+        settings.UpdatesChanged();
+
+        Assert.False(settings.UpdateAvailable);
+        Assert.Equal("Version 0.2.0 is no longer the newest; check for updates again.", settings.UpdateStatus);
+    }
+
+    // Replaced while Settings was at work (here, while the person was asked): settled once it is idle.
+    [Fact]
+    public async Task A_release_replaced_while_Settings_was_busy_is_no_longer_offered_once_Settings_is_idle()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        settings.RestartDownloaded = _ =>
+        {
+            updater.Ready = null;
+            settings.UpdatesChanged();
+            return Task.FromResult<string?>(AutoUpdater.NotNow);
+        };
+
+        await settings.InstallUpdateAsync(_ => Task.FromResult(false));
+
+        Assert.False(settings.UpdateAvailable);
+        Assert.Equal("Version 0.2.0 is no longer the newest; check for updates again.", settings.UpdateStatus);
+    }
+
+    // The worst ordering (Copilot's review of 746a8616): Settings is at work on the release it saw
+    // ready when a background check replaces it, and the replacement's download then fails, both
+    // said while Settings is busy. Its progress stays until it is done, and the stale release goes
+    // then. Gated, no sleeps.
+    [Fact]
+    public async Task A_replacement_whose_download_fails_while_Settings_is_busy_leaves_no_stale_release_once_Settings_is_idle()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        await settings.CheckForUpdatesAsync();
+        var asked = new TaskCompletionSource<string?>();
+        settings.RestartDownloaded = _ => asked.Task;
+        var install = settings.InstallUpdateAsync(_ => Task.FromResult(true));
+        Assert.True(settings.Busy);
+
+        // The background check finds 0.3.0, dropping 0.2.0 (as Velopack's does) and saying so...
+        updater.Ready = null;
+        settings.UpdatesChanged();
+        // ...then its download fails, and that is said too.
+        updater.DownloadFails = new IOException("the connection was reset");
+        await Assert.ThrowsAsync<IOException>(() => updater.DownloadAsync(_ => { }));
+        settings.UpdatesChanged();
+        Assert.Equal("Stopping the host to update it…", settings.UpdateStatus);
+
+        asked.SetResult("the update downloaded has changed since (0.2.0 is no longer the newest for this machine): the newest is being downloaded now, so try again in a moment");
+        await install;
+
+        Assert.False(settings.UpdateAvailable);
+        // Why the restart didn't install, never dropped (6677216492), then what Settings learned since.
+        Assert.Equal($"The update didn't install because a newer update was downloaded meanwhile; {Product.Name} offers it again once it is downloaded. Version 0.2.0 is no longer the newest; check for updates again.", settings.UpdateStatus);
+        // And an event after Settings went idle changes nothing.
+        settings.UpdatesChanged();
+        Assert.False(settings.UpdateAvailable);
+    }
+
+    // Turning "Include pre-releases" off or on changes the updater's source, which drops what it
+    // found and downloaded without a word (VelopackUpdater.Manager reads the choice when next used).
+    [Fact]
+    public async Task Changing_the_pre_release_choice_stops_offering_what_was_found_or_ready_on_the_old_source()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        await settings.CheckForUpdatesAsync();
+        Assert.True(settings.UpdateAvailable);
+
+        updater.Ready = null;
+        settings.Prereleases = !settings.Prereleases;
+
+        Assert.False(settings.UpdateAvailable);
+        Assert.DoesNotContain("0.2.0", settings.UpdateStatus);
+    }
+
+    // Include pre-releases changed while Settings was busy with something else: the release a
+    // check here found on the old source, never downloaded, is not offered once Settings is idle.
+    [Fact]
+    public async Task A_release_found_on_the_old_source_is_not_offered_after_the_pre_release_choice_changes_while_Settings_is_busy()
+    {
+        await Connected();
+        await settings.CheckForUpdatesAsync();
+        Assert.Equal("Version 0.2.0 is available.", settings.UpdateStatus);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.AgentsInstall, async _ =>
+        {
+            entered.SetResult();
+            await FakeHost.Until(release.Task);
+            return new AgentInstallResult(true, "Fixture executable installed.", "fixture.exe");
+        });
+        host.On(HostOps.AgentsRefresh, _ => Readiness("1.2.3"));
+        var busy = settings.InstallAgentAsync("claude");
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(settings.Busy);
+
+        settings.Prereleases = !settings.Prereleases;
+        release.SetResult();
+        await busy;
+
+        Assert.False(settings.Busy);
+        Assert.False(settings.UpdateAvailable);
+        Assert.DoesNotContain("0.2.0", settings.UpdateStatus);
+    }
+
+    // Copilot's review of ac778916: "Up to date" from a check here came back once a background
+    // download since was gone, hiding the newer release a background check had found.
+    [Fact]
+    public async Task Up_to_date_from_a_check_here_never_hides_a_newer_release_found_in_the_background_since()
+    {
+        await Connected();
+        var observed = new ObservedUpdater(updater);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        updater.Found = null;
+        await page.CheckForUpdatesAsync();
+        Assert.Equal("Up to date (0.1.0).", page.UpdateStatus);
+
+        // In the background: 0.2.0 found and downloaded, then 0.3.0 found, which drops it, and
+        // whose download fails.
+        updater.Found = "0.2.0";
+        await observed.CheckAsync();
+        await observed.DownloadAsync(_ => { });
+        page.UpdatesChanged();
+        updater.Found = "0.3.0";
+        await observed.CheckAsync();
+        updater.Ready = null;
+        page.UpdatesChanged();
+
+        Assert.DoesNotContain("Up to date", page.UpdateStatus);
+        Assert.Contains("0.3.0", page.UpdateStatus);
+    }
+
+    // Copilot's review of ac778916: a check here that found nothing left "Up to date" standing
+    // after Include pre-releases changed, though the new source was never asked.
+    [Fact]
+    public async Task Up_to_date_from_the_old_source_goes_when_the_pre_release_choice_changes()
+    {
+        await Connected();
+        updater.Found = null;
+        await settings.CheckForUpdatesAsync();
+        Assert.Equal("Up to date (0.1.0).", settings.UpdateStatus);
+
+        settings.Prereleases = !settings.Prereleases;
+
+        Assert.DoesNotContain("Up to date", settings.UpdateStatus);
+    }
+
+    // Copilot's review of 9e1ee18f: a release a check here found, never downloaded, then replaced by
+    // a background check whose own download fails, was still offered, and its Restart to update
+    // could only fail. Through the ObservedUpdater the app shares, as App wires it.
+    [Fact]
+    public async Task A_release_found_here_and_replaced_by_a_background_check_whose_download_fails_is_no_longer_offered()
+    {
+        await Connected();
+        var observed = new ObservedUpdater(updater);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        await page.CheckForUpdatesAsync();
+        Assert.Equal("Version 0.2.0 is available.", page.UpdateStatus);
+        page.UpdatesChanged();
+        Assert.True(page.UpdateAvailable);
+
+        updater.Found = "0.3.0";
+        Assert.Equal("0.3.0", await observed.CheckAsync());
+        updater.DownloadFails = new IOException("the connection was reset");
+        await Assert.ThrowsAsync<IOException>(() => observed.DownloadAsync(_ => { }));
+        page.UpdatesChanged();
+
+        Assert.False(page.UpdateAvailable);
+        Assert.Equal("Version 0.2.0 is no longer the newest; check for updates again.", page.UpdateStatus);
+    }
+
+    // Copilot's summary of 5d32c599: what the last check found on the old source was still what the
+    // machine reported as available to its devices after Include pre-releases changed.
+    [Fact]
+    public async Task Changing_the_pre_release_choice_stops_reporting_the_old_sources_find_and_says_so()
+    {
+        await Connected();
+        var observed = new ObservedUpdater(updater);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        await page.CheckForUpdatesAsync();
+        Assert.Equal("0.2.0", observed.Found);
+        var changes = 0;
+        observed.Changed += () => changes++;
+
+        page.Prereleases = !page.Prereleases;
+
+        Assert.Null(observed.Found);
+        Assert.Null(observed.CheckedAt);
+        Assert.True(changes > 0);
+    }
+
+    // Copilot's review of 35d9157a: the update line changes on its own, so it is announced, once
+    // per change (ui.md §9.1 A6); what Settings' own Check says is not announced as such.
+    [Fact]
+    public async Task The_update_line_is_announced_once_when_it_changes_on_its_own_and_not_for_Settings_own_check()
+    {
+        await Connected();
+        var said = 0;
+        settings.UpdateStatusAnnounced += () => said++;
+
+        await settings.CheckForUpdatesAsync();
+        settings.UpdatesChanged();
+        Assert.Equal(0, said);
+
+        await updater.DownloadAsync(_ => { });
+        settings.UpdatesChanged();
+        settings.UpdatesChanged();
+
+        Assert.Equal(1, said);
+        Assert.Equal("Version 0.2.0 is ready. Restart to update.", settings.UpdateStatus);
+    }
+
+    // Copilot's review of 9039771d: a release downloaded in the background while Settings was busy
+    // with something else was recorded as seen when it went idle, and never announced.
+    [Fact]
+    public async Task A_release_ready_while_Settings_is_busy_with_something_else_is_announced_once_when_it_is_idle()
+    {
+        await Connected();
+        var said = 0;
+        settings.UpdateStatusAnnounced += () => said++;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.AgentsInstall, async _ =>
+        {
+            entered.SetResult();
+            await FakeHost.Until(release.Task);
+            return new AgentInstallResult(true, "Fixture executable installed.", "fixture.exe");
+        });
+        host.On(HostOps.AgentsRefresh, _ => Readiness("1.2.3"));
+        var busy = settings.InstallAgentAsync("claude");
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await updater.DownloadAsync(_ => { });
+        settings.UpdatesChanged();
+        Assert.Equal(0, said);
+
+        release.SetResult();
+        await busy;
+        Assert.Equal(1, said);
+        Assert.Equal("Version 0.2.0 is ready. Restart to update.", settings.UpdateStatus);
+
+        settings.UpdatesChanged();
+        Assert.Equal(1, said);
+    }
+
+    [Fact]
+    public async Task A_release_found_here_and_not_yet_downloaded_stays_available_when_the_updater_changes()
+    {
+        await Connected();
+        await settings.CheckForUpdatesAsync();
+
+        settings.UpdatesChanged();
+
+        Assert.True(settings.UpdateAvailable);
+        Assert.Equal("Version 0.2.0 is available.", settings.UpdateStatus);
+    }
+
+    [Fact]
+    public async Task Settings_Restart_to_update_hands_the_warning_to_the_apps_path_and_Not_now_there_is_no_error()
+    {
+        await Connected();
+        Func<string, Task<bool>>? given = null;
+        settings.RestartDownloaded = confirm => { given = confirm; return Task.FromResult<string?>(AutoUpdater.NotNow); };
+        await updater.DownloadAsync(_ => { });
+
+        await settings.InstallUpdateAsync(_ => Task.FromResult(false));
+
+        Assert.NotNull(given);
+        Assert.Null(settings.Error);
+        Assert.Equal("Version 0.2.0 is ready. Restart to update.", settings.UpdateStatus);
+        Assert.False(updater.Applied);
+    }
+
+    // A session that starts a turn while the release downloads is warned of: asked once it has
+    // downloaded, just before the host stops.
+    [Fact]
+    public async Task Settings_asks_what_a_restart_would_interrupt_after_the_download_not_before()
+    {
+        await Connected();
+        await settings.CheckForUpdatesAsync();
+        var downloadedWhenAsked = false;
+        string? warned = null;
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Working));
+        await Wait.UntilAsync(() => connection.Sessions.All.Count == 1, "the session");
+
+        await settings.InstallUpdateAsync(warning => { (warned, downloadedWhenAsked) = (warning, updater.Ready == "0.2.0"); return Task.FromResult(false); });
+
+        Assert.StartsWith("1 session here has a turn running.", warned);
+        Assert.True(downloadedWhenAsked);
+        Assert.Null(settings.Error);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
     public async Task An_update_that_cannot_be_applied_starts_the_host_again_and_says_why()
     {
         await Connected();
@@ -1734,10 +2162,11 @@ public sealed class SettingsTests : IAsyncLifetime
         await settings.CheckForUpdatesAsync();
         await settings.InstallUpdateAsync();
 
-        Assert.Equal("no downloaded update to install; check for updates again", settings.Error);
+        Assert.Equal("The update didn't install because nothing has been downloaded yet.", settings.Error);
         Assert.Single(host.Sent(HostOps.Stop));
         Assert.Single(tasks.Ran);
-        Assert.False(settings.UpdateAvailable);
+        // Still downloaded, so still offered, for the person to try again (as the banner does).
+        Assert.True(settings.UpdateAvailable);
         Assert.Null(prefs.UpdatedFrom);
     }
 
@@ -1756,8 +2185,8 @@ public sealed class SettingsTests : IAsyncLifetime
 
         var last = prefs.LastUpdate!;
         Assert.Equal((UpdateOutcome.Failed, "0.1.0", "0.2.0", (string?)null), (last.Outcome, last.From, last.To, last.Request));
-        Assert.Equal(settings.Error, last.Reason);
         Assert.StartsWith("no downloaded update to install", last.Reason);
+        Assert.Equal(AppUpdateViewModel.DidNotInstall(last.Reason!, again: true), settings.Error);
         Assert.Null(prefs.UpdateRequest);
         Assert.Equal("a-device-press", prefs.UpdateInstallAsked);
     }
@@ -1773,8 +2202,211 @@ public sealed class SettingsTests : IAsyncLifetime
 
         var last = prefs.LastUpdate!;
         Assert.Equal((UpdateOutcome.Failed, "0.2.0", "downloading 0.2.0 failed: The response ended prematurely."), (last.Outcome, last.To, last.Reason));
-        Assert.Equal("The response ended prematurely.", settings.Error);
+        Assert.Equal("The update didn't download; choose Restart to update to try again.", settings.Error);
         Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    // Creative on #719 (6643004091): an error names the next step in one sentence; with downloads
+    // in the background, that is when it is tried again.
+    [Fact]
+    public async Task A_download_that_fails_says_when_it_is_tried_again_in_the_background()
+    {
+        await Connected();
+        var observed = new ObservedUpdater(updater);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        updater.DownloadFails = new HttpRequestException("The response ended prematurely.");
+
+        await page.CheckForUpdatesAsync();
+        await page.InstallUpdateAsync();
+
+        Assert.Equal($"The update didn't download. {Product.Name} will try again at {observed.RetryAt!.Value.ToLocalTime():t}.", page.Error);
+    }
+
+    // When an update is ready (#689, 6674007815): Restart to update unless this machine was set
+    // otherwise, kept per machine and profile, each choice saying what it does.
+    [Fact]
+    public async Task When_an_update_is_ready_starts_at_Restart_to_update_and_keeps_Install_between_turns_once_chosen()
+    {
+        await Connected();
+        Assert.Equal(0, settings.WhenReadyIndex);
+        Assert.Equal(SettingsViewModel.WhenReadyRestart, settings.WhenReadyNote);
+        Assert.Null(prefs.WhenUpdateReady);
+
+        settings.WhenReadyIndex = 1;
+
+        Assert.Equal(UpdateWhenReady.InstallBetweenTurns, prefs.WhenUpdateReady);
+        Assert.Equal(SettingsViewModel.WhenReadyBetweenTurns, settings.WhenReadyNote);
+        Assert.DoesNotContain("at the machine", settings.WhenReadyNote, StringComparison.Ordinal);
+    }
+    // Copilot on eae43827 (r4488279975): the app ticks its updater when a preference changes, so
+    // the shared updater must already know the source changed when it hears Include pre-releases did.
+    [Fact]
+    public async Task Include_pre_releases_changes_the_shared_source_before_anyone_hears_of_it()
+    {
+        await Connected();
+        var observed = new ObservedUpdater(updater);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        var before = observed.Source;
+        string? heard = null;
+        page.PreferencesChanged += () => heard = observed.Source;
+
+        page.Prereleases = !page.Prereleases;
+
+        Assert.NotNull(heard);
+        Assert.NotEqual(before, heard);
+        Assert.Equal(observed.Source, heard);
+    }
+
+    // Engineering's second-family review of #719 (6676638175), Creative (6676653935): with a
+    // release ready, a check GitHub refused or limited lost its words and its retry time behind the
+    // offer. Both now show: the offer first, then #709's sentence, as a status, not an error.
+    [Fact]
+    public async Task A_check_GitHub_limits_with_a_release_ready_shows_the_offer_and_then_the_limit_not_as_an_error()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        var limited = new AgentBridge.Host.Core.Updates.ReleaseDiscoveryException(
+            "GitHub is limiting how often this network can check for updates.", DateTimeOffset.UtcNow + TimeSpan.FromMinutes(5), limited: true);
+        updater.CheckFails = limited;
+
+        await settings.CheckForUpdatesAsync();
+
+        Assert.Null(settings.Error);
+        Assert.Equal($"Version 0.2.0 is ready. Restart to update. {limited.Message}", settings.UpdateStatus);
+        Assert.True(settings.UpdateAvailable);
+    }
+
+    // Creative (6677102646, principle 6): while the banner above Settings offers the same release,
+    // Settings doesn't repeat the offer; #709's sentence, which the banner doesn't say, stays.
+    [Fact]
+    public async Task With_the_banner_offering_the_same_release_Settings_says_only_what_the_banner_doesnt()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        settings.ShareRestart(new AppUpdateViewModel(() => "0.2.0", _ => Task.FromResult<string?>(null)));
+        Assert.Equal("", settings.UpdateStatus);
+        var limited = new AgentBridge.Host.Core.Updates.ReleaseDiscoveryException(
+            "GitHub is limiting how often this network can check for updates.", DateTimeOffset.UtcNow + TimeSpan.FromMinutes(5), limited: true);
+        updater.CheckFails = limited;
+
+        await settings.CheckForUpdatesAsync();
+
+        Assert.Equal(limited.Message, settings.UpdateStatus);
+        Assert.True(settings.UpdateAvailable);
+        Assert.Null(settings.Error);
+    }
+
+    // Engineering's second-family review of #719 (6676638175), Creative (6676653935): one restart,
+    // with one state, whichever control starts it. Wired as App wires them: Settings' Restart to
+    // update refused by another profile shows on the banner as a failure with Try again, and in
+    // Settings' status line in the same words, never as an error.
+    [Fact]
+    public async Task A_restart_from_Settings_another_profile_refuses_shows_on_the_banner_with_Try_again_and_in_Settings_in_the_same_words()
+    {
+        await Connected();
+        var observed = new ObservedUpdater(updater);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        await observed.CheckAsync();
+        await observed.DownloadAsync(_ => { });
+        var auto = new AutoUpdater(observed, connection, manager, () => prefs, p => prefs = p, _ => { }, _ => "another profile's host (pid 77) runs from this installation");
+        var banner = AppUpdateViewModel.For(auto);
+        page.ShareRestart(banner);
+        Assert.Equal("0.2.0", banner.Version);
+
+        await page.InstallUpdateAsync(_ => Task.FromResult(true));
+
+        const string refused = "The update didn't install because another bridge profile is running from this installation.";
+        Assert.Equal((true, true, "Try again", refused), (banner.Shown, banner.Failed, banner.ActionLabel, banner.Message));
+        // The banner above Settings says it; Settings doesn't repeat it (Creative, 6677102646),
+        // and its Restart to update stays.
+        Assert.Equal("", page.UpdateStatus);
+        Assert.True(page.UpdateAvailable);
+        Assert.Null(page.Error);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+
+        // Engineering's second-family review (6677353697), MEDIUM: a check GitHub limits after the
+        // refusal is Settings' own news, said here; the banner keeps the refusal.
+        var limited = new AgentBridge.Host.Core.Updates.ReleaseDiscoveryException(
+            "GitHub is limiting how often this network can check for updates.", DateTimeOffset.UtcNow + TimeSpan.FromMinutes(5), limited: true);
+        updater.CheckFails = limited;
+        await page.CheckForUpdatesAsync();
+        Assert.Equal(limited.Message, page.UpdateStatus);
+        Assert.Equal((true, refused), (banner.Failed, banner.Message));
+    }
+
+    // Engineering's Claude-family review of #719 (6677216492), HIGH: wired as App wires them, with
+    // the app's updater already running, a release Settings found and downloaded itself (downloads
+    // off, so the background never took it) was never the banner's, and Settings' Restart to
+    // update did nothing at all. It reaches the app's updater, which takes it and installs it.
+    [Fact]
+    public async Task With_the_apps_updater_running_Settings_Restart_to_update_installs_a_release_Settings_downloaded_itself()
+    {
+        await Connected();
+        prefs = prefs with { AutoUpdate = false };
+        var observed = new ObservedUpdater(updater);
+        var page = new SettingsViewModel(connection, manager, observed, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        var auto = new AutoUpdater(observed, connection, manager, () => prefs, p => prefs = p, _ => { }, _ => null);
+        var banner = AppUpdateViewModel.For(auto);
+        page.ShareRestart(banner);
+        Assert.Null(banner.Version);
+
+        await page.CheckForUpdatesAsync();
+        Assert.True(page.UpdateAvailable);
+        await page.InstallUpdateAsync(_ => Task.FromResult(true));
+
+        Assert.True(updater.Applied);
+        Assert.False(banner.Failed);
+        Assert.Null(page.Error);
+    }
+
+    // And a restart pressed here that failed and took the release with it is still said here, when
+    // no banner says it: Settings never drops why (6677216492).
+    [Fact]
+    public async Task A_restart_from_Settings_that_failed_and_lost_the_release_is_still_said_in_Settings()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        settings.RestartDownloaded = _ => { updater.Ready = null; return Task.FromResult<string?>("installing 0.2.0 failed: the package is gone"); };
+
+        await settings.InstallUpdateAsync(_ => Task.FromResult(true));
+
+        Assert.StartsWith($"The update didn't install because the installer reported an error; {Product.Name} offers it again once it is downloaded.", settings.UpdateStatus);
+        Assert.Null(settings.Error);
+    }
+
+    // And while it runs, the control pressed (Settings') shows its ring and says so, and the banner
+    // shows it restarting.
+    [Fact]
+    public async Task A_restart_from_Settings_shows_on_Settings_button_and_on_the_banner_while_it_runs()
+    {
+        await Connected();
+        await updater.DownloadAsync(_ => { });
+        var held = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var banner = new AppUpdateViewModel(() => "0.2.0", _ => held.Task);
+        settings.ShareRestart(banner);
+
+        var press = settings.InstallUpdateAsync();
+        Assert.Equal((true, "Restarting\u2026", true, "Restarting to update\u2026"), (settings.RestartingHere, settings.RestartStatus, banner.Restarting, banner.Message));
+        held.SetResult(AutoUpdater.NotNow);
+        await press;
+
+        Assert.Equal((false, "", false), (settings.RestartingHere, settings.RestartStatus, banner.Restarting));
+    }
+    // Creative on #719 (6643004091): Settings' own download is said at most every quarter.
+    [Fact]
+    public async Task A_download_from_Settings_is_announced_at_most_every_quarter()
+    {
+        await Connected();
+        var said = 0;
+        settings.UpdateStatusAnnounced += () => said++;
+        settings.RestartDownloaded = _ => Task.FromResult<string?>(AutoUpdater.NotNow);
+        updater.Steps = [.. Enumerable.Range(0, 101)];
+
+        await settings.CheckForUpdatesAsync();
+        await settings.InstallUpdateAsync();
+
+        Assert.Equal(4, said);
     }
 
     [Fact]

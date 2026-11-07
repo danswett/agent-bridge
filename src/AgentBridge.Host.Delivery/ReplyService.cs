@@ -4,6 +4,7 @@ using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Delivery.Copilot;
 using AgentBridge.Host.Delivery.AgentReplies;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Host.Delivery.Windows;
 using AgentBridge.Protocol;
@@ -37,6 +38,15 @@ public sealed class ReplyOptions
     public TimeSpan ConfirmTimeout { get; init; } = TimeSpan.FromSeconds(60);
 
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromMilliseconds(250);
+
+    // How much longer a reply that timed out unrecorded is watched for, without changing its
+    // outcome, so its confirmation line can be followed by when it was recorded after all
+    // (#1025): how late "late" is. The host sets five minutes (Program.cs); zero watches no
+    // further. Its looks are LateLook apart: the agent's own time on the record is what is
+    // measured, so they need not be quick.
+    public TimeSpan LateWatch { get; init; } = TimeSpan.Zero;
+
+    public TimeSpan LateLook { get; init; } = TimeSpan.FromSeconds(5);
 
     // How long Claude or Codex is given to record a reply before its Enter is taken to have
     // been swallowed as part of the paste, and pressed again (agent-ha-bridge's
@@ -141,6 +151,9 @@ public sealed class ReplyService : ISessionReplier
     // that Enter would answer. The resume's transcript already exists, so the no-transcript-yet
     // check below never catches it. Set once the launcher exists (LaunchService.HeldForReply).
     public Func<string, string?>? LaunchHeld { get; set; }
+
+    // Ends the late watches of replies that timed out (#1025) when the host stops, so none outlives it.
+    public CancellationToken Stopping { get; set; }
 
     void OnSessionChanged(object? sender, SessionChange change)
     {
@@ -266,18 +279,80 @@ public sealed class ReplyService : ISessionReplier
         {
             // Only reached before anything was typed: CopilotAsync owns its own failures
             // once a key may have gone.
-            return Refused($"the host could not send the reply: {e.Message}");
+            return Failed(AnswerOutcome.Refused, $"reply {key.ToString()[..8]} to {Short(request.Id)} failed before typing", e);
         }
 
         // The session is free again once the keys have gone: a question it asks next can be
         // answered while this waits for the prompt to be taken, which for a busy session can
         // be a while.
-        try { return await typed.Confirm(); }
-        catch (Exception e) { return Unconfirmed($"the reply was typed but could not be checked ({e.Message}); check at the machine"); }
+        ReplyResult confirmed;
+        try { confirmed = await typed.Confirm(); }
+        catch (Exception e) { confirmed = Failed(AnswerOutcome.Unconfirmed, $"reply {key.ToString()[..8]} to {Short(request.Id)} could not be checked", e); }
+        Measure(key, request.Id, typed.Seen, timeline, confirmed);
+        return confirmed;
     }
 
-    // What a reply that went is confirmed by.
-    sealed record Typed(Func<Task<ReplyResult>> Confirm);
+    // One line for each reply that reached its confirmation, to measure why replies go
+    // unconfirmed (#1025): ids, the agent, whether the session was working when the keys went,
+    // when they had all gone, when the agent recorded the reply (its own time, or ~ the host's
+    // when its record has none, or never), the timeout, and the outcome, in ms after receipt as
+    // the timings line is. Never the reply's words. One that timed out unrecorded is then watched
+    // for LateWatch more, and a second line says when it was recorded after all, if it was.
+    void Measure(Guid key, string sessionId, Seen seen, DeliveryTimeline timeline, ReplyResult result)
+    {
+        var id = key.ToString()[..8];
+        var (typedAt, working, recorded) = timeline.Stages();
+        var when = recorded is { } r ? Ms(r) : seen.At is { } s ? $"~{Ms(s)}" : "never";
+        log(FormattableString.Invariant($"reply {id} to {Short(sessionId)} confirm: {seen.Agent.ToString().ToLowerInvariant()}, {(working ? "working" : "idle")}, typed {(typedAt is { } t ? Ms(t) : "?")}, recorded {when}, timeout {options.ConfirmTimeout.TotalSeconds:0} s, {result.Outcome.ToString().ToLowerInvariant()}"));
+        if (result.Outcome == AnswerOutcome.Unconfirmed && recorded is null && seen.At is null && !seen.Ended && options.LateWatch > TimeSpan.Zero)
+        {
+            _ = Task.Run(() => WatchLateAsync(id, seen, timeline));
+        }
+
+        static string Ms(long ms) => ms.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    // Looks for the reply's prompt now and then, never claiming it: the outcome stands, and this
+    // only says how late the record came. A prompt of the same words typed since, at the machine
+    // or by another reply, reads as this one: rare, and only ever early in the measure.
+    async Task WatchLateAsync(string id, Seen seen, DeliveryTimeline timeline)
+    {
+        var started = options.Time.GetTimestamp();
+        try
+        {
+            while (options.Time.GetElapsedTime(started) < options.LateWatch)
+            {
+                await Task.Delay(options.LateLook, options.Time, Stopping).ConfigureAwait(false);
+                if (seen.Find() is (true, var at))
+                {
+                    var ms = timeline.After(at) is { } agent ? agent.ToString(System.Globalization.CultureInfo.InvariantCulture) : FormattableString.Invariant($"~{timeline.Elapsed()}");
+                    log($"reply {id} late: recorded {ms}");
+                    return;
+                }
+            }
+            log(FormattableString.Invariant($"reply {id} late: not recorded within {options.LateWatch.TotalSeconds:0} s more"));
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e)
+        {
+            // Never rethrown: this task has no one awaiting it, and measures only.
+            log($"reply {id} late: its transcript could not be read ({e.GetType().Name})");
+        }
+    }
+
+    // What a reply's confirmation saw of it, for its measurement (#1025): its agent; when the host
+    // found the reply's own prompt, in ms after receipt (whatever the outcome then), or null;
+    // whether the session ended first; and how to look for that prompt again, without taking it.
+    sealed class Seen(AgentKind agent, Func<(bool Found, DateTimeOffset? At)> find)
+    {
+        public AgentKind Agent => agent;
+        public Func<(bool Found, DateTimeOffset? At)> Find => find;
+        public long? At { get; set; }
+        public bool Ended { get; set; }
+    }
+
+    // What a reply that went is confirmed by, and what its confirmation saw.
+    sealed record Typed(Func<Task<ReplyResult>> Confirm, Seen Seen);
 
     // KeysWent: some or all of the reply may have reached the session, whatever the result.
     sealed record Attempt(ReplyResult? Result, Typed? Typed, bool KeysWent = false);
@@ -340,18 +415,22 @@ public sealed class ReplyService : ISessionReplier
             // registers its session (inuse.<pid>.lock) while its folder-trust question may still
             // be on screen. So a session with no transcript yet may be asking that, where typed
             // words are dropped and Enter answers "Yes": a reply to one on the test VM trusted
-            // the folder. Only a person at the machine answers it, so nothing is typed, and the
-            // reason says which case this is rather than calling the transcript unreadable.
-            if (!before.Readable && NotYetWritten(transcript, now))
+            // the folder. The window says which: the trust question is drawn in place of the
+            // prompt's box and footer, never beside them (1.0.105 to 1.0.107, seen live), so a
+            // reply goes only when the box and footer are on screen and no startup question is
+            // (#1018); otherwise it is held, with words for the phone, and nothing is typed. The
+            // keys themselves are still held to those rows by the worker (#825).
+            var noTranscriptYet = !before.Readable && NotYetWritten(transcript, now);
+            if (noTranscriptYet)
             {
-                return Done(Refused("Copilot has not started this session's transcript yet (it does with the first prompt), so the host cannot tell whether it is still asking whether to trust its folder, which a reply would answer; send the first prompt at the machine, or launch with a prompt"));
+                if (await FirstReplyHoldAsync(pid, "Copilot") is { } hold) { return Done(Refused(hold)); }
             }
-            if (!before.Readable) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
+            else if (!before.Readable) { return Done(Refused("the session's transcript could not be read, so nothing is typed; reply at the machine")); }
             if (before.Resumed)
             {
                 return Done(Refused("the session was resumed in a new Copilot while a question or approval was open, and its window may still show it, where a reply would answer it; answer or dismiss it at the machine (or type there), then reply"));
             }
-            if (before.Asking) { return Done(Asking()); }
+            if (before.Asking && !noTranscriptYet) { return Done(Asking()); }
             from = before.ScannedTo;
             // Typed only into Copilot's input box, empty and outside shell mode, as the screen
             // shows it now: words left in it would go with the reply, and in shell mode Enter runs
@@ -394,7 +473,7 @@ public sealed class ReplyService : ISessionReplier
             try { result = await injector.InjectAsync(pid, keys); }
             catch (Exception e)
             {
-                return new Attempt(Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine"), null, KeysWent: true);
+                return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"the injector failed while typing a reply into {Short(session.Id)}", e), null, KeysWent: true);
             }
             finally { timeline.InjectEnd(); }
         }
@@ -407,14 +486,39 @@ public sealed class ReplyService : ISessionReplier
         {
             InjectionStatus.NothingTyped => Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                 ? "Copilot's input box changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
-                : result.Detail)),
+                : DeliveryReasons.Of(result.Detail))),
             InjectionStatus.Interrupted when result.Detail == WorkerInjector.ScreenChangedPartway =>
-                new Attempt(Unconfirmed("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent; the words are left in the box at the machine, to send or clear there"), null, KeysWent: true),
-            InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session, so check at the machine"), null, KeysWent: true),
-            _ => new Attempt(null, new Typed(() => ConfirmAsync(transcript, from, words, staged, timeline)), KeysWent: true),
+                new Attempt(Unconfirmed("the reply was typed into Copilot's input box, but the box changed before its Enter, so it was not sent and its words are still in the box"), null, KeysWent: true),
+            InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true),
+            _ => Typing(AgentKind.Copilot, () => FirstOf(CopilotPrompts.Since(transcript, from).Prompts, p => CopilotReply.Matches(words, p.Content), p => p.At),
+                seen => ConfirmAsync(transcript, from, words, staged, timeline, seen)),
         };
 
         static Attempt Done(ReplyResult r) => new(r, null);
+    }
+
+    // Why a reply to a Copilot session with no transcript yet must wait, or null when its window
+    // shows the prompt's box with no startup question over it (#1018). A window that cannot be
+    // read, or does not show the box yet, is "waiting to start", never "at the machine".
+    async Task<string?> FirstReplyHoldAsync(int pid, string label)
+    {
+        ConsoleScreen screen;
+        try { screen = await injector.ReadScreenAsync(pid); }
+        catch (Exception e)
+        {
+            log($"could not read the screen of pid {pid} for a first reply: {e.GetType().Name}: {e.Message}");
+            return FirstReplyWords.WaitingToStart;
+        }
+        if (screen.Rows is not { } rows) { return FirstReplyWords.WaitingToStart; }
+        switch (StartupQuestions.Read(rows))
+        {
+            case StartupQuestion.None: break;
+            case StartupQuestion.Trust: return FirstReplyWords.AskingTrust(label, answerableFromHere: false);
+            default: return FirstReplyWords.AskingAtMachine(label);
+        }
+        // The box drawn at the bottom over its footer, whatever it holds: a draft or shell mode
+        // is named by the check that types, which comes next.
+        return CopilotInputBoxReader.Read(rows) is { Seen: true } or { Box: not null } ? null : FirstReplyWords.WaitingToStart;
     }
 
     // Copilot's input box, as the session's screen shows it now, or why no reply can be typed
@@ -423,8 +527,8 @@ public sealed class ReplyService : ISessionReplier
     {
         ConsoleScreen screen;
         try { screen = await injector.ReadScreenAsync(pid); }
-        catch (Exception e) { return (null, $"the host could not read the session's screen ({e.Message}); reply at the machine", false, null); }
-        if (screen.Rows is not { } rows) { return (null, screen.Problem ?? "the host could not read the session's screen; reply at the machine", false, null); }
+        catch (Exception e) { return (null, Logged($"could not read the screen of pid {pid} for a reply", e), false, null); }
+        if (screen.Rows is not { } rows) { return (null, DeliveryReasons.Of(screen.Problem ?? "the host could not read the session's screen; reply at the machine"), false, null); }
         return CopilotInputBoxReader.Read(rows);
     }
 
@@ -478,8 +582,8 @@ public sealed class ReplyService : ISessionReplier
             working = now.Status == SessionStatus.Working;
             ConsoleScreen screen;
             try { screen = await injector.ReadScreenAsync(pid); }
-            catch (Exception e) { return Done(Refused($"the host could not read the session's screen ({e.Message}); reply at the machine")); }
-            if (screen.Rows is not { } rows) { return Done(Refused(screen.Problem ?? "the host could not read the session's screen; reply at the machine")); }
+            catch (Exception e) { return Done(Failed(AnswerOutcome.Refused, $"could not read the screen of {name} {Short(session.Id)} for a reply", e)); }
+            if (screen.Rows is not { } rows) { return Done(Refused(DeliveryReasons.Of(screen.Problem ?? "the host could not read the session's screen; reply at the machine"))); }
             var box = Find(agent, rows);
             if (box is null)
             {
@@ -512,12 +616,12 @@ public sealed class ReplyService : ISessionReplier
                     catch (Exception e)
                     {
                         // Keys have gone: the staged files must stay for the agent.
-                        return new Attempt(Unconfirmed($"the host could not read {name}'s screen part way through the reply ({e.Message}); check at the machine"), null, KeysWent: true);
+                        return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"could not read the screen of {name} {Short(session.Id)} part way through a reply", e), null, KeysWent: true);
                     }
                     if (box is null)
                     {
                         log($"stopped typing a reply into {name} {Short(session.Id)}: its input box did not take an image path as an image");
-                        return new Attempt(Unconfirmed($"{name} did not take an attachment as an image, so its path may be left as words in its input box; check at the machine"), null, KeysWent: true);
+                        return new Attempt(Unconfirmed($"{name} did not take an attachment as an image, so its path may be left as words in its input box"), null, KeysWent: true);
                     }
                 }
                 var keys = new KeyPlan([AgentReply.Key(send, box.Rows)]);
@@ -526,7 +630,7 @@ public sealed class ReplyService : ISessionReplier
                 try { result = await injector.InjectAsync(pid, keys); }
                 catch (Exception e)
                 {
-                    return new Attempt(Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine"), null, KeysWent: true);
+                    return new Attempt(Failed(AnswerOutcome.Unconfirmed, $"the injector failed while typing a reply into {name} {Short(session.Id)}", e), null, KeysWent: true);
                 }
                 finally { timeline.InjectEnd(); }
                 if (result.Status != InjectionStatus.Typed) { break; }
@@ -542,13 +646,14 @@ public sealed class ReplyService : ISessionReplier
             case InjectionStatus.NothingTyped when !sent:
                 return Done(Refused(result.Detail == WorkerInjector.ScreenChanged
                     ? $"{name}'s screen changed just as the reply was to be typed, so nothing was typed; try again, or reply at the machine"
-                    : result.Detail));
+                    : DeliveryReasons.Of(result.Detail)));
             case InjectionStatus.NothingTyped or InjectionStatus.Interrupted:
-                return new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session, so check at the machine"), null, KeysWent: true);
+                return new Attempt(Unconfirmed($"{DeliveryReasons.Of(result.Detail)}; part of the reply may have reached the session"), null, KeysWent: true);
         }
 
         await SubmitAsync(session.Id, agent, pid, transcript, from, plan, timeline);
-        return new Attempt(null, new Typed(() => ConfirmAgentAsync(agent, transcript, from, plan, timeline)), KeysWent: true);
+        return Typing(agent, () => FirstOf(Prompts(agent, transcript, from).Prompts, plan.Says, p => p.At),
+            seen => ConfirmAgentAsync(agent, transcript, from, plan, timeline, seen));
 
         static Attempt Done(ReplyResult r) => new(r, null);
     }
@@ -636,7 +741,7 @@ public sealed class ReplyService : ISessionReplier
 
     // Watches the agent's record for the prompt that is this reply, and the files it took in.
     // Claude records a reply it queues at once, but reads its files only when it takes it.
-    async Task<ReplyResult> ConfirmAgentAsync(AgentKind agent, string transcript, long from, AgentReply plan, DeliveryTimeline timeline)
+    async Task<ReplyResult> ConfirmAgentAsync(AgentKind agent, string transcript, long from, AgentReply plan, DeliveryTimeline timeline, Seen seen)
     {
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
         var started = options.Time.GetTimestamp();
@@ -654,6 +759,7 @@ public sealed class ReplyService : ISessionReplier
                     if (!plan.Says(prompt)) { other = true; continue; }
                     if (!TakePrompt(transcript, prompt.Offset)) { continue; }
                     mine = prompt.Offset;
+                    seen.At ??= timeline.Elapsed();
                     timeline.Recorded(prompt.At);
                 }
                 if (prompt.Offset != mine) { continue; }
@@ -663,15 +769,15 @@ public sealed class ReplyService : ISessionReplier
                     return new ReplyResult(AnswerOutcome.Delivered);
                 }
                 // Codex records its images with the prompt: missing then is missing for good.
-                if (agent == AgentKind.Codex) { return Unconfirmed("Codex recorded the reply but did not attach every image to it; check at the machine"); }
+                if (agent == AgentKind.Codex) { return Unconfirmed("Codex recorded the reply but did not attach every image to it"); }
             }
             if (options.Time.GetElapsedTime(started) >= options.ConfirmTimeout)
             {
                 return Unconfirmed(mine is not null
-                    ? $"{name} recorded the reply but has not read every file it mentions yet; check at the machine"
+                    ? $"{name} recorded the reply but has not read every file it mentions yet"
                     : other
-                    ? $"{name} recorded a different message, not this reply; check at the machine"
-                    : $"{name} did not record the reply within {options.ConfirmTimeout.TotalSeconds:0} seconds; check at the machine");
+                    ? $"{name} recorded a different message, not this reply"
+                    : $"{name} did not record the reply within {options.ConfirmTimeout.TotalSeconds:0} seconds");
             }
             await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
         }
@@ -695,14 +801,13 @@ public sealed class ReplyService : ISessionReplier
         catch (InvalidDataException e) { return Refused(e.Message); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            log($"could not stage attachments: {e.Message}");
-            return Refused($"the host could not stage the attachments privately ({e.Message}); nothing was sent");
+            return Failed(AnswerOutcome.Refused, "could not stage attachments", e);
         }
     }
 
     // Watches the transcript, from where it stood before the keys went, for the person's
     // prompt that is this reply.
-    async Task<ReplyResult> ConfirmAsync(string transcript, long from, string words, IReadOnlyList<string> attached, DeliveryTimeline timeline)
+    async Task<ReplyResult> ConfirmAsync(string transcript, long from, string words, IReadOnlyList<string> attached, DeliveryTimeline timeline, Seen seen)
     {
         var started = options.Time.GetTimestamp();
         var other = false;
@@ -714,23 +819,42 @@ public sealed class ReplyService : ISessionReplier
             {
                 if (!CopilotReply.Matches(words, prompt.Content)) { other = true; continue; }
                 if (!TakePrompt(transcript, prompt.Offset)) { continue; }
+                seen.At ??= timeline.Elapsed();
                 timeline.Recorded(prompt.At);
                 if (!CopilotReply.Attached(attached, prompt.Attachments))
                 {
-                    return Unconfirmed("the session recorded the reply but did not attach every file to it; check at the machine");
+                    return Unconfirmed("the session recorded the reply but did not attach every file to it");
                 }
                 timeline.Confirmed();
                 return new ReplyResult(AnswerOutcome.Delivered);
             }
-            if (since.SessionEnded) { return Unconfirmed("the session ended before it recorded the reply; check at the machine"); }
+            if (since.SessionEnded)
+            {
+                seen.Ended = true;
+                return Unconfirmed("the session ended before it recorded the reply");
+            }
             if (options.Time.GetElapsedTime(started) >= options.ConfirmTimeout)
             {
                 return Unconfirmed(other
-                    ? "the session recorded a different message, not this reply; check at the machine"
-                    : $"the session did not record the reply within {options.ConfirmTimeout.TotalSeconds:0} seconds; check at the machine");
+                    ? "the session recorded a different message, not this reply"
+                    : $"the session did not record the reply within {options.ConfirmTimeout.TotalSeconds:0} seconds");
             }
             await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
         }
+    }
+
+    // Keys have gone: the reply is confirmed by its prompt, which `find` looks for again, untaken,
+    // once a confirmation has timed out (#1025).
+    static Attempt Typing(AgentKind agent, Func<(bool Found, DateTimeOffset? At)> find, Func<Seen, Task<ReplyResult>> confirm)
+    {
+        var seen = new Seen(agent, find);
+        return new Attempt(null, new Typed(() => confirm(seen), seen), KeysWent: true);
+    }
+
+    static (bool Found, DateTimeOffset? At) FirstOf<T>(IEnumerable<T> prompts, Func<T, bool> mine, Func<T, DateTimeOffset?> at)
+    {
+        foreach (var p in prompts) { if (mine(p)) { return (true, at(p)); } }
+        return (false, null);
     }
 
     static bool NotYetWritten(string transcript, Session session) =>
@@ -746,6 +870,16 @@ public sealed class ReplyService : ISessionReplier
     }
 
     static string Short(string id) => id.Length > 8 ? id[..8] : id;
+
+    // What went wrong goes to the host's log only: the person is given fixed words, never an
+    // exception's text (#802, #995).
+    ReplyResult Failed(AnswerOutcome outcome, string what, Exception e) => new(outcome, Logged(what, e));
+
+    string Logged(string what, Exception e)
+    {
+        log($"{what}: {e.GetType().Name}: {e.Message}");
+        return DeliveryReasons.CouldNotDeliver;
+    }
 
     static ReplyResult Refused(string reason) => new(AnswerOutcome.Refused, reason);
     static ReplyResult Stale(string reason) => new(AnswerOutcome.Stale, reason);

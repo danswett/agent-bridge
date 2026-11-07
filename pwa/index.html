@@ -15,6 +15,7 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" sizes="180x180">
   <link rel="stylesheet" href="design/tokens.css">
   <link rel="stylesheet" href="app.css">
+  <script src="text-size-boot.js"></script>
   <title>Slipgates</title>
 </head>
 <body>
@@ -182,6 +183,15 @@
           <p id="notify-error" class="note warn" role="alert" hidden></p>
           <div class="row">
             <button type="button" id="notify-toggle" class="button" aria-pressed="false">Turn on notifications</button>
+          </div>
+        </section>
+        <section id="text-size" class="panel text-size" aria-labelledby="text-size-h">
+          <h3 id="text-size-h">Text size</h3>
+          <p class="note">On this device only.</p>
+          <div class="segmented" role="group" aria-labelledby="text-size-h">
+            <button type="button" class="toggle" data-text-size="smaller" aria-pressed="false">Smaller</button>
+            <button type="button" class="toggle" data-text-size="default" aria-pressed="true">Default</button>
+            <button type="button" class="toggle" data-text-size="larger" aria-pressed="false">Larger</button>
           </div>
         </section>
         <section id="demo-settings" class="panel account" aria-labelledby="demo-settings-h" hidden>

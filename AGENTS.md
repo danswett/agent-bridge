@@ -1,8 +1,17 @@
 # Working on agent-bridge
 
-Read this before you change anything, whether you are a person or an agent. For where the
-project stands and what comes next, see [docs/status.md](docs/status.md). For the
-architecture, see [docs/design.md](docs/design.md).
+Read this before you change anything, whether you are a person or an agent.
+**New contributor or fresh session?** Read [CONTRIBUTING.md](CONTRIBUTING.md), then
+[the contributor workflow](docs/contributor-workflow.md), before taking work.
+These are required reading, not optional background. Read any instructions in the
+area you change too. For project context see [docs/status.md](docs/status.md);
+for architecture see [docs/design.md](docs/design.md).
+
+Do not assume personal memories, a previous session, a shared GitHub login or private
+Project access establish current ownership or permission. Confirm the canonical issue
+and accepted scope before editing. Helping a contributor does not make an agent a
+standing team coordinator; use [the participation rules](docs/contributor-workflow.md#participation)
+and do not start a collector, reporting timer or worker fleet just to contribute.
 
 ## The one rule that outranks the rest
 
@@ -82,8 +91,9 @@ Keep a PR a draft while you iterate (from #459 on, drafts run only a fast subset
 
 Every merge to `main` whose CI builds the app (any change the app's jobs select) publishes a
 release-build pre-release of the Windows app
-(`v0.1.<run>`, Velopack, with deltas), and installed apps update themselves once the host
-is idle. A red `main` CI therefore blocks publishing: fix it quickly. PR builds are dev
+(`v0.1.<run>`, Velopack, with deltas), and installed apps download it in the background and
+install it when the person chooses Restart to update (#516). A red `main` CI therefore blocks
+publishing: fix it quickly. PR builds are dev
 builds, and guard G6 limits their HA connector to a disposable HA.
 
 ## Relay deploys

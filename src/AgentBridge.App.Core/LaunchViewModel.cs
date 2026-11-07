@@ -122,7 +122,7 @@ public sealed partial class LaunchViewModel : Observable
                 if (was.Deliveries.Get(Key) is { State: DeliveryState.Done or DeliveryState.Failed } final && final.Request == last.Request) { OnDelivery(local, final, was); }
                 else if (Pending)
                 {
-                    lost = "Not confirmed: the relay connection to this machine's host changed before it said whether the launch started. Check at this machine before launching again.";
+                    lost = "Not confirmed: the relay connection to this machine's bridge changed before it said whether the launch started. Check at this machine before launching again.";
                     Show();
                 }
             }

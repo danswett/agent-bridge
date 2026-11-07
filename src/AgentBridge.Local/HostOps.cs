@@ -60,6 +60,11 @@ public sealed record UpdateReport(UpdateState State, IReadOnlyList<string>? Take
 // credential for that relay, as private as the device key.
 public sealed record RelayAccount(string Relay, string Token, string AccountId, string Login);
 
+// host.relay.account's request: the app's own device id, when it says it (#801). The host then
+// refuses manage.* through the relay from that key: the app manages its own machine from Settings,
+// and an agent here could use its key as the same user. Absent from an older app.
+public sealed record RelayAccountRequest(string? Device = null);
+
 [UnknownAs(Off)]
 public enum RelayState { Off, SignedOut, Connecting, Connected, Refused }
 
@@ -84,8 +89,9 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // EscapedApproval: permissions.escapedApproval, confirm or machine (#803); null from a host before it.
 // EscapedApprovalDevices: permissions.escapedApprovalDevices, the devices that may confirm one; null
 // while absent, when the folder-trust devices may, and only while folder trust is on.
+// PhoneSignIn: permissions.phoneSignIn, signing an agent in from a person's device (#972).
 public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null)
+    bool DevBoxKeepAwake = false, string? EscapedApproval = null, IReadOnlyList<string>? EscapedApprovalDevices = null, bool PhoneSignIn = false)
 {
     // By the devices in it, not the list object, so a restart is not asked for because two reads
     // of the same file made two lists.
@@ -94,7 +100,8 @@ public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, 
         && (RemoteFolderTrustDevices ?? []).SequenceEqual(other.RemoteFolderTrustDevices ?? [], StringComparer.Ordinal)
         && DevBoxKeepAwake == other.DevBoxKeepAwake && EscapedApproval == other.EscapedApproval
         && (EscapedApprovalDevices is null) == (other.EscapedApprovalDevices is null)
-        && (EscapedApprovalDevices ?? []).SequenceEqual(other.EscapedApprovalDevices ?? [], StringComparer.Ordinal);
+        && (EscapedApprovalDevices ?? []).SequenceEqual(other.EscapedApprovalDevices ?? [], StringComparer.Ordinal)
+        && PhoneSignIn == other.PhoneSignIn;
 
     public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
 }
@@ -154,9 +161,9 @@ public sealed record SignInRequest(string? Relay = null);
 // the list that one was made from; when the host's differs (another app, or a person's terminal,
 // changed it meanwhile), nothing is changed and the result says Conflict, so a device revoked
 // elsewhere is never approved again by a list made before. DevBoxKeepAwake: devBox.keepAwake,
-// applied at once.
+// applied at once. PhoneSignIn: permissions.phoneSignIn, at the next start.
 public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null);
+    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null, bool? PhoneSignIn = null);
 
 public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired, bool Conflict = false);
 

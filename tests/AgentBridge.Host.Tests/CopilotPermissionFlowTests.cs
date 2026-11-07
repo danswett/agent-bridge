@@ -120,6 +120,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains("cancelled", result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
     }
 
     [Fact]
@@ -147,6 +148,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, result.Outcome);
         Assert.Contains(kind, result.Reason);
+        Assert.DoesNotContain("at the machine", result.Reason);
     }
 
     [Fact]
@@ -157,6 +159,7 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
 
         Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
         Assert.Contains("did not record an answer", first.Reason);
+        Assert.DoesNotContain("at the machine", first.Reason);
         Assert.Equal(AnswerOutcome.Refused, again.Outcome);
         Assert.Single(injector.Plans);
     }

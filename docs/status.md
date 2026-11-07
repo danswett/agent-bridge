@@ -1,13 +1,15 @@
 # Status, plan and handoff
 
-**Start here** if you are picking this project up with no prior context, whether you are a
-person or an agent. This page says where the project is, what runs where, what comes
-next, and how the work is done. Keep it current: update it in the same PR as any change
-that moves the project along (a merge that closes a stage, a machine migrated, a
-decision made).
+**New contributor or fresh agent session? Start with [CONTRIBUTING.md](../CONTRIBUTING.md).**
+This page supplies project context, dated snapshots and links to current role holders.
+The [contributor workflow](contributor-workflow.md) owns durable coordination procedures;
+canonical issues and PRs hold current assignments and exact-head evidence.
+Keep this page current when a change moves the project along, and retain explicit
+dates on historical snapshots rather than treating them as current assignments.
 
-*Last updated: 2026-11-05, Pacific (product decisions of 11-04 and 11-05, including the no-RDP
-tenet). Older implementation and machine snapshots below retain their stated dates.*
+*Last updated: 2026-11-06, Pacific (contributor entry path, #1045; product decisions of
+11-04 and 11-05, including the no-RDP tenet). Older implementation and machine snapshots
+below retain their stated dates.*
 
 **Product tenet (owner, 2026-11-04): you never have to RDP into a machine.** Anything that can
 only be fixed or diagnosed at the machine is a product gap: it is labelled `needs-rdp` and
@@ -15,6 +17,8 @@ prioritised by [#696](https://github.com/danswett/agent-bridge/issues/696) rule 
 
 | Read next | For |
 |---|---|
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | The first-contribution path for people and their agents |
+| [Contributor workflow](contributor-workflow.md) | Canonical records, ownership, participation, readiness and handoffs |
 | [#696](https://github.com/danswett/agent-bridge/issues/696) | The order of work: epics, Now/Next/Later and intake rules. The Project's **Epic** and **Horizon** fields index it |
 | [design.md](design.md) | The master plan and architecture: goals, protocol, security, relay, host, apps, roadmap (§10), risks |
 | [parity.md](parity.md) | Every agent-ha-bridge feature mapped to this product, with evidence or an issue |
@@ -149,82 +153,23 @@ remain routing references until every active destination is verified.
 
 #### Operational sources of truth
 
-| Record | Owns |
-|---|---|
-| Canonical issue | Scope, acceptance criteria, priority, accepted implementation owner, dependencies and next action |
-| Implementation PR | Exact head, CI, actual review, finding dispositions, unresolved threads and readiness evidence for Quality |
-| GitHub Project views, once configured | Filterable indexes over those issues and PRs; not a second plan or evidence of acceptance |
-| #170 root/index, after verified cutover | Current roles, operating rules and links; not a repeated whole-project inventory or per-PR queue |
-| Repository docs and approved designs | Durable architecture, roadmap and decisions; not a minute-by-minute activity log |
-
-A suggested owner is **unclaimed** until explicitly accepted. Link the acceptance
-receipt; preserve existing delegates and contributor branch ownership. A shared
-GitHub account, an unverified checkbox, silence or an old ready packet is not a new acceptance.
-If the next action requires owner input, state the precise decision; do not relabel an
-already-approved requirement as blocked on design.
-
-Keep cross-track dependencies on their canonical issues. Put readiness and
-merge/rebase requests on the PR for Quality. Every head change needs fresh CI and
-an actual Copilot review on that exact head. Only an **independent** review may
-use a bounded delta: the previously reviewed commit must be a proved ancestor of
-the new head, and the independent reviewer must explicitly clear that delta at the
-new head. A rebase without that ancestry needs a full independent review; neither
-old CI nor an old Copilot review is inherited. Safety, trust, security and required
-checks remain gates. Quality's
-[current operating receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924)
-allows ready PRs while main CI is pending, but pauses merges while main is red until
-green or reverted; it does not waive final-head PR gates.
-
-The minute collector retains the full event journal, including failed/partial reads
-as unknown. The consumer reconciles it into the canonical records and publishes
-**material changes**, not repeated inventory dumps. Archive old coordination
-snapshots with their cutoffs, keep their history and links, and explicitly supersede
-old authority instructions during a handoff. Do not remove the old tracker until all
-active rows have a verified destination; a Project-permission failure is not an empty
-queue or a completed migration.
+The authoritative [record map](contributor-workflow.md#operational-sources-of-truth),
+[ownership procedure](contributor-workflow.md#claiming-work),
+[review evidence](contributor-workflow.md#readiness-and-review-evidence) and
+[handoff procedure](contributor-workflow.md#handoffs) now live in the contributor
+workflow. This heading remains for existing links; it is not a second policy copy.
 
 #### Running Shiproom
 
-The [public Shiproom hub](https://github.com/danswett/agent-bridge/issues/689)
-links coordinator check-ins and blocker acknowledgments to the existing
-[private Project](https://github.com/users/danswett/projects/1).
-Shiproom owns coordination, Project health, deadlines and escalation only.
-TPM retains issue triage, deduplication and the single collector; implementation,
-design and Quality retain their existing authorities. Authors may still arm
-their own exact-head auto-merge under AGENTS.md. Shiproom is not a merge grant,
-a second implementation coordinator or completion of the #170 index cutover.
+The authoritative [Shiproom procedure](contributor-workflow.md#running-shiproom)
+now lives in the contributor workflow; current dispatch remains on
+[#689](https://github.com/danswett/agent-bridge/issues/689).
+Moving the procedure does not change accepted roles, operating obligations or the
+incomplete #170 cutover. See [participation](contributor-workflow.md#participation)
+before assuming a standing coordinator role.
 
-Active agent coordinators explicitly acknowledge the protocol and post a first
-check-in before adoption is recorded. A coordinator acknowledges a delivered blocker
-or ACK request within 5 minutes. Each check-in names lane and current session,
-its permalink, the reused recurring mechanism, canonical current work, actual
-blockers (or none), named needed responder, next deliverable and next due time in
-Pacific. Keep one standing roll-up per lane, linking canonical issues and PRs rather
-than copying the backlog. Missing owners remain pending until acceptance is proved.
-Keep contributor branches and delegates with their existing owners. A human
-contributor has no imposed cadence outside an explicitly accepted work window;
-public receipts work without private Project access.
-
-| Interval | Shiproom action |
-|---|---|
-| 5 minutes after a delivered blocker/ACK request | Obtain an explicit acknowledgment; escalate a missed deadline once |
-| 15 minutes after the last explicit check-in | Coordinator check-in due |
-| 20 minutes after the last explicit check-in | Mark the heartbeat stale |
-| 30 minutes after the last explicit check-in | Escalate to the named responsible coordinator/TPM |
-| Immediately | Escalate P0 or unsafe routing to the actual responsible authority |
-
-Preserve the actual blocked reason and needed responder. A sent message, generic
-issue `updatedAt`, mirror write or unchanged activity response is not a check-in or
-acceptance. Project `Heartbeat receipt`, `Next due PT`, `Needs from` and `Ack state`
-fields index this evidence; `Accepted owner` and `Owner receipt` require actual acceptance.
-An inactive optional HA or Apple lane does not block unrelated native delivery.
-
-The dedicated Shiproom session runs a narrow one-minute SLA tick with its own
-persisted control state, consuming only new retained collector events from its
-activation cursor. Reuse an appropriate coordinator timer instead of duplicating
-one. Inspect control/source health before lengthy research. Session-local timers
-do not survive a stopped CLI or reboot: report gaps and restore coverage explicitly.
-Source outages mean unknown visibility, not idle work or missed consent.
+<details>
+<summary>Historical handoff and resumption notes (2026-11-02; not current assignments)</summary>
 
 The following handoff/resumption notes are **historical, 2026-11-02**; use canonical
 issues and PRs for current heads, owners and gates:
@@ -259,6 +204,8 @@ Historical native publication work under #317, superseded by #387's redirect:
 - #319 still gates writer cutover on the replacement integration/card and
   disposable-HA handover/rollback verification. No live HA or legacy-install
   changes during development; no cleanup under #389 before that gate.
+
+</details>
 
 ## 3. Shadow gate (#40)
 

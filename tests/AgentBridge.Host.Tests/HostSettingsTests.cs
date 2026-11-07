@@ -67,6 +67,15 @@ public sealed class HostSettingsTests : IDisposable
         Assert.True(settings.RemoteApproval);
     }
 
+    [Fact]
+    public void Remote_management_is_on_by_default_and_off_when_the_owner_or_a_spoiled_file_says_so()
+    {
+        Assert.True(With(null).Settings.RemoteManage);
+        Assert.False(With("{ \"permissions\": { \"remoteManage\": false } }").Settings.RemoteManage);
+        Assert.False(With("{ \"permissions\": { \"remoteApproval\": false, \"remoteManage\": false } }").Settings.RemoteManage);
+        Assert.False(With("{ \"permissions\": { \"remoteManage\": \"no\" } }").Settings.RemoteManage);
+    }
+
     [Theory]
     [InlineData("{ \"permissions\": { \"remoteApproval\": \"no\" } }")]
     [InlineData("{ \"permissions\": false }")]
@@ -144,6 +153,35 @@ public sealed class HostSettingsTests : IDisposable
         Assert.False(settings.Launch.Enabled);
         Assert.Contains($"written by a newer {Product.Name}", problem);
         Assert.True(With("{ \"version\": 1 }").Settings.RemoteApproval);
+    }
+
+    [Theory]
+    [InlineData("{}", false)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":false}}", false)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":true}}", true)]
+    [InlineData("{\"permissions\":{\"phoneSignIn\":\"true\"}}", false)]
+    [InlineData("{\"version\":2,\"permissions\":{\"phoneSignIn\":true}}", false)]
+    [InlineData("{", false)]
+    public void Sign_in_from_devices_is_off_unless_the_machine_sets_it_true(string text, bool on)
+    {
+        Assert.False(HostSettings.Default.PhoneSignIn);
+        Assert.Equal(on, With(text).Settings.PhoneSignIn);
+    }
+
+    [Fact]
+    public void The_apps_switch_writes_sign_in_from_devices_beside_the_other_permissions()
+    {
+        With("{ \"permissions\": { \"remoteApproval\": false }, \"push\": { \"enabled\": false } }");
+
+        HostConfigFile.Patch(folder, null, null, phoneSignIn: true);
+        var (on, problem) = HostSettings.Load(folder);
+        HostConfigFile.Patch(folder, null, null, phoneSignIn: false);
+
+        Assert.Null(problem);
+        Assert.True(on.PhoneSignIn);
+        Assert.False(on.RemoteApproval);
+        Assert.False(on.Push);
+        Assert.False(HostSettings.Load(folder).Settings.PhoneSignIn);
     }
 
     [Theory]

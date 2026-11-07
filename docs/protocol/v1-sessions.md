@@ -103,6 +103,8 @@ with the wrong type):
 | `TrustQuestion` | | `id`, `agent`, `kind`, `folder`, `root`, `rootNote`, `warning`, `answerable` |
 | `SignedCommand` ([v1-transfer.md](v1-transfer.md)) | | `body`, `by`, `mac` |
 | `TransferResult` | | `blob`, `size`, `sha256`, `agent`, `launcher`, `files` |
+| `ManageCommand` (#801) | | `command` |
+| `ManageHaTokenRequest` (#801, held until #55) | | `command`, `secret` |
 
 So, for example, a session with no `status` reads as `idle`, one whose `title` is a number has
 no title, and a `ToolCall` with no `id` is left out of `history`. A question whose `message` is a
@@ -145,6 +147,16 @@ unit tests replay the same files, so a field renamed or a limit moved in one imp
 in the other. Where they disagree today, the files list it as a known difference with its issue.
 After a deliberate change, regenerate them with `UPDATE_PROTOCOL_VECTORS=1` as
 [vectors/README.md](vectors/README.md#regenerating) says, and commit them with the change.
+
+**Proposed for #970 slice 1b (not generated yet):** the relay's `presence` (roster.md) gets
+vectors of its own, `vectors/presence.json`, so older clients' fallback is tested. `known[]`
+entries with `offline.outcome` set to each value a relay may send, `closed`, `reset`,
+`timeout`, `rate-limited`, `too-large`, `relay-restarting` and `unknown`, and to #815's older
+`dropped` and an unknown future value. A client that predates a value reads it as lost
+connection (`reads`: no reason shown, "Offline" as today). They include an entry with
+`offline.gone` (`since`, `evidence`, `alert`) and one whose `gone.v` is unknown (read as
+absent), so an unknown field never makes a client claim the bridge stopped
+([host-gone.md](host-gone.md)).
 
 ## Channel framing
 
@@ -255,7 +267,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 | `offered` | The sessions that died, newest first, at most 20: `id`, `agent`, `title`, `midTurn: true` if a turn was running when it went, `questionLost: true` if a question or approval was waiting in it, which went with it. Never the question's words, a prompt or a response. The notice stays within 8 KiB as JSON: past that, titles are shortened (to 60 bytes), then dropped, then the last names are left out and counted in `offeredMore`; the counts, `cause` and the times are never trimmed. The `restored` notification is made from the same notice |
 | `offeredMore` | How many more died than `offered` names: past 20, or left out to keep the notice within 8 KiB. Absent when none |
 
-Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. A client that does not know `restore` ignores it. It names sessions, so a peer that may not read them (one pinned as a `host`, [trusted peers](../host-config.md#trusted-peers-disposable-host-foundation)) is not told it.
+Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. **Proposed, not built (#948):** a person's device may also restore every session the notice names in one confirmed press, `restore.run` ([restore-run.md](restore-run.md)), through the same path a start-up restore takes. A client that does not know `restore` ignores it. It names sessions, so a peer that may not read them (one pinned as a `host`, [trusted peers](../host-config.md#trusted-peers-disposable-host-foundation)) is not told it.
 
 **Changes (`hello.changed`).** What hello says changes without a new connection: agent-ha-bridge starting or stopping (G5) takes answering, replying, stopping and launching away or gives them back, with `readOnly`; `update` comes and goes. A client used to ask hello again every 10 s to see it, on every connection: about 36 hellos a minute at a host from the account's other machines' Windows apps (#640). Of a host that offers `hello.changed`, a client asks `{ "changes": true }` in its hello, and from then on, for as long as that channel is open, the host sends the event
 
@@ -289,7 +301,9 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.transfer` | `session.launch` takes a `transfer`: a session that ended on another of the account's machines, brought here and resumed as a copy ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.transfer.serve` | `session.transfer`, host to host: this machine hands its ended sessions to the account's other machines on a command a person's device signed ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.restore` | `hello`'s `machine.restore`: what a reboot or a crash took, offered to resume ([What went](#hello)), and the `restored` notification ([Notifications](#notifications)). Without it, a client says nothing of sessions that went
+| `sessions.restore.run` | **Proposed, not built (#948).** `restore.run`: a person's device restores the sessions `machine.restore` offers, after a confirmation ([restore-run.md](restore-run.md)). Offered with `sessions.restore` and `sessions.launch`, only to a person's device (through the relay as `pwa` or `app`, or the app on the pipe), and never on a read-only machine (G5). Without it, a client says the sessions can be restored at the machine |
 | `update` | `update.get`, `update.subscribe`, `update.check`, `update.install`: the machine's updates, seen and asked for from a person's other devices, installed by its Windows app ([v1-update.md](v1-update.md)). Through the relay only, and never by a read-only machine |
+| `manage` | `manage.get`, `manage.subscribe`, `manage.restart`: a person's device restarts this host, each press a command it signed for this machine, leaving only through #805's quiet lease ([host-lifecycle.md](../host-lifecycle.md)); with `manage.hooks`, `manage.hooks.repair` repairs the hooks of an agent this installation set up (#801). Through the relay only, to a `pwa` or `app` device that is not this machine's own app, never by a read-only machine or one with `permissions.remoteManage` off. `manage.stop`, `manage.config.*` and `manage.haToken.set` are defined but refused `needs-roster` until the signed device roster (#55), and their capabilities are never offered. See [Managing a machine](#managing-a-machine) |
 
 ### `sessions.list`
 
@@ -612,7 +626,7 @@ anything but `delivered`, and `timings` for a request that asked for progress
 | `outcome` | Meaning | Typed? |
 |---|---|---|
 | `delivered` | The host typed the answer and the agent's transcript recorded it | Yes |
-| `unconfirmed` | The host typed it, but could not confirm the agent recorded it (for example the session stopped answering). It never retries on its own; the client says to check at the machine | Yes |
+| `unconfirmed` | The host typed it, but could not confirm the agent recorded it (for example the session stopped answering). It never retries on its own; the client says to check the conversation | Yes |
 | `stale` | The session is no longer asking that question: answered at the machine or by another device, or gone | No |
 | `busy` | Another answer or a reply to this session is being delivered | No |
 | `refused` | The host will not type it: an invalid answer, a question the client should not answer remotely (`truncated` or `answerAtMachine`), a prompt the host has already typed an answer into once, an elevated or otherwise unreachable session, an agent or platform without delivery, or agent-ha-bridge active for this user | No |
@@ -1125,6 +1139,74 @@ Request `data`: `{}`. Result: the devices this host notifies, oldest first:
 `current` marks the calling device. Endpoints are never sent back: one is a capability to
 notify that device.
 
+### Managing a machine
+
+**New (#801 slice A).** A person's phone, browser or Windows app restarts a machine's host, or
+repairs the hooks of an agent that machine's installation set up, so nobody has to sign in to
+it for either. The design record, with the open and answered questions, is draft
+[#821](https://github.com/danswett/agent-bridge/pull/821); this section is the contract.
+
+| Op | Request `data` | Result |
+|---|---|---|
+| `manage.get` | `{}` | `ManageState` |
+| `manage.subscribe` | `{}` | `ManageState`, then a `manage.state` event with the `ManageState` whenever it changes |
+| `manage.restart` | `ManageCommand` | `ManageResult` |
+| `manage.hooks.repair` | `ManageCommand`; its body's `args` is `{ "agent": "copilot" \| "claude" \| "codex" \| "agency" }` | `ManageResult` |
+| `manage.stop`, `manage.config.get`, `manage.config.set` | `ManageCommand` | `ManageResult`, always refused `needs-roster` until #55 |
+| `manage.haToken.set` | `ManageHaTokenRequest`: `{ "command", "secret" }` | The same; the request is refused before it is read, so the secret is never parsed |
+
+`ManageCommand` is `{ "command": SignedCommand }`: the [signed command](v1-transfer.md) a
+person's device made for this machine, whose body's `action` is the op. It lives at most
+**2 minutes** from `issuedAt` (a transfer's lives 10). The body's `args` and `contentSha256`
+are signed with the rest (the MAC covers the whole body; the vector
+`a-hook-repair-with-args` in [signed-command.json](vectors/signed-command.json)), and are
+optional, so a transfer's bytes are unchanged. An action takes only the arguments it defines
+(Connection, Q-C4 on #886): a restart none, a repair `agent` alone, neither a
+`contentSha256`. Anything else is refused `bad-args`.
+
+**Authorization.** Through the relay only: every `manage.*` op is refused on the local pipe,
+whoever asks ([local-pipe.md](local-pipe.md)), so the #67 guard on `host.restart` is
+untouched. The signer must be the device sending it, connected now, of kind `pwa` or `app`
+(Connection, Q-C1 on #886), and not this machine's own app (the device id the app gave in
+`host.relay.account`), which is refused `local-device` and may not read `manage.get` either.
+**Until #55**, that kind is the one the device declared to the relay in its presence (as
+`update.*` and folder trust read it; Connection, Q-C7): any device signed in to the account
+can claim `pwa`. #55's roster binding replaces it with the kind the owner approved; the
+bounds below are what hold until then. A machine with `permissions.remoteManage` off
+([host-config.md](../host-config.md)), or read-only, offers none of it and refuses all of it,
+reads included; the switch and read-only are looked at again just before a repair runs and
+before a restart commits.
+
+**A restart** leaves only through #805's quiet lease ([host-lifecycle.md](../host-lifecycle.md)):
+`TryAcquireQuiet`, then `AnnouncePlanned`, then `CommitDeparture`; refused at once
+(`not-quiet`, `busy`, `announce-failed`, `changed`) when any step fails, never forced or
+carried out later. It is refused `changed` when its quiet lease ran out before the commit (#885), and
+while the #800 agent sign-in entrypoint is on,
+since a restart cancels a pending sign-in (Connection, Q-C8). At most **2 committed restarts
+every 6 hours** per machine until #55 (`rate-limited`), and 3 presses of each kind per device
+every 10 minutes. Once committed, the result is `accepted` with the planned-state
+`transition`; the host settles its usage probes (#238), then hands over to its replacement
+(#239); a stop that comes meanwhile wins, and no replacement is started. The new host reports `done` (with `tookSeconds`) or `failed` in `last`; a restart a stop won over is `failed` (`changed`), however soon the host is started again.
+
+**A repair** runs only for an agent whose hook ownership record names this profile (else
+`unavailable`), and is only ever Settings' Set up / Repair, never a removal. `done` or
+`failed`, with `restartRequired`.
+
+The owner's other devices get a quiet notice of each restart and repair (Q-O3): a `finished`
+push of class `done`, silent, kept in the tray, naming the machine, what, and which device;
+never a value. A restart waits up to 3 s for it to be sent before it leaves.
+
+`ManageResult`: `{ "request"?, "outcome": "accepted" | "done" | "unchanged" | "refused" | "failed",
+"reason"?, "detail"?, "restartRequired"?, "transition"?, "state"?: ManageState }`. An unknown
+outcome reads as `failed`, an unknown reason as a refusal with its `detail`. A press sent again
+gets its first answer and is never acted on twice. A refusal before the press is verified as a
+person's carries no `state`.
+
+`ManageState`: `{ "phase": "idle" | "restarting" | "repairing", "pending"?: { "request", "kind",
+"by", "at", "transition"? }, "restarts": { "left", "nextAt"? }, "last"?: { "request", "kind",
+"outcome", "by", "at", "reason"?, "tookSeconds"? } }`. `by` is the device's kind and short id
+(`pwa 1a2b3c4d`). Vectors: [manage.json](vectors/manage.json).
+
 ## Notifications
 
 A host with `push` notifies every subscribed device when one of its sessions needs the
@@ -1141,9 +1223,18 @@ their own (#253, #610, #754 and #764 were each one client's). The session carrie
 | `class` | Tier | The host sets it when (first match wins) |
 |---|---|---|
 | `fyi` | | `status` is `ending`: the person asked for the session to end |
-| `needsYou` | Needs you: interrupts | a `question` is pending, the session's own or a delegate's (`waitingOn`), a form or an approval alike, one marked `answerAtMachine` included; or `attention` is present: `signInNeeded`, `error` (an errored turn) or `notResponding` |
+| `needsYou` | Needs you: interrupts | a `question` is pending, the session's own or a delegate's (`waitingOn`), a form or an approval alike, one marked `answerAtMachine` included; or `attention` is present: `signInNeeded`, `error` (an errored turn) or `notResponding`; or `restored` is present with `cause` `crash` and nobody has acted on the session since its restore (no prompt since it, and no turn started after it). `restored` after a reboot or a host restart gives no class: those sessions are `needsYou` only through their own state |
 | `done` | Done: waits | `status` is `idle` with a non-empty response of the main agent's own: `own.response` while `source.response` names a delegate, `response` otherwise (the same text a `finished` push quotes). Delegates still running in the `background` do not change it, as they do not hold back a `finished` push |
 | `fyi` | FYI: never notifies | anything else: working, or idle (delegating or not) with nothing of the main agent's own said |
+
+**A session restored after a crash (#780)** is `needsYou` from its restore (`classSince` is
+`restored.at`) until the person acts on it: a prompt arrives after the restore (Continue, any reply,
+or one typed at the machine), or a turn starts after it. It is also no longer `needsYou` for it once
+`restored` goes (after 24 hours). After a reboot or a host restart its
+`restored` gives it no class (Product on #975): its `class` comes from `status`, `question` and
+`attention` like any other session's, and it is restored idle, so `done` if its last turn left an
+answer of the main agent's own, else `fyi`. Neither changes the Needs you list, its count or the
+badge, which follow ui.md; `class` is the notification tier only.
 
 The wire names are the owner's tier names from #913 in this protocol's camelCase, as
 `signInNeeded` is, so the spec, the code and ui.md say each tier with one word. They are short
@@ -1156,8 +1247,9 @@ session's own, one question answered as the next is asked, working and idle with
 never worked out again per question, so a new question while the session is already `needsYou`
 does not restart the reminder. When `class` changes, or the host sends a session for the first
 time (after the host starts, or when it finds the session), it is taken from the fields that
-put the session in the tier: for `needsYou` the earliest of `question.askedAt` and
-`attention.since` that are present, the oldest thing waiting on the person; for `done` and
+put the session in the tier: for `needsYou` the earliest of `question.askedAt`,
+`attention.since` and, for a restore after a crash, `restored.at` that are present, the oldest
+thing waiting on the person; for `done` and
 `fyi` it is `statusSince` (for `ending`, when the end was asked for). A snapshot, a list or a
 resumed subscription carries the same `classSince` the host last sent; only a restart of the
 host can start the episode again from those fields.
@@ -1189,15 +1281,19 @@ host can start the episode again from those fields.
   session's question is still `needsYou`, and a turn an agent drove is still `done` (only its
   push is stopped). Mute still lets every approval and sign-in through, an approval marked
   `answerAtMachine` included: the person has to act, and its notice keeps "waiting at the
-  machine". Their protocol is later #913 work.
+  machine". A host groups a burst of questions and sends the reminder in its pushes
+  ([Bursts and the reminder](#bursts-and-the-reminder-913)); the rest is later #913 work.
 * **Done is silent everywhere** (the owner's answer B), older clients and Home Assistant
   included. The host sends every `finished` push with `silent: true`, and a client also keeps a
   `done` notice silent whatever `silent` says, as a second safeguard. A Done notice still shows
   (on the lock screen, for a Watched session); it never interrupts.
-* **The reminder** (ui.md §7.0 rule 5) is the clients': once per session, 15 minutes after its
-  `needsYou` alert, counted from `classSince`, and never repeated. A new question while the
-  session is already `needsYou` replaces its notification in place and does not restart the
-  reminder; answering everything ends the episode and cancels it.
+* **The reminder** (ui.md §7.0 rule 5): once per session and episode, 15 minutes after its
+  `needsYou` alert, and never repeated. A new question while the session is already `needsYou`
+  replaces its notification in place and does not restart the reminder; answering everything
+  ends the episode and cancels it. For a question, the host sends it as a push
+  ([Bursts and the reminder](#bursts-and-the-reminder-913)). A client times its own only for
+  what it alerts for itself from the session (a toast while the app runs, or `attention`, which
+  has no push yet), counted from `classSince`, and adds none to a push.
 * **Additive and optional.** An older client ignores `class`, `classSince` and `data.class`, as
   any field it does not know. A newer client reading a session or a push without them (an older
   host) keeps today's behaviour: the rules in [When a host notifies](#when-a-host-notifies), and
@@ -1207,17 +1303,39 @@ host can start the episode again from those fields.
   they never move `updatedAt` or send an upsert on their own, and the
   [session budget](#session-budget) never trims them.
 
-**What a host classes today:** every session it sends, and its `question`, `finished` and
-`signIn` pushes, and a `restored` push after a crash. Not by the host:
+**What a host classes today:** every session it sends, a session restored after a crash
+included, and its `question`, `finished` and `signIn` pushes, and a `restored` push after a crash
+(and, proposed, any `restored` that replaces a `hostGone`, [Host gone](#host-gone-970)).
+Not by the host:
 * **A machine offline unexpectedly (#805)**, which its host cannot say. Each client classes it
   `needsYou` from the relay's presence, once #269's grace period has passed, so a short drop
   never is. #805 owns the threshold.
-* **A session restored after a crash (#780)**: the machine's `restored` notice after a crash is
-  `needsYou`. Hosts set a restored session's `restored` field, but in this version its `class`
-  does not follow `restored`: it comes from `status`, `question` and `attention` like any other
-  session's (it is restored idle, so `done` if its last turn left an answer of the main agent's
-  own, else `fyi`). Whether `restored` after a crash should make the session itself `needsYou`
-  is an open Product decision, tracked on #780.
+* **A machine whose host is gone (#970, proposed)**, which its host cannot say either. The
+  relay decides it ([host-gone.md](host-gone.md)): only after a departure the host didn't
+  announce, with evidence the bridge stopped, and 5 minutes for #805 to heal it first. The
+  relay then sends the host's pre-sealed `hostGone` notice if one was armed
+  ([Host gone](#host-gone-970)), and clients show the machine's state (ui.md §6.14).
+
+  **How the two sit side by side.** Neither replaces the other; each governs its own signal,
+  and #970 changes nothing of #805's, its threshold included:
+  * A machine **with `offline.gone`** is #970's. Its alert is the one `hostGone` notice (or
+    `gone.alert`'s toast), at the `needsYou` tier: it interrupts, with the question sound, once
+    per episode. A client doesn't class that machine again under #805's rule, so one departure
+    never alerts twice, and the shared caps count it once. It is **not counted** in Needs you's N,
+    its filter or the app badge, which count questions and approvals only (owner decision,
+    2026-11-05; Product, #1022); its banner and its row line are how it shows.
+  * Every other machine that is offline unexpectedly is #805's, as above: one that was lost
+    without evidence the bridge stopped (a `timeout`, a machine switched off or asleep), and
+    one whose planned reboot, restart or update didn't return (#805's no-return push,
+    which #970 never sends). #970's pending window sends and shows nothing, and takes nothing
+    from #805's rule while it runs. To keep "never alerts twice" true, #805's threshold for a
+    machine lost with no plan is to be no shorter than `HostGoneAfter`; until SRE confirms that
+    on #805, a machine #805 alerted before it became gone is the one open overlap.
+  * A machine whose host announced its departure (#805's plan) is never #970's.
+
+  `needsYou` here is the tier, the alert's strength, in both rules; neither makes a machine a
+  member of Needs you's N. If #805 meant its classing to count a machine in N or the badge, that
+  conflicts with the 2026-11-05 owner decision for every machine, and is for SRE to settle on #805.
 
 `signInNeeded` pushes as the `signIn` notice of #800, at most once an hour per machine, agent
 and account (ui.md §6.13). The rest of `attention` has no push of its own yet. Being `needsYou`,
@@ -1227,7 +1345,8 @@ the session is `needsYou`, beginning at `classSince`. If the session recovers an
 responding again within 2 minutes, that is the same episode: its notification is replaced
 silently, not alerted again. A recurrence after more than 2 minutes is a new episode and may
 alert. Each episode gets the one reminder at 15 minutes, never repeated. Telling episodes apart,
-and the reminder, are the clients' to time; the host only sends `attention` and `classSince`.
+and the reminder for `attention`, are the clients' to time; the host only sends `attention` and
+`classSince`, and neither reminds nor groups what it does not push.
 Home Assistant's notifications are to follow `class` too, `done` only for a Watched session, and
 silently (ui.md §7.0; later #913 work).
 
@@ -1235,10 +1354,11 @@ silently (ui.md §7.0; later #913 work).
 
 | `kind` | When | Once per |
 |---|---|---|
-| `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it |
+| `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart. Within a burst it goes in the `group` instead. Still pending 15 minutes after the session's first question notice of the episode, it goes once more with `data.reminder` ([Bursts and the reminder](#bursts-and-the-reminder-913)) | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it. The reminder: once per episode |
 | `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified. Nor is a turn that ended on an error or a failed sign-in (`attention` `error` or `signInNeeded`): it is idle with the previous turn's answer still beside it, which a `finished` would quote as the new one's; one already due or held for the session is withdrawn while that attention lasts. A `finished` that would have replaced an answered question and does not go (withdrawn so, or refused by a device) sends that question's `resolved` instead to the devices still showing it, unless it is asked again | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `restored` | With `sessions.restore`: the host started again after a reboot or a crash took sessions with it ([What went](#hello)). Sent once every session it saw live is judged and those that died are restored, or 10 minutes after it started if some are still being judged then; not at all if none of them died. It says how many were restored and counts those offered, naming only the sessions that went mid-turn or with a question waiting and leaving the rest to Launch; sessions an earlier start already offered stay in `machine.restore` but are not notified again. To every subscribed device | Start of the host
-| `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead | Question |
+| `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead. Also withdraws a `group` once none of its questions is pending | Question |
+| `group` | **New (#913 rule 3).** A question of another session comes due within 30 s of one that went as itself, while that one (or one already grouped) is still pending: see [Bursts and the reminder](#bursts-and-the-reminder-913) | Burst |
 | `signIn` | **New (#800).** Sessions of the machine need sign-in: `attention` `signInNeeded`, except while its `recovery` is `pending` (signed in, waiting for the session to show it). Sent as soon as the first of them does, with no delay, to every subscribed device, on screen or not: a turn that ended on a 401 is `idle` with the previous turn's answer beside it, and nothing else tells the person every one of those sessions has stopped. Then again each hour while any still does, counted from when one reached a device, a restart of the host included (one that never went is made again by the next host). Once none does, one still waiting to be sent is withdrawn, and the next failure is notified at once. Never one per session, and never for an `error` or `notResponding` (ui.md §6.13): the row says those | Machine, agent and account, per hour |
 
 A device is sent at most one `finished` per session every 10 minutes. One that follows sooner
@@ -1256,6 +1376,88 @@ the rest, keeping only the latest per device and session, until there is room. A
 service answering 429 or 5xx is retried with backoff; 404 or 410 means the subscription
 is gone, and the host drops it.
 
+### Bursts and the reminder (#913)
+
+**New (#913 host slice 2, rules 3 and 5).** Only questions and approvals (a delegate's included):
+the items the Needs you list shows (ui.md). A `signIn` push is never grouped and keeps its own
+hourly repeat; `error` and `notResponding` have no push yet, so a host neither groups nor reminds
+them, and the `restored` notice is its own.
+
+* **A burst groups** (rule 3). The first question goes as itself, after its usual 2 s and no
+  later: nothing waits for a window. It opens a **30 s** window. A question of another session
+  that comes due while the window is open, and while the first or one already grouped is still
+  pending, does not go as itself: it joins the machine's one `group` notice, made when the second
+  arrives (alerting, as a question does) and replaced in place, silently, as more join within the
+  window or as they are answered. A device whose alerting group had not reached it when it was
+  replaced (the relay down, the rate limit, a retry) gets the replacement alerting instead: each
+  device hears a burst once. The first question keeps its own notice, which the group does
+  not replace: it carries the approve or answer controls, and its session's later notices
+  (`resolved`, `finished`, its next question) replace whatever its tag shows. A session whose own
+  question notice is on devices is not grouped either: its next question replaces that. A
+  question alone in its window, or one after it closed, goes as itself. The group counts the
+  first question and those grouped while they are pending. Once none is, a `resolved` withdraws it
+  from the devices it reached. A later burst while it is still out replaces it, and alerts.
+* **One reminder** (rule 5). A session's first question notice of a `needsYou` episode, as
+  itself or in a group, arms its reminder for **15 minutes** later. If the session is still
+  `needsYou` then, with a question pending that was notified, that question's own notice goes
+  once more, with `data.reminder: true`: the same title, body, tag, topic and `navigate`,
+  alerting. It goes to the devices the first notice went to, each still subscribed under the same
+  pairing; it is not grouped. It is cancelled when the session leaves `needsYou` (its question
+  answered on any device or at the machine, or withdrawn) or ends, a reminder still on its way to
+  other devices included: each is checked again as it goes. Never repeated: a further
+  question in the same episode brings no second. Rule 4 (only the device in use alerts) narrows
+  it later.
+* **A restart of the host** loses a reminder still to come and an open window. The host notifies
+  a question already pending when it starts, as always, which counts a new 15 minutes. Each goes
+  as itself, never grouped, under its session's tag, so its answer withdraws it as any question's
+  does, and none opens a window: they are not a burst, and the next live question goes as itself
+  too. A group out before the restart is not withdrawn by the next host, and is replaced by the
+  next burst.
+* **An older client** reads `group` as `question`, an unknown kind. It names no session or
+  question and opens the machine, so it shows the words and nothing to answer. It ignores
+  `reminder` and shows the reminder as the question's notice again, replacing it in place.
+
+### Host gone (#970)
+
+**Proposed, not implemented.** The one notice a host writes for after it has gone. A host that
+has stopped can't send anything, so while any agent in its sessions, a delegate included, is working or waiting it keeps a
+sealed `hostGone` notice armed with the relay (`host-gone-arm`, [host-gone.md](host-gone.md#arming-the-notice-slice-3)),
+one per subscribed device, and disarms it within 5 s of none being so. The relay sends it,
+unread, only if the host goes without announcing it and isn't back within 5 minutes
+([host-gone.md](host-gone.md#the-window-805-goes-first)). The relay never learns what the
+sessions were doing; the host never claims more than it saw when it sealed the notice.
+
+| `kind` | When | Once per |
+|---|---|---|
+| `hostGone` | Sent by the **relay**, sealed by the host in advance: the host went, unannounced, with any agent in its sessions working or waiting by its last arm (a delegate included, [host-gone.md](host-gone.md#arming-the-notice-slice-3)), and wasn't back 5 minutes later. Never for a machine that was simply off with nothing in flight, nor for a departure the host announced (#805's), nor while #805 is still restarting it | Episode. At most one alert an hour per machine and three a day per account, shared with #805's no-return notice: an episode counts as one alert when at least one of its notices was sent or its `gone.alert` was set, never when the caps suppressed it |
+| `hostBack` | Sent by the **host**, live, once it has been back for 2 minutes and #780 has finished judging with nothing to restore, to the devices the relay said were sent `hostGone` (`host-gone-sent`), silently, replacing the `hostGone` in place. **Only if no `restored` notice went in this episode:** a return's `restored`, of any cause, replaces the `hostGone` instead (below), so the person gets one notice on return, never two | Episode |
+
+* **Tag** `<machine id>:host`, and **topic** the first 24 bytes of SHA-256 of
+  `agent-bridge-push|<machine id>|host`, base64url: a `hostBack` replaces the `hostGone`, and a
+  phone that was offline gets the latest of the two.
+* **One notice on return** (Creative and Connection, #1022). The relay sends `host-gone-sent`
+  (`since`, `targets`, and the gone `tag` and `topic`) as soon as the host reconnects, with empty
+  `targets` when its episode wasn't alerted; the host holds any `restored` push until it has it
+  (at most 10 s). A `restored` notice of any cause ([When a host notifies](#when-a-host-notifies)),
+  even one decided after the episode ended, then goes to each device in `targets` on the gone tag
+  and topic, replacing the alert in place, and to every other device on `<machine id>:~restore`
+  as today; no `hostBack` follows. On the gone tag it alerts at Needs you, never silently
+  (`silent` absent, `data.class` `needsYou`, whatever its cause). Withdrawing it uses whichever
+  tag it went on, which the host remembers per device until it is withdrawn; after that, nothing
+  about the `hostGone` comes back ([host-gone.md](host-gone.md)).
+* **TTL and urgency:** `hostGone` 6 h, `high`; `hostBack` 6 h, `normal`.
+* **Payload:** `title` "*machine*'s bridge isn't running" (`hostBack`: "*machine*'s bridge is
+  running again"); `body` "It stopped while sessions there were working or waiting on you."
+  (`hostBack`: "You can reach its sessions again."), the words of ui.md §6.14. Sealed before the
+  host went, so never a time, a count, a session's title or any agent's words. `navigate`: the
+  subscription's `app` with `host` only, which opens that machine's tab. `silent`: absent on
+  `hostGone`, which has the question sound; `true` on `hostBack`. `data.class` `needsYou` on
+  `hostGone`, absent on `hostBack` (it withdraws rather than notifies). `data.machine` the
+  machine's id; no `data.session` or `data.question`. `data.at` is when the host sealed it, not
+  when it went: a client shows the notification's own time.
+* **A client that doesn't know the kinds** reads them as `question`: with no session or question
+  in `navigate`, it opens the machine with nothing to answer, as for `restored`.
+
 ### Replacing and collapsing
 
 Every notice about one session on one machine shares:
@@ -1265,10 +1467,11 @@ Every notice about one session on one machine shares:
   `finished` one replaces the question it followed. A `signIn` notice's is
   `<machine id>:signin:<agent>:<first 8 hex of SHA-256 of the account>` (of the empty string when
   the host does not know the account), one per machine, agent and account, so its hourly repeat
-  replaces it.
+  replaces it. A `group` notice's, and its withdrawal's, is `<machine id>:~needsyou`, one per
+  machine.
 * a **topic** (RFC 8030 `Topic`), the first 24 bytes of SHA-256 of
-  `agent-bridge-push|<machine id>|<session id>` (for `signIn`, the tag's part after the machine id
-  in place of the session id), base64url (32 characters; Apple refuses
+  `agent-bridge-push|<machine id>|<session id>` (for `signIn` and `group`, the tag's part after the
+  machine id in place of the session id), base64url (32 characters; Apple refuses
   other lengths, spike S5 finding 6): the push service replaces an undelivered push with
   the newer one, so a phone that was offline gets one notice per session, not a backlog.
 
@@ -1278,6 +1481,9 @@ Every notice about one session on one machine shares:
 | `finished` | 6 h | `normal` |
 | `signIn` | 6 h | `high` |
 | `restored` | 24 h | `normal` |
+| `group` | 24 h | `high`; `normal` when it changes silently or is withdrawn |
+| `hostGone` (#970, proposed) | 6 h | `high` |
+| `hostBack` (#970, proposed) | 6 h | `normal` |
 
 ### The payload
 
@@ -1301,14 +1507,15 @@ service worker shows from the same fields everywhere else:
 
 | Field | Notes |
 |---|---|
-| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. `signIn`: "*Agent* on *machine* needs sign-in" (ui.md §6.13). At most 120 bytes |
-| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". `signIn`: "*n* sessions affected" ("1 session affected"); the title names the machine. Never the account, a code, a URL or any of the agent's words. Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
-| `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. `signIn`: `host` and `signin=<agent>` only, never `session` or `question` (#800 6646515428): an older client, which reads the kind as `question`, opens the machine and no question view or answer controls. A client opens that machine and session, and the question ready to answer |
-| `silent` | `true` for `resolved`, which replaces a question without alerting again, and for `finished`: Done never alerts (#913), so a client that predates `data.class`, and Safari's Declarative Web Push, which shows without the service worker, play nothing for it. Absent for `signIn`, which has the question sound (owner, 2026-11-04, ui.md §6.13) |
-| `data.kind` | `question`, `finished`, `resolved`, `signIn` or `restored`. A client reads a kind it doesn't know as `question`. A `restored` notice is titled `<machine> restarted` (a reboot) or `<machine> · the host stopped`, its body counts the sessions that went and names those mid-turn or with a question lost; its `navigate` has only `host` (the subscription's `app` with any `host`, `session` and `question` it carried replaced, not appended to; the rest of its query kept), its tag is `<machine id>:~restore`, and its `data.session` is empty and `data.question` absent, so an app that reads it as a question (one from before `restored`, whose service worker adds no actions) shows these words and opens the machine, with nothing to answer |
+| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. `signIn`: "*Agent* on *machine* needs sign-in" (ui.md §6.13). `group`: "Needs you", never changed by its updates, and its withdrawal's too. At most 120 bytes |
+| `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". `signIn`: "*n* sessions affected" ("1 session affected"); the title names the machine. `group`: "`<machine>` · *n* sessions waiting on you" ("1 session waiting on you" once the rest are answered); its withdrawal "`<machine>` · no longer waiting". Creative owns these words (#913, 6690989275). Never the account, a code, a URL or any of the agent's words. Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
+| `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. `signIn`: `host` and `signin=<agent>` only, never `session` or `question` (#800 6646515428): an older client, which reads the kind as `question`, opens the machine and no question view or answer controls. `group` and its withdrawal: `host` and `needsyou=1`, built as `restored`'s (any `host`, `session` and `question` in `app` replaced), opening Needs you; an older client opens the machine. A client opens that machine and session, and the question ready to answer |
+| `silent` | `true` for `resolved`, which replaces a question without alerting again, for a `group` changed in place after its first push, and for `finished`: Done never alerts (#913), so a client that predates `data.class`, and Safari's Declarative Web Push, which shows without the service worker, play nothing for it. Absent for `signIn`, which has the question sound (owner, 2026-11-04, ui.md §6.13) |
+| `data.kind` | `question`, `finished`, `resolved`, `signIn`, `restored` or `group` (**new, #913**) (and, proposed, `hostGone` and `hostBack`: [Host gone](#host-gone-970)). A client reads a kind it doesn't know as `question`. A `group` has no approve or answer controls (#253) and no agent text (#263): `data.session` is empty, `data.question` absent, `data.sessions` its count; its withdrawal is a `resolved` with its tag, `data.session` empty. A `restored` notice is titled `<machine> restarted` (a reboot) or `<machine> · the bridge stopped` (Creative, #1022: "bridge", never "host", in copy; the built string changes in #970 slice 3), its body counts the sessions that went and names those mid-turn or with a question lost; its `navigate` has only `host` (the subscription's `app` with any `host`, `session` and `question` it carried replaced, not appended to; the rest of its query kept), its tag is `<machine id>:~restore` (proposed, #970: to a device that was sent a `hostGone` in this episode, the gone notice's tag and topic instead, [Host gone](#host-gone-970)), and its `data.session` is empty and `data.question` absent, so an app that reads it as a question (one from before `restored`, whose service worker adds no actions) shows these words and opens the machine, with nothing to answer |
 | `data.machine`, `data.session`, `data.question` | The machine's device id, the session's `id`, the question's `id` (not for `finished`). Neither `session` nor `question` for `signIn`, which is about the machine |
-| `data.agent`, `data.sessions` | `signIn` only: whose sign-in it is (`copilot`, `claude`, `codex`), and how many of the machine's sessions need it |
-| `data.class` | **New (#913).** The notice's [notification class](#notification-class-913): `needsYou` for `question` and `signIn`, and for `restored` after a crash; `done` for `finished`, never `needsYou` (a turn that ends with a question pending sends that question as its own `question` notice). Absent on `resolved`, which withdraws a notice rather than being one, on a `restored` after a reboot or a restart of the host, and from an older host, whose push a client handles as today. Unknown reads as absent |
+| `data.agent`, `data.sessions` | `signIn`: whose sign-in it is (`copilot`, `claude`, `codex`), and how many of the machine's sessions need it. `group`: `sessions` only, how many sessions it stands for |
+| `data.class` | **New (#913).** The notice's [notification class](#notification-class-913): `needsYou` for `question`, `group` and `signIn`, and for `restored` after a crash; `done` for `finished`, never `needsYou` (a turn that ends with a question pending sends that question as its own `question` notice). Absent on `resolved`, which withdraws a notice rather than being one, on a `restored` after a reboot or a restart of the host (proposed, #970: except one that replaces a `hostGone` on its tag, which is `needsYou` whatever its cause), and from an older host, whose push a client handles as today. Unknown reads as absent |
+| `data.reminder` | **New (#913 rule 5).** `true` on a question's one reminder ([Bursts and the reminder](#bursts-and-the-reminder-913)); absent otherwise. A client may word or sound it as a reminder; one that ignores it shows the question again |
 | `data.at` | When the host sent it |
 
 The JSON as encrypted is at most **3 KiB**: under RFC 8291's one 4096-byte record (3993
@@ -1365,11 +1572,11 @@ is for disposable evaluation, not production service enrollment.
 | `driverPrincipal` | string? | With `driver` `agent`, which agent, when the host knows: at most 128 bytes, plain text, shown as secondary detail only. Absent otherwise |
 | `subagents` | [Subagent](#subagent)[]? | The sub-agents the session started, at any depth ([design/subagents.md](../design/subagents.md)): running ones (`working`, `waiting`) first, newest start first, then the most recently finished. At most 20, and fewer if the [session budget](#session-budget) trims them. Absent when there are none. Finished ones stay until the session ends. Only Copilot sends them so far |
 | `subagentsMore` | number? | Entries left out of `subagents`, by the host's limit or the budget. Absent when none are |
-| `restored` | object? | Set on a session its host restored, idle, after a reboot or a crash (#780), once its window has been seen ready (never on one that may be asking whether to trust its folder), for that run of the host and at most 24 hours: `at`, `cause`, `midTurn` (it went while working, and no prompt has arrived since the restore), `questionLost` (a question was waiting in it) and, with `midTurn` only, `continue`: the words a client offers to send as an ordinary `session.reply` when a person presses Continue, with no more trust than any reply; the host never sends that reply itself. Hosts set `restored` on each session they restore ([What went](#hello)); it does not change the session's `class` ([Notification class](#notification-class-913)). `midTurn` and `continue` go once a prompt arrives after the restore. A question the interrupted run left waiting is not shown as `question` (`questionLost` says it went) |
+| `restored` | object? | Set on a session its host restored, idle, after a reboot or a crash (#780), once its window has been seen ready (never on one that may be asking whether to trust its folder), for that run of the host and at most 24 hours: `at`, `cause`, `midTurn` (it went while working, and no prompt has arrived since the restore), `questionLost` (a question was waiting in it) and, with `midTurn` only, `continue`: the words a client offers to send as an ordinary `session.reply` when a person presses Continue, with no more trust than any reply; the host never sends that reply itself. Hosts set `restored` on each session they restore ([What went](#hello)); after a crash, it makes the session `needsYou` until the person acts on it, and after a reboot or a host restart it does not change the session's `class` ([Notification class](#notification-class-913)). `midTurn` and `continue` go once a prompt arrives after the restore. A question the interrupted run left waiting is not shown as `question` (`questionLost` says it went) |
 | `waitingOn` | string? | Status precedence rule 2: the id of the sub-agent whose question is `question`, while the session has none of its own. Absent otherwise |
 | `attention` | [Attention](#attention)? | **New (#800).** What is wrong with the session that `status` cannot say: its agent needs signing in again, its turn ended on an error, or it stopped responding. Absent when nothing is |
 | `class` | `"needsYou"` \| `"done"` \| `"fyi"`? | **New (#913).** The session's notification tier, which every client follows instead of its own rules: [Notification class](#notification-class-913). Absent from an older host; a client then keeps today's behaviour. A client that does not know a value reads it as absent |
-| `classSince` | time? | **New (#913).** When the session entered its present tier, the episode's start, which the 15-minute reminder counts from. Kept while `class` is unchanged (a further question does not move it); on a change of `class`, for `needsYou` the earliest of `question.askedAt` and `attention.since`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
+| `classSince` | time? | **New (#913).** When the session entered its present tier, the episode's start, which the 15-minute reminder counts from. Kept while `class` is unchanged (a further question does not move it); on a change of `class`, for `needsYou` the earliest of `question.askedAt`, `attention.since` and, after a crash, `restored.at`, otherwise `statusSince` ([Notification class](#notification-class-913)). Present with `class`. Never shown |
 
 **Status precedence** with sub-agents (first match wins): the session's own question
 (`waiting`); a sub-agent's question (`waiting`, with `waitingOn`); the main agent's turn
@@ -1378,29 +1585,48 @@ running (`working`); the main agent idle with background agents or commands stil
 and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
 was.
 
-### Disabled phone sign-in framework (#800 slice 2)
+### Phone sign-in (#800 slice 2, enabled per machine by #972)
 
-`sessions.signin` is **not advertised**. Neither production sign-in entrypoint nor
-credential-status adapter is registered. Direct `signin.start` and `signin.cancel`
-requests return `refused`. The internal, fake-tested framework is gated off by default;
-enabling a fake backend in a test does not enable deployed hosts.
+`sessions.signin` is **off by default** and turned on **per machine**, by the machine's own
+`config.json`: `permissions.phoneSignIn: true` ([host-config.md](../host-config.md#phone-sign-in)),
+set from the Windows app's Settings ("Let my devices sign Copilot in on this machine", a
+`host.settings` change over the local pipe, which an agent session may not make) or by
+`agent-bridge-host config set permissions.phoneSignIn true` at the machine. It is read when the host
+starts. A host advertises `sessions.signin`, and says `signIn: "phone"` on a session's
+`signInNeeded` attention, only while it is on **and** the host has an adapter that can run for
+that agent: today Copilot alone, on Windows alone, with Copilot's `.exe` found when the host
+started. Off, or for another agent, `signin.start` and
+`signin.cancel` return `refused` and no attention says `phone`. Devices cannot change the setting
+yet; that waits for #801's settings path. The capability is offered only to a channel the
+person authority below accepts: a device **pinned as a person** at this machine.
 
-The eventual agent-owned entrypoint is subject to captured-output/privacy admission.
-Engineering approved unpatched `copilot login --device-code` conditionally: **the machine
-opens a browser and copies the code**. No production runner is included here, no live
-sign-in was attempted, and there is no replacement OAuth client or installed-CLI patch.
-An approved adapter must suppress CLI debug logging with a supported option, preserve
-the CLI's persistence/organization-policy checks, and keep both output streams private.
-The prepared, unexecuted launch contract uses
-`copilot login --device-code --host https://github.com --log-level none`,
-with host-resolved absolute executable/home, private redirected streams, no shell,
-and inherited token variables removed by name without examining their values.
-The installed CLI declares `none` as a supported level and forwards it into login.
-This launch specification is not a process factory; the output adapter still needs
-the routed, redacted capture. Upstream follow-up:
+Copilot's adapter (`CopilotSignInAdapter`) runs the CLI's own `copilot login --device-code`,
+unpatched, under Engineering's conditional approval (#800 6648319937): **the machine opens a
+browser and copies the code**. There is no replacement OAuth client and no installed-CLI patch.
+It runs `copilot login --device-code --host https://github.com --log-level none` (the CLI's
+supported option, so login never writes its default debug log), with the host-resolved absolute
+`.exe` (never a `.cmd` shim, which would need a shell), `COPILOT_HOME` set to the host's own
+Copilot home, standard input closed (so the CLI's plaintext-storage question is answered no and
+its keychain persistence and organization-policy checks stand), inherited token variables and
+`COPILOT_DEBUG*` overrides removed by name without examining their values, and the process and
+anything it starts in a Windows job that ends them together (a browser the login started fresh
+closes when the flow ends). Both output streams stay in the
+host process: standard error is drained and discarded by the runner, and standard output is
+read only by the adapter, which turns the CLI's own lines into the private runner's frames:
+
+| CLI line (1.0.105), in this order and nothing else | Frame |
+|---|---|
+| `To authenticate, visit <verificationUri> and enter code <userCode>` | `code`, with the URL and code checked as below |
+| `Waiting for authorization...` | none |
+| `Signed in successfully as <account>.` (printed only once the credential is stored and the organization policy allows it) | `done`, `persisted` and `policyAllowed` true; the account text is discarded |
+
+Any other line, a line out of order or one over the runner's limits ends the flow `refused`,
+without saying what it was; a nonzero exit is `failed`. The CLI prints no expiry, so the code's
+`expiresAt` is the host's own 10-minute flow deadline, shorter than GitHub's 15-minute device
+codes. Upstream follow-up for a no-browser, no-clipboard mode:
 [github/copilot-cli#5358](https://github.com/github/copilot-cli/issues/5358).
 
-The framework's request/event contract (not yet offered to clients) is:
+The request/event contract is:
 
 `account`, `signIn` and `recovery` are structured host metadata, never copied or inferred
 from CLI prose, messages or displayed account strings. An account with no structured
@@ -1447,10 +1673,10 @@ The private runner accepts **adapter frames, not guessed Copilot console fixture
 one strict JSON line with exactly `kind: "code"`, `userCode`, `verificationUri`,
 `expiresAt`, then a `done` line with exactly `kind`, `outcome: "signedIn"`,
 `persisted: true`, `policyAllowed: true`, and successful process exit. Duplicate,
-unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. Native
-expiry metadata is required and capped by the host deadline. Stdout/stderr never enter
-the generic command runner or a logger; errors expose only constant outcomes. There
-is deliberately no concrete process factory until the entrypoint gate passes.
+unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. The
+adapter supplies `expiresAt` (above) and the runner caps it at the host deadline.
+Stdout/stderr never enter the generic command runner or a logger; errors expose only
+constant outcomes. The only concrete process factory is Copilot's adapter above.
 
 `signin.done signedIn` sets **pending**, not recovered: `signInNeeded` remains until
 the existing parser sees real main-agent model output after the latest auth failure.
@@ -1463,10 +1689,9 @@ credential scope. There is no status provider, credential-file inspection or aut
 probe. Even proof from another matching session only makes this session pending:
 its own real main-model reply is required to clear its attention.
 Dead-session resume/reload is an interface dependency on **#780 Host B**; the supplied
-stub starts/types nothing and claims no resumed session ids. No signed-in push is
-emitted by this framework.
-Advertising also waits for perf-A's follow-up to suppress ordinary "finished" pushes
-on auth failure (review 4476391166); that notification fix is not part of this slice.
+stub starts/types nothing and claims no resumed session ids, so `signin.done` lists none in
+`resumed` or `continue` yet. No signed-in push is emitted. Ordinary "finished" pushes on an
+auth failure are already suppressed (#845, with #841).
 
 ### Attention
 
@@ -1568,9 +1793,9 @@ that turn's error, or "Copilot stopped with an error." when no error was read be
 turn. Clients, HA and a `finished` push therefore never carry any of the agent's error text.
 
 Claude Code and Codex send none yet: their records are read only once a real, redacted sample of
-each has been captured. `account`, `signIn`, `recovery`, the per-machine
-roll-up in `hello`, the `signIn` and `signedIn` notices and the `sessions.signin` capability
-(relaying the agent's own device-code sign-in to a person's device) follow in later slices of
+each has been captured. `recovery`, `signIn` (`phone`, [above](#phone-sign-in-800-slice-2-enabled-per-machine-by-972)),
+the `signIn` notice and the `sessions.signin` capability are in place for Copilot; `account`, the
+per-machine roll-up in `hello` and the `signedIn` notice follow in later slices of
 #800; their shape is in [#800](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6646501884),
 and this section grows with each.
 ### Driver

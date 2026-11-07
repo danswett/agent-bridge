@@ -148,7 +148,7 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
 const OUTCOME_TEXT = {
   // Said as "You answered · value" (describeAnswer), in text2 with no badge: the button's check said it went.
   delivered: () => 'You answered',
-  unconfirmed: (at) => `Sent, but not confirmed. Check at the machine${at}.`,
+  unconfirmed: () => 'Sent, but not confirmed. Check the conversation.',
   stale: () => 'Already answered or gone: the session is no longer asking this.',
   busy: () => 'Another answer to this session is being delivered. Try again in a moment.',
   refused: () => 'The machine refused this answer.',
@@ -162,7 +162,6 @@ const OUTCOME_TEXT = {
 // its words. stalled: whether the state it is in has stalled (ReceiptClock). Returns { key, text,
 // more, tone, line, speech }; tone: progress | done | warn | bad, or room for nothing to show.
 export function describeAnswer(entry, machineName, { question = null, stalled = false } = {}) {
-  const at = where(machineName);
   switch (entry.state) {
     case 'sending':
     case 'waiting':
@@ -180,7 +179,7 @@ export function describeAnswer(entry, machineName, { question = null, stalled = 
           speech: value ? `Answer delivered. You answered ${value}` : 'Answer delivered. You answered',
         };
       }
-      let text = OUTCOME_TEXT[outcome](at);
+      let text = OUTCOME_TEXT[outcome]();
       if (outcome === 'refused' && entry.reason) { text = `The machine refused this answer: ${entry.reason}.`; }
       if (outcome === 'unconfirmed' && entry.reason) { text += ` (${entry.reason})`; }
       return { key: outcome, text, more: null, tone: outcome === 'refused' ? 'bad' : 'warn', line: true, speech: `Answer: ${text}` };

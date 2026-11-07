@@ -22,22 +22,25 @@ import { AttachmentLimits, describeSize, prepareAttachment } from '../attachment
 import { CANCELLED } from '../reply-service.js';
 import { isSendKey, shortcutHints } from '../platform.js';
 import { ReceiptClock, describeInFlight, drawReceipt, drawn, dropCheck, holdCheck, receiptLive } from './receipt.js';
+import { PHONE } from './collapse-header.js';
 
 let seq = 0;
-const where = (machineName) => (machineName ? ` on ${machineName}` : '');
 const kib = (n) => `${(n / 1024).toFixed(1)} KiB`;
 const capitalise = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 // Images a browser can show as a thumbnail. HEIC only Safari can, and it says so by loading.
 const SHOWN = /^image\/(png|jpeg|gif|webp|heic|heif)$/;
 // Above this a thumbnail is not worth a second copy of the photo in memory.
 const THUMBNAIL_MAX = 16 * 1024 * 1024;
+// A phone's box grows a line at a time to six lines (24 each, and 10 above and below), then
+// scrolls inside (ui.md §6.5, #935).
+const GROW_MAX = 164;
 
 // After busy, Send comes back after this long, as for an answer.
 export const REPLY_BUSY_PAUSE_MS = 2000;
 
 const OUTCOME_TEXT = {
   delivered: () => 'Delivered',
-  unconfirmed: (at) => `Sent, but not confirmed. Check at the machine${at} before sending it again.`,
+  unconfirmed: () => 'Sent, but not confirmed. Check the conversation before sending it again.',
   stale: () => 'Not sent: the session has ended.',
   busy: () => 'Not sent: an answer or another reply to this session is being delivered. Try again in a moment.',
   refused: () => 'The machine refused this reply.',
@@ -50,7 +53,6 @@ const OUTCOME_TEXT = {
 // (ReceiptClock). Returns { key, text, more, tone, line, speech }; tone: progress | warn | bad,
 // or room for nothing to show.
 export function describeReply(entry, { machineName, stalled = false } = {}) {
-  const at = where(machineName);
   const said = (key, text, tone) => ({ key, text, more: null, tone, line: true, speech: `Reply: ${text}` });
   switch (entry.state) {
     case 'sending': {
@@ -74,7 +76,7 @@ export function describeReply(entry, { machineName, stalled = false } = {}) {
       const outcome = OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed';
       // Send's check says it (holdCheck), and the line keeps its room, empty.
       if (outcome === 'delivered') { return { key: 'delivered', text: '', more: null, tone: 'room', line: false, speech: 'Reply delivered' }; }
-      let text = OUTCOME_TEXT[outcome](at);
+      let text = OUTCOME_TEXT[outcome]();
       if (outcome === 'refused' && entry.reason) { text = `The machine refused this reply: ${entry.reason}.`; }
       if (outcome === 'unconfirmed' && entry.reason) { text += ` (${entry.reason})`; }
       return said(outcome, text, outcome === 'refused' ? 'bad' : 'warn');
@@ -103,17 +105,43 @@ export class ReplyBox {
   #edited = null;
   // Why nothing can be sent now (its machine offline, #269), or null.
   #offline = null;
+  // Below 760 (a phone): the box is one line at rest and grows with its words.
+  #phone = null;
+  #resize = null;
+  #width = 0;
+  #fitFrame = 0;
+  // Takes the person to the question the reply waits on, and focuses its first choice.
+  #onGoToQuestion = null;
+  // Told whenever the box's words or state are drawn again (a phone's compact copy of them).
+  #onChange = null;
 
   // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
-  // largeMax: the largest it takes through the blob store, 0 for none.
-  constructor({ machineName, replying, attach = false, largeMax = 0, uuid = () => globalThis.crypto.randomUUID() }) {
+  // largeMax: the largest it takes through the blob store, 0 for none. onGoToQuestion: the
+  // phone notice's link, to the question the reply waits on. onChange: told when the words change.
+  constructor({ machineName, replying, attach = false, largeMax = 0, onGoToQuestion = null, onChange = null, uuid = () => globalThis.crypto.randomUUID() }) {
     this.machineName = machineName;
+    this.#onGoToQuestion = onGoToQuestion;
+    this.#onChange = onChange;
     this.replying = replying;
     this.uuid = uuid;
     this.idBase = `r${++seq}`;
     this.#attach = attach;
     this.#largeMax = largeMax;
+    this.#phone = globalThis.matchMedia?.(PHONE) ?? null;
     this.#build();
+    this.#place();
+    this.#phone?.addEventListener('change', this.#onPhone);
+    // The box's width decides where its words wrap, and it has none until it is drawn.
+    if (typeof globalThis.ResizeObserver === 'function') {
+      this.#resize = new ResizeObserver(() => {
+        const w = this.els.form.offsetWidth;
+        if (w === this.#width) { return; }
+        this.#width = w;
+        cancelAnimationFrame(this.#fitFrame);
+        this.#fitFrame = requestAnimationFrame(() => this.fit());
+      });
+      this.#resize.observe(this.els.form);
+    }
     this.#receipt = new ReceiptClock({
       describe: (entry, { stalled }) => describeReply(entry, { machineName: this.machineName, stalled }),
       draw: (d) => drawReceipt(this.els.status, 'answer-status reply-status', d),
@@ -130,7 +158,42 @@ export class ReplyBox {
     this.#unwatch?.();
     this.#receipt.destroy();
     clearTimeout(this.#busyTimer);
+    this.#phone?.removeEventListener('change', this.#onPhone);
+    this.#resize?.disconnect();
+    if (this.#fitFrame) { cancelAnimationFrame(this.#fitFrame); }
     for (const f of this.#files) { if (f.url) { URL.revokeObjectURL(f.url); } }
+  }
+
+  #onPhone = () => { this.#place(); this.#sync(); };
+
+  // A phone draws Attach before the text, so it comes before it in Tab and reading order too
+  // (ui.md §9); from 760 it is with Send again, after the text.
+  #place() {
+    const e = this.els;
+    const phone = !!this.#phone?.matches;
+    if ((e.attach.parentElement === e.box) === phone) { return; }
+    const had = e.attach.ownerDocument?.activeElement === e.attach;
+    if (phone) { e.box.insertBefore(e.attach, e.box.firstElementChild); } else { e.tools.prepend(e.attach); }
+    if (had) { e.attach.focus({ preventScroll: true }); }
+  }
+
+  // A phone's box as tall as its words, from one line to six, then it scrolls inside. From 760 the
+  // box is as the stylesheet draws it.
+  fit() {
+    const t = this.els.input;
+    if (!this.#phone?.matches) {
+      t.style.removeProperty('height');
+      t.style.removeProperty('overflow-y');
+      return;
+    }
+    if (!t.getClientRects().length) { return; }
+    const top = t.scrollTop;
+    // Its least height (the stylesheet's one line) first, so the words alone decide.
+    t.style.height = '0px';
+    const full = t.scrollHeight;
+    t.style.height = `${Math.min(full, GROW_MAX)}px`;
+    t.style.overflowY = full > GROW_MAX ? 'auto' : 'hidden';
+    t.scrollTop = top;
   }
 
   get text() { return this.els.input.value; }
@@ -178,6 +241,7 @@ export class ReplyBox {
     e.bytes = h('span', { class: 'bytes', id: `${id}-bytes`, 'aria-live': 'polite' });
     e.hint = h('p', { class: 'note reply-hint', id: `${id}-hint`, hidden: true }, 'Line breaks are sent as spaces: the session gets your reply as one line.');
     e.held = h('p', { class: 'note warn reply-held', id: `${id}-held`, hidden: true }, 'The session is waiting for an answer to its question. Answer that first, then reply.');
+    e.toQuestion = h('button', { type: 'button', class: 'reply-question-link', onclick: () => this.#onGoToQuestion?.() }, 'Go to the question');
     e.error = h('p', { class: 'answer-error reply-error', role: 'alert', hidden: true });
     e.files = h('ul', { class: 'attachments', 'aria-label': 'Attachments', hidden: true });
     e.picker = h('input', { type: 'file', multiple: true, class: 'file-picker', hidden: true, tabindex: '-1', 'aria-hidden': 'true' });
@@ -198,10 +262,10 @@ export class ReplyBox {
     e.form = h('form', { class: 'reply', novalidate: true, 'aria-labelledby': `${id}-label` },
       h('label', { for: `${id}-text`, class: 'text-label sr-only', id: `${id}-label` }, 'Reply'),
       e.held,
-      h('div', { class: 'reply-box' },
+      e.box = h('div', { class: 'reply-box' },
         h('div', { class: 'text-wrap' }, e.input, e.bytes),
         e.files,
-        h('div', { class: 'reply-tools' }, e.attach, e.send)),
+        e.tools = h('div', { class: 'reply-tools' }, e.attach, e.send)),
       e.hint, e.error,
       h('div', { class: 'answer-actions' }, e.resend, e.cancel),
       e.picker,
@@ -244,16 +308,28 @@ export class ReplyBox {
     e.hint.hidden = !/[\r\n\u2028\u2029]/.test(text);
     const held = this.#held();
     const pending = this.#pending();
+    const linked = e.toQuestion === e.toQuestion.ownerDocument.activeElement;
     e.held.hidden = !held;
+    // Each written only when it changes: rewriting the notice on every update would take a focused
+    // "Go to the question" out of the page, and focus with it.
+    const say = (words) => { if (e.held.contains(e.toQuestion) || e.held.textContent !== words) { e.held.textContent = words; } };
     if (this.#offline) {
-      e.held.textContent = this.#offline;
+      say(this.#offline);
+    } else if (held && this.#session.question.answerAtMachine) {
+      say('The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.');
+    } else if (held && this.#phone?.matches && this.#onGoToQuestion) {
+      // A phone's notice is one line, and its link takes the person to the question (ui.md §6.5).
+      if (!e.held.contains(e.toQuestion)) {
+        e.held.replaceChildren(h('span', { class: 'reply-notice-text' }, 'Answer its question first.'), ' ', e.toQuestion);
+      }
     } else if (held) {
-      e.held.textContent = this.#session.question.answerAtMachine
-        ? 'The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.'
-        : 'The session is waiting for an answer to its question. Answer that first, then reply.';
+      say('The session is waiting for an answer to its question. Answer that first, then reply.');
     }
+    e.held.classList.toggle('reply-notice', e.held.contains(e.toQuestion));
     // Offline, the words can still be written, to go once it is back; a question would take them.
     e.input.disabled = !!this.#session?.question;
+    // The link gone with the question it led to: focus goes to the words, not the top of the page.
+    if (linked && (e.held.hidden || !e.held.contains(e.toQuestion)) && !e.input.disabled) { e.input.focus(); }
     e.attach.hidden = !this.#attach;
     e.attach.disabled = held || pending || this.#files.length + this.#preparing >= AttachmentLimits.perReply;
     for (const b of e.files.querySelectorAll('button.remove')) { b.disabled = pending; }
@@ -266,6 +342,8 @@ export class ReplyBox {
     e.send.disabled = off;
     if (!off && (pending || this.#busyTimer)) { e.send.setAttribute('aria-disabled', 'true'); } else { e.send.removeAttribute('aria-disabled'); }
     e.resend.disabled = !!this.#offline;
+    this.fit();
+    this.#onChange?.();
   }
 
   #clearError() {

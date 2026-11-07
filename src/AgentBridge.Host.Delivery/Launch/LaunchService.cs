@@ -650,7 +650,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 {
                     log($"launch {Short(key)}: bringing session {Short(transfer.Session)} from {Short(transfer.From)}");
                     try { fetched = await options.Transfers!.FetchAsync(transfer, peer, Config.Transfer.MaxBytes, CancellationToken.None); }
-                    catch (TransferRefusedException e) { return Refused($"the session could not be brought from the other machine: {e.Message}"); }
+                    catch (TransferRefusedException e)
+                    {
+                        log($"launch {Short(key)}: the session could not be brought from {Short(transfer.From)}: {e.Message}");
+                        return Refused("the session couldn't be brought from the other machine");
+                    }
                     if (fetched.About.Agent != plan.Launcher.Kind)
                     {
                         var theirs = Launchers.Find(fetched.About.Launcher)?.Label ?? fetched.About.Agent.ToString();
@@ -672,7 +676,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
         catch (Exception e)
         {
-            return Refused($"the host could not launch the session: {e.Message}");
+            log($"launch {Short(key)}: failed before the agent was started: {e.Message}");
+            return Refused("the machine couldn't start the session");
         }
     }
 
@@ -858,7 +863,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 try { staged = attachments.Stage(claim); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
                 {
-                    return Refused($"the host could not stage the attachments privately ({e.Message}); nothing was started");
+                    log($"launch {Short(key)}: the attachments could not be staged privately: {e.Message}");
+                    return Refused("the machine couldn't stage the attachments privately; nothing was started");
                 }
                 if (CopilotReply.WithAttachments(prompt, staged) is not { } line) { return Refused("an attachment's staged path cannot be mentioned; nothing was started"); }
                 prompt = line;
@@ -898,7 +904,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 }
                 catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
                 {
-                    return Refused($"the session from the other machine could not be installed here: {e.Message}; nothing was started");
+                    log($"launch {Short(key)}: the session from the other machine could not be installed here: {e.Message}");
+                    return Refused("the session from the other machine couldn't be installed here; nothing was started");
                 }
                 log($"launch {Short(key)}: installed session {Short(plan.Transfer!.Session)} from {Short(fetched.From)} as {Short(newId)} ({TransferLimits.Mib(fetched.About.Size)}, {fetched.About.Files} file(s))");
                 plan = plan with { Resume = new ResumeEntry(newId, fetched.About.Agent, plan.Launcher.Id, fetched.About.Title, directory, options.Time.GetUtcNow()), Where = fetched.About.Title };
@@ -935,7 +942,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             catch (Exception e)
             {
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
-                return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} could not be started: {e.Message}") { Launched = launched };
+                return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
             }
             if (claim is not null) { attachments!.Consume(claim); handed.Value = true; }
             if (sessionId.Length > 0) { Launched(sessionId, started); }
@@ -1196,7 +1203,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         {
             var p = pending.FirstOrDefault(x => !x.Closed && (x.LiveId == sessionId || x.SessionId == sessionId)
                 && !(x.Decided.Task.IsCompletedSuccessfully && x.Decided.Task.Result.Outcome == LaunchOutcome.Started));
-            if (p is not null) { return NotReady(p.Launcher.Label); }
+            if (p is not null) { return Waiting(p.Launcher.Label, p.Question); }
             if (!neverReady.TryGetValue(sessionId, out held)) { return null; }
         }
         // Outside pendingGate: the source and the transcript are read with no lock of this one's held.
@@ -1208,13 +1215,22 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         var alive = held.Alive();
         lock (pendingGate)
         {
-            if (alive && !past) { return NotReady(held.Label); }
+            if (alive && !past) { return FirstReplyWords.NotSeenReady(held.Label); }
             neverReady.Remove(sessionId);
             return null;
         }
-        static string NotReady(string label) =>
-            $"{label} was started here and its window has not been seen ready, so it may still be asking a startup question (such as whether to trust its folder) that a reply would answer; answer it at the machine (a prompt typed there lets replies through)";
     }
+
+    // What a held reply says while the launch is still followed: the question its window asks,
+    // answered from a device where the bridge allows that for folder trust (#947), else the
+    // machine; and, with no question drawn, that it is still starting (#1018), naming Needs you only
+    // where a trust question would show there with a way to answer it.
+    string Waiting(string label, StartupQuestion question) => question switch
+    {
+        StartupQuestion.None => FirstReplyWords.StillStarting(label, RemoteFolderTrust && TrustDevices.Count > 0),
+        StartupQuestion.Trust => FirstReplyWords.AskingTrust(label, RemoteFolderTrust && TrustDevices.Count > 0),
+        _ => FirstReplyWords.AskingAtMachine(label),
+    };
 
 
     // Whether the agent a launch started on this session still runs, as a check to make again later,
@@ -1429,7 +1445,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 log($"launch {Short(p.Key)}: folder trust for {by}: {Math.Abs(steps)} {(steps > 0 ? "down" : "up")} -> {moved.Status} {moved.Detail}");
                 if (moved.Status == InjectionStatus.NothingTyped)
                 {
-                    return Stopped(device) is not null ? TrustRefused(Refusal(device)) : TrustRefused($"its window changed before anything was typed ({moved.Detail}); answer at the machine");
+                    return Stopped(device) is not null ? TrustRefused(Refusal(device)) : TrustRefused(NothingTyped(moved.Detail));
                 }
                 if (moved.Status != InjectionStatus.Typed) { return TrustUnconfirmed("the highlight may have moved, but whether it did is not known"); }
                 var asked = screen;
@@ -1452,7 +1468,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 var stopped = Stopped(device);
                 return before
                     ? TrustUnconfirmed(stopped is not null ? $"the highlight was moved, but Enter was not pressed: {stopped}" : "the highlight was moved, but its window changed before Enter, so Enter was not pressed")
-                    : stopped is not null ? TrustRefused(Refusal(device)) : TrustRefused($"its window changed before anything was typed ({typed.Detail}); answer at the machine");
+                    : stopped is not null ? TrustRefused(Refusal(device)) : TrustRefused(NothingTyped(typed.Detail));
             }
             // Esc that closed the agent can end the worker's attach before it says it is done
             // (interrupted): whether Quit worked is then what the agent did, which is looked for.
@@ -1464,15 +1480,25 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         catch (Exception e)
         {
             // A worker that failed part way may have typed: settled, so a resend gets this too.
-            if (!wrote) { return TrustRefused($"nothing was typed ({e.Message}); answer at the machine"); }
+            if (!wrote)
+            {
+                log($"launch {Short(p.Key)}: folder trust for {by}: {choice} failed before anything was typed: {e.Message}");
+                return TrustRefused("nothing was typed; answer at the machine");
+            }
             p.TrustTyped = true;
             log($"launch {Short(p.Key)}: folder trust for {by}: {choice} failed part way: {e.Message}");
-            return TrustUnconfirmed($"the {choice} may not have reached {label} ({e.Message})");
+            return TrustUnconfirmed($"the {choice} may not have reached {label}");
         }
         finally { Volatile.Write(ref p.Answering, 0); }
     }
 
     const int TrustKeyPauseMs = 300;
+
+    // A folder-trust key that never went. A worker that did not start says so in Creative's
+    // words (#995), the exception in the host's log only (#802), not as a window that changed.
+    static string NothingTyped(string detail) => detail == Windows.WorkerInjector.NotStarted
+        ? $"{DeliveryReasons.CouldNotDeliver}; answer at the machine"
+        : $"its window changed before anything was typed ({detail}); answer at the machine";
 
     // Whether the window still shows the question that id named when it was shown: one value, read
     // once, so an id is never checked against another read's words.

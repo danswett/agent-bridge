@@ -39,8 +39,11 @@ public sealed record PushDevice(string Device, string Name, string Service, Date
 // Restored: one per machine, when its host started after sessions went with a reboot or a crash
 // (#780). An older client reads it as a question: shown and alerting, with its own title and body,
 // opening the machine (no session or question is named), so nothing invites an answer.
+// Group (#913 rule 3): two or more questions of this machine's sessions within 30 s, as one notice
+// that opens Needs you. It names no session or question, so an older client, which reads it as a
+// question, shows its words and opens the machine, with nothing to answer.
 [UnknownAs(Question)]
-public enum NoticeKind { Question, Finished, Resolved, SignIn, Restored }
+public enum NoticeKind { Question, Finished, Resolved, SignIn, Restored, Group }
 
 // The plaintext of one push, before RFC 8291 encryption. It is a Declarative Web Push
 // message (web_push: 8030), which Safari 18.4+ shows without running the service worker,
@@ -80,6 +83,7 @@ public sealed record PushNoticeData
     public string? Session { get; init; }
     public string? Question { get; init; }
     // SignIn: whose sign-in it is, and how many sessions it stops. Never the account.
+    // Group: how many sessions it stands for.
     public AgentKind? Agent { get; init; }
     public int? Sessions { get; init; }
     // The notice's tier (#913), as session.class: NeedsYou for a question, a sign-in and a crash's
@@ -88,6 +92,9 @@ public sealed record PushNoticeData
     // reads as absent, as session.class does.
     [JsonConverter(typeof(UnknownAsAbsentConverter<NotificationClass>))]
     public NotificationClass? Class { get; init; }
+    // #913 rule 5: true on the one reminder of a question still unanswered 15 minutes after it was
+    // notified, which is otherwise the question's own notice again. Absent on everything else.
+    public bool? Reminder { get; init; }
     public required DateTimeOffset At { get; init; }
 }
 
@@ -126,6 +133,10 @@ public static class PushNotice
     // reads the kind as a question, then shows no question view or answer controls.
     public static string SignInNavigate(string app, string machine, AgentKind agent) =>
         Link(app, $"host={Uri.EscapeDataString(machine)}&signin={agent.ToString().ToLowerInvariant()}");
+
+    // A grouped notice (#913 rule 3) opens Needs you: the machine, as NavigateMachine opens it, with
+    // needsyou=1. An older client opens the machine.
+    public static string NavigateNeedsYou(string app, string machine) => NavigateMachine(app, machine) + "&needsyou=1";
 
     public static string Navigate(string app, string machine, string session, string? question) =>
         Link(app, $"host={Uri.EscapeDataString(machine)}&session={Uri.EscapeDataString(session)}" +
