@@ -39,6 +39,7 @@ param staging = {
   version: readEnvironmentVariable('RELAY_STAGING_VERSION', '')
   identityName: 'id-agent-bridge-relay-staging'
   keyVaultName: 'kv-abrelay-stg-wus2'
+  customDomain: 'relay-staging.slipgates.com'
   blobStorageName: 'abblobstgwus2'
   rosterStorageName: 'abrosterstgwus2'
   minReplicas: 0

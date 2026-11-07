@@ -477,7 +477,7 @@ account, so it outlives its machine going offline (#172); signing out deletes it
 Each machine on the **Machines** page is a row of two lines (#213): its name, with its icon and
 its state ("Viewing", "Online", "Offline") on that first line; then at most two facts, how many
 sessions it has and its version (with `(dev)` for a build from a working copy), or in the
-version's place "View only" or "Discovery held", the host's own reason in the line's tooltip
+version's place "View only" or, once a hold has lasted two minutes (#1064), "Discovery held", the host's own reason in the line's tooltip
 and said to a screen reader. Its updates and Forget sit inside the row, in its text column, as
 small secondary buttons, and Check for updates under the rows in the same column. Demo mode has usage too (`window.agentBridgeDemo.usage(report)`
 sends a new one; `?usage=0` plays a host without it; `?keep=1` keeps readings between visits,

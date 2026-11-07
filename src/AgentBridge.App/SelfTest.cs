@@ -282,8 +282,7 @@ static partial class SelfTest
             await CheckPanes(window, main, Check, outFile);
             await CheckDividers(window, main, Check, outFile);
             await CheckMachineTabs(window, main, Check, outFile);
-            await CheckHeldBanners(window, main, demo, remote, Check, outFile);
-            await CheckDelegates(window, main, Check, outFile);
+            await CheckDelegates(window, main, demo, Check, outFile);
             await CheckAnswerMoves(window, main, Check, outFile);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.
@@ -366,6 +365,7 @@ static partial class SelfTest
             await Task.Delay(700);
             await CheckMachinesPage(window, main, Check, outFile);
             await CheckMachineHeld(window, main, remote, Check, outFile);
+            await CheckResumeHeld(window, launch, remote, Check, outFile);
             await CheckNarrowest(window, Check, outFile);
             // The theme passes draw the Sessions page with a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);
@@ -384,7 +384,7 @@ static partial class SelfTest
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");
-            await CheckHighContrast(window, main, demo, remote, Check, outFile, result);
+            await CheckHighContrast(window, main, launch, demo, remote, Check, outFile, result);
             // Last, as it adds sessions every check above counts without (#765).
             await Write(outFile, result, checks, failures, "live resize");
             await MeasureResize(window, main, demo, Check, outFile, result);
@@ -978,7 +978,7 @@ static partial class SelfTest
     // setting is changed off the UI thread: SystemParametersInfo sends WM_SETTINGCHANGE to every
     // window, this app's included, and from the UI thread that message would re-enter XAML in the
     // middle of this method.
-    static async Task CheckHighContrast(MainWindow window, MainViewModel main, DemoHost demo, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    static async Task CheckHighContrast(MainWindow window, MainViewModel main, LaunchViewModel launch, DemoHost demo, DemoHost remote, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
     {
         // A receipt line already on screen as the switch is made, and not bound again after it: it
         // follows the switch by itself (#625, Copilot 4485379205). The passes below draw anew.
@@ -1015,6 +1015,7 @@ static partial class SelfTest
             var hcBroken = await DrawPages(window, "HighContrast", outFile, check);
             check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
             await PictureYoursInHighContrast(window, check, outFile);
+            await PictureFoldInHighContrast(window, main, check, outFile);
             await PictureAgentRows(window, main, outFile, "highcontrast");
             await PictureRowsTheAppCantActOn(window, main, demo, outFile, [ElementTheme.Default]);
             await ProgressGallery(window, main, demo, check, outFile, result, "highcontrast");
@@ -1029,6 +1030,9 @@ static partial class SelfTest
             await CaptureSignIn(window, main, remote, check, outFile, contrast: true);
             // The update bar and Settings' update row in high contrast (#719, Creative 6643004091).
             await CaptureUpdate(window, main, check, outFile, contrast: true);
+            // The held machine's row and a held resume's line in high contrast (#1064).
+            await CheckMachineHeld(window, main, remote, check, outFile, contrast: true);
+            await CheckResumeHeld(window, launch, remote, check, outFile, contrast: true);
             window.ShowPage("sessions");
         }
         finally

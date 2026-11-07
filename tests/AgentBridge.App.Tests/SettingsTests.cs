@@ -610,6 +610,40 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Get_started_names_the_one_next_step_and_never_marks_CLI_sign_in_done()
+    {
+        AgentReadinessRow Row(AgentReadiness a) => new(a, canManage: true, canInstall: true, installOffered: true);
+        string Mark(IReadOnlyList<SetupStep> s, string id) => s.Single(x => x.Id == id).Mark;
+
+        var down = SetupGuide.Steps(false, [], false);
+        Assert.Equal(("Next", "Later"), (Mark(down, "bridge"), Mark(down, "install")));
+
+        var fresh = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.NeedsAction, installation: ReadinessState.Missing))], false);
+        Assert.Equal(("Done", "Next", "Later"), (Mark(fresh, "bridge"), Mark(fresh, "install"), Mark(fresh, "hooks")));
+        Assert.Contains("Install CLI on one of the agents below", fresh.Single(x => x.Id == "install").Detail);
+        Assert.Equal("Next, step 2 of 6, Install an agent's CLI. Choose Install CLI on one of the agents below.", fresh.Single(x => x.Id == "install").AccessibleName);
+
+        var installed = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.NeedsAction))], false);
+        Assert.Equal(("Done", "Next"), (Mark(installed, "install"), Mark(installed, "hooks")));
+
+        var setUp = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "An owned setup record exists and setup completed."))], true);
+        Assert.Equal(("Done", "Next", "Yours to check", "Done"), (Mark(setUp, "hooks"), Mark(setUp, "session"), Mark(setUp, "cli-signin"), Mark(setUp, "account")));
+
+        var working = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Working, hooksDetail: "owned setup record"))], false);
+        Assert.Equal("Done", Mark(working, "session"));
+
+        var heard = SetupGuide.Steps(true, [Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record") with { LastHookHandledAt = DateTimeOffset.UtcNow })], false);
+        Assert.Equal("Done", Mark(heard, "session"));
+        Assert.All(heard, s => Assert.True(s.Settled));
+        Assert.Contains(installed, s => !s.Settled);
+
+        var one = SetupGuide.Steps(true, [
+            Row(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record")),
+            Row(Agent("codex", "Codex", ReadinessState.NeedsAction))], false);
+        Assert.Equal(("Done", "Next"), (Mark(one, "hooks"), Mark(one, "session")));
+    }
+
+    [Fact]
     public void A_set_up_agent_the_host_cannot_test_yet_offers_no_verb_and_says_it_is_not_tested_yet()
     {
         var row = new AgentReadinessRow(Agent("copilot", "Copilot CLI", ReadinessState.Unknown, hooksDetail: RecordIntakeOn), canManage: true);
@@ -1041,6 +1075,11 @@ public sealed class SettingsTests : IAsyncLifetime
         var row = settings.Agents.Single();
         Assert.Equal("Set up", row.SetUpVerb);
         Assert.False(row.ShowSetUp);
+        // First run: the offer holds the Set up, so Get started points at it, not at "can't be changed".
+        var hooks = settings.SetupSteps.Single(s => s.Id == "hooks");
+        Assert.Equal("Next", hooks.Mark);
+        Assert.DoesNotContain("can't be changed", hooks.Detail);
+        Assert.Contains("Set up on Claude Code", hooks.Detail);
     }
 
     [Theory]

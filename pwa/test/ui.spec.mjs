@@ -545,7 +545,7 @@ test.describe('installed', () => {
     expect(new URL(scope).pathname).toBe('/agent-bridge/app/');
   });
 
-  test('an app whose new releases keep failing to install says so, and goes on with the one it has', async ({ page }) => {
+  test('an app whose new releases keep failing to install says so after a grace, and goes on with the one it has', async ({ page }) => {
     await openDemo(page);
     await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
     await expect(page.locator('#stuck-banner')).toBeHidden();
@@ -561,7 +561,9 @@ test.describe('installed', () => {
     await page.evaluate((r) => localStorage.setItem('agent-bridge.app.installFailures', JSON.stringify({ release: r, failures: 3 })), active);
     await page.reload();
     await page.waitForSelector('html[data-demo-ready]');
-    await expect(page.locator('#stuck-banner')).toBeVisible();
+    // Only a lasting state gets a banner (ui.md §7, #1064): none until it has stood three seconds.
+    await expect(page.locator('#stuck-banner')).toBeHidden();
+    await expect(page.locator('#stuck-banner')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('#stuck-banner')).toContainText("A new version of the app keeps failing to install. You're still on the version you had.");
     await expect(page.locator('#stuck-banner .button.secondary')).toHaveText('Try again');
     // Said through the live region already on the page, which one unhidden with its words is not.

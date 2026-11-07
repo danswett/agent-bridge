@@ -269,8 +269,9 @@ is a later change, once both names pass step 3. Retiring `relay.bad-duck.com` is
 The first name's steps work as follows. `deploy.ps1` steps it forward
 as DNS allows: it prints both records while they are missing; once they resolve it puts the
 hostname on the app (pass 2), then issues the managed certificate and binds it with SNI
-(pass 3); after that it re-states the binding. Staging has no custom domain; adding
-`customDomain: 'relay-staging.bad-duck.com'` to `staging` and two more records would give it one.
+(pass 3); after that it re-states the binding. Staging is served at
+`https://relay-staging.slipgates.com` (its `customDomain`; DNS-only CNAME `relay-staging` and TXT
+`asuid.relay-staging`), so the new-hostname steps can be exercised there before production.
 
 **Renewal** is automatic as long as the CNAME keeps pointing at the app and stays DNS only.
 Moving the record, proxying it, or deleting the TXT makes renewal fail silently until the

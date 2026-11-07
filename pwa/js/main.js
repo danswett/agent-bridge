@@ -43,6 +43,7 @@ import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
 import { ReleaseWatch } from './release-watch.js';
+import { LastingBanner } from './banner-rule.js';
 import { UsageView } from './ui/usage-view.js';
 import { conceal, reveal, watchDisclosures, watchPresses } from './ui/motion.js';
 import { cameBack, watchFocusRing } from './ui/focus.js';
@@ -268,6 +269,10 @@ function hideStatus(banner) {
   if (said.textContent === banner.querySelector('span').textContent) { said.textContent = ''; }
 }
 
+// Banners for states that come and go: only a lasting one is drawn (ui.md §7, #1064).
+const stuckBanner = new LastingBanner({ show: () => showStatus($('stuck-banner')), hide: () => hideStatus($('stuck-banner')) });
+const replacedBanner = new LastingBanner({ show: () => reveal($('replaced-banner')), hide: () => conceal($('replaced-banner')) });
+
 // An installed PWA keeps running the code it has until restarted (S5 limitation), so a
 // new version is announced with a reload button instead of waiting for a force-quit.
 function registerServiceWorker() {
@@ -276,7 +281,7 @@ function registerServiceWorker() {
   // Only an app running a release it has can be stuck on it: without one, each load is the network's.
   const releases = new ReleaseWatch({
     onChange: (stuck) => {
-      if (stuck && hadController) { showStatus($('stuck-banner')); } else { hideStatus($('stuck-banner')); }
+      stuckBanner.set(stuck && hadController);
     },
   });
   // Which release is in control, read again after each takeover; only the latest read counts.
@@ -782,7 +787,7 @@ function begin(account) {
   connection.on('presence', () => page.drawMachines());
   connection.on('log', (line) => console.log(line));
   connection.on('state', ({ state }) => {
-    if (state === 'replaced') { reveal($('replaced-banner')); } else { conceal($('replaced-banner')); }
+    replacedBanner.set(state === 'replaced');
     switch (state) {
       // News, as reconnecting is: the strip shows on a phone, in plain words.
   case 'connecting': return setPill('Connecting…', 'busy');

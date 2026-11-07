@@ -98,6 +98,19 @@ public sealed class LaunchTests : IAsyncLifetime
         await Wait.UntilAsync(() => opened.Contains("new-1"), "the new session's card to open");
     }
 
+    // #1064: a resume the host holds back while its discovery is held is a wait, not a refusal.
+    [Fact]
+    public async Task A_resume_the_host_holds_back_while_its_discovery_is_held_says_it_waits_for_the_machine()
+    {
+        outcome = _ => new LaunchResult(LaunchOutcome.Busy, "Held: session discovery is waiting on an unrecognised copilot process (pid 4120)");
+        ui.Post(() => launch.Resume = Pick(launch.Resumes, "old-1"));
+        ui.Post(launch.Launch);
+
+        await Wait.UntilAsync(() => launch.State == "busy", "busy");
+        Assert.Equal("Test PC is still finding its sessions. Try Launch again in a moment.", launch.StatusText);
+        Assert.Equal(Tone.Progress, launch.StatusTone);
+    }
+
     [Fact]
     public async Task Resuming_reopens_a_session_in_its_own_folder_so_no_workspace_is_sent_and_it_leaves_the_list()
     {
