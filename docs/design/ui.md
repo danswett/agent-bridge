@@ -923,7 +923,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Costly change:** only a move to a higher cost tier asks first: "Switch to Opus 5.5? It
     costs more per turn than Sonnet 5.5." The buttons are Switch and Cancel, with focus on
     Cancel. A same-tier or cheaper move doesn't ask. An agent caller must pass the same confirm
-    flag, and it is audited.
+    flag. Every change is audited, whoever made it (owner decision, 2026-11-07).
   - **States, in words on the row and announced politely:**
 
     | State | Row reads |
