@@ -267,7 +267,7 @@ Request `data`: `{}`, or `{ "changes": true }` to be told when what hello says c
 | `offered` | The sessions that died, newest first, at most 20: `id`, `agent`, `title`, `midTurn: true` if a turn was running when it went, `questionLost: true` if a question or approval was waiting in it, which went with it. Never the question's words, a prompt or a response. The notice stays within 8 KiB as JSON: past that, titles are shortened (to 60 bytes), then dropped, then the last names are left out and counted in `offeredMore`; the counts, `cause` and the times are never trimmed. The `restored` notification is made from the same notice |
 | `offeredMore` | How many more died than `offered` names: past 20, or left out to keep the notice within 8 KiB. Absent when none |
 
-Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. A client that does not know `restore` ignores it. It names sessions, so a peer that may not read them (one pinned as a `host`, [trusted peers](../host-config.md#trusted-peers-disposable-host-foundation)) is not told it.
+Absent when nothing went, or once the run is 24 hours old. Nothing is started from it: a session in `offered` is resumed by a person from Launch (`session.launch` with `resume`, [v1-launch.md](v1-launch.md)), with every rule a resume has. **Proposed, not built (#948):** a person's device may also restore every session the notice names in one confirmed press, `restore.run` ([restore-run.md](restore-run.md)), through the same path a start-up restore takes. A client that does not know `restore` ignores it. It names sessions, so a peer that may not read them (one pinned as a `host`, [trusted peers](../host-config.md#trusted-peers-disposable-host-foundation)) is not told it.
 
 **Changes (`hello.changed`).** What hello says changes without a new connection: agent-ha-bridge starting or stopping (G5) takes answering, replying, stopping and launching away or gives them back, with `readOnly`; `update` comes and goes. A client used to ask hello again every 10 s to see it, on every connection: about 36 hellos a minute at a host from the account's other machines' Windows apps (#640). Of a host that offers `hello.changed`, a client asks `{ "changes": true }` in its hello, and from then on, for as long as that channel is open, the host sends the event
 
@@ -301,6 +301,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.transfer` | `session.launch` takes a `transfer`: a session that ended on another of the account's machines, brought here and resumed as a copy ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.transfer.serve` | `session.transfer`, host to host: this machine hands its ended sessions to the account's other machines on a command a person's device signed ([v1-transfer.md](v1-transfer.md)). Through a relay with a blob store only |
 | `sessions.restore` | `hello`'s `machine.restore`: what a reboot or a crash took, offered to resume ([What went](#hello)), and the `restored` notification ([Notifications](#notifications)). Without it, a client says nothing of sessions that went
+| `sessions.restore.run` | **Proposed, not built (#948).** `restore.run`: a person's device restores the sessions `machine.restore` offers, after a confirmation ([restore-run.md](restore-run.md)). Offered with `sessions.restore` and `sessions.launch`, only to a person's device (through the relay as `pwa` or `app`, or the app on the pipe), and never on a read-only machine (G5). Without it, a client says the sessions can be restored at the machine |
 | `update` | `update.get`, `update.subscribe`, `update.check`, `update.install`: the machine's updates, seen and asked for from a person's other devices, installed by its Windows app ([v1-update.md](v1-update.md)). Through the relay only, and never by a read-only machine |
 | `manage` | `manage.get`, `manage.subscribe`, `manage.restart`: a person's device restarts this host, each press a command it signed for this machine, leaving only through #805's quiet lease ([host-lifecycle.md](../host-lifecycle.md)); with `manage.hooks`, `manage.hooks.repair` repairs the hooks of an agent this installation set up (#801). Through the relay only, to a `pwa` or `app` device that is not this machine's own app, never by a read-only machine or one with `permissions.remoteManage` off. `manage.stop`, `manage.config.*` and `manage.haToken.set` are defined but refused `needs-roster` until the signed device roster (#55), and their capabilities are never offered. See [Managing a machine](#managing-a-machine) |
 
@@ -1584,29 +1585,48 @@ running (`working`); the main agent idle with background agents or commands stil
 and it was already `waiting` for a sub-agent's permission prompt before hosts said whose it
 was.
 
-### Disabled phone sign-in framework (#800 slice 2)
+### Phone sign-in (#800 slice 2, enabled per machine by #972)
 
-`sessions.signin` is **not advertised**. Neither production sign-in entrypoint nor
-credential-status adapter is registered. Direct `signin.start` and `signin.cancel`
-requests return `refused`. The internal, fake-tested framework is gated off by default;
-enabling a fake backend in a test does not enable deployed hosts.
+`sessions.signin` is **off by default** and turned on **per machine**, by the machine's own
+`config.json`: `permissions.phoneSignIn: true` ([host-config.md](../host-config.md#phone-sign-in)),
+set from the Windows app's Settings ("Let my devices sign Copilot in on this machine", a
+`host.settings` change over the local pipe, which an agent session may not make) or by
+`agent-bridge-host config set permissions.phoneSignIn true` at the machine. It is read when the host
+starts. A host advertises `sessions.signin`, and says `signIn: "phone"` on a session's
+`signInNeeded` attention, only while it is on **and** the host has an adapter that can run for
+that agent: today Copilot alone, on Windows alone, with Copilot's `.exe` found when the host
+started. Off, or for another agent, `signin.start` and
+`signin.cancel` return `refused` and no attention says `phone`. Devices cannot change the setting
+yet; that waits for #801's settings path. The capability is offered only to a channel the
+person authority below accepts: a device **pinned as a person** at this machine.
 
-The eventual agent-owned entrypoint is subject to captured-output/privacy admission.
-Engineering approved unpatched `copilot login --device-code` conditionally: **the machine
-opens a browser and copies the code**. No production runner is included here, no live
-sign-in was attempted, and there is no replacement OAuth client or installed-CLI patch.
-An approved adapter must suppress CLI debug logging with a supported option, preserve
-the CLI's persistence/organization-policy checks, and keep both output streams private.
-The prepared, unexecuted launch contract uses
-`copilot login --device-code --host https://github.com --log-level none`,
-with host-resolved absolute executable/home, private redirected streams, no shell,
-and inherited token variables removed by name without examining their values.
-The installed CLI declares `none` as a supported level and forwards it into login.
-This launch specification is not a process factory; the output adapter still needs
-the routed, redacted capture. Upstream follow-up:
+Copilot's adapter (`CopilotSignInAdapter`) runs the CLI's own `copilot login --device-code`,
+unpatched, under Engineering's conditional approval (#800 6648319937): **the machine opens a
+browser and copies the code**. There is no replacement OAuth client and no installed-CLI patch.
+It runs `copilot login --device-code --host https://github.com --log-level none` (the CLI's
+supported option, so login never writes its default debug log), with the host-resolved absolute
+`.exe` (never a `.cmd` shim, which would need a shell), `COPILOT_HOME` set to the host's own
+Copilot home, standard input closed (so the CLI's plaintext-storage question is answered no and
+its keychain persistence and organization-policy checks stand), inherited token variables and
+`COPILOT_DEBUG*` overrides removed by name without examining their values, and the process and
+anything it starts in a Windows job that ends them together (a browser the login started fresh
+closes when the flow ends). Both output streams stay in the
+host process: standard error is drained and discarded by the runner, and standard output is
+read only by the adapter, which turns the CLI's own lines into the private runner's frames:
+
+| CLI line (1.0.105), in this order and nothing else | Frame |
+|---|---|
+| `To authenticate, visit <verificationUri> and enter code <userCode>` | `code`, with the URL and code checked as below |
+| `Waiting for authorization...` | none |
+| `Signed in successfully as <account>.` (printed only once the credential is stored and the organization policy allows it) | `done`, `persisted` and `policyAllowed` true; the account text is discarded |
+
+Any other line, a line out of order or one over the runner's limits ends the flow `refused`,
+without saying what it was; a nonzero exit is `failed`. The CLI prints no expiry, so the code's
+`expiresAt` is the host's own 10-minute flow deadline, shorter than GitHub's 15-minute device
+codes. Upstream follow-up for a no-browser, no-clipboard mode:
 [github/copilot-cli#5358](https://github.com/github/copilot-cli/issues/5358).
 
-The framework's request/event contract (not yet offered to clients) is:
+The request/event contract is:
 
 `account`, `signIn` and `recovery` are structured host metadata, never copied or inferred
 from CLI prose, messages or displayed account strings. An account with no structured
@@ -1653,10 +1673,10 @@ The private runner accepts **adapter frames, not guessed Copilot console fixture
 one strict JSON line with exactly `kind: "code"`, `userCode`, `verificationUri`,
 `expiresAt`, then a `done` line with exactly `kind`, `outcome: "signedIn"`,
 `persisted: true`, `policyAllowed: true`, and successful process exit. Duplicate,
-unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. Native
-expiry metadata is required and capped by the host deadline. Stdout/stderr never enter
-the generic command runner or a logger; errors expose only constant outcomes. There
-is deliberately no concrete process factory until the entrypoint gate passes.
+unknown, malformed/invalid-UTF-8, trailing or oversized output fails closed. The
+adapter supplies `expiresAt` (above) and the runner caps it at the host deadline.
+Stdout/stderr never enter the generic command runner or a logger; errors expose only
+constant outcomes. The only concrete process factory is Copilot's adapter above.
 
 `signin.done signedIn` sets **pending**, not recovered: `signInNeeded` remains until
 the existing parser sees real main-agent model output after the latest auth failure.
@@ -1669,10 +1689,9 @@ credential scope. There is no status provider, credential-file inspection or aut
 probe. Even proof from another matching session only makes this session pending:
 its own real main-model reply is required to clear its attention.
 Dead-session resume/reload is an interface dependency on **#780 Host B**; the supplied
-stub starts/types nothing and claims no resumed session ids. No signed-in push is
-emitted by this framework.
-Advertising also waits for perf-A's follow-up to suppress ordinary "finished" pushes
-on auth failure (review 4476391166); that notification fix is not part of this slice.
+stub starts/types nothing and claims no resumed session ids, so `signin.done` lists none in
+`resumed` or `continue` yet. No signed-in push is emitted. Ordinary "finished" pushes on an
+auth failure are already suppressed (#845, with #841).
 
 ### Attention
 
@@ -1774,9 +1793,9 @@ that turn's error, or "Copilot stopped with an error." when no error was read be
 turn. Clients, HA and a `finished` push therefore never carry any of the agent's error text.
 
 Claude Code and Codex send none yet: their records are read only once a real, redacted sample of
-each has been captured. `account`, `signIn`, `recovery`, the per-machine
-roll-up in `hello`, the `signIn` and `signedIn` notices and the `sessions.signin` capability
-(relaying the agent's own device-code sign-in to a person's device) follow in later slices of
+each has been captured. `recovery`, `signIn` (`phone`, [above](#phone-sign-in-800-slice-2-enabled-per-machine-by-972)),
+the `signIn` notice and the `sessions.signin` capability are in place for Copilot; `account`, the
+per-machine roll-up in `hello` and the `signedIn` notice follow in later slices of
 #800; their shape is in [#800](https://github.com/danswett/agent-bridge/issues/800#issuecomment-6646501884),
 and this section grows with each.
 ### Driver

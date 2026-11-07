@@ -8,6 +8,10 @@ Dev Box shows up on your phone, and your answer goes straight back. It is the su
 [agent-ha-bridge](https://github.com/danswett/agent-ha-bridge), without the need for
 Home Assistant.
 
+**Contributing, with or without agents? [Start here](CONTRIBUTING.md).**
+The guide covers choosing work, working safely alongside other contributors, checks,
+reviews and handoffs. Fresh agent sessions start with [AGENTS.md](AGENTS.md).
+
 > **The name.** The product is called Slipgates ([brand](docs/design/brand.md)). The
 > repository (`danswett/agent-bridge`), project and namespace names (`AgentBridge.*`),
 > commands (`agent-bridge-host`), install paths, environment variables and the web app's
@@ -16,13 +20,11 @@ Home Assistant.
 > ([what stays](docs/design/brand.md#33-never-renamed-by-the-brand)). The protocol's name,
 > Bridge Protocol v1, is also a legacy name kept until Phase 3.
 
-> **Status: in use on a first migrated machine (2026-11-01).** The host, Windows app, phone
-> PWA and relay are built to parity with agent-ha-bridge, and machines are moving over
-> one at a time, with rollback. agent-ha-bridge stays the supported product on every
-> machine not yet migrated. **Where things stand, what's next and how to pick the work
-> up: [docs/status.md](docs/status.md).** The plan and architecture are in
-> [docs/design.md](docs/design.md), how to work here is in [AGENTS.md](AGENTS.md), and
-> feature-by-feature parity with evidence is in [docs/parity.md](docs/parity.md).
+> **Project context:** [docs/status.md](docs/status.md) distinguishes dated migration
+> snapshots from live work references. [Product priorities](https://github.com/danswett/agent-bridge/issues/696)
+> determine the order of work; canonical issues and PRs hold current ownership and evidence.
+> The architecture is in [docs/design.md](docs/design.md), and feature-by-feature parity
+> with evidence is in [docs/parity.md](docs/parity.md).
 
 ## Planned shape
 
