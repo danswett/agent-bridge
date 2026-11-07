@@ -20,8 +20,19 @@ public struct RelayDeviceCode: Decodable, Sendable {
     public let expiresIn: Int
 }
 
+/// A refusal's words are fixed text written in this app. Taking a literal only keeps text from a
+/// host, the relay or the system out of it, so it can never carry a secret onto the screen (#826).
+public struct RelayRefusal: Sendable, Equatable, ExpressibleByStringLiteral {
+    public let text: String
+
+    public init(stringLiteral value: StaticString) {
+        text = "\(value)"
+    }
+}
+
 public enum RelayError: LocalizedError, Sendable, Equatable {
-    case invalidURL, invalidMessage, disconnected, timeout, overflow, refused(String)
+    /// `hostRefused` is a host's own `ok: false`; its reason is never shown.
+    case invalidURL, invalidMessage, disconnected, timeout, overflow, hostRefused, refused(RelayRefusal)
 
     public var errorDescription: String? {
         switch self {
@@ -30,7 +41,8 @@ public enum RelayError: LocalizedError, Sendable, Equatable {
         case .disconnected: "The relay connection ended."
         case .timeout: "The connection did not respond in time."
         case .overflow: "Too many updates arrived. Reconnect to synchronize again."
-        case let .refused(reason): reason
+        case .hostRefused: "The machine refused the request."
+        case let .refused(reason): reason.text
         }
     }
 }
@@ -89,7 +101,7 @@ public struct RelaySignIn: Sendable {
     public func start() async throws -> RelayDeviceCode {
         let (data, response) = try await post("v1/auth/device", body: nil)
         try Task.checkCancellation()
-        guard response.statusCode == 200 else { throw RelayError.refused("Sign-in is unavailable (\(response.statusCode)).") }
+        guard response.statusCode == 200 else { throw RelayError.refused("Sign-in is unavailable. Try again later.") }
         let code = try JSONDecoder().decode(RelayDeviceCode.self, from: data)
         guard !code.deviceCode.isEmpty, !code.userCode.isEmpty, code.expiresIn > 0,
               code.expiresIn <= 3600, code.interval > 0, code.interval <= 60,

@@ -218,6 +218,10 @@ var blobEnv = blobsOn
       { name: 'Relay__Blobs__AccountUrl', value: blobStore!.outputs.accountUrl }
       { name: 'Relay__Blobs__Container', value: blobStore!.outputs.container }
       { name: 'Relay__Blobs__ManagedIdentityClientId', value: identity.properties.clientId }
+      { name: 'Relay__Feedback__Backend', value: 'azure' }
+      { name: 'Relay__Feedback__AccountUrl', value: blobStore!.outputs.accountUrl }
+      { name: 'Relay__Feedback__Container', value: blobStore!.outputs.feedbackContainer }
+      { name: 'Relay__Feedback__ManagedIdentityClientId', value: identity.properties.clientId }
     ]
   : []
 

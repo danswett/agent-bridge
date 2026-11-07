@@ -59,7 +59,7 @@ public actor BridgeUsageCache {
                 try persist(session)
             } catch {
                 entries = []
-                statusMessage = "Saved usage could not be loaded: \(error.localizedDescription)"
+                statusMessage = "Saved usage could not be loaded: \(BridgeShownError.sentence(for: error))"
             }
         }
         return session

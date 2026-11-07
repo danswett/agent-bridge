@@ -53,7 +53,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    AnswerService Answerer(bool platform = true, bool remoteApproval = true, TimeProvider? time = null) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
+    // resume: a form left part answered is finished, or reset, as a host does (ResumeWait); off,
+    // it is left as it was, which the tests of a form stopped partway look at.
+    AnswerService Answerer(bool platform = true, bool remoteApproval = true, TimeProvider? time = null, bool resume = false, TimeSpan? resumeWait = null, DeliveryGate? gate = null) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
@@ -61,7 +63,12 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         ConfirmTimeout = TimeSpan.FromSeconds(2),
         PollInterval = TimeSpan.FromMilliseconds(25),
         Time = time ?? TimeProvider.System,
-    }, m => { lock (logged) { logged.Add(m); } });
+        ResumeWait = resume ? resumeWait ?? TimeSpan.FromSeconds(2) : TimeSpan.Zero,
+        ResumePoll = TimeSpan.FromMilliseconds(50),
+        ResetWait = TimeSpan.FromMilliseconds(1500),
+        FormRecheck = resume ? TimeSpan.FromMilliseconds(300) : TimeSpan.FromSeconds(2),
+        WordsWait = resume ? TimeSpan.FromMilliseconds(500) : TimeSpan.FromSeconds(3),
+    }, m => { lock (logged) { logged.Add(m); } }, gate);
 
     // What the answer service logged, for its timing lines.
     readonly List<string> logged = [];
@@ -273,7 +280,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
 
         var first = AnswerAsync(ch, new { pick = "b" });
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
         var second = await AnswerAsync(ch, new { pick = "c" });
         release.SetResult();
 
@@ -296,7 +303,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
 
         var first = AnswerAsync(ch, new { pick = "b" });
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
         var waiting = ch.RequestAsync(Ops.SessionAnswer, new { id = Second, question = "r1", request = Guid.NewGuid().ToString(), fields = new { pick = "a" } });
         await Task.Delay(300);
         // Only one answer is typed at a time, and the second session's question is answered
@@ -323,17 +330,17 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         probe.Reason = null;
         Assert.Equal(("refused", "agent-ha-bridge is running for this user"), await AnswerAsync(ch, new { pick = "b" }, refusedId));
 
-        // Stale for a question not asked; the same request stays stale.
+        // Stale for a question not asked; the same request stays stale (an id belongs to its question).
         var staleId = Guid.NewGuid().ToString();
         Assert.Equal("stale", (await AnswerAsync(ch, new { pick = "b" }, staleId, question: "q0")).Outcome);
-        Assert.Equal("stale", (await AnswerAsync(ch, new { pick = "b" }, staleId, question: "q1")).Outcome);
+        Assert.Equal("stale", (await AnswerAsync(ch, new { pick = "b" }, staleId, question: "q0")).Outcome);
 
         // Busy behind another answer; repeated once that one has finished, still busy.
         var release = new TaskCompletionSource();
         injector.Gate = release.Task;
         injector.OnInject = () => Fixture.Append(events, Recorded("q1", new { pick = "b" }));
         var first = AnswerAsync(ch, new { pick = "b" });
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
         var busyId = Guid.NewGuid().ToString();
         Assert.Equal("busy", (await AnswerAsync(ch, new { pick = "c" }, busyId)).Outcome);
         release.SetResult();
@@ -353,7 +360,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var request = Guid.NewGuid().ToString();
 
         var first = AnswerAsync(ch, new { pick = "b" }, request);
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the answer to start typing", Patience);
         // Resent while the first is still being typed, then again on a new channel after.
         var during = AnswerAsync(ch, new { pick = "b" }, request);
         release.SetResult();
@@ -382,6 +389,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Fixture.Append(events, Recorded("q1", new { pick = "a" }), Copilot.ToolDone("q1", second++), AskDays("q2", second++));
         await source.RefreshAsync();
         boxes.Add("days");
+        prefills["days"] = "3";
         injector.Screen = () => FieldsScreen(["pick", "days"], message: "How many?");
         injector.OnInject = () => { if (Enters() == 2) { Fixture.Append(events, Recorded("q2", recorded)); } };
     }
@@ -416,7 +424,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var request = Guid.NewGuid().ToString();
 
         var first = AnswerAsync(ch, new { pick = "a", days = 3 }, request, "q2");
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the answer to start typing", Patience);
         var during = AnswerAsync(ch, new { pick = "a", days = 3 }, request, "q2");
         release.SetResult();
         var again = await AnswerAsync(await OpenAsync(), new { pick = "a", days = 3 }, request, "q2");
@@ -503,11 +511,16 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         if (labels.Length > 1 && at > 0) { hints.Add("shift+tab prev"); }
         hints.AddRange(["ctrl+d decline", "esc cancel"]);
         List<string> rows = ["────────────────────────", " Copilot needs information.", .. message.Split('\n').SelectMany(line => Wrapped(line, wrap)).Select(l => $" {l}"), ""];
-        if (labels.Length > 1) { rows.AddRange([$" {string.Join("   ", labels.Select((l, i) => marked && i == at ? $"[{l}]" : l))}", ""]); }
+        if (labels.Length > 1) { rows.AddRange([TabBar(labels, at, marked), ""]); }
         // A line break in a title or the question is drawn as rows of their own, as Ink does.
         List<string> drawn = [.. rows, $" {labels[at]}{(colon ? ":" : "")}", .. body, "", $" {string.Join(" · ", hints)}", "────────────────────────"];
         return [.. drawn.SelectMany(r => r.Split('\n', '\r'))];
     }
+
+    // The whole tab bar's row as `Da` draws it at field `at` (inside the frame's paddingX 1):
+    // each label ` <label> `, gaps of one, the selected one `[<label>]` with `marked`.
+    static string TabBar(string[] labels, int at, bool marked) =>
+        $" {string.Join(" ", labels.Select((l, i) => marked && i == at ? $"[{l}]" : $" {l} "))}";
 
     // A line as a console `wrap` columns wide breaks it between words; whole when wrap is 0.
     static IEnumerable<string> Wrapped(string line, int wrap)
@@ -705,14 +718,17 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         ? ["    a", "    b", "    c", "  ❯ Other (type your answer below)"]
         : ["  ❯ a", "    b", "    c", "    Other (type your answer)"]);
 
-    [Fact]
-    public async Task An_Other_answer_to_a_lone_list_is_refused_before_any_key_saying_why_as_the_list_already_does()
+    [Theory]
+    [InlineData("Type your answer...")]
+    [InlineData("")]
+    [InlineData("a local draft")]
+    public async Task An_Other_answer_to_a_lone_list_is_refused_before_any_key_saying_why_as_the_list_already_does(string box)
     {
         // Live, the words go into a box drawn apart from the form, which no key is held to; the
         // host typed them into the form it modelled, which the session never draws, and either
         // stopped with Other left open or withheld the Enter. The listing shows Other unavailable,
         // and the refusal carries the same reason, as a code and its sentence (#908).
-        injector.Screen = () => OtherScreen(injector.Plans.Count > 0);
+        injector.Screen = () => [.. OtherScreen(open: true), "\u257B\u2584\u2584\u2584", "\u2503 " + box, "\u2579\u2580\u2580\u2580"];
         var ch = await OpenAsync();
 
         var result = await AnswerResultAsync(ch, new { pick = new { other = OtherWords } }, Guid.NewGuid().ToString(), question: "q1");
@@ -836,6 +852,55 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(1, injector.Plans.Sum(p => p.Plan.Sends.Count(s => s.Enter)));
     }
 
+    // #1093, the owner's case on a real machine: the form's fields were typed, the words never
+    // showed within the wait, so the last Enter was held and the answer left unconfirmed, with
+    // the form part answered. Sent again under a new request (the phone had reloaded), it is
+    // never typed again, and is neither delivered nor refused until the session records it.
+    [Fact]
+    public async Task An_identical_retry_of_a_two_field_answer_whose_Enter_was_held_types_nothing_and_turns_delivered_once_recorded()
+    {
+        await AskFormAsync();
+        injector.Screen = () => FormScreen(Picked(), words: false, moved: Moved());
+        var ch = await OpenAsync();
+
+        var first = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+        Assert.Equal(("unconfirmed", "typed"), (first.GetProperty("outcome").GetString(), Stage(first)));
+        Assert.Contains("only the form's first 1 of 2 fields were answered", first.GetProperty("reason").GetString());
+        var typed = injector.Plans.Count;
+
+        foreach (var _ in new[] { 1, 2, 3 })
+        {
+            var retry = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+            Assert.Equal(("unconfirmed", "typed", DeliveryReasons.AnswerNotConfirmed), (retry.GetProperty("outcome").GetString(), Stage(retry), retry.GetProperty("reason").GetString()));
+        }
+        Assert.Equal(typed, injector.Plans.Count);
+
+        Fixture.Append(events, Recorded("q2", FormAnswer));
+        var recorded = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+        Assert.Equal("delivered", recorded.GetProperty("outcome").GetString());
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    [Fact]
+    public async Task An_identical_retry_of_a_one_field_answer_whose_Enter_was_held_types_nothing_and_turns_delivered_once_recorded()
+    {
+        await AskDataAsync();
+        injector.Screen = () => DataScreen("", injector.Plans.Count > 0 ? "ae" : null);
+        var ch = await OpenAsync();
+
+        var first = await AnswerResultAsync(ch, new { data = "ae" }, Guid.NewGuid().ToString());
+        Assert.Equal(("unconfirmed", "typed"), (first.GetProperty("outcome").GetString(), Stage(first)));
+        var typed = injector.Plans.Count;
+
+        var retry = await AnswerResultAsync(ch, new { data = "ae" }, Guid.NewGuid().ToString());
+        Assert.Equal(("unconfirmed", "typed", DeliveryReasons.AnswerNotConfirmed), (retry.GetProperty("outcome").GetString(), Stage(retry), retry.GetProperty("reason").GetString()));
+        Assert.Equal(typed, injector.Plans.Count);
+
+        Fixture.Append(events, Recorded("q2", new { data = "ae" }));
+        Assert.Equal("delivered", (await AnswerResultAsync(ch, new { data = "ae" }, Guid.NewGuid().ToString())).GetProperty("outcome").GetString());
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
     [Fact]
     public async Task An_answer_given_at_the_machine_while_the_words_wait_to_show_gets_no_Enter_from_the_host()
     {
@@ -883,12 +948,15 @@ public sealed class AnswerFlowTests : IAsyncLifetime
             }
         }
         return Rows();
-        List<string> Rows() => field >= names.Length ? ["(sent)"] : Framed(message, labels ?? names, field, [$"Field: {names[field]}", .. Input(typed)], wrap, marked, colon: !boxes.Contains(names[field]));
+        List<string> Rows() => field >= names.Length ? ["(sent)"] : Framed(message, labels ?? names, field, [$"Field: {names[field]}", .. Input(typed.Length == 0 && prefills.TryGetValue(names[field], out var opened) ? opened : typed)], wrap, marked, colon: !boxes.Contains(names[field]));
     }
 
     // The fields of the question asked that Copilot draws as a text or number box, headed
     // without a colon (`Fxn`, `Lxn`); read from its schema as the CLI reads it (`tle`).
     readonly HashSet<string> boxes = new(StringComparer.Ordinal);
+
+    // The boxes that open with their default typed in (#662), as the box draws it.
+    readonly Dictionary<string, string> prefills = new(StringComparer.Ordinal);
 
     void Boxes(object properties)
     {
@@ -896,7 +964,11 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         {
             var type = p.Value.TryGetProperty("type", out var t) ? t.GetString() : null;
             var listed = p.Value.TryGetProperty("enum", out _) || p.Value.TryGetProperty("oneOf", out _);
-            if (type is "number" or "integer" || (type is "string" or null && !listed)) { boxes.Add(p.Name); }
+            if (type is "number" or "integer" || (type is "string" or null && !listed))
+            {
+                boxes.Add(p.Name);
+                if (p.Value.TryGetProperty("default", out var d)) { prefills[p.Name] = d.ValueKind == JsonValueKind.String ? d.GetString()! : d.GetRawText(); }
+            }
         }
     }
 
@@ -1252,23 +1324,19 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
     [Theory]
     // Fields of the same heading the tab hints do tell apart (the first and the last, or the
-    // first and one between), and a title with a no-break space, a run of spaces and spaces at
-    // its ends, drawn as written with its colon after it (`Dxn`: `t,":"`): all answered as usual.
+    // first and one between): answered as usual.
     [InlineData("first-and-last")]
     [InlineData("first-and-between")]
-    [InlineData("spaces")]
-    public async Task Headings_the_screen_tells_apart_or_reads_with_other_spaces_are_answered(string form)
+    public async Task Headings_the_screen_tells_apart_are_answered(string form)
     {
         var three = form == "first-and-between";
         object answer = three ? new { one = "b", two = "c", last = "a" } : new { one = "b", two = "c" };
         string[] names = three ? ["one", "two", "last"] : ["one", "two"];
-        var title = form == "spaces" ? "\u00A0Pick  one " : "Pick";
-        string[] labels = form switch { "spaces" => [title, "two"], "first-and-between" => ["Pick", "Pick", "last"], _ => ["Pick", "Pick"] };
-        var list = new { type = "string", title, @enum = new[] { "a", "b", "c" } };
-        var other = new { type = "string", title = form == "spaces" ? "two" : "Pick", @enum = new[] { "a", "b", "c" } };
+        string[] labels = three ? ["Pick", "Pick", "last"] : ["Pick", "Pick"];
+        var list = new { type = "string", title = "Pick", @enum = new[] { "a", "b", "c" } };
         await AskFieldsAsync(three
-            ? new { one = list, two = other, last = new { type = "string", title = "last", @enum = new[] { "a", "b", "c" } } }
-            : new { one = list, two = other }, names.Length, answer);
+            ? new { one = list, two = list, last = new { type = "string", title = "last", @enum = new[] { "a", "b", "c" } } }
+            : new { one = list, two = list }, names.Length, answer);
         injector.Screen = () => FieldsScreen(names, labels: labels);
         var ch = await OpenAsync();
 
@@ -1375,6 +1443,400 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal("refused", outcome);
         Assert.Contains(shows == "boxed" ? "permission prompt" : "no longer showed the question's form", reason);
         Assert.Empty(injector.Attempts);
+    }
+
+    // The answer-attempt line the answer logged (CopilotAnswerTrace).
+    async Task<string> AttemptLineAsync()
+    {
+        static bool Mine(string m) => m.StartsWith("answer-attempt v=1 ", StringComparison.Ordinal);
+        await Wait.UntilAsync(() => { lock (logged) { return logged.Any(Mine); } }, "the answer-attempt line", Patience);
+        lock (logged) { return Assert.Single(logged, Mine); }
+    }
+
+    [Theory]
+    // Copilot CLI 1.0.105 breaks a question's line wherever Unicode line breaking allows: after a
+    // hyphen, as the question refused all morning was (#1123), inside a word too long for its
+    // row (#848), or between two wide characters. The form, steady on screen, is still this
+    // question's.
+    [InlineData("ag-test-ops", "ag-\ntest-ops")]
+    [InlineData("agentbridgetestoperations", "agentbridgetes\ntoperations")]
+    [InlineData("\u30C6\u30B9\u30C8\u7528\u30E1\u30FC\u30EB", "\u30C6\u30B9\u30C8\u7528\n\u30E1\u30FC\u30EB")]
+    public async Task A_three_field_form_whose_question_wraps_inside_a_word_is_still_answered_field_by_field(string word, string drawn)
+    {
+        var message = $"Which mailbox should the test mail go out from (from {word})?";
+        var answer = new { first = "b", second = "c", feedback = Feedback };
+        string[] names = ["first", "second", "feedback"];
+        await AskFieldsAsync(new
+        {
+            first = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            second = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            feedback = new { type = "string" },
+        }, 3, answer, message);
+        injector.Screen = () => FieldsScreen(names, message: message.Replace(word, drawn, StringComparison.Ordinal));
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(3, Enters());
+        Assert.Contains("rereads=0 steady=yes", (await AttemptLineAsync()));
+    }
+
+    // The six fields of a form refused live at its first read (#1123): titles too
+    // long together for the console, so Copilot CLI 1.0.105's tab bar showed only some.
+    static readonly string[] SixTitles =
+    [
+        "1. Automatic diagnostics default", "1b. Who answers the EEA/UK personal-data question?", "2. Part-answered forms",
+        "3. Narrower key check", "4. Structured channel (if the trial works)", "5. CLI updates for launched sessions",
+    ];
+
+    const string SixMessage = "Five decisions from the #1135 host answer delivery design. My recommendation is the default on each.";
+
+    async Task<string[]> AskSixAsync(object answer, string[]? titles = null)
+    {
+        titles ??= SixTitles;
+        string[] names = ["diagnostics", "eea", "partial", "keys", "channel", "updates"];
+        string[] Options(int n) => [.. Enumerable.Range(0, n).Select(i => $"Option {i + 1}")];
+        await AskFieldsAsync(new
+        {
+            diagnostics = new { type = "string", title = titles[0], description = "Whether a report is sent.", @enum = Options(2) },
+            eea = new { type = "string", title = titles[1], description = "Who is asked.", @enum = Options(3) },
+            partial = new { type = "string", title = titles[2], description = "What the host does.", @enum = Options(4) },
+            keys = new { type = "string", title = titles[3], description = "How narrow.", @enum = Options(2) },
+            channel = new { type = "string", title = titles[4], description = "Which channel.", @enum = Options(3) },
+            updates = new { type = "string", title = titles[5], description = "When to update.", @enum = Options(2) },
+        }, 6, answer, SixMessage);
+        return names;
+    }
+
+    static readonly object SixAnswer = new { diagnostics = "Option 1", eea = "Option 2", partial = "Option 3", keys = "Option 1", channel = "Option 2", updates = "Option 1" };
+
+    // The form as Copilot CLI 1.0.105 draws it in a console `columns` wide: its rules across it,
+    // the question wrapped, and the tab bar `bar` draws at the field it is at.
+    List<string> SixScreen(string[] names, int columns, Func<int, string> bar)
+    {
+        var rows = FieldsScreen(names, message: SixMessage, labels: SixTitles, wrap: columns - 4);
+        var at = Array.FindIndex(SixTitles, t => rows.Contains($" {t}:"));
+        if (at < 0) { return rows; }
+        var whole = TabBar(SixTitles, 0, marked: false);
+        return [.. rows.Select(r => r.Trim('\u2500').Length == 0 && r.Length > 0 ? new string('\u2500', columns - 2) : r == whole ? $" {bar(at)}" : r)];
+    }
+
+    // `Da`'s bar at field `at` in a console `columns` wide: as many labels as `$fn` fits around
+    // it, in the window `Hfn` centres on it, an arrow on each side with labels hidden, counted
+    // again with the arrows' room taken out; each label ` <label> `, gaps of one, the selected
+    // one `[<label>]` where colour is unavailable.
+    static string CliBar(string[] labels, int at, int columns, bool marked)
+    {
+        int Fits(int room)
+        {
+            var (used, n, left, right) = (labels[at].Length + 2, 1, at - 1, at + 1);
+            while (left >= 0 || right < labels.Length)
+            {
+                if (right < labels.Length && used + labels[right].Length + 3 <= room) { (used, n, right) = (used + labels[right].Length + 3, n + 1, right + 1); }
+                else { right = labels.Length; }
+                if (left >= 0 && used + labels[left].Length + 3 <= room) { (used, n, left) = (used + labels[left].Length + 3, n + 1, left - 1); }
+                else { left = -1; }
+            }
+            return n;
+        }
+        (int Start, int End) Window(int n)
+        {
+            if (labels.Length <= n) { return (0, labels.Length); }
+            var start = Math.Clamp(at - n / 2, 0, labels.Length - n);
+            return (start, start + n);
+        }
+        var room = columns - 4;
+        var (s, e) = Window(Fits(room));
+        if (s > 0 || e < labels.Length) { (s, e) = Window(Fits(room - (s > 0 ? 2 : 0) - (e < labels.Length ? 2 : 0))); }
+        var shown = string.Join(" ", labels[s..e].Select((l, i) => marked && s + i == at ? $"[{l}]" : $" {l} "));
+        return $"{(s > 0 ? "\u2190 " : "")}{shown}{(e < labels.Length ? " \u2192" : "")}  ";
+    }
+
+    [Theory]
+    // In colour, and with the field being answered in the bar's brackets where colour is
+    // unavailable.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_six_field_form_whose_whole_tab_bar_fits_a_wide_window_is_answered_field_by_field(bool marked)
+    {
+        var names = await AskSixAsync(SixAnswer);
+        injector.Screen = () => SixScreen(names, 260, at => CliBar(SixTitles, at, 260, marked));
+        Assert.DoesNotContain("\u2192", CliBar(SixTitles, 0, 260, marked));
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, SixAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(6, Enters());
+        Assert.Contains("check=none", (await AttemptLineAsync()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_six_field_form_whose_tab_bar_hides_titles_gets_no_keys_and_is_named_for_the_machine(bool marked)
+    {
+        // At 102 columns the six titles do not fit across the bar: it shows two of them and an
+        // arrow for those hidden (#1123). The hidden titles cannot be read before the first key,
+        // so nothing is typed, and the refusal says why rather than that no form showed.
+        var names = await AskSixAsync(SixAnswer);
+        injector.Screen = () => SixScreen(names, 102, at => CliBar(SixTitles, at, 102, marked));
+        Assert.Contains("\u2192", CliBar(SixTitles, 0, 102, marked));
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, SixAnswer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("too narrow for the question's form to show every field's title", reason);
+        Assert.Contains("answer it at the machine", reason);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
+    }
+
+    [Fact]
+    public async Task A_form_that_differs_from_the_question_only_in_a_title_its_tab_bar_hides_gets_no_keys()
+    {
+        // The question's last title is not the one on screen, but at the first field the bar
+        // shows only the first two: message, labels shown, heading and hints all read the same.
+        // Typed into, the first field of a form that is not this question would stay filled
+        // before its last field's heading told them apart (#1137 review).
+        string[] asked = [.. SixTitles[..5], "5. CLI updates for archived sessions"];
+        var names = await AskSixAsync(SixAnswer, asked);
+        injector.Screen = () => SixScreen(names, 102, at => CliBar(SixTitles, at, 102, marked: false));
+        Assert.Equal(CliBar(asked, 0, 102, marked: false), CliBar(SixTitles, 0, 102, marked: false));
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, SixAnswer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Attempts);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Theory]
+    // Labels hidden with no arrow to say so, and a window that is not the one the CLI draws at
+    // this field (the next field's labels, the field being answered not among them).
+    [InlineData("no-arrow")]
+    [InlineData("elsewhere")]
+    public async Task A_tab_bar_that_is_not_the_window_drawn_at_this_field_gets_no_keys(string bar)
+    {
+        var names = await AskSixAsync(SixAnswer);
+        injector.Screen = () => SixScreen(names, 102, at => bar == "no-arrow"
+            ? $" {SixTitles[0]}   {SixTitles[1]}  "
+            : $"\u2190  {SixTitles[2]}    {SixTitles[3]}   \u2192  ");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, SixAnswer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("no longer showed the question's form", reason);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=bar@", (await AttemptLineAsync()));
+    }
+
+    [Theory]
+    // The question says "Now here"; the screen shows a form that says "Nowhere" (or
+    // "enteraccept") in one place, in a row of its own, every other row the same. Read with
+    // their spaces left out, the two read alike, and the keys went to a form that is not this
+    // question (#1137 review). A space is missing only where a row breaks.
+    [InlineData("bar")]
+    [InlineData("message")]
+    [InlineData("hints")]
+    public async Task A_form_that_says_Nowhere_where_the_question_says_Now_here_gets_no_keys(string where)
+    {
+        const string Message = "Put it Now here or archive it?";
+        var answer = new { pick = "b", here = "c", archive = "a" };
+        string[] names = ["pick", "here", "archive"];
+        await AskFieldsAsync(new
+        {
+            pick = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            here = new { type = "string", title = "Now here", @enum = new[] { "a", "b", "c" } },
+            archive = new { type = "string", title = "Archive", @enum = new[] { "a", "b", "c" } },
+        }, 3, answer, Message);
+        injector.Screen = () =>
+        {
+            var rows = FieldsScreen(names, message: where == "message" ? Message.Replace("Now here", "Nowhere", StringComparison.Ordinal) : Message,
+                labels: where == "bar" ? ["pick", "Nowhere", "Archive"] : ["pick", "Now here", "Archive"]);
+            return where == "hints" ? [.. rows.Select(r => r.Replace("enter accept", "enteraccept", StringComparison.Ordinal))] : rows;
+        };
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains($"check={where}@", (await AttemptLineAsync()));
+    }
+
+    [Theory]
+    // The question says "Now here"; the row breaks at its space, which the CLI leaves out or
+    // draws at the start of the next row.
+    [InlineData("Now\nhere")]
+    [InlineData("Now\n here")]
+    public async Task A_question_and_titles_with_spaces_are_still_this_questions_where_a_row_breaks_at_one(string drawn)
+    {
+        const string Message = "Put it Now here or archive it?";
+        var answer = new { pick = "b", here = "c", archive = "a" };
+        string[] names = ["pick", "here", "archive"];
+        await AskFieldsAsync(new
+        {
+            pick = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            here = new { type = "string", title = "Now here", @enum = new[] { "a", "b", "c" } },
+            archive = new { type = "string", title = "Archive", @enum = new[] { "a", "b", "c" } },
+        }, 3, answer, Message);
+        injector.Screen = () => FieldsScreen(names, message: Message.Replace("Now here", drawn, StringComparison.Ordinal), labels: ["pick", "Now here", "Archive"]);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(3, Enters());
+    }
+
+    [Fact]
+    public async Task A_question_broken_after_a_hyphen_whose_next_row_starts_with_a_space_gets_no_keys()
+    {
+        // The CLI breaks "ag-test-ops" after the hyphen and starts the next row at the
+        // question's column. A row that starts a space further in says "ag- test-ops": another
+        // question (#1137 review).
+        const string Message = "Which mailbox should the test mail go out from (from ag-test-ops)?";
+        var answer = new { first = "b", second = "c" };
+        string[] names = ["first", "second"];
+        await AskFieldsAsync(new
+        {
+            first = new { type = "string", @enum = new[] { "a", "b", "c" } },
+            second = new { type = "string", @enum = new[] { "a", "b", "c" } },
+        }, 2, answer, Message);
+        injector.Screen = () => FieldsScreen(names, message: Message.Replace("ag-test-ops", "ag-\n test-ops", StringComparison.Ordinal));
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=message@", (await AttemptLineAsync()));
+    }
+
+    [Theory]
+    // A form of one field has no tab bar: its heading alone says which field it is. Titled
+    // "Pick one", a form whose heading shows "Pick  one" or "Pick\u00A0one" is another form's
+    // (#1137 review).
+    [InlineData("Pick  one")]
+    [InlineData("Pick\u00A0one")]
+    public async Task A_single_field_form_whose_heading_shows_spaces_its_title_has_not_gets_no_keys(string shown)
+    {
+        var answer = new { pick = "b" };
+        await AskFieldsAsync(new { pick = new { type = "string", title = "Pick one", @enum = new[] { "a", "b", "c" } } }, 1, answer);
+        injector.Screen = () => FieldsScreen(["pick"], labels: [shown]);
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, answer, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=field-heading@", (await AttemptLineAsync()));
+    }
+
+    [Theory]
+    // A window too narrow for the key hints wraps them, between two of them, inside one, or
+    // inside a word of one (#910): they still say the form is at its field.
+    [InlineData(" enter accept · ctrl+d decline ·", " esc cancel")]
+    [InlineData(" enter accept · ctrl+d decline · esc", " cancel")]
+    [InlineData(" enter accept · ctrl+d dec", " line · esc cancel")]
+    public async Task Key_hints_a_narrow_window_wraps_still_let_a_single_lists_answer_go(string first, string second)
+    {
+        IEnumerable<string> Narrow(string row) => row.Contains("esc cancel", StringComparison.Ordinal) ? [first, second] : [row];
+        injector.Screen = () => [.. WhichOne.SelectMany(Narrow)];
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal(("delivered", (string?)null), (outcome, reason));
+        Assert.Equal(1, Enters());
+    }
+
+    [Fact]
+    public async Task A_form_read_mid_redraw_is_read_again_and_its_answer_goes_once_it_shows()
+    {
+        // Streaming output redraws the screen: read in the middle of it, the form had no bottom
+        // rule yet, and that one read refused the answer (#1123). Read again, it shows.
+        DateTime? first = null;
+        injector.Screen = () =>
+        {
+            first ??= DateTime.UtcNow;
+            return DateTime.UtcNow - first < TimeSpan.FromMilliseconds(300) ? [.. WhichOne.Take(WhichOne.Count - 3)] : WhichOne;
+        };
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal(("delivered", (string?)null), (outcome, reason));
+        lock (logged) { Assert.Contains(logged, m => m.Contains("showed the form at its next field when read again", StringComparison.Ordinal)); }
+        Assert.Contains("steady=no", (await AttemptLineAsync()));
+    }
+
+    [Fact]
+    public async Task Keys_refused_because_output_scrolled_above_the_form_are_typed_again_at_the_same_field()
+    {
+        // Output drawn above the form between the host's read and its keys: the worker refuses
+        // keys held to rows that moved, and that one refusal left the form unanswered (#1123).
+        // Read again, the form shows the same field drawn the same, so they go again.
+        var scrolled = false;
+        injector.Screen = () => scrolled ? ["\u25CF more output", .. WhichOne] : WhichOne;
+        injector.Holding = _ => { if (injector.Attempts.Count == 1) { scrolled = true; } };
+        injector.OnInject = () => { if (Enters() == 1) { Fixture.Append(events, Recorded("q1", new { pick = "b" })); } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal(("delivered", (string?)null), (outcome, reason));
+        Assert.Single(injector.Refused);
+        Assert.Equal(1, Enters());
+        Assert.Contains("retries=1", (await AttemptLineAsync()));
+    }
+
+    [Fact]
+    public async Task A_field_drawn_differently_when_its_Enter_was_refused_gets_no_Enter()
+    {
+        // The pointer moved off the option the keys walked to before its Enter (something else
+        // pressed a key): an Enter now would pick another option, so it is never typed again.
+        var moved = false;
+        injector.Screen = () => moved ? Framed("Which one?", ["pick"], 0, ["    a", "    b", "  \u276F c"]) : WhichOne;
+        injector.Holding = plan => { if (HasEnterOnly(plan)) { moved = true; } };
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("unconfirmed", outcome);
+        Assert.Contains("screen changed", reason);
+        Assert.Equal(0, Enters());
+        Assert.True(HasEnterOnly(Assert.Single(injector.Refused)));
+    }
+
+    [Fact]
+    public async Task A_refusal_logs_which_check_failed_and_the_screens_outline_but_never_its_words()
+    {
+        injector.Screen = () => [.. WhichOne.Select(r => r.Replace("Which one?", "Which branch?", StringComparison.Ordinal))];
+        var ch = await OpenAsync();
+
+        var (outcome, _) = await AnswerAsync(ch, new { pick = "b" });
+
+        Assert.Equal("refused", outcome);
+        var attempt = await AttemptLineAsync();
+        Assert.Contains("fields=1 shape=choice3 ", attempt);
+        Assert.Contains("steady=no", attempt);
+        Assert.Contains("check=message@2 ", attempt);
+        Assert.EndsWith("outcome=refused resume=- resumes=0", attempt);
+        lock (logged)
+        {
+            var refusal = Assert.Single(logged, m => m.Contains("is not the form at its next field", StringComparison.Ordinal));
+            Assert.Contains($"rows={WhichOne.Count} ", refusal);
+            Assert.Contains("check=message@2", refusal);
+            Assert.DoesNotContain(logged, m => m.Contains("branch", StringComparison.OrdinalIgnoreCase));
+        }
     }
 
     [Theory]
@@ -1514,7 +1976,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
 
         var first = AnswerAsync(ch, new { pick = "b" });
-        await Wait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Attempts.Count == 1, "the first answer to start typing", Patience);
         var waiting = ch.RequestAsync(Ops.SessionAnswer, new { id = Second, question = "r1", request = Guid.NewGuid().ToString(), fields = new { pick = "a" } });
         await Task.Delay(300);
         Fixture.Append(other, Copilot.ToolStart("r9", "ask_user", new { message = "Which one?", requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } } } } }, 3, "helper"));
@@ -1854,39 +2316,25 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Theory]
-    // A list's title with white space at either end, or a no-break space, drawn as written with
-    // its colon after it (`Dxn`: `t,":"`, never trimmed): "Pick one " is "Pick one :". The
-    // heading looked for is the title and colon as drawn, so the list after the first field is
-    // found, not refused once the first has been committed (#510 review, Copilot 5780656913).
-    [InlineData("Pick one ")]
-    [InlineData(" Pick one")]
-    [InlineData("Pick\u00A0one\u00A0")]
-    public async Task A_list_whose_title_has_white_space_at_its_ends_is_found_by_its_heading_as_drawn(string title)
-    {
-        var answer = new { first = "b", pick = "c" };
-        string[] names = ["first", "pick"];
-        await AskFieldsAsync(new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, pick = new { type = "string", @enum = new[] { "a", "b", "c" }, title } }, 2, answer);
-        injector.Screen = () => FieldsScreen(names, labels: ["first", title]);
-        var ch = await OpenAsync();
-
-        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
-
-        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
-        Assert.Equal(2, Enters());
-    }
-
-    [Theory]
     // A later field whose title is white space alone (a text box draws it as a blank row, a list
     // as a lone colon) or holds a line break (the heading split across rows, its colon on the
     // next, while the tab bar's first row still reads as the labels). It is refused before the
     // first key, not found missing once the field before it has been answered (#510 review,
     // Copilot 5780656913; Trust on 412f1b2d), and listed for the machine (Trust on 8335427d).
+    // So is one with white space at its ends, a run of spaces, or a space of another kind: how
+    // the CLI draws those is not known, and the screen's headings are read exactly as drawn
+    // (#1137 review).
     [InlineData("string", "   ")]
     [InlineData("enum", "   ")]
     [InlineData("enum", "Pick\n")]
     [InlineData("enum", "Pick\r")]
     [InlineData("string", "Pick\n")]
-    public async Task A_later_field_titled_with_white_space_alone_or_a_line_break_is_refused_before_any_key(string kind, string title)
+    [InlineData("enum", "Pick one ")]
+    [InlineData("enum", " Pick one")]
+    [InlineData("enum", "Pick  one")]
+    [InlineData("enum", "Pick\u00A0one")]
+    [InlineData("string", "\u00A0Pick  one ")]
+    public async Task A_later_field_whose_title_the_screen_cannot_tell_from_another_is_refused_before_any_key(string kind, string title)
     {
         var answer = new { first = "b", note = kind == "enum" ? "c" : Feedback };
         string[] names = ["first", "note"];
@@ -1986,7 +2434,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     async Task<(long Start, long End, long? Typed)> TimingAsync(string request)
     {
         bool Mine(string m) => m.StartsWith($"answer {request[..8]} timings ", StringComparison.Ordinal);
-        await Wait.UntilAsync(() => { lock (logged) { return logged.Any(Mine); } }, "the timing line", Patience);
+        await HostWait.UntilAsync(() => { lock (logged) { return logged.Any(Mine); } }, "the timing line", Patience);
         string line;
         lock (logged) { line = logged.Single(Mine); }
         var inject = System.Text.RegularExpressions.Regex.Match(line, @"inject (?<a>\d+)-(?<b>\d+)");
@@ -2189,7 +2637,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var again = await AnswerResultAsync(await OpenAsync(), FormAnswer, request);
 
         Assert.Equal(("unconfirmed", "recorded"), (again.GetProperty("outcome").GetString(), Stage(again)));
-        Assert.Contains("different answer", again.GetProperty("reason").GetString());
+        // A resend says only that nothing was typed again; the stage says what the session recorded.
+        Assert.Equal(DeliveryReasons.AnswerNotConfirmed, again.GetProperty("reason").GetString());
         Assert.Equal(typed, injector.Plans.Count);
     }
 
@@ -2266,6 +2715,522 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(("refused", "the session runs as administrator"), await AnswerAsync(ch, new { pick = "b" }, question: "q2"));
     }
 
+    // ---- a form left part answered: finished from where it stopped, or reset (#1123) ----
+
+    static readonly object TwoLists = new { first = new { type = "string", @enum = new[] { "a", "b", "c" } }, second = new { type = "string", @enum = new[] { "a", "b", "c" } } };
+    static readonly object TwoListsReordered = new { second = new { type = "string", @enum = new[] { "a", "b", "c" } }, first = new { type = "string", @enum = new[] { "a", "b", "c" } } };
+    static readonly object TwoPicked = new { first = "b", second = "c" };
+    static readonly string[] TwoNames = ["first", "second"];
+
+    static bool IsEscape(KeyPlan plan) => plan.Sends.Any(s => s.Text == KeyPlan.Escape);
+
+    bool Escaped() { lock (injector.Plans) { return injector.Plans.Any(p => IsEscape(p.Plan)); } }
+
+    // The plans typed after the Esc that reset the form.
+    List<KeyPlan> AfterEscape()
+    {
+        lock (injector.Plans) { return [.. injector.Plans.SkipWhile(p => !IsEscape(p.Plan)).Skip(1).Select(p => p.Plan)]; }
+    }
+
+    int EntersAfterEscape() => AfterEscape().Sum(p => p.Sends.Count(s => s.Enter));
+
+    // A two-list form whose first field took its Enter and never moved on, until an Esc cancels
+    // it; then the prompt, until the session asks again (asked), when the form is drawn afresh
+    // and answered field by field from the keys after the Esc.
+    List<string> StuckScreen(Func<bool> asked)
+    {
+        if (!Escaped()) { return Framed("Tell me", TwoNames, 0, ["Field: first", .. Input("")]); }
+        if (!asked()) { return ["> "]; }
+        var field = EntersAfterEscape();
+        return field >= TwoNames.Length ? ["(sent)"] : Framed("Tell me", TwoNames, field, [$"Field: {TwoNames[field]}", .. Input("")]);
+    }
+
+    [Fact]
+    public async Task A_part_answered_form_is_finished_from_the_field_it_stopped_at_once_the_screen_shows_it_there_again()
+    {
+        Serve(Answerer(resume: true));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        // A permission prompt drawn over the form once its first field took its Enter, gone again
+        // a moment later: the first pass stops there, the form part answered.
+        DateTime? back = null;
+        injector.OnInject = () =>
+        {
+            if (Enters() == 1) { back ??= DateTime.UtcNow.AddMilliseconds(800); }
+            if (Enters() == 2) { Fixture.Append(events, Recorded("q2", TwoPicked)); }
+        };
+        injector.Screen = () => back is { } b && DateTime.UtcNow < b ? PermissionPrompt : FieldsScreen(TwoNames);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        // Each field's keys and its Enter once, the second's only once the form showed it, and no Esc.
+        Assert.Equal(2, Enters());
+        Assert.Equal(4, injector.Plans.Count);
+        Assert.False(Escaped());
+        Assert.Contains("resume=resumed resumes=1", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task Words_typed_but_not_submitted_get_only_their_Enter_on_resume_and_are_never_typed_again()
+    {
+        Serve(Answerer(resume: true));
+        await AskFormAsync();
+        // A busy CLI draws the words well after WordsWait: the first pass leaves them without
+        // their Enter, and the resume finds them there.
+        var drawAt = DateTime.MaxValue;
+        injector.OnInject = () =>
+        {
+            if (injector.Plans[^1].Plan.Sends.Any(s => s.Text == Feedback)) { drawAt = DateTime.UtcNow.AddMilliseconds(1000); }
+            if (Enters() == 2) { Fixture.Append(events, Recorded("q2", FormAnswer)); }
+        };
+        injector.Screen = () => FormScreen(Picked(), WordsTyped() && DateTime.UtcNow >= drawAt, moved: Moved());
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Single(injector.Plans, p => p.Plan.Sends.Any(s => s.Text == Feedback));
+        Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
+        Assert.Equal(2, Enters());
+        Assert.Contains("resume=resumed resumes=1", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task A_part_answered_form_gets_no_keys_while_the_screen_shows_something_else_and_is_not_reset()
+    {
+        Serve(Answerer(resume: true));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        injector.Screen = () => Enters() >= 1 ? PermissionPrompt : FieldsScreen(TwoNames);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Contains("only the form's first 1 of 2 fields were answered (\"first\"); the rest were not typed", result.GetProperty("reason").GetString());
+        // The first field's keys and its Enter, then nothing: none of the second's, and no Esc.
+        Assert.Equal(2, injector.Attempts.Count);
+        Assert.Contains("resume=held resumes=0", await AttemptLineAsync());
+        // The resume never even tried the screen (Showing): only the first pass gave up on it.
+        Assert.True(GaveUp() <= 1, $"gave up on the screen {GaveUp()} times");
+    }
+
+    // How often the host gave up on the screen as not the form at the field its keys were for.
+    int GaveUp() { lock (logged) { return logged.Count(m => m.Contains("is not the form at its next field", StringComparison.Ordinal)); } }
+
+    [Theory]
+    // Another form at resume time, with the same field names at the same field: its question
+    // says something else, or it asks one field more. Nothing goes into it, not even the Esc.
+    [InlineData("Tell me something else", 2)]
+    [InlineData("Tell me", 3)]
+    public async Task A_part_answered_form_gets_no_keys_while_another_form_with_the_same_fields_is_on_screen(string message, int count)
+    {
+        Serve(Answerer(resume: true));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        string[] labels = count == 3 ? [.. TwoNames, "third"] : TwoNames;
+        injector.Screen = () => Enters() >= 1 ? Framed(message, labels, 1, ["Field: second", .. Input("")]) : FieldsScreen(TwoNames);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Equal(2, injector.Attempts.Count);
+        Assert.False(Escaped());
+        Assert.Contains("resume=held resumes=0", await AttemptLineAsync());
+        Assert.True(GaveUp() <= 1, $"gave up on the screen {GaveUp()} times");
+    }
+
+    [Fact]
+    public async Task A_first_field_already_showing_words_typed_at_the_machine_is_refused_with_nothing_typed()
+    {
+        // Keys typed into a box add to what is in it: a local "9" and the answer's "0" would be
+        // submitted as "90" (#1123 review).
+        await AskDataAsync();
+        injector.Screen = () => DataScreen("9");
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { data = "0" }, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("already shows something typed into it at the machine", reason);
+        Assert.Empty(injector.Attempts);
+    }
+
+    [Theory]
+    // Spaces typed at the machine into an empty box do not show on a screen read (its rows are
+    // trimmed), so the box reads as untouched; once the answer's words follow them they do, and
+    // the words' Enter is not pressed: " 0" is not "0" (#1123 review, Sol on 0f12d819). The CLI
+    // records a number box as Number(text), which ignores the spaces, but it is held the same.
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Words_typed_after_spaces_left_in_an_empty_box_at_the_machine_get_no_Enter(bool number)
+    {
+        object answer = number ? new { n = 7 } : new { data = "7" };
+        if (number) { await AskFieldsAsync(new { n = new { type = "integer" } }, 1, answer); }
+        else { await AskDataAsync(); }
+        bool Typed() => injector.Plans.Any(p => p.Plan.Sends.Any(s => s.Text == "7"));
+        injector.Screen = () => number
+            ? Framed("Tell me", ["n"], 0, ["Field: n", .. Input(Typed() ? "  7" : "  ")], colon: false)
+            : DataScreen(Typed() ? "  7" : "  ");
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        Assert.Equal(("unconfirmed", "typed"), (result.GetProperty("outcome").GetString(), Stage(result)));
+        Assert.Equal(0, Enters());
+        Assert.Single(injector.Plans, p => p.Plan.Sends.Any(s => s.Text == "7"));
+        lock (logged) { Assert.Contains(logged, m => m.Contains("do not start its field's input", StringComparison.Ordinal)); }
+    }
+
+    [Fact]
+    public async Task A_next_field_already_showing_words_typed_at_the_machine_gets_none_of_the_answers_words()
+    {
+        await AskFormAsync();
+        injector.Screen = () => Picked()
+            ? Framed("Approve the mark?", ["pick", "Feedback (optional)"], 1, [.. Input("9")], colon: false)
+            : FormScreen(false, false, moved: Moved());
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        Assert.Equal(1, Enters());
+        Assert.DoesNotContain(injector.Attempts, p => p.Sends.Any(s => s.Text == Feedback));
+        lock (logged) { Assert.Contains(logged, m => m.Contains("is not as it opens", StringComparison.Ordinal)); }
+    }
+
+    [Fact]
+    public async Task A_form_resumed_between_fields_types_nothing_into_a_next_field_typed_into_at_the_machine_meanwhile()
+    {
+        Serve(Answerer(resume: true));
+        await AskFormAsync();
+        // A permission prompt drawn over the form once the list took its Enter, so the first pass
+        // stops between fields; gone again, the text field shows a "9" typed at the machine.
+        DateTime? back = null;
+        injector.OnInject = () => { if (Enters() == 1) { back ??= DateTime.UtcNow.AddMilliseconds(800); } };
+        injector.Screen = () => !Picked() ? FormScreen(false, false, moved: Moved())
+            : back is { } b && DateTime.UtcNow < b ? PermissionPrompt
+            : Framed("Approve the mark?", ["pick", "Feedback (optional)"], 1, [.. Input("9")], colon: false);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        // The list's keys and Enter, then never the words (which would make "9..."): the form is
+        // reset with an Esc instead, which the session is not seen to take.
+        Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        Assert.Equal(1, Enters());
+        Assert.DoesNotContain(injector.Attempts, p => p.Sends.Any(s => s.Text == Feedback));
+        Assert.True(Escaped());
+        Assert.Empty(AfterEscape());
+        Assert.Contains("resume=uncancelled resumes=0", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task A_form_stopped_after_every_field_is_resumed_at_most_three_times_and_then_reset()
+    {
+        // Each field's Enter brings a permission prompt that stays until the host gives up on the
+        // screen: every pass types one field and stops.
+        Serve(Answerer(resume: true, resumeWait: TimeSpan.FromSeconds(20)));
+        string[] names = ["f1", "f2", "f3", "f4", "f5"];
+        var list = new { type = "string", @enum = new[] { "a", "b", "c" } };
+        var answer = new { f1 = "b", f2 = "b", f3 = "b", f4 = "b", f5 = "b" };
+        await AskFieldsAsync(new { f1 = list, f2 = list, f3 = list, f4 = list, f5 = list }, 5, answer);
+        injector.Screen = () => Enters() > GaveUp() ? PermissionPrompt : FieldsScreen(names);
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
+
+        // The first pass and three resumes, a field each; then the Esc, never the fifth field.
+        Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        Assert.True(Escaped());
+        lock (injector.Plans) { Assert.Equal(4, injector.Plans.TakeWhile(p => !IsEscape(p.Plan)).Sum(p => p.Plan.Sends.Count(s => s.Enter))); }
+        Assert.Empty(AfterEscape());
+        Assert.Contains("resume=uncancelled resumes=3", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task A_form_answered_afresh_that_stops_again_is_never_reset_a_second_time()
+    {
+        Serve(Answerer(resume: true));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        // Asked again, the form is stuck at its first field once more.
+        var asked = false;
+        injector.Screen = () => !Escaped() || asked ? Framed("Tell me", TwoNames, 0, ["Field: first", .. Input("")]) : new List<string> { "> " };
+        var ch = await OpenAsync();
+
+        var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
+        Fixture.Append(events, Copilot.ToolDone("q2", second++), Copilot.ToolStart("q3", "ask_user", new { message = "Tell me", requestedSchema = new { properties = TwoLists } }, second++));
+        asked = true;
+        await source.RefreshAsync();
+        var result = await answering;
+
+        // One Esc; the question asked again gets its first field's keys and Enter, and then is
+        // left as the redo's own wait leaves it, logged as what became of the redo.
+        Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        Assert.Single(injector.Plans, p => IsEscape(p.Plan));
+        Assert.Equal(1, EntersAfterEscape());
+        Assert.Contains("resume=redone-held", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task A_question_asked_again_before_the_reset_one_is_closed_gets_nothing_typed()
+    {
+        Serve(Answerer(resume: true));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        var asked = false;
+        injector.Screen = () => StuckScreen(() => asked);
+        var ch = await OpenAsync();
+
+        var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
+        // The same question under a new call id, the old call never closed: the Esc is not known
+        // to have cancelled it, so the answer is not typed into the new one.
+        Fixture.Append(events, Copilot.ToolStart("q3", "ask_user", new { message = "Tell me", requestedSchema = new { properties = TwoLists } }, second++));
+        asked = true;
+        await source.RefreshAsync();
+        var result = await answering;
+
+        Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        Assert.Empty(AfterEscape());
+        Assert.Contains("resume=uncancelled", await AttemptLineAsync());
+    }
+
+    [Theory]
+    // The prompt recorded in the transcript and the session listed again (Codex review on
+    // a174e20b): a main agent's approval is then listed as the session's question, a helper's
+    // leaves the form listed as answered at the machine. Either way the form is still asked,
+    // under the prompt, and is resumed once the prompt is answered.
+    [InlineData(null)]
+    [InlineData("helper")]
+    public async Task A_part_answered_form_waits_out_a_recorded_permission_prompt_and_is_finished_after_it(string? agent)
+    {
+        // The typing slot, held by the test while it answers the prompt, so that no read of the
+        // recovery's falls between the transcript saying so and the listing being refreshed.
+        var gate = new DeliveryGate();
+        Serve(Answerer(resume: true, resumeWait: TimeSpan.FromSeconds(30), gate: gate));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        // The prompt is recorded once only (the first Enter); showing is what the screen draws, and
+        // is cleared when the prompt is answered, so the resume's own keys record nothing more.
+        var injected = false;
+        var showing = false;
+        injector.OnInject = () =>
+        {
+            if (!injected && Enters() == 1)
+            {
+                injected = true;
+                Fixture.Append(events, Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, second++, agent),
+                    Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], second++, agent));
+                showing = true;
+            }
+            if (Enters() == 2) { Fixture.Append(events, Recorded("q2", TwoPicked)); }
+        };
+        injector.Screen = () => showing ? PermissionPrompt : FieldsScreen(TwoNames);
+        var ch = await OpenAsync();
+
+        var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        await Wait.UntilAsync(() => showing, "the permission prompt over the form", Patience);
+        await source.RefreshAsync();
+        Assert.True(source.Get(Id)?.Question is { Id: not "q2" } or { AnswerAtMachine: true });
+        // Several of the recovery's reads made since the listing changed, and still waiting
+        // (before #1152, the first of them gave the form up as gone).
+        var checks = probe.Checks;
+        await Wait.UntilAsync(() => probe.Checks >= checks + 3 || answering.IsCompleted, "the recovery reading the session again", Patience);
+        Assert.False(answering.IsCompleted);
+        // Answered at the machine: the form is listed again, and the rest of it goes.
+        await gate.WaitToTypeAsync();
+        try
+        {
+            Fixture.Append(events, Copilot.PermissionDone("r1", "c9", "approved", second++), Copilot.ToolDone("c9", second++));
+            showing = false;
+            await source.RefreshAsync();
+        }
+        finally { gate.DoneTyping(); }
+        var result = await answering;
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, Enters());
+        Assert.False(Escaped());
+        Assert.Contains("resume=resumed resumes=1", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task A_reset_form_asked_again_exactly_is_answered_afresh_once_for_the_same_card()
+    {
+        Serve(Answerer(resume: true));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        var asked = false;
+        injector.Screen = () => StuckScreen(() => asked);
+        injector.OnInject = () => { if (EntersAfterEscape() == 2) { Fixture.Append(events, Recorded("q3", TwoPicked)); } };
+        var ch = await OpenAsync();
+
+        var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
+        // Cancelled, the session asks the very same question again, under a new call id.
+        Assert.Equal(0, EntersAfterEscape());
+        Fixture.Append(events, Copilot.ToolDone("q2", second++), Copilot.ToolStart("q3", "ask_user", new { message = "Tell me", requestedSchema = new { properties = TwoLists } }, second++));
+        asked = true;
+        await source.RefreshAsync();
+        var result = await answering;
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        // One Esc, after the stuck field's keys and Enter; then each field of the question asked
+        // again once, its keys and then its Enter.
+        Assert.Single(injector.Plans, p => IsEscape(p.Plan));
+        Assert.Equal(3, injector.Plans.FindIndex(p => IsEscape(p.Plan)) + 1);
+        Assert.Equal(4, AfterEscape().Count);
+        Assert.Equal(2, EntersAfterEscape());
+        Assert.Contains("resume=redone", await AttemptLineAsync());
+    }
+
+    [Theory]
+    // Asked something else, or nothing, after the Esc: the card is out of date, and nothing is
+    // typed into whatever the session shows next. The same fields in another order are another
+    // form (#1123 review): their order is the order the form asks them in.
+    [InlineData("Tell me something else", false)]
+    [InlineData(null, false)]
+    [InlineData("Tell me", true)]
+    public async Task A_reset_form_not_asked_again_the_same_retires_its_card_as_out_of_date_with_nothing_typed_after_the_Esc(string? other, bool reordered)
+    {
+        Serve(Answerer(resume: true));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        var asked = false;
+        injector.Screen = () => StuckScreen(() => asked);
+        var ch = await OpenAsync();
+
+        var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
+        Fixture.Append(events, Copilot.ToolDone("q2", second++));
+        if (other is not null)
+        {
+            Fixture.Append(events, Copilot.ToolStart("q3", "ask_user", new { message = other, requestedSchema = new { properties = reordered ? TwoListsReordered : TwoLists } }, second++));
+            asked = true;
+        }
+        await source.RefreshAsync();
+        var result = await answering;
+
+        Assert.Equal("stale", result.GetProperty("outcome").GetString());
+        Assert.Contains("this question is out of date", result.GetProperty("reason").GetString());
+        Assert.Contains(other is null ? "did not ask it again" : "asked something else since", result.GetProperty("reason").GetString());
+        Assert.Empty(AfterEscape());
+        Assert.Contains($"resume={(other is null ? "stale" : "replaced")}", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task Words_edited_at_the_machine_to_a_different_answer_with_the_same_ending_get_no_Enter_on_resume()
+    {
+        Serve(Answerer(resume: true));
+        await AskFormAsync();
+        // The words typed show only after WordsWait, and by then edited at the machine to say the
+        // opposite: the same last characters, not the same answer.
+        const string edited = "The middle bar does not connect all the way";
+        Assert.Equal(global::AgentBridge.Host.Delivery.Copilot.WordsOnScreen.Tail(Feedback), global::AgentBridge.Host.Delivery.Copilot.WordsOnScreen.Tail(edited));
+        var drawAt = DateTime.MaxValue;
+        injector.OnInject = () =>
+        {
+            if (injector.Plans[^1].Plan.Sends.Any(s => s.Text == Feedback)) { drawAt = DateTime.UtcNow.AddMilliseconds(1000); }
+        };
+        injector.Screen = () => WordsTyped() && DateTime.UtcNow >= drawAt
+            ? Framed("Approve the mark?", ["pick", "Feedback (optional)"], 1, [.. Input(edited)], colon: false)
+            : FormScreen(Picked(), false, moved: Moved());
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        // The list's Enter alone: the words are typed once and never entered; the form is reset
+        // with an Esc, which the session is not seen to take, so it is left for the person.
+        Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        Assert.Contains("not seen to close", result.GetProperty("reason").GetString());
+        Assert.Equal(1, Enters());
+        Assert.Single(injector.Plans, p => p.Plan.Sends.Any(s => s.Text == Feedback));
+        Assert.True(Escaped());
+        Assert.Empty(AfterEscape());
+        Assert.Contains("resume=uncancelled", await AttemptLineAsync());
+    }
+
+    [Theory]
+    // Leading spaces are read from the column right after the caret, never inferred from the
+    // words; a trailing space cannot be seen on a screen read (its padding is trimmed), so words
+    // planned with one are never held, and a row showing one after the words is not the words.
+    [InlineData(" OK", "OK")]
+    [InlineData("OK", " OK")]
+    [InlineData("OK ", "OK")]
+    [InlineData("OK", "OK ")]
+    public void Words_differing_only_by_a_leading_or_trailing_space_are_not_held_by_the_field_for_a_resume_Enter(string planned, string actual)
+    {
+        var form = global::AgentBridge.Host.Delivery.Copilot.CopilotForm.Read(JsonSerializer.SerializeToElement(new
+        {
+            message = "Approve the mark?",
+            requestedSchema = new
+            {
+                properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } }, feedback = new { type = "string", title = "Feedback (optional)" } },
+                required = new[] { "pick" },
+            },
+        })).Form!;
+        List<string> Shown(string words) => Framed("Approve the mark?", ["pick", "Feedback (optional)"], 1, [.. Input(words)], colon: false);
+
+        Assert.False(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Holds(Shown(actual), form, 1, planned));
+        // The words drawn exactly as planned are held, unless they end in a space nothing shows.
+        Assert.Equal(!planned.EndsWith(' '), global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Holds(Shown(planned), form, 1, planned));
+    }
+
+    [Fact]
+    public async Task A_form_whose_keys_were_cut_short_is_given_the_whole_quiet_wait_before_its_Esc()
+    {
+        Serve(Answerer(resume: true));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        // The second field's keys are cut short partway (Interrupted): it cannot be resumed, but
+        // the Esc still waits out ResumeWait (2 s here) for the person or the session.
+        injector.Holding = plan => injector.Result = !IsEscape(plan) && !HasEnterOnly(plan) && Enters() == 1
+            ? new InjectionResult(InjectionStatus.Interrupted, "cut short")
+            : new InjectionResult(InjectionStatus.Typed, "ok");
+        injector.Screen = () => Framed("Tell me", TwoNames, Math.Min(Enters(), 1), [$"Field: {TwoNames[Math.Min(Enters(), 1)]}", .. Input("")]);
+        var ch = await OpenAsync();
+
+        var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
+        Fixture.Append(events, Copilot.ToolDone("q2", second++));
+        await source.RefreshAsync();
+        var result = await answering;
+
+        Assert.Equal("stale", result.GetProperty("outcome").GetString());
+        // The first list's keys and Enter, the second's keys cut short, then the Esc, no sooner
+        // than the wait allows.
+        TimeSpan gap;
+        lock (injector.Plans)
+        {
+            Assert.Equal(3, injector.Plans.FindIndex(p => IsEscape(p.Plan)));
+            Assert.DoesNotContain(injector.Plans[2].Plan.Sends, s => s.Enter);
+            gap = injector.At[3] - injector.At[2];
+        }
+        Assert.True(gap >= TimeSpan.FromSeconds(1.5), $"the Esc went {gap.TotalMilliseconds:0} ms after the keys were cut short");
+        Assert.Empty(AfterEscape());
+    }
+
+    [Fact]
+    public async Task A_reset_form_with_a_permission_prompt_over_it_is_not_retired_as_out_of_date()
+    {
+        Serve(Answerer(resume: true));
+        await AskFieldsAsync(TwoLists, 2, TwoPicked);
+        injector.Screen = () => StuckScreen(() => false);
+        var ch = await OpenAsync();
+
+        var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
+        await Wait.UntilAsync(() => Escaped(), "the Esc that resets the form", Patience);
+        // A permission prompt opens over the form, its call never closed: the Esc may have gone
+        // to that, and the question is still asked, so it is not out of date.
+        Fixture.Append(events, Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, second++, "helper"),
+            Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], second++));
+        await source.RefreshAsync();
+        var result = await answering;
+
+        Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        Assert.Contains("finish it at the machine", result.GetProperty("reason").GetString());
+        Assert.DoesNotContain("out of date", result.GetProperty("reason").GetString());
+        Assert.Empty(AfterEscape());
+        Assert.Contains("resume=uncancelled", await AttemptLineAsync());
+    }
+
     sealed class FakeProbe : IAgentHaBridgeProbe
     {
         public string? Reason;
@@ -2273,7 +3238,15 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         // Thrown by every check while set: a check that cannot be made.
         public Exception? Fails;
 
-        public string? Active() => Fails is { } fails ? throw fails : Answers is { Count: > 0 } queue ? queue.Dequeue() : Reason;
+        // How many checks have been made: each of a recovery's reads begins with one.
+        public int Checks => Volatile.Read(ref checks);
+        int checks;
+
+        public string? Active()
+        {
+            Interlocked.Increment(ref checks);
+            return Fails is { } fails ? throw fails : Answers is { Count: > 0 } queue ? queue.Dequeue() : Reason;
+        }
     }
 
     sealed class NoGuard : ITargetGuard

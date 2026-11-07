@@ -86,7 +86,7 @@ public final class BridgeHistoryLoader {
                 hasLoaded = true
             } catch {
                 guard active, token == generation else { continue }
-                self.error = "Couldn’t load \(subject == .session ? "tool history" : "delegate details"): \(error.localizedDescription)"
+                self.error = "Couldn’t load \(subject == .session ? "tool history" : "delegate details"): \(BridgeShownError.sentence(for: error))"
             }
         }
         isLoading = false

@@ -278,9 +278,9 @@ public sealed class StopFlowTests : IAsyncLifetime
 
         // A reply to another session holds the one typing turn.
         _ = ch.RequestAsync(Ops.SessionReply, new { id = Other, request = Guid.NewGuid().ToString(), text = "hello" });
-        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
         var stopping = StopAsync(ch);
-        await Wait.UntilAsync(() => Volatile.Read(ref control.Opens) == 2, "the stop to wait for the typing turn", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref control.Opens) == 2, "the stop to wait for the typing turn", Patience);
         await WorkingAsync();
         release.SetResult();
 
@@ -457,7 +457,7 @@ public sealed class StopFlowTests : IAsyncLifetime
         var ch = await OpenAsync();
 
         var reply = ch.RequestAsync(Ops.SessionReply, new { id = Id, request = Guid.NewGuid().ToString(), text = "hello" });
-        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
+        await HostWait.UntilAsync(() => injector.Plans.Count == 1, "the reply to start typing", Patience);
         Assert.Equal(("busy", "an answer or reply to this session is being delivered, or it is already being ended"), Pair(await StopAsync(ch)));
         release.SetResult();
         Assert.Equal("delivered", (await reply).GetProperty("result").GetProperty("outcome").GetString());
@@ -467,7 +467,7 @@ public sealed class StopFlowTests : IAsyncLifetime
         await source.RefreshAsync();
         injector.OnInject = null;
         var stopping = StopAsync(ch);
-        await Wait.UntilAsync(() => source.Get(Id)?.Status == SessionStatus.Ending, "the session to show as ending", Patience);
+        await HostWait.UntilAsync(() => source.Get(Id)?.Status == SessionStatus.Ending, "the session to show as ending", Patience);
         var during = await ch.RequestAsync(Ops.SessionReply, new { id = Id, request = Guid.NewGuid().ToString(), text = "wait" });
         Assert.Equal("busy", during.GetProperty("result").GetProperty("outcome").GetString());
         Assert.Equal("busy", (await StopAsync(ch)).Outcome_);

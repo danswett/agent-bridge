@@ -16,6 +16,8 @@ param githubClientId = 'Iv23liXL0Mvqs2dckn5U'
 // app.slipgates.com is the PWA's new address (#393). The github.io origin stays listed so the
 // move can be rolled back and the old address keeps working until it is retired.
 param allowedOrigins = ['https://danswett.github.io', 'https://app.slipgates.com']
+// Staging only: the throwaway preview site for real-device testing (#1068). Never in allowedOrigins.
+param stagingExtraAllowedOrigins = ['https://preview.slipgates.com']
 
 param production = {
   name: 'agent-bridge-relay'
@@ -39,6 +41,7 @@ param staging = {
   version: readEnvironmentVariable('RELAY_STAGING_VERSION', '')
   identityName: 'id-agent-bridge-relay-staging'
   keyVaultName: 'kv-abrelay-stg-wus2'
+  customDomain: 'relay-staging.slipgates.com'
   blobStorageName: 'abblobstgwus2'
   rosterStorageName: 'abrosterstgwus2'
   minReplicas: 0

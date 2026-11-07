@@ -604,10 +604,10 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         var stopping = await ch.CallAsync(HostOps.Stop);
         Assert.True(stopping.GetProperty("stopping").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref stops) == 1, "the stop to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref stops) == 1, "the stop to follow its response", Patience);
         var restarting = await ch.CallAsync(HostOps.Restart);
         Assert.True(restarting.GetProperty("restarting").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
     }
 
     [Fact]
@@ -668,7 +668,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         f.Processes.Exit(AgentKind.Copilot, parent.Id);
         await source.RefreshAsync();
         Assert.True((await ch.CallAsync(HostOps.Restart)).GetProperty("restarting").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the app's restart", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the app's restart", Patience);
     }
 
     [Fact]
@@ -758,7 +758,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(0, Volatile.Read(ref probeHolds));
         await ch.CallAsync(HostOps.Restart);
 
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
         Assert.Equal(0, Volatile.Read(ref stops));
     }
 

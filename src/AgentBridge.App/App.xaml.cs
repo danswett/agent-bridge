@@ -73,19 +73,22 @@ public partial class App : Application
         }
 
         var prefsFile = Path.Combine(appData, $"{options.Profile}-settings.json");
+        var firstInstall = installed && !options.Demo && options.SelfTest is null && AppPreferences.IsFirstRun(prefsFile);
         var prefs = AppPreferences.Load(prefsFile);
+        if (firstInstall) { prefs = prefs with { GuidePending = true }; }
         AppPreferences Prefs() => prefs;
         void SavePrefs(AppPreferences next)
         {
             prefs = next;
             try { next.Save(prefsFile); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"settings not saved: {e.Message}"); }
         }
+        if (firstInstall) { SavePrefs(prefs); }
 
         // One updater for Settings and the automatic updates alike, observed so that what either
         // does is what the account's other devices are told (#51).
         var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile, manager.Layout.ProfileFolder));
         IAppAtSignIn atSignIn = installed ? new RunKey(Paths.Exe) : new NoRunKey();
-        var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay) { LogTo = AppLog.Write };
+        var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay) { LogTo = AppLog.Write, OpenGuideAtFirstLaunch = installed && !options.Demo && options.SelfTest is null && !options.Background && !options.ToastActivated };
 
         if (installed)
         {
@@ -200,8 +203,8 @@ public partial class App : Application
         // changed.
         if (!options.Demo && updater.InstalledVersion is not null)
         {
-            AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write);
-            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui);
+            AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write, blockers: InstallBlockers.Find);
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui, preflight: InstallBlockers.Find);
             // The banner's Restart to update, and Settings' (#516): the updater's changes come on
             // whichever thread made them.
             var appUpdate = AppUpdateViewModel.For(autoUpdater);

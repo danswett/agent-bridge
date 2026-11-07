@@ -1,5 +1,5 @@
 // A static file server for the tests: serves a built site (tools/build-site.mjs) under a
-// path prefix, the way GitHub Pages serves it under /agent-bridge/app/.
+// path prefix, the way GitHub Pages serves it at app.slipgates.com/ (#393).
 //   node test/serve.mjs --port 8790 [--relay <origin>]   builds into .site and serves it
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
@@ -13,7 +13,7 @@ const TYPES = {
   '.webmanifest': 'application/manifest+json', '.png': 'image/png',
 };
 
-export const APP_PATH = '/agent-bridge/app/';
+export const APP_PATH = '/';
 
 export function startStaticServer({ dir, port = 0, prefix = APP_PATH }) {
   const server = http.createServer(async (req, res) => {

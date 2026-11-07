@@ -116,6 +116,18 @@ suites:
     baseline: { tests: 122, skipped: 2, seconds: 13 }
     status: exists
 
+  - id: feedback-inbox
+    kind: component
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.FeedbackInbox.Tests
+    command: dotnet test tests/AgentBridge.FeedbackInbox.Tests -c Release
+    where: ci.yml product
+    status: exists
+
   - id: local-api
     kind: component
     ring: 0
@@ -353,6 +365,19 @@ suites:
     where: ci.yml product
     status: exists
 
+  - id: lab-scripts
+    kind: unit
+    ring: 0
+    select: affected
+    # The clean-VM lab's provisioning and runner-interface drafts, with external commands stubbed:
+    # nothing reaches Azure. Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/lab/**]
+    command: pwsh -NoProfile -File quality/lab/test-scripts.ps1
+    where: ci.yml light
+    status: exists
+
   - id: relay-container
     kind: packaging
     ring: 1
@@ -385,11 +410,13 @@ suites:
     ring: 2
     select: always
     # Every merge to main: only main's newest commit passes the gate, then the x64 and Arm64
-    # packages become one GitHub pre-release, which installed copies update from.
+    # packages become one GitHub pre-release, which installed copies update from. With
+    # APP_SIGNING, the sign job packs and signs them first (#734; docs/app-windows.md, Signing);
+    # either way it asks again whether main is still at this commit, and publish runs only on yes.
     platforms: [win-x64, win-arm64]
     runner: hosted
-    command: see ci.yml publish-gate and publish (main only)
-    where: ci.yml publish-gate, publish
+    command: see ci.yml publish-gate, sign and publish (main only)
+    where: ci.yml publish-gate, sign, publish
     status: exists
 
   - id: app-upgrade
@@ -679,6 +706,20 @@ suites:
     status: exists
 
   # ---------------------------------------------------------------- live, on disposable machines
+  - id: lab-nightly
+    kind: unit
+    ring: 0
+    select: affected
+    # The held nightly lab run's gate and cut verdict (lab-nightly.yml), offline: the gate refuses
+    # every run until the lab's prerequisites are met in reviewed source, and the verdict passes a
+    # cut only when both roles pass it. Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/lab/**, .github/workflows/lab-nightly.yml]
+    command: pwsh quality/lab/test-nightly.ps1
+    where: ci.yml light
+    status: exists
+
   - id: lab-e2e-simulated
     kind: e2e
     ring: 3
@@ -686,8 +727,12 @@ suites:
     # The packaged app and host installed on clean lab VMs, driven end to end (launch, ask,
     # answer from the PWA through the staging relay, reply, attach, stop, transfer between
     # machines) with simulated agents that write real-format transcripts and run the real hook.
+    # Its first coverage (v1, Windows x64 and native Arm64) is agreed in quality/lab/README.md;
+    # only nonexecuting provisioning and runner-interface drafts exist (lab-scripts).
     platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
     runner: lab
+    # Windows x64 and Arm64 nightly, once its gate lets it run (lab-nightly); it refuses today.
+    where: lab-nightly.yml
     status: planned
 
   - id: lab-e2e-agents
@@ -729,6 +774,35 @@ suites:
     runner: lab
     command: build/shadow-soak-vm.ps1 -Status (gate PASS)
     status: exists
+
+  - id: lab-release-verify
+    kind: unit
+    ring: 0
+    select: affected
+    # The held lab release verification's gate and verdict (lab-release-verify.yml), and that
+    # workflow's shape, offline: the gate refuses every verification until its prerequisites are met
+    # in reviewed source, and the verdict passes a release only when the nightly passed it and both
+    # roles' results are that release's. Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/lab/release-*, quality/lab/test-release-verify.ps1, .github/workflows/lab-release-verify.yml]
+    command: pwsh quality/lab/test-release-verify.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: lab-release-verification
+    kind: e2e
+    ring: 4
+    select: always
+    # One named release run through the lab nightly (#854) on both roles and held to its results:
+    # v1 evidence about that release, never a promotion, a channel move or a Beta 1 count (§7, #736).
+    # Held: its gate refuses every run today (quality/lab/release-gate.ps1), and no ring 4 gate
+    # reads it.
+    platforms: [win-x64, win-arm64]
+    runner: lab
+    command: see lab-release-verify.yml (gh workflow run lab-release-verify.yml -f release=v0.1.N -f relay=staging, once its gate allows)
+    where: lab-release-verify.yml
+    status: planned
 
   # ---------------------------------------------------------------- security
   - id: codeql

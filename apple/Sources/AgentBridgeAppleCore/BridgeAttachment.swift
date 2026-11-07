@@ -17,7 +17,7 @@ public struct BridgeAttachment: Identifiable, Sendable {
         try BridgeOperationValidation.require("sessions.attach", in: capabilities)
         try BridgeOperationValidation.require("sessions.reply", in: capabilities)
         let maximum = isLocal && capabilities.contains("sessions.attach.direct") ? Self.maximumDirectBytes : Self.maximumBytes
-        guard !bytes.isEmpty, bytes.count <= maximum else { throw BridgeOperationError("The file must contain 1 to \(maximum) bytes for this connection.") }
+        guard !bytes.isEmpty, bytes.count <= maximum else { throw BridgeOperationError("The file is empty or larger than this connection allows.") }
         guard (1 ... 255).contains(name.utf8.count) else { throw BridgeOperationError("The attachment name must contain 1 to 255 UTF-8 bytes.") }
         if let type, type.utf8.count > 127 {
             throw BridgeOperationError("The attachment type is longer than 127 UTF-8 bytes.")

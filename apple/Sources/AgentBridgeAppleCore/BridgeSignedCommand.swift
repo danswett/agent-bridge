@@ -112,7 +112,7 @@ public struct BridgeTrustQuestion: Identifiable, Sendable, Equatable {
     {
         try BridgeOperationValidation.require("launch.trust", in: capabilities)
         guard !isLocal, answerable, let warning, !warning.isEmpty, warning.utf8.count <= 2048 else {
-            throw BridgeOperationError(atMachine ?? "Answer this folder-trust question at the machine.")
+            throw BridgeOperationError("Answer this folder-trust question at the machine.")
         }
         guard currentQuestionID == id else { throw BridgeOperationError("This folder-trust question is no longer pending.") }
         let command = try BridgeSignedCommand.sign(action: choice == .trust ? .trust : .quit, targetMachinePublicKey: machinePublicKey,

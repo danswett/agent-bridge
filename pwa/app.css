@@ -916,7 +916,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 }
 .delegate-event-mark { display: flex; align-items: center; justify-content: center; width: 16px; height: var(--type-meta-line); color: var(--ab-text2); }
 .delegate-event-text { min-width: 0; overflow-wrap: anywhere; }
-/* A run of more than three (D3): one line, its button, the chevron ending it inside its target
+/* A run of two or more (D3): one line, its button, the chevron ending it inside its target
    and focus ring, then the "still working" link after a 12 gap, each a target of its own
    (ui.md §9.1 A11). Too long for one line (a phone), the link wraps under the summary's words,
    and the icon stays on their first line: each target pads its first line to the target's
@@ -1602,6 +1602,11 @@ summary {
   /* Resting values; collapse-foot.js overrides them inline on the view. */
   .session-view { --fy: 0px; --fcovered: 0px; --foot-h: 0px; }
   .conversation { position: relative; }
+  /* The compact area slides its box down by its room, past the conversation's foot. Clipped here
+     it goes under the bar; unclipped, its lower edge showed in the band under the conversation
+     (an installed iPhone's home indicator): a second reply-box outline under the bar's copy
+     (#1078). clip, not hidden: nothing may scroll it. */
+  .conversation { overflow: clip; }
   .stream-scroll {
     padding-bottom: calc(var(--foot-h, 0px) + var(--ab-space-4));
     scroll-padding-bottom: calc(var(--fcovered, 0px) + var(--ab-space-2));

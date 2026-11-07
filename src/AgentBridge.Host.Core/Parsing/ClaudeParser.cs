@@ -197,7 +197,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
             case "user":
                 {
                     var message = Json.Obj(e, "message");
-                    if (message is { } m && Json.Get(m, "content") is { ValueKind: JsonValueKind.String } content && content.GetString() is { } text && IsNotice(e, text))
+                    if (message is { } m && Json.Get(m, "content") is { ValueKind: JsonValueKind.String } content && Json.Text(content) is { } text && IsNotice(e, text))
                     {
                         Delivered(text, at, confirmed: true);
                         break;
@@ -468,7 +468,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     {
         var message = Json.Obj(e, "message");
         string? text;
-        if (message is { } m && Json.Get(m, "content") is { ValueKind: JsonValueKind.String } s) { text = s.GetString(); }
+        if (message is { } m && Json.Get(m, "content") is { ValueKind: JsonValueKind.String } s) { text = Json.Text(s); }
         else
         {
             var blocks = Blocks(message).ToList();

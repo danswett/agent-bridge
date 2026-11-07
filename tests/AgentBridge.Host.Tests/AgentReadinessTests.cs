@@ -223,7 +223,7 @@ public sealed class AgentReadinessTests : IDisposable
         using var cancel = new CancellationTokenSource();
 
         var pending = service.RefreshAsync(cancel.Token);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await TestTimeoutDiagnostics.WaitAsync(entered.Task, TimeSpan.FromSeconds(30));
         cancel.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
         Assert.Null(service.Snapshot);
@@ -245,10 +245,10 @@ public sealed class AgentReadinessTests : IDisposable
         await using var service = Service(timeout: TimeSpan.FromMinutes(1));
 
         var first = service.RefreshAsync();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await TestTimeoutDiagnostics.WaitAsync(entered.Task, TimeSpan.FromSeconds(30));
         var second = service.RefreshAsync();
         release.SetResult(new CommandResult(true, false, 0, "2.3.4"));
-        var reports = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(30));
+        var reports = await TestTimeoutDiagnostics.WaitAsync(Task.WhenAll(first, second), TimeSpan.FromSeconds(30));
 
         Assert.Single(commands.Calls);
         Assert.All(reports, r => Assert.Equal("2.3.4", Agent(r, "claude").Version));
@@ -264,7 +264,7 @@ public sealed class AgentReadinessTests : IDisposable
         await using var service = Service(timeout: TimeSpan.FromMinutes(1));
 
         var beforeSetup = service.RefreshAsync();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await TestTimeoutDiagnostics.WaitAsync(entered.Task, TimeSpan.FromSeconds(30));
         Task<AgentReadinessReport> afterSetup;
         Task<AgentReadinessReport> overlappingCheck;
         try
@@ -276,7 +276,7 @@ public sealed class AgentReadinessTests : IDisposable
             overlappingCheck = service.RefreshAsync(fresh: true);
         }
         finally { release.TrySetResult(new CommandResult(true, false, 0, "1.2.3")); }
-        var reports = await Task.WhenAll(beforeSetup, afterSetup, overlappingCheck).WaitAsync(TimeSpan.FromSeconds(30));
+        var reports = await TestTimeoutDiagnostics.WaitAsync(Task.WhenAll(beforeSetup, afterSetup, overlappingCheck), TimeSpan.FromSeconds(30));
 
         Assert.Contains("owned setup record", Agent(reports[1], "claude").Hooks.Detail);
         Assert.Contains("owned setup record", Agent(reports[2], "claude").Hooks.Detail);
@@ -294,7 +294,7 @@ public sealed class AgentReadinessTests : IDisposable
         {
             // The probe still times out at 50 ms, then has two seconds to clean up. This
             // outer bound catches a hang, not a loaded runner's scheduling delay (#664).
-            var agent = Agent(await service.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(30)), "claude");
+            var agent = Agent(await TestTimeoutDiagnostics.WaitAsync(service.RefreshAsync(), TimeSpan.FromSeconds(30)), "claude");
             Assert.Equal(ReadinessState.Failed, agent.VersionCheck.State);
             Assert.Contains("timed out", agent.VersionCheck.Detail);
             Assert.Contains("without confirming cleanup", agent.VersionCheck.Detail);
@@ -316,11 +316,11 @@ public sealed class AgentReadinessTests : IDisposable
         // everything else, and a loaded windows-11-arm runner took longer (#638).
         var service = Service(timeout: TimeSpan.FromMinutes(1));
         var pending = service.RefreshAsync();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await TestTimeoutDiagnostics.WaitAsync(entered.Task, TimeSpan.FromSeconds(30));
         var disposing = service.DisposeAsync().AsTask();
         try
         {
-            await disposing.WaitAsync(TimeSpan.FromSeconds(30));
+            await TestTimeoutDiagnostics.WaitAsync(disposing, TimeSpan.FromSeconds(30));
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
             Assert.Null(service.Snapshot);
         }
@@ -381,14 +381,14 @@ public sealed class AgentReadinessTests : IDisposable
             if (Agent(report, "copilot").LastHookHandledAt is not null) { hookHeard.TrySetResult(); }
         };
         service.Start();
-        await initiallyChecked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await TestTimeoutDiagnostics.WaitAsync(initiallyChecked.Task, TimeSpan.FromSeconds(30));
         locator.Installed["copilot"] = "copilot.exe";
         f.Time.Advance(TimeSpan.FromMinutes(10));
-        await laterInstalled.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await TestTimeoutDiagnostics.WaitAsync(laterInstalled.Task, TimeSpan.FromSeconds(30));
 
         SpoolContract.Write(f.Runtime, "copilot", "agent_stop", "{}"u8, [], f.Time.GetUtcNow(), 1);
         Assert.Equal(1, intake.Pass());
-        await hookHeard.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await TestTimeoutDiagnostics.WaitAsync(hookHeard.Task, TimeSpan.FromSeconds(30));
 
         var copilot = Agent(service.Snapshot!, "copilot");
         Assert.Equal(f.Time.GetUtcNow(), copilot.LastHookHandledAt);

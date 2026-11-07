@@ -100,7 +100,17 @@ public sealed class QuestionView : StackPanel
 
         if (!vm.Answerable)
         {
-            Children.Add(new TextBlock { Text = vm.ReadOnlyNote, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") });
+            var note = new TextBlock { Text = vm.ReadOnlyNote, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") };
+            Children.Add(note);
+            if (vm.AtMachineExplanation is { } explanation)
+            {
+                var line = new TextBlock { Text = explanation, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") };
+                void Ink() => note.Foreground = line.Foreground = Ui.ThemedBrush("AbNeedsText", line.ActualTheme);
+                line.Loaded += (_, _) => Ink();
+                line.ActualThemeChanged += (_, _) => Ink();
+                AutomationId(line, "AtMachineExplanation");
+                Children.Add(line);
+            }
             if (vm.ShowReadOnlyFields)
             {
                 foreach (var f in vm.Fields)

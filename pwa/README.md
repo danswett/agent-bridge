@@ -5,7 +5,10 @@ through the relay. Plain ES modules and CSS, no framework, no build step, nothin
 CDN: the page's Content-Security-Policy allows scripts and styles from this site only,
 and network access to the relay only.
 
-Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`.
+Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`. It moves to
+<https://app.slipgates.com/> (#393) when the repository variable `PAGES_APP_AT_ROOT` is `true`: the app is then the
+site's root, and `/app/` redirects to it. The tests serve the app at `/`, as it will be there.
+The move, for people who installed the old address, and its rollback: [docs/app-domain.md](../docs/app-domain.md).
 Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
 
 It shows sessions, their activity and their pending questions, answers those questions
@@ -75,6 +78,7 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/hidden-text.js` | Text not on screen as it runs (#165, #220): the hidden and right-to-left characters the Needs you lane refuses, and the `\uXXXX` escapes code and approvals draw them as (the app's `HiddenText`) |
 | `js/auth-state.js` | An agent that needs sign-in, whose turn ended on an error, or that has stopped answering (#800): every protocol name for them in one place (`Session.attention`, `hello.machine.signIn`, `sessions.signin` and its `signin.*` ops and events, as Connection's contract on #800 has them), the github.com allowlist, the user code's shape, and agent text cut short and refused when token-shaped (the app's `AuthState`) |
+| `js/details-rows.js` | A session's Details rows ([ui.md](../docs/design/ui.md) §6.2, #1087), pure: the words and their order the table both clients share sets ([session-details.json](../docs/design/session-details.json)), which `test/unit/details-rows.test.mjs` checks them against, as the Windows app's `DetailsTableTests` does; `session-card.js` draws what it returns |
 | `js/ui/sign-in-view.js` | The sign-in banners (#800): one per machine, agent and account, naming the sessions held up as links in its line, with Sign in, and focused from a sign-in push's link (#969); and the sheet that press opens, with the code from this device's own `signin.code`, Copy and Open |
 | `js/ui/needs-you-view.js` | Needs you on screen, above the list and apart from it, its entries kept in place across redraws |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each session's answers, replies, files, End session and the launch panel to the machine it is for; which session is chosen (from the address, kept across a resize) and which panes show; the heading, count, empty state and a line per machine that can't be reached |
@@ -216,6 +220,10 @@ sessions and never moves their rows. An entry leaves when its question does.
 * **A form**, or a question this machine won't take from the phone, opens its session (the
   title), where the card says what it asks.
 * **A prompt marked `answerAtMachine`** says "Answer at the machine", with nothing to press.
+  Only `answerAtMachineReason: "shape"` adds "This kind of question can only be answered at
+  the machine." after "Answer at the machine · *machine*", in Needs you's text colour.
+  Both lines are accessible text, not a live region. Missing or unknown reasons retain the
+  current single line. Row status and attention do not change.
 
 The lane's count is the app's badge on the Home Screen or taskbar, where the browser has the
 Badging API (`navigator.setAppBadge`), and nothing where it hasn't.
@@ -477,7 +485,7 @@ account, so it outlives its machine going offline (#172); signing out deletes it
 Each machine on the **Machines** page is a row of two lines (#213): its name, with its icon and
 its state ("Viewing", "Online", "Offline") on that first line; then at most two facts, how many
 sessions it has and its version (with `(dev)` for a build from a working copy), or in the
-version's place "View only" or "Discovery held", the host's own reason in the line's tooltip
+version's place "View only" or, once a hold has lasted two minutes (#1064), "Discovery held", the host's own reason in the line's tooltip
 and said to a screen reader. Its updates and Forget sit inside the row, in its text column, as
 small secondary buttons, and Check for updates under the rows in the same column. Demo mode has usage too (`window.agentBridgeDemo.usage(report)`
 sends a new one; `?usage=0` plays a host without it; `?keep=1` keeps readings between visits,
@@ -500,9 +508,10 @@ destinations) at two sizes, and fail one whose time grows faster than its length
 Code blocks wrap rather than scroll sideways (`pre-wrap`, breaking even a long base64
 token), keeping indentation, and each has a Copy button in its top-right corner that copies
 exactly what the block draws, whatever the wrapping. The button is made by `toDom`, never by
-the parser, so no reply text can produce a `<button>`. It uses the Clipboard API and falls
-back to a hidden text area and `execCommand('copy')` where that API is missing or refuses
-(older WebViews, some iOS Home Screen apps). Inline code has no button.
+the parser, so no reply text can produce a `<button>`. It copies through a hidden text area and
+`execCommand('copy')` first, inside the tap, and uses the Clipboard API where that is refused:
+WebKit's Clipboard API resolved with nothing on the clipboard, so its answer was no proof the text
+got there (#1090). It says Copy failed when neither wrote. Inline code has no button.
 
 What is drawn is what runs (#415, ui.md §6.4, the app's #296): every code block and code span
 reads strictly left to right (`dir="ltr"`, `unicode-bidi: isolate`), with bidi controls,

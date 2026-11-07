@@ -165,7 +165,7 @@ struct MachinesView: View {
                 return
             }
             do { try await store.forget(request.machine.id) }
-            catch { forgetError = "Couldn’t forget \(request.displayedName): \(error.localizedDescription)" }
+            catch { forgetError = "Couldn’t forget \(request.displayedName): \(BridgeShownError.sentence(for: error))" }
         }
     }
 }
