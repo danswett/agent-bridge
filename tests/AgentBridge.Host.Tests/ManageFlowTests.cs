@@ -405,7 +405,9 @@ public sealed class ManageFlowTests : IAsyncLifetime
     public async Task A_host_wired_from_its_settings_refuses_a_restart_while_its_agent_sign_in_entrypoint_is_on()
     {
         manage = Make(new HostSettings(true));
-        await using var signIn = new AgentBridge.Host.SignIn.AgentSignInService(source, null!, null!, null!, null!, () => false, time);
+        // No roster pins anyone (#972 slice 2): it is the entrypoint being on that holds a restart.
+        var nobody = new AgentBridge.Host.SignIn.RosterSignInAuthority(new AgentBridge.Host.SignIn.NoPersonRoster(), () => false, _ => true);
+        await using var signIn = new AgentBridge.Host.SignIn.AgentSignInService(source, nobody, null!, null!, null!, () => false, time);
         host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"))
         {
             Manage = manage,

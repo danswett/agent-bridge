@@ -1679,7 +1679,45 @@ that agent: today Copilot alone, on Windows alone, with Copilot's `.exe` found w
 started. Off, or for another agent, `signin.start` and
 `signin.cancel` return `refused` and no attention says `phone`. Devices cannot change the setting
 yet; that waits for #801's settings path. The capability is offered only to a channel the
-person authority below accepts: a device **pinned as a person** at this machine.
+person authority below accepts: a device the machine's **device roster pins as a person's**. And
+no attention says `phone` while the roster pins nobody (#972 slice 2), so no client offers a Sign
+in every device would be refused; a client still offers it only with the capability.
+
+**The person pin (#972 slice 2).** The pin is #55's signed roster entry
+([device-approval.md](../design/device-approval.md)), read from the machine's verified copy of
+the account's roster through one interface, `IPersonDeviceRoster`: `State` (`None`, `Ready`
+or `Unreadable`), `Find(key, account)`, `Pinned(account)`, `StillPinned(device)` and
+`Changed`. Trust's #55 slice A implements it on its verifier; until then the host's is
+`NoPersonRoster`, which pins nobody, so **no device is offered sign-in on any machine yet**. A
+device is pinned only when all of these hold (Trust's conditions on #972, 6700902097):
+
+* the roster is `Ready`. `None` and `Unreadable` both pin nobody, and `StillPinned` is false on
+  any doubt, a stale roster (device-approval.md §6.3) included;
+* `Find` matches the channel's full static key and relay account, and its device id is that
+  key's. The roster's own kind (`app`, `pwa` or `phone`, `RosterKinds.IsPerson`) and presence
+  (`key` or `webauthn`) decide; **the channel's self-declared kind is never an input**;
+* the device is past probation and confirmed (§3.4): one that isn't is not returned at all;
+* the machine is not read-only, and, where `trustedPeers` enforcement is on, the channel's
+  trusted-peer role is `person`. **A #402 trusted-peer `person` pin no longer opens sign-in**:
+  it is still needed there for the channel to act at all, and never enough.
+
+A grant is bound to the roster entry's `generation` and `add` hash, which change when the
+device is removed or added again. `Changed` fires on every change, a removal heard from another
+host included, and the host looks at every flow at once, as well as every 250 ms: a flow whose
+device is no longer pinned ends `cancelled` and its code is purged, and a re-added device is a
+new grant that never joins the old flow.
+
+* `signin.devices {}` (capability `signin.devices`, **new**) returns who can sign an agent in on
+  this machine, read-only: `{state: "none" | "ready" | "unreadable", devices: [{name, kind,
+  platform, thisDevice?}]}`, from the same roster and the same rules, `thisDevice: true` on the
+  asking device's own entry. Never a device id, key, generation or presence; the name and
+  platform are the roster's (the enrollee's words), with control characters removed. Offered
+  through the relay only, wherever `sessions.signin` itself is turned on (whether or not the
+  asking device is pinned), and only to a `person` role where `trustedPeers` enforcement is on:
+  `service` and `host` peers are refused it. A device shows it on its Machines page (ui.md §6.6);
+  the app beside the host has the same in its status (`signInDevices`,
+  [local-pipe.md](local-pipe.md)). Nothing adds or removes a device here: adding is #55's
+  enrollment, and removing a single device waits for #55's Remove.
 
 Copilot's adapter (`CopilotSignInAdapter`) runs the CLI's own `copilot login --device-code`,
 unpatched, under Engineering's conditional approval (#800 6648319937): **the machine opens a
@@ -1745,10 +1783,10 @@ fields fail closed. Recovery values come only from the host's typed lifecycle.
   Send deadlines cancel the underlying encrypted send as well as its wait, including
   terminal delivery and receipt replay. Lifetime expiry reports `expired` whether the
   worker or sweep observes it first; explicit cancellation before expiry stays `cancelled`.
-* Current pinned **person**, session-read **and** write authority are all required.
-  A self-claimed `app`/`pwa` kind is insufficient even when the transitional trust
-  enforcement switch is off. Service/host roles, revoked/regranted generations,
-  read-only G5 machines and unapproved/default configurations get no capability.
+* A current roster **person** pin (above) is required, and, where trusted-peer enforcement is
+  on, a `person` role too. A self-claimed kind is never an input. Service/host roles,
+  removed/re-added roster entries, a roster that is absent, unreadable or stale, read-only G5
+  machines and unapproved/default configurations get no capability.
 
 The private runner accepts **adapter frames, not guessed Copilot console fixtures**:
 one strict JSON line with exactly `kind: "code"`, `userCode`, `verificationUri`,

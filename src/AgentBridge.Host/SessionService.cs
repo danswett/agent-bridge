@@ -116,6 +116,9 @@ public sealed class SessionService
     // adapter exists for the agent (PhoneSignInSetup). Off by default: nothing is offered.
     internal SignIn.AgentSignInService? SignIn { get; init; }
     internal bool SignInEntrypointApproved { get; init; }
+    // signin.devices (#972 slice 2): who can sign an agent in here, read-only, through the relay, from
+    // the machine's person-device roster, given the asking device's id. Offered with sign-in itself.
+    internal Func<string?, SignInDevices>? SignInDevices { get; init; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -182,6 +185,8 @@ public sealed class SessionService
             case AgentSignIn.Cancel:
                 return SignInEntrypointApproved && SignIn is not null ? await SignIn.CancelAsync(channel, data)
                     : new { outcome = "refused", reason = "agent sign-in is not enabled" };
+            case AgentSignIn.Devices when DevicesOffered(channel):
+                return SignInDevices!(((SecureChannel)channel).PeerStatic is { } peer ? Wire.DeviceId(peer) : null);
             case Ops.PushSubscribe or Ops.PushUnsubscribe or Ops.PushList when push is not null:
                 return await push.HandleAsync(channel, op, data);
             // Notifications turned off on this machine (push.enabled), or never set up: a device
@@ -520,10 +525,13 @@ public sealed class SessionService
         catch (Exception e) when (e is IOException or ObjectDisposedException or InvalidOperationException or OperationCanceledException) { }
     }
 
+    bool DevicesOffered(IProtocolChannel channel) => SignInEntrypointApproved && SignIn is not null && SignInDevices is not null && channel is SecureChannel;
+
     List<string> Offered(IProtocolChannel channel)
     {
         List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus];
         if (SignInEntrypointApproved && SignIn?.Offered(channel) == true) { offered.Add(AgentSignIn.Capability); }
+        if (DevicesOffered(channel)) { offered.Add(AgentSignIn.DevicesCapability); }
         // Who may read history is narrowed by the channel's caller (LocalApi, RemoteAuthorization).
         if (source.ServesHistory) { offered.Add(HistoryProtocol.Capability); }
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }

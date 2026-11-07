@@ -18,6 +18,7 @@ import { checkAnswer } from '../../js/answers.js';
 import { checkReply } from '../../js/replies.js';
 import { checkLaunch, readLaunchOptions, readLaunchResult, readTrustQuestion, readTrustResult } from '../../js/launch.js';
 import { readUpdateCommandResult, readUpdateState } from '../../js/update.js';
+import { readSignInDevices } from '../../js/signin-devices.js';
 import { readUsage } from '../../js/usage.js';
 import { HostClient } from '../../js/host-client.js';
 import { PatchError, applyPatch, readPatch } from '../../js/session-patch.js';
@@ -235,6 +236,8 @@ const READS = {
   UpdateState: { read: readUpdateState },
   UpdateResult: { read: (j) => readUpdateState({ last: j }).last },
   UpdateCommandResult: { read: readUpdateCommandResult },
+  SignInDevices: { read: readSignInDevices },
+  SignInDevice: { read: (j) => readSignInDevices({ state: 'ready', devices: [j] })?.devices[0] ?? null },
   UsageReport: { read: readUsage },
   AgentUsage: { read: (j) => readUsage({ agents: [j] }).agents[0] ?? null },
   UsageWindow: { read: (j) => readUsage({ agents: [{ agent: 'copilot', label: 'Copilot', windows: [j] }] }).agents[0].windows[0] ?? null },

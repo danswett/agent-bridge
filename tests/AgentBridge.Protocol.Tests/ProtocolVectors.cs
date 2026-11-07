@@ -276,6 +276,15 @@ public static class ProtocolVectors
             // Signed in, and still signInNeeded until the model is seen answering (#800 ruling).
             .Valid("signed-in-waiting-for-the-model", new Attention { Kind = AttentionKind.SignInNeeded, Since = T0, Agent = AgentKind.Copilot, Provider = "github", SignIn = SignInWhere.Phone, Recovery = RecoveryState.Pending })
             .Reads("unknown-values-and-fields-from-a-newer-host", """{"kind":"paused","since":"2026-10-28T04:22:43.182Z","errorClass":"cosmic","signIn":"watch","recovery":"teleporting","somethingNew":{"a":1}}""");
+        // #972 slice 2: who can sign an agent in on a machine (signin.devices), read-only. Never an
+        // id, key, generation or presence.
+        f.Record<SignInDevice>(Host)
+            .Valid("this-device", new SignInDevice("iPhone", "phone", "iOS", true))
+            .Valid("another-device", new SignInDevice("Work laptop", "app", "Windows"));
+        f.Record<SignInDevices>(Host)
+            .Valid("listed", new SignInDevices(SignInDeviceStates.Ready, [new("iPhone", "phone", "iOS", true), new("Work laptop", "app", "Windows")]))
+            .Valid("no-roster-yet", new SignInDevices(SignInDeviceStates.None, []))
+            .Valid("unreadable", new SignInDevices(SignInDeviceStates.Unreadable, []));
         f.Record<Session>(Host)
             .Valid("full", FullSession)
             .Valid("minimal", MinimalSession)
