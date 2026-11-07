@@ -25,6 +25,12 @@ async function openDemo(page) {
     window.__copies = [];
     const clipboard = { writeText: (text) => { window.__copies.push(text); return Promise.resolve(); } };
     Object.defineProperty(navigator, 'clipboard', { configurable: true, get: () => clipboard });
+    document.execCommand = (command) => {
+      const a = document.activeElement;
+      if (command !== 'copy' || !(a instanceof HTMLTextAreaElement)) { return false; }
+      window.__copies.push(a.value.slice(a.selectionStart, a.selectionEnd));
+      return true;
+    };
   });
   await go(page, 'machines');
 }

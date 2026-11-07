@@ -100,46 +100,18 @@ static partial class SelfTest
     }
 
     [LibraryImport("user32.dll")]
-    private static partial nint GetForegroundWindow();
-
-    [LibraryImport("user32.dll")]
     private static partial uint GetWindowThreadProcessId(nint hwnd, out uint processId);
 
-    // Escape, down and up, as the keyboard sends it.
-    static unsafe bool PressEscape()
+    // Escape, down and up, using the conversation checks' shared native INPUT layout.
+    static bool PressEscape()
     {
         const ushort escape = 0x1B;
         const uint keyUp = 0x0002;
-        var inputs = stackalloc InjectedInput[2];
-        inputs[0] = new InjectedInput { Type = 1, Union = new InjectedUnion { Key = new KeyInput { Vk = escape, Scan = 0, Flags = 0, Time = 0, ExtraInfo = 0 } } };
-        inputs[1] = new InjectedInput { Type = 1, Union = new InjectedUnion { Key = new KeyInput { Vk = escape, Scan = 0, Flags = keyUp, Time = 0, ExtraInfo = 0 } } };
-        return SendInput(2, inputs, sizeof(InjectedInput)) == 2;
+        KeyInput[] inputs =
+        [
+            new() { Type = 1, Vk = escape },
+            new() { Type = 1, Vk = escape, Flags = keyUp },
+        ];
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<KeyInput>()) == inputs.Length;
     }
-
-    [StructLayout(LayoutKind.Sequential)]
-    struct KeyInput
-    {
-        public ushort Vk;
-        public ushort Scan;
-        public uint Flags;
-        public uint Time;
-        public nint ExtraInfo;
-    }
-
-    // INPUT: a type and a union sized by its largest member, MOUSEINPUT (32 bytes on 64-bit Windows).
-    [StructLayout(LayoutKind.Sequential)]
-    struct InjectedInput
-    {
-        public uint Type;
-        public InjectedUnion Union;
-    }
-
-    [StructLayout(LayoutKind.Explicit, Size = 32)]
-    struct InjectedUnion
-    {
-        [FieldOffset(0)] public KeyInput Key;
-    }
-
-    [LibraryImport("user32.dll")]
-    private static unsafe partial uint SendInput(uint count, InjectedInput* inputs, int size);
 }
