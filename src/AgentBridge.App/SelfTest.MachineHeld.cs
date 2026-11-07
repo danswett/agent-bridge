@@ -32,7 +32,9 @@ static partial class SelfTest
         try
         {
             machine.Host.Sessions.SetHeld(new DiscoveryHeld(reason, [AgentKind.Copilot]));
-            var said = await Until(() => Facts()?.Text.EndsWith(" · Discovery held", StringComparison.Ordinal) == true, TimeSpan.FromSeconds(5));
+            // The window's one-second timer is not started in a self-test, and the row is drawn on its fifth tick
+            // once the hold is due; so the ticks are driven here, as the sign-in captures drive theirs.
+            var said = await Until(() => { main.Tick(); return Facts()?.Text.EndsWith(" · Discovery held", StringComparison.Ordinal) == true; }, TimeSpan.FromSeconds(10));
             await Task.Delay(300);
             var facts = Facts();
             var name = facts is null ? null : FrameworkElementAutomationPeer.CreatePeerForElement(facts)?.GetName();
@@ -70,11 +72,13 @@ static partial class SelfTest
         remote.ResumeHeldReason = "an unrecognised copilot process (pid 4120)";
         try
         {
+            // The Codex pick an earlier step left would not be this session's agent.
+            launch.Agent = launch.Agents.FirstOrDefault(a => a.Value == "copilot") ?? launch.Agent;
             launch.Resume = launch.Resumes.FirstOrDefault(r => r.Value.Length > 0);
             launch.Prompt = "";
             launch.Launch();
             var said = await Until(() => launch.StatusText == wanted, TimeSpan.FromSeconds(10));
-            check(said && launch.StatusTone == Tone.Progress, $"says a resume on a held machine waits for discovery, not that it was refused ({launch.StatusText})");
+            check(said && launch.StatusTone == Tone.Progress, $"says a resume on a held machine waits for discovery, not that it was refused ({launch.StatusText}{(launch.Problem.Length > 0 ? $" | {launch.Problem}" : "")})");
             var line = ById<TextBlock>(window.RootElement, "LaunchStatus");
             check(line is { ActualHeight: > 0 } && line.Text == wanted, "draws that line on the Launch page");
             foreach (var theme in contrast ? new[] { ElementTheme.Default } : new[] { ElementTheme.Light, ElementTheme.Dark })
