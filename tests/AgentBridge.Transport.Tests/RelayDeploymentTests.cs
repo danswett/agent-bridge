@@ -206,10 +206,12 @@ public class RelayDeploymentTests
     [Fact]
     public void Latency_and_connect_histograms_and_the_live_gauge_are_dimensioned_by_kind_only()
     {
-        var metrics = new RelayMetrics(new ServiceCollection().AddMetrics().BuildServiceProvider().GetRequiredService<IMeterFactory>(), () => 3, () => [new("host", 2), new("app", 1)]);
+        var factory = new ServiceCollection().AddMetrics().BuildServiceProvider().GetRequiredService<IMeterFactory>();
+        var metrics = new RelayMetrics(factory, () => 3, () => [new("host", 2), new("app", 1)]);
         var seen = new List<(string Instrument, double Value, string[] Keys, object? Kind)>();
         using var listener = new MeterListener();
-        listener.InstrumentPublished = (i, l) => { if (i.Meter.Name == RelayMetrics.MeterName) { l.EnableMeasurementEvents(i); } };
+        // Relays in other tests share the meter name and run in parallel: listen to this factory only.
+        listener.InstrumentPublished = (i, l) => { if (i.Meter.Name == RelayMetrics.MeterName && ReferenceEquals(i.Meter.Scope, factory)) { l.EnableMeasurementEvents(i); } };
         listener.SetMeasurementEventCallback<double>((i, v, tags, _) => seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], tags.ToArray().FirstOrDefault().Value)));
         listener.SetMeasurementEventCallback<int>((i, v, tags, _) => seen.Add((i.Name, v, [.. tags.ToArray().Select(t => t.Key)], tags.ToArray().FirstOrDefault().Value)));
         listener.Start();
