@@ -29,18 +29,18 @@ are.
    means the first file; "ARM-based processor" means the second. The installer files are named
    `AgentBridgeApp`, but the app itself is called Slipgates.
 3. Run it. Windows shows a blue box, **Windows protected your PC**. This is expected: the beta
-   installer is not signed yet, and Windows warns about any installer it does not recognise.
+   installer is not signed yet, and Windows warns about any installer it does not recognize.
    Click **More info**, then **Run anyway**.
 4. Slipgates opens. Under **Agents on this machine** it shows whether your coding tools are
-   ready and offers **Set up** or **Repair** for the hooks. Installing a CLI, signing in to it
-   and trusting a folder are separate steps you do yourself; if one is missing, tell us rather
-   than assuming it is done. The app keeps itself up to date and offers **Restart to update**
+   ready and offers **Set up** or **Repair** for the hooks. Slipgates doesn't install your coding
+      CLI, sign you in to it or trust your project folder; do those yourself first. If **Set up**
+      can't make an agent ready, tell us which step it stopped at. The app keeps itself up to date and offers **Restart to update**
    when there is a newer version.
 
 ## Connect your phone
 
-1. On your PC, open Slipgates > Settings > relay and choose **Sign in with GitHub**. It shows a
-   code and a GitHub link.
+1. On your PC, open Slipgates > **Settings** and, under **Your devices**, choose
+   **Sign in with GitHub**. It shows a code and a GitHub link.
 2. On your phone, open <https://danswett.github.io/agent-bridge/app/> and choose
    **Sign in with GitHub**. Open the GitHub link it shows, enter the code, and use the same
    GitHub account as your PC.
@@ -49,7 +49,7 @@ are.
 ## Known issues
 
 - The installer is unsigned, so Windows warns as described above (#734).
-- On Windows on Arm the x64 installer runs but is untested; use the Arm installer.
+- On Windows on Arm, use the Arm installer. The Intel/AMD one runs there but we haven't tested it.
 - See the list of open bugs for the rest: <https://github.com/danswett/agent-bridge/issues>.
 
 ## What we collect
@@ -64,8 +64,9 @@ how much each sends.
 
 Until the in-app Send feedback button lands (#738, #739), reply in the email or Teams
 conversation your invitation came in. Please do not file it as a public issue. If something
-fails, tell us the first step that failed and its exact error message (or that a PC session
-appeared on your phone). Never send tokens or sign-in codes.
+fails, tell us the first step that failed and its exact error message. If it all worked, tell
+us that too: a PC session showing on your phone is the end of the guide. Never send tokens or
+sign-in codes.
 
 ## Uninstall
 
