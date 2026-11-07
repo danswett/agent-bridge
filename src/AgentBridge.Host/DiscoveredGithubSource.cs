@@ -1,5 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host.Core.Updates;
+using Velopack;
+using Velopack.Logging;
 using Velopack.Sources;
 
 namespace AgentBridge.Host;
@@ -16,11 +18,21 @@ namespace AgentBridge.Host;
 sealed class DiscoveredGithubSource(string repository, bool prereleases, ReleaseDiscovery discovery, IFileDownloader? downloader = null, Func<string?>? installed = null)
     : GithubSource(repository, null, prereleases, downloader)
 {
+    // The channel of the check under way (the installed package's, `win` or `win-arm64`), which a
+    // list from the CDN is judged by: Velopack names it to GetReleaseFeed, not to GetReleases.
+    readonly AsyncLocal<string?> channel = new();
+
+    public override Task<VelopackAssetFeed> GetReleaseFeed(IVelopackLogger logger, string? appId, string channel, Guid? stagingId = null, VelopackAsset? latestLocalRelease = null)
+    {
+        this.channel.Value = channel;
+        return base.GetReleaseFeed(logger, appId, channel, stagingId, latestLocalRelease);
+    }
+
     protected override async Task<GithubRelease[]> GetReleases(bool includePrereleases)
     {
         // Read through discovery, so a list this can't read is its failure, backed off, never kept.
         var releases = await discovery.ReleasesAsync(ReleaseDiscovery.ReleasesUrl(RepoUri.ToString()),
-            json => JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None, installed?.Invoke());
+            json => JsonSerializer.Deserialize<GithubRelease?[]>(json) ?? [], CancellationToken.None, installed?.Invoke(), channel.Value, includePrereleases);
         // As GithubSource orders and filters its own.
         return [.. releases.OfType<GithubRelease>().OrderByDescending(r => r.PublishedAt).Where(r => includePrereleases || !r.Prerelease)];
     }

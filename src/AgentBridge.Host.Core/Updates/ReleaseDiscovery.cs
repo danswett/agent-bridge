@@ -31,11 +31,12 @@ namespace AgentBridge.Host.Core.Updates;
 // first, which caches GitHub's answer for every machine, and of GitHub only when the relay can't
 // give a list this trusts. The relay is untrusted transport: its list is used only if every asset
 // it names downloads from this repository's own GitHub releases (DownloadPrefix), in the release
-// that names it, it has something to install, and it is no older than the newest release already
-// seen here or installed; anything else is GitHub's to answer, as before. Feeds and packages still
+// that names it, it has a feed for this machine's channel, and that channel's newest release in it
+// is no older than the newest GitHub last listed for the channel here, nor than what is installed;
+// anything else is GitHub's to answer, as before. Feeds and packages still
 // come from GitHub's download URLs and are still checked against their checksums. A list from the
-// relay is as old as the relay's copy (its Age header), never "GitHub answered now": FetchedAt
-// says so, and GitHub's own backoff stays in force until GitHub itself answers.
+// relay is as old as the relay's copy (its Age header, which it must send), never "GitHub answered
+// now": FetchedAt says so, and GitHub's own backoff stays in force until GitHub itself answers.
 public sealed class ReleaseDiscovery : IDisposable
 {
     // The switch, off until the relay is live (SRE, #927): flipped by a release, never by a setting.
@@ -135,8 +136,10 @@ public sealed class ReleaseDiscovery : IDisposable
     // The release list as read: a list that read throws JsonException for (a field of the wrong
     // type, `[{"prerelease":{}}]`) is an answer that couldn't be read, so it is neither kept nor
     // served from the file, and is backed off like any other failure, never a raw JsonException.
-    // installed: the version installed here, which a relay's list may not be older than.
-    public async Task<T> ReleasesAsync<T>(string url, Func<string, T> read, CancellationToken cancellationToken, string? installed = null)
+    // installed: the version installed here, channel: this machine's Velopack channel (`win`,
+    // `win-arm64`) and prereleases: whether they are offered, which a relay's list is judged by;
+    // without a channel the relay isn't asked.
+    public async Task<T> ReleasesAsync<T>(string url, Func<string, T> read, CancellationToken cancellationToken, string? installed = null, string? channel = null, bool prereleases = true)
     {
         await turn.WaitAsync(cancellationToken);
         try
@@ -153,28 +156,28 @@ public sealed class ReleaseDiscovery : IDisposable
             // touch it.
             var holding = state.NotBefore is { } wait && now < wait;
             if (cached && now < state.FreshUntil && (!holding || state.Source == Sources.Cdn)) { return releases; }
-            if (cdn && url == GitHubList)
+            if (cdn && url == GitHubList && channel is not null)
             {
-                var (body, age, refused) = await AskCdnAsync(state.Url == url ? state.Body : null, installed, cancellationToken);
+                // The floor is only ever GitHub's: a relay's list, however it checked out, never
+                // raises it, so a forged high version can't make later genuine lists look old.
+                var floor = state.Url == url && state.Floors?.TryGetValue(Floor(channel, prereleases), out var f) == true ? f : null;
+                var (body, age, refused) = await AskCdnAsync(floor, installed, channel, prereleases, cancellationToken);
                 now = time.GetUtcNow();
-                if (body is not null && Readable(body, read, out var relayed))
+                if (body is not null && age is { } a && Readable(body, read, out var relayed))
                 {
                     // GitHub's backoff, its failures and its problem stay as they were: only
                     // GitHub answering ends them (Platform on #927, 6711518771).
-                    var asOf = now - (age ?? TimeSpan.Zero);
                     state = state with
                     {
                         Url = url,
                         Body = body,
                         ETag = null,
-                        FetchedAt = asOf,
+                        FetchedAt = now - a,
                         FreshUntil = now + Interval + IntervalJitter * random(),
                         Source = Sources.Cdn,
                     };
                     Write(state);
-                    log?.Invoke(age is { } a
-                        ? $"update check: the release list came from the CDN, from its copy of {Span(a)} ago"
-                        : "update check: the release list came from the CDN, which didn't say how old its copy is");
+                    log?.Invoke($"update check: the release list came from the CDN, from its copy of {Span(a)} ago");
                     return relayed;
                 }
                 log?.Invoke($"update check: the CDN's release list was not used, as {refused ?? "it could not be read"}; {(holding ? "GitHub is not asked again yet" : "asking GitHub")}");
@@ -185,10 +188,11 @@ public sealed class ReleaseDiscovery : IDisposable
             var unchanged = answer.Status == HttpStatusCode.NotModified && cached;
             if (unchanged || answer.Status == HttpStatusCode.OK && answer.Body is not null && Readable(answer.Body, read, out releases))
             {
+                var body = unchanged ? state.Body : answer.Body;
                 state = state with
                 {
                     Url = url,
-                    Body = unchanged ? state.Body : answer.Body,
+                    Body = body,
                     ETag = answer.ETag ?? (unchanged ? state.ETag : null),
                     FetchedAt = now,
                     FreshUntil = now + Interval + IntervalJitter * random(),
@@ -196,6 +200,7 @@ public sealed class ReleaseDiscovery : IDisposable
                     Failures = 0,
                     Problem = null,
                     Source = Sources.GitHub,
+                    Floors = ChannelNewest(body),
                 };
                 Write(state);
                 if (cdn) { log?.Invoke("update check: the release list came from GitHub"); }
@@ -235,8 +240,9 @@ public sealed class ReleaseDiscovery : IDisposable
     sealed record Answer(HttpStatusCode Status, string? Body = null, string? ETag = null, TimeSpan? Wait = null, string? Problem = null);
 
     // The relay's list and how old its copy is, or why it is not used: words for the log, never
-    // an exception's text or the relay's body.
-    async Task<(string? Body, TimeSpan? Age, string? Refused)> AskCdnAsync(string? seen, string? installed, CancellationToken cancellationToken)
+    // an exception's text or the relay's body. A copy of unknown age is not used: it could be any
+    // age, and counted fresh it would end holds only a new answer may end (#934, review 6711939053).
+    async Task<(string? Body, TimeSpan? Age, string? Refused)> AskCdnAsync(string? floor, string? installed, string channel, bool prereleases, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, CdnList);
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
@@ -249,8 +255,8 @@ public sealed class ReleaseDiscovery : IDisposable
             // Whatever the handler did, the answer must be the relay's own for exactly this
             // page: a redirect followed elsewhere is not it.
             if (response.RequestMessage?.RequestUri?.AbsoluteUri is { } answered && answered != CdnList) { return (null, null, "the CDN sent the check elsewhere"); }
-            var age = response.Headers.Age;
-            if (age > CdnOldest) { return (null, age, $"its copy was {Span(age.Value)} old"); }
+            if (response.Headers.Age is not { } age) { return (null, null, "the CDN didn't say how old its copy is"); }
+            if (age > CdnOldest) { return (null, age, $"its copy was {Span(age)} old"); }
             // Read as UTF-8 whatever charset it claims (GitHub's list is JSON), and only so much:
             // a reply this can't decode or that never ends is the relay's failure, not the check's.
             if (response.Content.Headers.ContentLength > CdnLargest) { return (null, age, "its list was too large"); }
@@ -264,7 +270,7 @@ public sealed class ReleaseDiscovery : IDisposable
                 bytes.Write(buffer, 0, read);
             }
             var body = System.Text.Encoding.UTF8.GetString(bytes.GetBuffer(), 0, (int)bytes.Length);
-            return CdnProblem(body, seen, installed) is { } problem ? (null, age, problem) : (body, age, null);
+            return CdnProblem(body, channel, prereleases, floor, installed) is { } problem ? (null, age, problem) : (body, age, null);
         }
         catch (Exception e) when (e is HttpRequestException or IOException or InvalidOperationException || e is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
@@ -276,19 +282,20 @@ public sealed class ReleaseDiscovery : IDisposable
     // (IsList), every release in it published (not a draft) and every asset downloading from this
     // repository's own releases, in the release that names it: a checksum only proves a package
     // matches the feed that names it, so a list naming another host's feed could name a hostile
-    // package (SRE, #927). Empty, cut short, or with nothing to install is a failed read, never
-    // "nothing newer". And it may not go backwards: older than a list seen here, or than what is
-    // installed, it would hold this machine back.
-    internal static string? CdnProblem(string body, string? seen, string? installed)
+    // package (SRE, #927). Empty, cut short, or with nothing for this machine's channel is a failed
+    // read, never "nothing newer". And it may not go backwards: the newest release Velopack can
+    // offer this channel from it (Selected) may not be older than what GitHub's last list here
+    // offered it (floor), nor than what is installed. Judged by that, not by the newest tag
+    // anywhere in the list: a forged newer release carrying only another channel's feed would
+    // otherwise pass while Velopack took an older one (review 6711939053).
+    internal static string? CdnProblem(string body, string channel, bool prereleases, string? floor, string? installed)
     {
         if (!IsList(body)) { return "its list could not be read"; }
         using var doc = JsonDocument.Parse(body);
-        Version? newest = null;
-        var installable = false;
         foreach (var release in doc.RootElement.EnumerateArray())
         {
             if (release.TryGetProperty("draft", out var draft) && draft.ValueKind != JsonValueKind.False) { return "its list named an unpublished release"; }
-            if (!release.TryGetProperty("tag_name", out var tagValue) || tagValue.GetString() is not { } tag || TagVersion(tag) is not { } version)
+            if (!release.TryGetProperty("tag_name", out var tagValue) || tagValue.GetString() is not { } tag || TagVersion(tag) is null)
             {
                 return "its list named a release without a version";
             }
@@ -303,18 +310,69 @@ public sealed class ReleaseDiscovery : IDisposable
                 {
                     return "its list named a download outside this project's GitHub releases";
                 }
-                if (name.StartsWith("releases.", StringComparison.Ordinal) && name.EndsWith(".json", StringComparison.Ordinal))
-                {
-                    installable = true;
-                    newest = newest is null || version > newest ? version : newest;
-                }
             }
         }
-        if (!installable || newest is null) { return "its list had nothing to install"; }
-        if (Newest(seen) is { } before && newest < before) { return "its list was older than one already seen here"; }
-        if (installed is not null && Version.TryParse(installed, out var current) && newest < current) { return "its list was older than the version installed here"; }
+        if (Selected(doc.RootElement, channel, prereleases) is not { } selected) { return "its list had nothing to install on this machine"; }
+        if (floor is not null && Version.TryParse(floor, out var before) && selected < before) { return "its list was older than GitHub's last list here"; }
+        if (installed is not null && Version.TryParse(installed, out var current) && selected < current) { return "its list was older than the version installed here"; }
         return null;
     }
+
+    // The newest release Velopack's GithubSource can offer this channel from a list: it reads the
+    // releases.<channel>.json of every release that carries one (pre-releases only when they are
+    // on, as DiscoveredGithubSource filters them) and offers the newest version among them, and a
+    // feed it can't download fails the whole check. So a release without this channel's index
+    // never counts, and one naming an index GitHub doesn't have fails rather than steers.
+    static Version? Selected(JsonElement list, string channel, bool prereleases)
+    {
+        var index = $"releases.{channel}.json";
+        Version? newest = null;
+        foreach (var release in list.EnumerateArray())
+        {
+            if (release.ValueKind != JsonValueKind.Object
+                || !release.TryGetProperty("tag_name", out var t) || t.ValueKind != JsonValueKind.String || TagVersion(t.GetString()!) is not { } version
+                || !prereleases && release.TryGetProperty("prerelease", out var pre) && pre.ValueKind == JsonValueKind.True
+                || !release.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array
+                || !assets.EnumerateArray().Any(a => a.ValueKind == JsonValueKind.Object && a.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String && n.GetString() == index))
+            {
+                continue;
+            }
+            if (newest is null || version > newest) { newest = version; }
+        }
+        return newest;
+    }
+
+    // What GitHub's own list gives each channel, with and without pre-releases: the floor a
+    // relay's list for that channel may not fall below.
+    static Dictionary<string, string>? ChannelNewest(string? body)
+    {
+        if (body is null) { return null; }
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) { return null; }
+            var floors = new Dictionary<string, string>(StringComparer.Ordinal);
+            var channels = doc.RootElement.EnumerateArray()
+                .Where(r => r.ValueKind == JsonValueKind.Object && r.TryGetProperty("assets", out var a) && a.ValueKind == JsonValueKind.Array)
+                .SelectMany(r => r.GetProperty("assets").EnumerateArray())
+                .Select(a => a.ValueKind == JsonValueKind.Object && a.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString()! : "")
+                .Where(n => n.StartsWith("releases.", StringComparison.Ordinal) && n.EndsWith(".json", StringComparison.Ordinal) && n.Length > "releases..json".Length)
+                .Select(n => n["releases.".Length..^".json".Length])
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            foreach (var channel in channels)
+            {
+                foreach (var prereleases in new[] { true, false })
+                {
+                    if (Selected(doc.RootElement, channel, prereleases) is { } v) { floors[Floor(channel, prereleases)] = v.ToString(); }
+                }
+            }
+            return floors;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    static string Floor(string channel, bool prereleases) => $"{channel}|{(prereleases ? "pre" : "stable")}";
 
     // Exactly the prefix and one more plain path segment: no query, fragment, escape, credentials
     // or dot segments that could lead the download anywhere else.
@@ -330,25 +388,6 @@ public sealed class ReleaseDiscovery : IDisposable
     static Version? TagVersion(string tag) =>
         tag.Length > 1 && tag[0] == 'v' && tag.Skip(1).All(c => char.IsAsciiDigit(c) || c == '.')
         && Version.TryParse(tag[1..], out var version) ? version : null;
-
-    // The newest version a list kept here names, whichever source gave it.
-    static Version? Newest(string? body)
-    {
-        if (body is null) { return null; }
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) { return null; }
-            Version? newest = null;
-            foreach (var release in doc.RootElement.EnumerateArray())
-            {
-                if (release.ValueKind == JsonValueKind.Object && release.TryGetProperty("tag_name", out var t) && t.ValueKind == JsonValueKind.String
-                    && TagVersion(t.GetString()!) is { } v && (newest is null || v > newest)) { newest = v; }
-            }
-            return newest;
-        }
-        catch (JsonException) { return null; }
-    }
 
     static string Span(TimeSpan span) =>
         span < TimeSpan.FromMinutes(1) ? "under a minute"
@@ -543,6 +582,8 @@ public sealed class ReleaseDiscovery : IDisposable
         public string? Problem { get; init; }
         public DateTimeOffset? Saved { get; init; }
         public string? Source { get; init; }
+        // What GitHub's last list offered each channel (ChannelNewest), never a relay's.
+        public Dictionary<string, string>? Floors { get; init; }
     }
 }
 

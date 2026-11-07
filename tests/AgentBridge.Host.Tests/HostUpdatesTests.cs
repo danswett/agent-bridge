@@ -267,18 +267,24 @@ public sealed class HostUpdatesTests : IDisposable
     // the CDN's can't be trusted. Releases name their feeds under this repository's GitHub releases.
     static string Downloaded(string version, string file) => $"{ReleaseDiscovery.DownloadPrefix}v{version}/{file}";
 
-    static string Listed(string version, string? feed = null) => $$"""
+    static string Listed(string version, string? feed = null, string index = "releases.win.json") => $$"""
         {"tag_name":"v{{version}}","name":"Agent Bridge {{version}}","draft":false,"prerelease":true,"published_at":"2026-11-07T18:00:00Z","assets":[
-          {"name":"releases.win.json","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/1","browser_download_url":"{{feed ?? Downloaded(version, "releases.win.json")}}","content_type":"application/json"}]}
+          {"name":"{{index}}","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/1","browser_download_url":"{{feed ?? Downloaded(version, index)}}","content_type":"application/json"}]}
         """;
 
     static string ChannelFeed(string version) =>
         $$"""{"Assets":[{"PackageId":"AgentBridgeApp","Version":"{{version}}","Type":"Full","FileName":"AgentBridgeApp-{{version}}-full.nupkg","SHA1":"0000000000000000000000000000000000000000","SHA256":"0000000000000000000000000000000000000000000000000000000000000000","Size":1}]}""";
 
-    static HttpResponseMessage Listing(string json, TimeSpan? age = null)
+    static HttpResponseMessage Listing(string json)
     {
-        var answer = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) };
-        if (age is { } a) { answer.Headers.Age = a; }
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) };
+    }
+
+    // The CDN's answer, saying how old its copy is, as it must for it to be used.
+    static HttpResponseMessage Relayed(string json, TimeSpan age = default)
+    {
+        var answer = Listing(json);
+        answer.Headers.Age = age;
         return answer;
     }
 
@@ -327,7 +333,7 @@ public sealed class HostUpdatesTests : IDisposable
     [Fact]
     public async Task With_the_switch_on_the_release_list_is_read_from_the_cdn_first_and_github_is_not_asked()
     {
-        var web = new FakeWeb { Cdn = () => Listing($"[{Listed("0.1.602")},{Listed("0.1.601")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.602")},{Listed("0.1.601")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
         var said = new List<string>();
         using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, log: said.Add, cdn: true);
 
@@ -362,7 +368,7 @@ public sealed class HostUpdatesTests : IDisposable
     [InlineData("https://github.com/danswett/agent-bridge/releases/download/v0.1.665/releases.win.json")]
     public async Task A_cdn_list_naming_a_download_outside_this_projects_github_releases_is_refused_and_github_is_used(string feed)
     {
-        var web = new FakeWeb { Cdn = () => Listing($"[{Listed("0.1.666", feed)},{Listed("0.1.601")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.666", feed)},{Listed("0.1.601")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
         using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: true);
 
         Assert.Equal("0.1.601", await OfferedAsync(discovery));
@@ -373,7 +379,7 @@ public sealed class HostUpdatesTests : IDisposable
     [Fact]
     public async Task A_cdn_list_older_than_the_version_installed_here_is_refused_and_github_is_used()
     {
-        var web = new FakeWeb { Cdn = () => Listing($"[{Listed("0.1.599")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.599")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
         using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: true);
 
         Assert.Equal("0.1.601", await OfferedAsync(discovery));
@@ -388,7 +394,7 @@ public sealed class HostUpdatesTests : IDisposable
     [InlineData("""[{"tag_name":"v0.1.602","name":"Agent Bridge 0.1.602","draft":false,"prerelease":true,"assets":[""")]
     public async Task An_empty_cut_short_or_uninstallable_list_from_the_cdn_is_a_failed_read_and_github_is_asked(string list)
     {
-        var web = new FakeWeb { Cdn = () => Listing(list), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var web = new FakeWeb { Cdn = () => Relayed(list), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
         using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: true);
 
         Assert.Equal("0.1.601", await OfferedAsync(discovery));
@@ -405,7 +411,7 @@ public sealed class HostUpdatesTests : IDisposable
         Assert.True((await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => OfferedAsync(discovery))).Limited);
 
         time.Advance(TimeSpan.FromMinutes(5));
-        web.Cdn = () => Listing($"[{Listed("0.1.602")}]", age: TimeSpan.FromMinutes(3));
+        web.Cdn = () => Relayed($"[{Listed("0.1.602")}]", TimeSpan.FromMinutes(3));
         Assert.Equal("0.1.602", await OfferedAsync(discovery));
         Assert.Equal(time.GetUtcNow() - TimeSpan.FromMinutes(3), discovery.FetchedAt);
 
@@ -419,12 +425,62 @@ public sealed class HostUpdatesTests : IDisposable
     [Fact]
     public async Task With_the_switch_off_the_cdn_is_never_asked()
     {
-        var web = new FakeWeb { Cdn = () => Listing($"[{Listed("0.1.602")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.602")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
         using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0);
 
         Assert.Equal("0.1.601", await OfferedAsync(discovery));
 
         Assert.Equal((0, 1), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    // Review 6711939053: a copy of unknown age could be any age, so it is not used.
+    [Fact]
+    public async Task A_cdn_list_that_does_not_say_how_old_it_is_is_not_used_and_github_is_asked()
+    {
+        var web = new FakeWeb { Cdn = () => Listing($"[{Listed("0.1.602")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var said = new List<string>();
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, log: said.Add, cdn: true);
+
+        Assert.Equal("0.1.601", await OfferedAsync(discovery));
+
+        Assert.Equal((1, 1), (web.CdnRequests, web.GitHubRequests));
+        Assert.Contains("update check: the CDN's release list was not used, as the CDN didn't say how old its copy is; asking GitHub", said);
+    }
+
+    // Review 6711939053: judged by what this machine's channel would be offered, not by the newest
+    // tag anywhere: a forged newer release carrying only another channel's index, beside a genuine
+    // older Windows one, is a list that would take this machine back.
+    [Fact]
+    public async Task A_cdn_list_whose_newest_release_carries_only_another_channels_feed_is_refused_below_githubs_last_list()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero));
+        var web = new FakeWeb { GitHub = () => Listing($"[{Listed("0.1.602")},{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, time, random: () => 0, cdn: true);
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+
+        time.Advance(ReleaseDiscovery.Interval);
+        web.Cdn = () => Relayed($"[{Listed("0.1.999", index: "releases.linux.json")},{Listed("0.1.601")}]");
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+
+        Assert.Equal((2, 2), (web.CdnRequests, web.GitHubRequests));
+    }
+
+    // Review 6711939053: only GitHub's own list sets the floor, so a relay's list naming a release
+    // GitHub doesn't have (its feed can't be read, so the check fails) can't make later genuine
+    // relay lists look old.
+    [Fact]
+    public async Task A_forged_newer_release_from_the_cdn_does_not_make_its_later_genuine_lists_look_old()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero));
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.999")},{Listed("0.1.601")}]") };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, time, random: () => 0, cdn: true);
+        await Assert.ThrowsAnyAsync<Exception>(() => OfferedAsync(discovery));
+
+        time.Advance(ReleaseDiscovery.Interval);
+        web.Cdn = () => Relayed($"[{Listed("0.1.602")},{Listed("0.1.601")}]");
+        Assert.Equal("0.1.602", await OfferedAsync(discovery));
+
+        Assert.Equal((2, 0), (web.CdnRequests, web.GitHubRequests));
     }
 
     [Fact]
@@ -433,7 +489,7 @@ public sealed class HostUpdatesTests : IDisposable
         var feed = Directory.CreateDirectory(Path.Combine(root, "releases")).FullName;
         File.WriteAllText(Path.Combine(feed, "releases.win.json"), ChannelFeed("0.1.605"));
         File.WriteAllText(Path.Combine(Directory.CreateDirectory(Path.Combine(root, "app")).FullName, "feed.txt"), feed);
-        var web = new FakeWeb { Cdn = () => Listing($"[{Listed("0.1.602")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
+        var web = new FakeWeb { Cdn = () => Relayed($"[{Listed("0.1.602")}]"), GitHub = () => Listing($"[{Listed("0.1.601")}]") };
         using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), web, random: () => 0, cdn: true);
         var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
         var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");

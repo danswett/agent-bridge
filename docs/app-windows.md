@@ -401,10 +401,17 @@ into one folder with one version. An app update is a host update, so they never 
     (and its API `url`, if any, under this repository's release assets), with nothing else in the
     URL: a checksum only proves a package matches the feed that names it, so a list naming
     another host's feed could name a hostile package;
-  * has something to install (a release carrying a `releases.<channel>.json`): an empty list,
-    one cut short or one with nothing to install is a failed read, never "nothing newer";
-  * is no older than the newest release in the list kept here, nor than the version installed;
-  * comes from a copy at most an hour old (its `Age` header).
+  * has something to install on this machine (a release carrying its channel's
+    `releases.<channel>.json`): an empty list, one cut short or one with nothing for this channel
+    is a failed read, never "nothing newer";
+  * offers this channel nothing older than GitHub's last list here offered it, nor than the
+    version installed. That is judged by the newest release carrying this channel's index (with
+    pre-releases only when they are on), which is what Velopack offers from it, never by the
+    newest tag anywhere in the list: a forged newer release with only another channel's index
+    must not pass while Velopack takes an older one. Only GitHub's own lists set that floor, so a
+    relay's list can't make later ones look old;
+  * says how old its copy is (`Age`, which the relay must send, `0` for a fresh fetch) and that
+    is at most an hour: a copy of unknown age is not used.
 
   Feeds and packages still download from those GitHub URLs and are still checked against their
   checksums as before (#719). A list from the relay counts as old as the relay says (`FetchedAt`
