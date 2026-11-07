@@ -73,9 +73,10 @@ the third-party connector API that Home Assistant is the first client of.
   wrong-token failure that AGENTS.md records for agent-ha-bridge (the 2026-09-29 blue card) can't
   happen, because an agent only ever holds an agent credential (design.md:503-506).
 * **G3. Least authority.** Read, reply and launch only. Never `session.answer` on an approval,
-  never `launch.trust.answer`, never `stop`, `transfer`, `update`, `forget`, settings or pairing.
+  never `launch.trust.answer`, never `stop` except an agent's own launched children (§5.2,
+  `agent.stop-own`), never `transfer`, `update`, `forget`, settings or pairing.
   Never an **unattended** reply into an allow-all session, and never a launch that isn't
-  explicitly `ask` (§5.2, §5.3). The owner's opt-ins (§5.7) add a per-message approval, a
+  explicitly `ask` unless the owner set `allowAll` at the machine for that workspace (§5.2, §5.3). The owner's opt-ins (§5.7) add a per-message approval, a
   same-account setting the owner enables knowingly, and read-only cross-account access.
 * **G4. Owner control per machine.** Each machine's policy is set at that machine (the app's
   Settings, or `agent-bridge-host config`, refused inside agent sessions, local-pipe.md:85-141).
@@ -182,6 +183,10 @@ The credential replaces `AGENT_HA_AGENT_TOKEN`, as design.md:495 planned.
 * **Scope.** Taken from the machine's policy at issue (§5.1), narrowed by the launch:
   * a launch can say `"agentScope": "none" | "read" | "read+reply" | "read+reply+launch"`
     (additive to `session.launch`, default: the policy's);
+  * an additional scope, **`agent.stop-own`**, lets the agent `session.stop` the sessions that
+    this same credential launched and nothing else (§5.2). It is **default off**, is set by the
+    machine's policy (`agents.stopOwn`, §5.1), and is not one of the ladder values above: a
+    launch may narrow it away but never grant it;
   * a launch made **by an agent** can never widen its sender's scope, and inherits its
     conversation `chain`, in which the launched session counts as one more distinct session (§5.4).
 * **Expiry.** A token is valid while its session's bound process lives, and for at most
@@ -530,7 +535,12 @@ may not reach.
 
   The inner `data` is the exact UTF-8 bytes of the inner op's request `data` (here
   `{"id":"…","text":"…"}` for `session.reply`), base64url without padding. Base64 adds a third
-  to a 16 KiB reply, which still fits v1's 48 KiB message. The result is the inner op's result, unchanged (`delivered`, `unconfirmed`, `busy`, `notIdle` (§5.2), `held` (§5.7), `refused`,
+  to a 16 KiB reply, which still fits v1's 48 KiB message. **The native reply cap is 16 KiB of
+  text per message.** The interim Home Assistant path (`script.agent_bridge_reply_payload`, a
+  64 KB JSON payload, driver `agent`, a fresh unique `at`, then a press of `button.<node>_submit`;
+  and `script.agent_bridge_launch_payload`) is the stopgap that native replaces. Until a larger
+  cap is decided (Q55), a longer reply is split into numbered parts ("1/3") or linked through a
+  GitHub comment. The result is the inner op's result, unchanged (`delivered`, `unconfirmed`, `busy`, `notIdle` (§5.2), `held` (§5.7), `refused`,
   `stale`, …; a launch's `started`, …). A refusal is `{ ok: false, error }` with a reason in
   words, which the issuing host passes back to the agent.
 * **Capability.** `agent.command` in `hello` (host-to-host channels only), and only while the host
@@ -682,14 +692,14 @@ meant as off is never read as on (host-config.md:139-141).
     "allowAgentLaunchedToLaunch": false
   },
   "inbound": {
-    "local":  { "read": "any", "reply": "forced-ask", "gate": "quiet", "allowAllTargets": false, "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] } },
+    "local":  { "read": "any", "reply": "forced-ask", "gate": "quiet", "allowAllTargets": false, "launch": { "workspaces": "approved", "permissions": ["ask"], "agents": ["<default>"], "profiles": ["<default>"] } },
     "remote": {
       "fromMachines": "any",
       "read": "any",
       "reply": "forced-ask",
       "gate": "quiet",
       "allowAllTargets": false,
-      "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] }
+      "launch": { "workspaces": "approved", "permissions": ["ask"], "agents": ["<default>"], "profiles": ["<default>"] }
     },
     "exclude": { "sessions": [], "workspaces": [] }
   },
@@ -719,7 +729,8 @@ meant as off is never read as on (host-config.md:139-141).
 | `inbound.*.reply` | `forced-ask` \| `agent-launched` \| `none` | Which sessions an agent may reply to. `forced-ask` is every session the host launched in forced-ask mode with no grant or mode change since (§5.3), which is the widest possible value. `agent-launched` is the subset an agent launched. `none` is none. **Default: `forced-ask`** (Q37). Adopted and manually started sessions are never reply targets, because their mode is unknown (§5.3) |
 | `inbound.*.gate` | `off` \| `quiet` \| `push` | Whether a reply or launch into a session that **isn't provably forced-ask** (allow-all or unknown-mode, §5.3) is **held** for the owner's per-message, presence-signed approval instead of refused (§5.7 G). `quiet` holds are counted on Needs-you and never pushed; `push` allows at most one aggregated, text-free push an hour. **Default: `quiet`** for the account's own agents; cross-account G is per link (`expose.gate`). Never offered to connectors |
 | `inbound.*.allowAllTargets` | `false`, or `{ workspaces: "same" \| "any" }` | Whether **this account's own** agents may reply into allow-all and unknown-mode sessions on this machine **without** a gate (§5.7 O). Set in `inbound.local`, it covers agents on this machine; in `inbound.remote`, agents on the account's other machines, which needs `workspaces: "any"` since `"same"` never matches across machines. Never for another account, a connector, a federated or `homeassistant:` principal, or a chain with a cross-account hop. **Default: `false`** in both. When enabled, the app proposes `inbound.local` with `workspaces: "same"`, and shows the escalation warning |
-| `inbound.*.launch` | `false`, or `{ workspaces: "approved" \| [labels], permissions: "ask", agents: [ids], profiles: [names] }` | Where an agent may launch. The request must state `permissions` **explicitly** (§5.2). An **unattended** launch is `ask` only. `allowAll` is possible only as a **new gated launch** (§5.7 G): the person approves the exact manifest, prompt, base commit and fresh worktree with presence, so it stays a person's decision, as design.md §5.6 requires even from a phone. `agents` and `profiles` are **allowlists**, empty by default except the machine's default agent and profile, each checked not to grant allow-all (§5.2) |
+| `agents.stopOwn` | `false` \| `true` | Whether agents get the `agent.stop-own` scope (§3.3, §5.2): `session.stop` of a session this same agent credential launched, and no other. **Default: `false`.** Set at the machine |
+| `inbound.*.launch` | `false`, or `{ workspaces: "approved" \| [labels], permissions: ["ask"] \| ["ask","allowAll"], agents: [ids], profiles: [names] }` | Where an agent may launch. The request must state `permissions` **explicitly** (§5.2), and it must be one of the listed values. **Default: `["ask"]`.** An **unattended** launch is `ask`, unless the owner listed `allowAll` (§5.2, launch rules). Otherwise `allowAll` is possible only as a **new gated launch** (§5.7 G): the person approves the exact manifest, prompt, base commit and fresh worktree with presence, so it stays a person's decision, as design.md §5.6 requires even from a phone. `agents` and `profiles` are **allowlists**, empty by default except the machine's default agent and profile, each checked not to grant allow-all (§5.2) |
 | `inbound.remote.fromMachines` | `any` \| `[add hash]` | Which of the account's machines may send. `any` means any active, non-probationary rostered host. A list names **add entries**, which the app picks by machine name, never bare device ids. A machine that is re-enrolled or displaced has a new add hash, so it drops out until the owner re-selects it (§8.10, V3, V4) |
 | `inbound.exclude` | session ids and workspace labels | Never reachable by any agent, local or remote. A person can mark a private session or workspace this way |
 | `limits.*` | integers | §5.4, §5.5 |
@@ -743,12 +754,12 @@ each with its warning. Until a host is in roster
 |---|---|---|
 | `sessions.list`, `session.get`, `session.read` (wait for change), `launch.options`, `launch.result` | Yes, if `read` permits. `launch.options` reaches agents **without titles**: each `resumable[]` entry is a reader-generated handle plus typed fields (agent, model, status, last active), never its free-text `title` (v1-launch.md:50-52, :66), which a tainted or external launch could set | Policy. Sessions not readable are left out of lists, and are `not-found` when named |
 | `session.reply` (text only) | Yes, if `reply` permits, and only into a target §5.3 allows, or through an owner's opt-in of §5.7 (a held, approved message, or the own-account setting) | Policy, §5.3, then the existing reply checks (v1-sessions.md:413-470), **then the agent-reply delivery guard below** |
-| `session.launch` (new, or resume) | Yes, if `launch` permits, with **explicit** `permissions`: `"ask"` for an unattended (provably forced-ask) launch, or `"allowAll"` only as a **new** gated launch the person approves with presence (§5.7 G) | Policy, the launch rules below, then `LaunchProtocol.Check` and the machine's offered values |
+| `session.launch` (new, or resume) | Yes, if `launch` permits, with **explicit** `permissions`: `"ask"` for an unattended (provably forced-ask) launch, `"allowAll"` unattended only where the owner listed it for that workspace (launch rules), or otherwise only as a **new** gated launch the person approves with presence (§5.7 G) | Policy, the launch rules below, then `LaunchProtocol.Check` and the machine's offered values |
 | `session.launch` with `transfer` | **No** | Transfers need a person command (#391 §7.2) |
 | `session.answer`: an approval (Copilot permission, Claude permission, Codex approval) | **Never** | Not in the action set (§4.3), and refused on the pipe for agent connections (`LocalApi.cs:44-47`'s rule kept) |
 | `session.answer`: an `ask_user` or `AskUserQuestion` form | **No in v1** (Q3) | As above. Decision 1 lists read, reply and launch only |
 | `launch.trust.answer` (folder trust, Bypass Permissions warning) | **Never** | Relay person-device only (v1-launch.md:216-219), and not in the action set |
-| `session.stop` | **No in v1** (Q12) | Not in the action set |
+| `session.stop` | **Only a session this same agent credential launched**, and only with the `agent.stop-own` scope (`agents.stopOwn`, default off). Never any other session, nor the sender's own parent or a sibling | The host checks the target id against the launch record's `chain`/parent (the credential that launched it), never against a caller-supplied claim. The host's two-press rule still applies: a stop of an idle session ends it on one request, and a **working** session needs a second, confirming request within 10 s. The fleet convention is that the launcher ends every session it launches, and nothing ends sessions automatically |
 | `attachment.*` | **No in v1** | Not in the action set |
 | `update.*`, `push.*`, `host.*`, `machine.forget`, `pairing.*`, roster ops, settings | **Never** | Not in the action set. Pipe management ops are already refused inside agent sessions |
 
@@ -815,8 +826,16 @@ connector `act` profile, Q26):
 **Launch rules for agents.**
 * `permissions` must be present. **A launch or resume without it is refused**, never filled from
   the machine's `defaults.permissions`, which may be `allowAll` (v1-launch.md:101).
-  * `ask` is the only value for an **unattended** launch.
-  * `allowAll` is accepted **only as a new gated launch** (§5.7 G): held until the person approves
+  * `ask` is the only value for an **unattended** launch, except for the owner's opt-in below.
+  * **Owner opt-in for unattended `allowAll`** (fleet coordinators launching teams): honoured only
+    if `inbound.*.launch.permissions` lists `"allowAll"`, which only the owner can set, at the
+    machine, per workspace label (Q54). Default is `["ask"]`. A launch with `allowAll` is refused
+    unless the target workspace label is one the owner set it for. The launched session is shown
+    as **allow-all and agent-launched** (driver `agent`, `driverPrincipal`). It counts against the
+    existing depth and fan-out limits (§5.4). An agent can never widen its own policy or scope
+    through it, and it never allows answering an approval or folder trust (§5.2): those stay
+    person-only. The launched session is not a reply target under §5.3 (it is allow-all).
+  * `allowAll` is otherwise accepted **only as a new gated launch** (§5.7 G): held until the person approves
     its exact manifest, prompt and fresh worktree with presence. That was the adversarial
     review's agreed item 8.
 * **Every agent launch is a provably forced-ask launch** (§5.3 (A)): a host-owned configuration
@@ -3370,7 +3389,7 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 
 | Party | Assumption | Must not be able to | Can (residual) |
 |---|---|---|---|
-| **A prompt-injected agent with tools only** (MCP and file tools in an `ask` session, no unattended shell) | Holds its own credential and follows hostile instructions | Answer an approval or folder trust anywhere. Launch with allow-all, or without an explicit `ask`. Reply into an allow-all, unknown-mode or working session (§5.3), unless the target's owner approves that exact message or enabled own-account allow-all targets (§5.7). Have its words or Enter land in a prompt that opens mid-delivery (§5.2's guard). Stop, transfer, update, change settings, adopt, or widen its own scope. Reach excluded sessions. Exceed depth, budget or rates. Appear as the person | Read and reply to sessions the policy allows, and launch `ask` sessions in approved workspaces, within budgets. Each act is attributed, audited and shown violet. That is the owner's chosen reach (decision 2). If the owner enabled `allowAllTargets` (§5.7 O): get commands run without a prompt through an allow-all session in that scope, the risk the setting's warning states |
+| **A prompt-injected agent with tools only** (MCP and file tools in an `ask` session, no unattended shell) | Holds its own credential and follows hostile instructions | Answer an approval or folder trust anywhere. Launch without an explicit `ask`, or with allow-all unless the owner listed `allowAll` for that workspace at the machine. Reply into an allow-all, unknown-mode or working session (§5.3), unless the target's owner approves that exact message or enabled own-account allow-all targets (§5.7). Have its words or Enter land in a prompt that opens mid-delivery (§5.2's guard). Stop any session other than ones its own credential launched (and that only with `agent.stop-own`; the child id is checked by the host against the launch record, not taken from the caller), transfer, update, change settings, adopt, or widen its own scope. Reach excluded sessions. Exceed depth, budget or rates. Appear as the person | Read and reply to sessions the policy allows, and launch `ask` sessions in approved workspaces, within budgets. Each act is attributed, audited and shown violet. That is the owner's chosen reach (decision 2). If the owner enabled `allowAllTargets` (§5.7 O): get commands run without a prompt through an allow-all session in that scope, the risk the setting's warning states |
 | **A prompt-injected agent with a shell** (it can run commands, after the person approved them or because its own session is allow-all) | All of the above, plus it runs processes as the user | Make another session's agent act through the bridge without a reply that passes §5.2 and §5.3 at the target | Everything the user can, locally: it is same-user code (§1.3, local-pipe.md:121-130). That includes using another session's token if it can read it, by spoofing its parent or joining that session's Job (§3.4: the ancestry check is a safety rail, not a boundary). Its subprocesses inherit its token (§3.4) |
 | **Another session's agent, or a detached helper**, on the same machine, holding a stolen token (from a readable environment, or a transcript that printed it) | Same OS user | Use it casually: on Windows the token is accepted only from a process inside the bound session's ancestry or Job object, read in full and failing closed, and `AGENT_BRIDGE_SESSION` proves nothing (§3.4). Outlive the session: the token dies with its process | On macOS and Linux nothing, because there are no agent credentials until peer identification exists (§3.4). On Windows, a helper that deliberately spoofs its parent (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`) or joins the session's Job passes the rail: that is a **safety rail, not a boundary**, and such code is same-user malware (below) |
 | **A stolen person's device** (unlocked, with its presence check passable) | Holds `sign`, maybe a `linkKey` | Beyond #391 §2's bounds: add or re-key hosts on a federation link, or rotate its key, without the peer person's confirmation (§7.3). Renew a link after its removal, holding only that device: the attesters stop co-signing (§7.3) | Until removed: what #391 allows a person's device, including drive sessions (#391 §7.3), and re-sign statements for links it holds the key for. Removal revokes those links, and each host sends a tombstone under its own `hostSign` (§7.3, §7.7). If the device is also a listed host or attester (the single-laptop setup), it renews its links until a tombstone from the required separate revoker arrives, or they expire |
@@ -3531,8 +3550,12 @@ Each has a recommendation. None is decided by this note.
 11. **Q11. Use the trusted-peer floor (#407) as an interim for cross-machine agent messaging?**
     **Recommended: no.** Decision 4 says wait for the roster, and the floor is for disposable
     evaluation (host-config.md:145-148). It may host AP5's tests on disposable hosts only.
-12. **Q12. May an agent stop a session?** **Recommended: not in v1** (decision 1). Revisit
-    allowing a session to stop sessions *it launched*, which is the useful case.
+12. **Q12. May an agent stop a session?** **Recommended: no, except sessions it launched itself**
+    (decision 1 stays for every other session). The fleet convention is that the launcher ends
+    every session it launches, and nothing ends sessions automatically, so a narrow, optional
+    `agent.stop-own` scope (§3.3, §5.2) is added, default off and set by machine policy. The
+    host binds the target to the launch record, and the two-press rule for a working session
+    still applies. Awaiting the owner's approval.
 13. **Q13. Read scope within the account.** **Recommended:** the same `Session` a person's device
     gets (decision 2: "any session"), minus `inbound.exclude`. Cross-account uses the projection
     (§7.4).
@@ -3854,3 +3877,23 @@ Decisions the reviews of `f3559996` asked to make explicit:
 
     **Decided: (a).** (b) stays a possible later design, to be reconsidered only if O proves
     unusable after updates.
+
+54. **Q54. Unattended `allowAll` launches by coordinators.** Fleet coordinators launch teams
+    unattended with "Allow all", which §5.2 otherwise forbids. **Recommended:** an owner-only,
+    per-machine, per-workspace opt-in, `inbound.*.launch.permissions: ["ask","allowAll"]`
+    (default `["ask"]`). It is honoured only when the owner set it at the machine for that
+    workspace label, shows on the launched session as allow-all and agent-launched, stays inside
+    the depth and fan-out limits, never lets an agent widen its own policy, and never allows
+    answering approvals or folder trust. The alternative is to keep every `allowAll` launch a
+    presence-approved gated launch (§5.7 G). Needs the owner's decision and an independent
+    security review.
+55. **Q55. Reply size.** The native cap is 16 KiB of text per message, which fits v1's 48 KiB
+    message. The interim Home Assistant path (64 KB JSON) is the stopgap native replaces, so long
+    replies are split into numbered parts or linked via a GitHub comment. **Open:** whether to
+    raise the cap, and to what.
+56. **Q56. Tests for the stop-own and unattended-launch changes.** The AP1 slice adds tests that
+    fail without them: `session.stop` of a session another credential launched, the sender's
+    parent, or a sibling is refused; a caller-supplied child id that differs from the launch
+    record is refused; `stop` is refused without `agent.stop-own`; a working child needs the
+    second press within 10 s; `allowAll` is refused unless the owner listed it for that
+    workspace, and an agent edit of its own policy has no effect.
