@@ -23,9 +23,9 @@ public static class Program
         // package (this profile's running app and host, and every other profile's) without a word.
         // A release downloaded waits for Restart to update (AutoUpdater).
         // No after-update callback (#497, #1167): the host it started was ended by Velopack as soon
-        // as the hook exited (1.2.161's run_hook force-stops the package after every hook), and its
-        // wait for that host held every update back by up to 10 s. The restarted app starts the
-        // host, once (App.StartHostAsync).
+        // as the hook exited (1.2.161's run_hook force-stops the package after every hook), and the
+        // hook, waiting up to 10 s for that host, took 4-15 s in Velopack's log on one machine (11
+        // of 49 killed at its 15 s limit). The restarted app starts the host, once (App.StartHostAsync).
         VelopackApp.Build()
             .SetAutoApplyOnStartup(false)
             .OnBeforeUpdateFastCallback(_ => Lifecycle.BeforeUpdate())

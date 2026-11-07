@@ -63,8 +63,25 @@ function Find-Window([string]$dir) {
     return $null
 }
 
-function Stop-From([string]$dir) {
-    Get-Process -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and $_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) } catch { $false } } | Stop-Process -Force -ErrorAction SilentlyContinue
+function Get-From([string]$dir) {
+    Get-Process -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and $_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) } catch { $false } }
+}
+
+# Ends every process this run started: the old app, Update.exe and whatever it started (the new
+# version, a hook), each with its children, and anything else running from the install. The old
+# app in its demo holds the demo's single-instance mutex (Program.cs), shared across scratch
+# folders, so one left running would keep the next run's app from opening. Bounded: 15 s, then it
+# fails rather than letting a run start against a survivor.
+function Stop-Run([string]$dir, [Diagnostics.Process[]]$started) {
+    foreach ($p in $started) {
+        if ($p -and -not $p.HasExited) { try { $p.Kill($true) } catch { } }
+    }
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while (($left = @(Get-From $dir)).Count -and $deadline.Elapsed.TotalSeconds -lt 15) {
+        $left | ForEach-Object { try { $_.Kill($true) } catch { } }
+        Start-Sleep -Milliseconds 200
+    }
+    if (($left = @(Get-From $dir)).Count) { throw "could not end $(($left | ForEach-Object { "$($_.ProcessName) ($($_.Id))" }) -join ', ') running from $dir" }
 }
 
 $extra = if ($Runtime -ne 'win-x64') { @('--runtime', $Runtime) } else { @() }
@@ -84,41 +101,43 @@ $root = Join-Path $Work 'root'
 $handoff = Join-Path $Work 'handoff'
 $results = @()
 for ($i = 1; $i -le $Runs; $i++) {
-    Stop-From $root
+    Stop-Run $root @()
     if (Test-Path $root) { Remove-Item $root -Recurse -Force }
     [IO.Compression.ZipFile]::ExtractToDirectory($portable.FullName, $root)
     New-Item -ItemType Directory -Force $handoff | Out-Null
     $copy = Join-Path $handoff $package.Name
     Copy-Item $package.FullName $copy -Force
 
-    $old = Start-Process (Join-Path $root 'current\AgentBridge.exe') -ArgumentList '--demo' -PassThru
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    while (-not (Find-Window $root) -and $sw.Elapsed.TotalSeconds -lt 120) { Start-Sleep -Milliseconds 100 }
-    if (-not (Find-Window $root)) { throw "run ${i}: the old version's window did not open" }
+    $old = $null; $update = $null; $new = $null
+    try {
+        $old = Start-Process (Join-Path $root 'current\AgentBridge.exe') -ArgumentList '--demo' -PassThru
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        while (-not (Find-Window $root) -and $sw.Elapsed.TotalSeconds -lt 120) { Start-Sleep -Milliseconds 100 }
+        if (-not (Find-Window $root)) { throw "run ${i}: the old version's window did not open" }
 
-    $log = Join-Path $Work "update-$i.log"
-    $apply = @('--silent', 'apply', '--package', "`"$copy`"", '--waitPid', "$($old.Id)", '--rootDir', "`"$root`"", '--packageDir', "`"$root\packages`"", '--log', "`"$log`"", '--', '--demo')
-    $update = Start-Process (Join-Path $root 'Update.exe') -ArgumentList $apply -PassThru
-    # As the app does: it starts Update.exe, then exits, and its window goes with it.
-    Stop-Process -Id $old.Id -Force
-    $gone = Get-Date
-    $new = $null
-    while (-not $new -and ((Get-Date) - $gone).TotalSeconds -lt 120) {
-        $new = Find-Window $root
-        if ($new -and $new.Id -eq $old.Id) { $new = $null }
-        if (-not $new) { Start-Sleep -Milliseconds 20 }
+        $log = Join-Path $Work "update-$i.log"
+        $apply = @('--silent', 'apply', '--package', "`"$copy`"", '--waitPid', "$($old.Id)", '--rootDir', "`"$root`"", '--packageDir', "`"$root\packages`"", '--log', "`"$log`"", '--', '--demo')
+        $update = Start-Process (Join-Path $root 'Update.exe') -ArgumentList $apply -PassThru
+        # As the app does: it starts Update.exe, then exits, and its window goes with it.
+        Stop-Process -Id $old.Id -Force
+        $gone = Get-Date
+        while (-not $new -and ((Get-Date) - $gone).TotalSeconds -lt 120) {
+            $new = Find-Window $root
+            if ($new -and $new.Id -eq $old.Id) { $new = $null }
+            if (-not $new) { Start-Sleep -Milliseconds 20 }
+        }
+        $shown = Get-Date
+        if (-not $update.WaitForExit(120000)) { throw "run ${i}: Update.exe did not finish in 120 s" }
+        $version = (Select-String -Path (Join-Path $root 'current\sq.version') -Pattern '<version>([^<]+)</version>').Matches[0].Groups[1].Value
+        $results += [pscustomobject]@{
+            Run = $i
+            Installed = $version
+            StartS = if ($new) { [math]::Round(($new.StartTime - $gone).TotalSeconds, 2) } else { $null }
+            WindowS = if ($new) { [math]::Round(($shown - $gone).TotalSeconds, 2) } else { $null }
+            UpdateExit = $update.ExitCode
+        }
     }
-    $shown = Get-Date
-    $update.WaitForExit(120000) | Out-Null
-    $version = (Select-String -Path (Join-Path $root 'current\sq.version') -Pattern '<version>([^<]+)</version>').Matches[0].Groups[1].Value
-    $results += [pscustomobject]@{
-        Run = $i
-        Installed = $version
-        StartS = if ($new) { [math]::Round(($new.StartTime - $gone).TotalSeconds, 2) } else { $null }
-        WindowS = if ($new) { [math]::Round(($shown - $gone).TotalSeconds, 2) } else { $null }
-        UpdateExit = $update.ExitCode
-    }
-    Stop-From $root
+    finally { Stop-Run $root @($old, $update, $new) }
     Start-Sleep -Seconds 2
 }
 

@@ -1027,8 +1027,8 @@ suites:
     # How long an update keeps the Windows app away (#1167): the old window's close to the new
     # version's process start and window, through Velopack's silent apply on a throwaway portable
     # install, five runs, medians in the run's summary. Arm64 only here (Daily has no Arm64
-    # machine); x64 is measured locally with the same script. Records, does not gate: the owner's
-    # budget is 8 s.
+    # machine), by hand (workflow_dispatch), never on a pull request; x64 is measured locally with
+    # the same script. Records, does not gate, as perf.yml: the owner's budget is 8 s.
     platforms: [win-arm64]
     runner: hosted
     triggers: [build/measure-update-gap.ps1, .github/workflows/update-gap.yml]

@@ -7,6 +7,10 @@ name: Update gap
 # with Velopack's silent apply (#1167's hand-off), five times, then prints the medians.
 # The runner is throwaway, so the update hooks run as they would for a person (-RealHooks); the app
 # restarts into its demo, so no host starts and nothing reaches a relay. No secrets, read-only.
+# Records, does not gate, as perf.yml: a hosted runner's timings vary too much to judge a change
+# by, and the owner's 8 s budget is read from the run's summary. By hand only, never on a pull
+# request, so it never runs a pull request's own code by itself; merge-rule.yml still evaluates
+# after a run, as after any workflow it lists.
 #
 # By hand: gh workflow run update-gap.yml --ref <branch> -f runs=5
 
@@ -17,17 +21,12 @@ on:
         description: How many timed updates
         type: number
         default: 5
-  pull_request:
-    branches: [main]
-    paths:
-      - build/measure-update-gap.ps1
-      - .github/workflows/update-gap.yml
 
 permissions: {}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   arm64:
