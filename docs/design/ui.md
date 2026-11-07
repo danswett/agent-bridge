@@ -862,11 +862,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 
   | # | Row | Value | Shown |
   |---|---|---|---|
-  | 1 | Status | The status words (§2.2), e.g. "Working", "Needs sign-in", without a time: rows 2 and 4 carry it | Always |
-  | 2 | In this state | "for 12m": how long in this status | Not when idle |
+  | 1 | Status | The status words (§2.2), e.g. "Working", "Needs sign-in", without a time: rows 2 and 4 carry it. While away, the away words with their "last seen" | Always |
+  | 2 | In this state | "for 12m": how long in this status | Not when idle or away |
   | 3 | Message | The host's sentence for what is wrong (#800), plain text, never a link | When sent |
-  | 4 | Not responding since | Clock time it went silent (§6.13) | When not responding |
-  | 5 | Driven by | The driver's principal, else "an agent" | When agent-driven |
+  | 4 | Not responding since | Clock time it went silent (§6.13) | When not responding, not away |
+  | 5 | Driven by | The driver's principal, else "an agent" | When agent-driven, not away |
   | 6 | Agent | The agent's name, e.g. "Copilot", "Claude", "Codex" | Always |
   | 7 | Model | As the host reports it | When sent |
   | 8 | Machine | The machine's name | When known |
@@ -885,7 +885,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   identifiers (17-18). Agent and Model sit together because the model is part of who is
   working. A value carries its unit ("12 turns", "pid 4312"), so it still reads right when it
   is copied or read alone. A value wraps rather than being cut off; only Folder shortens, and
-  only by its middle. A label may wrap too. Every value can be selected and copied. The ages and durations tick
+  only by its middle. A label may wrap too. While the session's machine is away (§2.2), Status
+  reads the away words, "Offline · last seen 5m ago" or "Reconnecting…", whose time is the only
+  one in the state group; In this state, Not responding since and Driven by are left out, since
+  they may no longer be so. The other rows stay as last known, and Updated says how old they are. Every value can be selected and copied. The ages and durations tick
   with the row's own clock. The PWA draws it as a `dl`; the Windows app reads each row as
   "Row, value". Both clients take the list from one shared definition where they can, and a
   test in each checks its rows against this table.
