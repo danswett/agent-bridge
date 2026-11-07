@@ -98,18 +98,32 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         public HistoryResult Page(string? before, int limit)
         {
             var (fingerprint, firstAt) = First();
+            if (LastLineEnd() is not { } last)
+            {
+                return before is null
+                    ? new HistoryResult { Turns = [], Start = new HistoryStart { Limited = true }, Partial = true }
+                    : HistoryResult.StaleCursor;
+            }
             long end;
             var depth = 0;
+            var checkedGrowth = false;
             if (before is null)
             {
-                if (LastLineEnd() is not { } last) { return new HistoryResult { Turns = [], Start = new HistoryStart { Limited = true }, Partial = true }; }
                 end = last;
             }
             else
             {
                 if (HistoryCursor.Open(before, reader._key) is not { } cursor || !Fits(cursor, fingerprint)) { return HistoryResult.StaleCursor; }
+                if (cursor.SnapshotEnd > last) { return HistoryResult.StaleCursor; }
                 end = cursor.Offset;
                 depth = cursor.Depth;
+                if (last > cursor.SnapshotEnd)
+                {
+                    checkedGrowth = true;
+                    var (appended, reachedSnapshot) = Back(last, HistoryLimits.Kept - depth, cursor.SnapshotEnd);
+                    depth += appended.Count;
+                    if (!reachedSnapshot || depth >= HistoryLimits.Kept) { return HistoryResult.StaleCursor; }
+                }
             }
             var want = Math.Min(limit, HistoryLimits.Kept - depth);
             if (want <= 0) { return HistoryResult.StaleCursor; }
@@ -117,6 +131,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             var (starts, reachedStart) = Back(end, want);
             if (starts.Count == 0)
             {
+                if (checkedGrowth && !reachedStart) { return HistoryResult.StaleCursor; }
                 // Nothing before it: the start of the session, or as far back as this host looks.
                 return reachedStart
                     ? new HistoryResult { Turns = [], Start = new HistoryStart { At = firstAt } }
@@ -154,7 +169,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                 return result with { Start = new HistoryStart { At = firstAt } };
             }
             if (served >= HistoryLimits.Kept) { return result with { Start = new HistoryStart { Limited = true } }; }
-            var next = new HistoryCursor(oldest.Offset, served, oldest.Id, fingerprint, HistoryCursor.SessionOf(sessionId));
+            var next = new HistoryCursor(oldest.Offset, served, last, oldest.Id, fingerprint, HistoryCursor.SessionOf(sessionId));
             return result with { Before = next.Seal(reader._key) };
         }
 
@@ -288,7 +303,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         // first; and whether it got back to the transcript's start, so nothing is before them.
         // Every line is searched whole for a turn's marks (TurnMarks) as its chunks go by, so a
         // line costs a parse only when it may start a turn, wherever in it its type is.
-        (List<Start> Starts, bool ReachedStart) Back(long end, int want)
+        (List<Start> Starts, bool ReachedStart) Back(long end, int want, long stop = 0)
         {
             var starts = new List<Start>();
             var marks = dialect.Marks;
@@ -303,11 +318,11 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
             try
             {
                 var pos = end;
-                while (pos > 0)
+                while (pos > stop)
                 {
                     cancellation.ThrowIfCancellationRequested();
                     if (scanned >= b.ScanBytes) { return (starts, false); }
-                    var n = (int)Math.Min(b.ChunkBytes, pos);
+                    var n = (int)Math.Min(b.ChunkBytes, pos - stop);
                     pos -= n;
                     scanned += n;
                     ReadAt(chunk.AsSpan(0, n), pos);
@@ -317,16 +332,16 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
                         if (chunk[i] != '\n') { continue; }
                         Mark(chunk.AsSpan(i + 1, segmentEnd - i - 1), segmentEnd == n);
                         if (!Line(pos + i + 1, chunk.AsSpan(0, n), pos)) { return (starts, false); }
-                        if (starts.Count >= want) { return (starts, next == 0); }
+                        if (starts.Count >= want) { return (starts, next == stop); }
                         segmentEnd = i;
                     }
                     // The rest belongs to a line that began in an earlier chunk, or at the start.
                     var rest = chunk.AsSpan(0, segmentEnd);
                     Mark(rest, segmentEnd == n);
                     Carry(rest, segmentEnd == n);
-                    if (pos == 0 && !Line(0, chunk.AsSpan(0, n), 0)) { return (starts, false); }
+                    if (pos == stop && !Line(stop, chunk.AsSpan(0, n), stop)) { return (starts, false); }
                 }
-                return (starts, next == 0);
+                return (starts, next == stop);
             }
             finally { ArrayPool<byte>.Shared.Return(chunk); }
 

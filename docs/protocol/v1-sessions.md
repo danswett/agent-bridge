@@ -17,6 +17,8 @@ resume a session (`sessions.launch`, in [v1-launch.md](v1-launch.md)). Files too
 the channel go through the relay's blob store (`sessions.attach.blob`, in
 [blobs.md](blobs.md)). A session's earlier turns are paged back with `session.history`
 (`sessions.history`, in [v1-history.md](v1-history.md)).
+History cursors can become stale as new turns push them outside the current newest-500 window;
+clients restart paging without `before` and merge by turn id.
 
 ## Rules for every message
 

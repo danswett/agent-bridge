@@ -887,6 +887,7 @@ public static class ProtocolVectors
             .Valid("partial", new HistoryResult { Turns = [new HistoryTurn { Id = TurnA, At = T0, Unreadable = true }, Scheduled], Before = Cursor, Partial = true })
             .Valid("missing", HistoryResult.Gone)
             .Valid("stale", HistoryResult.StaleCursor)
+            .Valid("cursor-aged-out-of-history-window", HistoryResult.StaleCursor)
             .Valid("unavailable", HistoryResult.NotAvailable("this session's transcript can't be found"))
             // A turn whose prompt's sender cannot be read is left out, and the page kept.
             .Reads("a-turn-that-cannot-be-read", Broken(new HistoryResult { Turns = [Whole, Scheduled], Before = Cursor }, j => j["turns"]![1]!["prompt"]!["from"] = 4))

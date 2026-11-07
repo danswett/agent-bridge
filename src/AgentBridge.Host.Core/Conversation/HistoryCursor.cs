@@ -6,18 +6,18 @@ using AgentBridge.Protocol;
 namespace AgentBridge.Host.Core.Conversation;
 
 // session.history's before (docs/protocol/v1-history.md, The cursor): where the oldest turn of a
-// page starts, its id, how many turns had been served by then, the transcript's fingerprint and the
+// page starts, its id, how many turns had been served, the last whole line seen, the transcript's fingerprint and the
 // session, sealed with a MAC under a key the host keeps, so a client can neither read a path from
 // it nor make one that starts anywhere but at a turn it could page to, or skips the 500-turn limit.
 // The key outlives the host's restarts (HistoryKey), so cursors do too.
-internal sealed record HistoryCursor(long Offset, int Depth, byte[] TurnId, byte[] Fingerprint, byte[] Session)
+internal sealed record HistoryCursor(long Offset, int Depth, long SnapshotEnd, byte[] TurnId, byte[] Fingerprint, byte[] Session)
 {
     const string Prefix = "h1.";
-    const byte Version = 1;
+    const byte Version = 2;
     const int FingerprintBytes = 8;
     const int SessionBytes = 8;
     const int MacBytes = 16;
-    const int PayloadBytes = 1 + 8 + 2 + TurnIds.Bytes + FingerprintBytes + SessionBytes;
+    const int PayloadBytes = 1 + 8 + 2 + 8 + TurnIds.Bytes + FingerprintBytes + SessionBytes;
 
     public static byte[] SessionOf(string id) => SHA256.HashData(Encoding.UTF8.GetBytes(id))[..SessionBytes];
 
@@ -32,9 +32,10 @@ internal sealed record HistoryCursor(long Offset, int Depth, byte[] TurnId, byte
         p[0] = Version;
         BinaryPrimitives.WriteInt64BigEndian(p[1..], Offset);
         BinaryPrimitives.WriteUInt16BigEndian(p[9..], (ushort)Depth);
-        TurnId.CopyTo(p[11..]);
-        Fingerprint.CopyTo(p[(11 + TurnIds.Bytes)..]);
-        Session.CopyTo(p[(11 + TurnIds.Bytes + FingerprintBytes)..]);
+        BinaryPrimitives.WriteInt64BigEndian(p[11..], SnapshotEnd);
+        TurnId.CopyTo(p[19..]);
+        Fingerprint.CopyTo(p[(19 + TurnIds.Bytes)..]);
+        Session.CopyTo(p[(19 + TurnIds.Bytes + FingerprintBytes)..]);
         var mac = HMACSHA256.HashData(key, payload)[..MacBytes];
         return Prefix + Attachments.Base64Url([.. payload, .. mac]);
     }
@@ -51,13 +52,15 @@ internal sealed record HistoryCursor(long Offset, int Depth, byte[] TurnId, byte
         if (!CryptographicOperations.FixedTimeEquals(mac, bytes.AsSpan(PayloadBytes))) { return null; }
         if (payload[0] != Version) { return null; }
         var offset = BinaryPrimitives.ReadInt64BigEndian(payload[1..]);
-        if (offset < 0) { return null; }
+        var snapshotEnd = BinaryPrimitives.ReadInt64BigEndian(payload[11..]);
+        if (offset < 0 || snapshotEnd <= offset) { return null; }
         return new HistoryCursor(
             offset,
             BinaryPrimitives.ReadUInt16BigEndian(payload[9..]),
-            payload.Slice(11, TurnIds.Bytes).ToArray(),
-            payload.Slice(11 + TurnIds.Bytes, FingerprintBytes).ToArray(),
-            payload.Slice(11 + TurnIds.Bytes + FingerprintBytes, SessionBytes).ToArray());
+            snapshotEnd,
+            payload.Slice(19, TurnIds.Bytes).ToArray(),
+            payload.Slice(19 + TurnIds.Bytes, FingerprintBytes).ToArray(),
+            payload.Slice(19 + TurnIds.Bytes + FingerprintBytes, SessionBytes).ToArray());
     }
 
     static byte[]? FromBase64Url(string s)

@@ -88,7 +88,7 @@ The result is one of:
 |---|---|
 | A page: `{ "turns": [Turn…], "before"?: …, "start"?: {…}, "partial"?: true }` | See below |
 | `{ "missing": true }` | The session is not one this host lists now: it has ended and been dropped, or never was. As `session.get` |
-| `{ "stale": true }` | `before` is not one this host can continue from: it is malformed, was made for another session or another transcript, or its turn is no longer where it was. The client keeps what it has drawn, asks again without `before`, and merges the new pages by turn id ([Live turns and history](#live-turns-and-history)) |
+| `{ "stale": true }` | `before` is not one this host can continue from: it is malformed, was made for another session or another transcript, its turn is no longer where it was, it aged out of the newest-500 window, or the host could not revalidate it within its read budgets. The client keeps what it has drawn, asks again without `before`, and merges the new pages by turn id ([Live turns and history](#live-turns-and-history)) |
 | `{ "unavailable": "<why, in words>" }` | The host has no history for this session: its transcript can't be found or read, or this agent's transcripts aren't read for history. At most 256 bytes. A client shows "Earlier messages aren't available from this machine" (H5) and may show the reason as secondary text |
 
 A request that is not an object, has no `id`, has a `before` that is not a string, a `limit` that
@@ -289,17 +289,22 @@ holds.
 same session's id; it never parses, builds or compares one.
 
 A host makes it from where the page's oldest turn starts in the transcript, that turn's id, how
-many turns have been served before it, and a fingerprint of the transcript's first record, and
+many turns have been served before it, the last whole line seen, and a fingerprint of the
+transcript's first record, and
 seals it with an HMAC-SHA256 under a key the host keeps in its profile folder
 (`history-cursor.key`: 32 random bytes, made once). So it is the same after the host restarts, and
-it stays good as the transcript grows. Nothing in it names a path. A client cannot make one that
+it stays good as the transcript grows while it remains within the current newest 500 turns.
+Nothing in it names a path. A client cannot make one that
 reads anything but the turns it could page to, nor skip the 500-turn limit. A host that cannot keep
 the key uses one for its run only, and its cursors are then stale after a restart.
 
 A host checks every cursor before using it: its MAC, its session, the transcript's fingerprint,
 and that the record where it says the turn starts is still that turn's prompt. Any of those
 failing (forged, cut, another session's or another host's, a transcript replaced or rewritten, a
-key the host has lost) is `{ "stale": true }`, never a page from somewhere else.
+key the host has lost) is `{ "stale": true }`, never a page from somewhere else. The host counts
+new prompts since the cursor was issued against the same read budgets; if it cannot complete that
+check or no older turn remains within the current window, it returns stale. Cursors from the older
+format without a last-whole-line position are stale too.
 
 ## Live turns and history
 

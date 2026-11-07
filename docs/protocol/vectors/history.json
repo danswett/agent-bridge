@@ -1781,6 +1781,12 @@
           }
         },
         {
+          "name": "cursor-aged-out-of-history-window",
+          "json": {
+            "stale": true
+          }
+        },
+        {
           "name": "unavailable",
           "json": {
             "unavailable": "this session's transcript can't be found"

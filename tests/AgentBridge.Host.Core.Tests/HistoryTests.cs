@@ -373,6 +373,67 @@ public class HistoryTests
     }
 
     [Fact]
+    public async Task A_cursor_that_ages_out_of_the_newest_500_turns_is_stale()
+    {
+        await using var s = new Copilot_();
+        await s.After([.. Enumerable.Range(1, 501).Select(i => Copilot.User("p" + i, i))]);
+        var newest = await s.Page(limit: 50);
+        Assert.Equal(Enumerable.Range(452, 50).Select(i => "p" + i), newest.Turns!.Select(Prompt));
+
+        await s.After([.. Enumerable.Range(502, 500).Select(i => Copilot.User("p" + i, i))]);
+        var earlier = await s.Page(newest.Before, limit: 50);
+        Assert.True(earlier.Stale);
+        Assert.Null(earlier.Turns);
+    }
+
+    [Fact]
+    public async Task A_cursor_that_still_fits_after_growth_stops_at_the_current_window()
+    {
+        await using var s = new Copilot_();
+        await s.After([.. Enumerable.Range(1, 501).Select(i => Copilot.User("p" + i, i))]);
+        var newest = await s.Page(limit: 50);
+        await s.After([.. Enumerable.Range(502, 25).Select(i => Copilot.User("p" + i, i))]);
+
+        var seen = new List<string>();
+        var before = newest.Before;
+        HistoryResult page;
+        do
+        {
+            page = await s.Page(before, limit: 50);
+            Assert.NotEqual(true, page.Stale);
+            seen.InsertRange(0, page.Turns!.Select(Prompt));
+            before = page.Before;
+        }
+        while (before is not null);
+        Assert.Equal(Enumerable.Range(27, 425).Select(i => "p" + i), seen);
+        Assert.True(page.Start!.Limited);
+    }
+
+    [Fact]
+    public async Task A_cursor_whose_growth_cannot_be_checked_within_the_budget_is_stale()
+    {
+        await using var s = new Copilot_(options: With(new HistoryBudgets { PageBytes = 10_000 }));
+        await s.After(Copilot.User("one", 1), Copilot.User("two", 2));
+        var before = (await s.Page(limit: 1)).Before;
+        await s.After([.. Enumerable.Range(3, 5).Select(i => Copilot.User("p" + i + new string('x', 4000), i))]);
+
+        Assert.True((await s.Page(before)).Stale);
+    }
+
+    [Fact]
+    public async Task A_cursor_whose_growth_leaves_no_budget_to_find_the_older_page_is_stale()
+    {
+        await using var s = new Copilot_(options: With(new HistoryBudgets { PageBytes = 10_000 }));
+        await s.After(Copilot.User("one" + new string('x', 4000), 1), Copilot.User("two", 2));
+        var before = (await s.Page(limit: 1)).Before;
+        await s.After(Copilot.User("three" + new string('x', 7000), 3));
+
+        var page = await s.Page(before);
+        Assert.True(page.Stale);
+        Assert.Null(page.Turns);
+    }
+
+    [Fact]
     public async Task A_forged_cut_foreign_or_outdated_cursor_is_stale_never_a_page_from_elsewhere()
     {
         await using var s = new Copilot_();
