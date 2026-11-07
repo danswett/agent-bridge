@@ -826,7 +826,7 @@ may send per-event, pseudonymous diagnostics about failed or slow attempts (setu
 update, answer delivery, connection), so beta reports can be triaged. It is *not*
 anonymous, it carries identifiers, and it is held to its own rules:
 
-* **Opt-in worldwide, off by default, permanently.** Owner decision (#689): no default-on revisit and no regional exemption work is planned. One genuine choice, no region shortcut. The first
+* **Opt-in worldwide, off by default, permanently.** Owner decision ([#689](https://github.com/danswett/agent-bridge/issues/689#issuecomment-6711136992)): no default-on revisit and no regional exemption work is planned. One genuine choice, no region shortcut. The first
   run offers "Not now" and "Allow diagnostics", neither preselected. Settings has "Send
   optional diagnostics" (off). While it is off nothing is collected, queued or uploaded
   as a diagnostic event, and refusing costs no functionality. A purely local per-attempt
