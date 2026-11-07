@@ -1582,6 +1582,11 @@ summary {
   /* Resting values; collapse-foot.js overrides them inline on the view. */
   .session-view { --fy: 0px; --fcovered: 0px; --foot-h: 0px; }
   .conversation { position: relative; }
+  /* The compact area slides its box down by its room, past the conversation's foot. Clipped here
+     it goes under the bar; unclipped, its lower edge showed in the band under the conversation
+     (an installed iPhone's home indicator): a second reply-box outline under the bar's copy
+     (#1078). clip, not hidden: nothing may scroll it. */
+  .conversation { overflow: clip; }
   .stream-scroll {
     padding-bottom: calc(var(--foot-h, 0px) + var(--ab-space-4));
     scroll-padding-bottom: calc(var(--fcovered, 0px) + var(--ab-space-2));
