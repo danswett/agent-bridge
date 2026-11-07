@@ -17,11 +17,12 @@ const mac = async (secret, ...parts) => {
 // Every message either way is noted, in order, to count round trips after the opening.
 function fakeRelay({ early }) {
   const flights = [];
-  const relay = { flights, url: null, proofOk: null };
+  const relay = { flights, url: null, proofOk: null, socket: null, frames: [] };
   class FakeSocket {
     readyState = 0;
     constructor(url) {
       relay.url = url;
+      relay.socket = this;
       this.eph = null;
       this.nonce = crypto.getRandomValues(new Uint8Array(32));
       setTimeout(async () => {
@@ -40,6 +41,7 @@ function fakeRelay({ early }) {
     }
 
     async send(data) {
+      if (typeof data !== 'string') { relay.frames.push(data); return; }
       flights.push('device');
       const m = JSON.parse(data);
       if (m.t === 'hello') {
@@ -81,3 +83,27 @@ for (const early of [true, false]) {
     assert.equal(roundTrips(after), early ? 1 : 2);
   });
 }
+
+test('a probe goes to this device itself, which the relay routes back, and its echo reaches no channel', { timeout: 10000 }, async (t) => {
+  const { relay, FakeSocket } = fakeRelay({ early: true });
+  const real = globalThis.WebSocket;
+  globalThis.WebSocket = FakeSocket;
+  t.after(() => { globalThis.WebSocket = real; });
+  const key = await P256KeyPair.generate();
+  const deviceId = await deviceIdOf(key.public);
+  const r = await new Relay({ base: 'https://relay.example', key, deviceId, name: 'Phone' }).connect('token');
+  const data = [];
+  r.onData = (from, payload) => { data.push(payload); };
+
+  const alive = r.probe(3000);
+  assert.equal(relay.frames.length, 1);
+  const frame = relay.frames[0];
+  assert.deepEqual([...frame], [1, ...unhex(deviceId), 0]);
+  relay.socket.onmessage({ data: frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength) });
+  assert.equal(await alive, true);
+  assert.ok(r.lastReceivedAt > 0);
+
+  assert.equal(await r.probe(10), false, 'nothing back within the deadline');
+  await new Promise((resolve) => { setTimeout(resolve, 10); });
+  assert.deepEqual(data, [], 'the echo is not handed on');
+});
