@@ -560,6 +560,13 @@ permission to bypass the roster. Current launch behavior is documented in
 | `agent@session` (local, target) | read, reply, launch with `ask` permissions on approved workspaces, subject to owner policy. **No `answer` grant in v1; no approvals or folder trust; no stop, transfer, update, forget, settings, pairing or allow-all launches. Never an unattended reply into an allow-all session** ([G3](design/agent-principals.md#12-goals)). Only launched/adopted sessions receive the proposed short-lived `AGENT_BRIDGE_TOKEN`; it is not HA-token propagation |
 | `agent@session` (remote, target, through its host) | The local agent grants, carried as host-signed principals; blocked on the #55 roster and reviewed #519 implementation, not merely account sign-in |
 
+The owner's opt-ins in [agent-principals §5.7](design/agent-principals.md#57-reaching-allow-all-sessions-the-gate-and-the-owners-opt-ins)
+are the only exceptions to the unattended allow-all rule. One is the **standing
+coordination group** (§5.7 C, #912): a time-limited grant, at most 24 hours, that the
+owner approves with presence. It lets named sessions send each other `session.reply` text
+and nothing else. It is off by default per machine, signed as roster `set grants`
+entries (§5.4), paused by taint or a host restart, and not built before #55.
+
 Unchanged local refusals: elevated sessions are not injected into, control characters
 are collapsed, only approved workspaces can be launched, folder trust is answered
 only at the machine, and nothing restarts the host from a host-launched session (the

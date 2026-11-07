@@ -76,7 +76,8 @@ the third-party connector API that Home Assistant is the first client of.
   never `launch.trust.answer`, never `stop`, `transfer`, `update`, `forget`, settings or pairing.
   Never an **unattended** reply into an allow-all session, and never a launch that isn't
   explicitly `ask` (§5.2, §5.3). The owner's opt-ins (§5.7) add a per-message approval, a
-  same-account setting the owner enables knowingly, and read-only cross-account access.
+  same-account setting the owner enables knowingly, a time-limited coordination group the owner
+  approves with presence, and read-only cross-account access.
 * **G4. Owner control per machine.** Each machine's policy is set at that machine (the app's
   Settings, or `agent-bridge-host config`, refused inside agent sessions, local-pipe.md:85-141).
 * **G5. Bounded automation.** Hop limits, conversation budgets and rate limits stop agent loops
@@ -682,13 +683,14 @@ meant as off is never read as on (host-config.md:139-141).
     "allowAgentLaunchedToLaunch": false
   },
   "inbound": {
-    "local":  { "read": "any", "reply": "forced-ask", "gate": "quiet", "allowAllTargets": false, "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] } },
+    "local":  { "read": "any", "reply": "forced-ask", "gate": "quiet", "allowAllTargets": false, "coordinationGroups": false, "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] } },
     "remote": {
       "fromMachines": "any",
       "read": "any",
       "reply": "forced-ask",
       "gate": "quiet",
       "allowAllTargets": false,
+      "coordinationGroups": false,
       "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] }
     },
     "exclude": { "sessions": [], "workspaces": [] }
@@ -719,6 +721,7 @@ meant as off is never read as on (host-config.md:139-141).
 | `inbound.*.reply` | `forced-ask` \| `agent-launched` \| `none` | Which sessions an agent may reply to. `forced-ask` is every session the host launched in forced-ask mode with no grant or mode change since (§5.3), which is the widest possible value. `agent-launched` is the subset an agent launched. `none` is none. **Default: `forced-ask`** (Q37). Adopted and manually started sessions are never reply targets, because their mode is unknown (§5.3) |
 | `inbound.*.gate` | `off` \| `quiet` \| `push` | Whether a reply or launch into a session that **isn't provably forced-ask** (allow-all or unknown-mode, §5.3) is **held** for the owner's per-message, presence-signed approval instead of refused (§5.7 G). `quiet` holds are counted on Needs-you and never pushed; `push` allows at most one aggregated, text-free push an hour. **Default: `quiet`** for the account's own agents; cross-account G is per link (`expose.gate`). Never offered to connectors |
 | `inbound.*.allowAllTargets` | `false`, or `{ workspaces: "same" \| "any" }` | Whether **this account's own** agents may reply into allow-all and unknown-mode sessions on this machine **without** a gate (§5.7 O). Set in `inbound.local`, it covers agents on this machine; in `inbound.remote`, agents on the account's other machines, which needs `workspaces: "any"` since `"same"` never matches across machines. Never for another account, a connector, a federated or `homeassistant:` principal, or a chain with a cross-account hop. **Default: `false`** in both. When enabled, the app proposes `inbound.local` with `workspaces: "same"`, and shows the escalation warning |
+| `inbound.*.coordinationGroups` | `false`, or `{ maxHours: 4..24, perMemberPerDay, perGroupPerMinute }` | Whether this machine's sessions may be members of an owner-approved **standing coordination group** (§5.7 C), and the ceilings on any group's length and budgets here. Set only at this machine. Honoured only in roster `enforce` mode; `inbound.remote` waits for #55 and AP5. Never for another account, a connector, a federated or `homeassistant:` principal. **Default: `false`** in both. When enabled, the app proposes `{ maxHours: 24, perMemberPerDay: 200, perGroupPerMinute: 10 }` |
 | `inbound.*.launch` | `false`, or `{ workspaces: "approved" \| [labels], permissions: "ask", agents: [ids], profiles: [names] }` | Where an agent may launch. The request must state `permissions` **explicitly** (§5.2). An **unattended** launch is `ask` only. `allowAll` is possible only as a **new gated launch** (§5.7 G): the person approves the exact manifest, prompt, base commit and fresh worktree with presence, so it stays a person's decision, as design.md §5.6 requires even from a phone. `agents` and `profiles` are **allowlists**, empty by default except the machine's default agent and profile, each checked not to grant allow-all (§5.2) |
 | `inbound.remote.fromMachines` | `any` \| `[add hash]` | Which of the account's machines may send. `any` means any active, non-probationary rostered host. A list names **add entries**, which the app picks by machine name, never bare device ids. A machine that is re-enrolled or displaced has a new add hash, so it drops out until the owner re-selects it (§8.10, V3, V4) |
 | `inbound.exclude` | session ids and workspace labels | Never reachable by any agent, local or remote. A person can mark a private session or workspace this way |
@@ -733,8 +736,8 @@ allowed in approved workspaces with an explicit `ask` only. The policy is the on
 it, and the app shows it as plain choices ("Agents on your other machines can: read ✓, reply to
 sessions started by Agent Bridge ✓, launch in approved folders ✓"). The gate (§5.7 G) is on in
 `quiet` mode, so own agents' messages to sessions that aren't provably forced-ask wait for you
-instead of failing. The own-account setting (O) and the link opt-ins are listed separately, off,
-each with its warning. Until a host is in roster
+instead of failing. The own-account setting (O), coordination groups (C) and the link opt-ins
+are listed separately, off, each with its warning. Until a host is in roster
 `enforce` mode, `inbound.remote` is ignored and treated as `none` (decision 4).
 
 ### 5.2 Allowed actions
@@ -1153,7 +1156,8 @@ refusals before signing.
 * **Grants and provenance.** Every entry also records its **origin** (the retained external
   origins and categories, §5.8), its **authorizer** (the person command that approved a hold,
   window, batch or gated launch, or the setting that allowed it), the **grant** used (direct,
-  G, a window, O, a link's status or content grant), the **outcome**, and, for a read, the
+  G, a window, O, a coordination group as `group:<id>@<gen>`, a link's status or content grant),
+  the **outcome**, and, for a read, the
   **projection served**. Never the content. A read served to a person device is marked
   **served**, not "read by a human": the host can't know whether anyone looked.
 * **Credential events.** Issue, adoption, rejection (wrong session, wrong process), revocation and
@@ -1587,6 +1591,135 @@ Claude, Codex and organisation-managed sessions. Same account and cross-account.
 * Chain depth, conversation and workflow budgets and rates apply unchanged, with a separate,
   lower per-target rate for allow-all targets (`limits.allowAllPerTargetPerMinute`, default 3).
 
+**(C) The standing coordination group (#912).** A named set of the owner's own sessions that
+may send each other `session.reply` text, unattended, allow-all members included, for a bounded
+time the owner approves with presence. It is a time-limited, owner-approved form of G's windows
+and O. The owner's decisions are H1, H2, M1 and H3 (2026-11-05, 11:32 PT) and (a)–(c)
+(11:35 PT). Product decided M2 (2026-11-07). Engineering's review (#912) set M3–M7 and L1–L3.
+Nothing is built before #55 and AP5 (AP11, §11.2).
+
+* **What the grant allows (M3).** `session.reply` text from one member into another, and
+  nothing else. It goes through §5.2's delivery guard unchanged. Every **Never** row in §5.2
+  stays.
+  * **Never through it:** launch or resume, transfer, update, forget, settings, pairing,
+    attachments, `push.*` or `host.*`. Never approvals, folder trust, forms (`ask_user`) or stop.
+  * **Never for** another account's principal, a connector's, a federated or a `homeassistant:`
+    principal. Never for a chain with a cross-account hop.
+  * **Managing the group** (approve, add, remove, revoke, resume after a restart) is a person
+    command from a person device only. It is never an agent, a connector or an HA press.
+* **Who may be a member (L1).** A member is bound to its account, machine and session id, and only
+  a session holding a credential (§3.2) can be one.
+  * A transfer drops the member.
+  * A resume of the same session id keeps it, subject to the restart pause below.
+  * A new session, or a resumed one under a new id, joins only when the owner adds it.
+* **Per-machine opt-in (M1, owner decision).** `inbound.*.coordinationGroups` (§5.1) is off by
+  default and set only at the machine, with machine-set ceilings on length and budgets. It is
+  honoured only in roster `enforce` mode. Cross-machine use waits for #55 and AP5.
+* **Taint pauses a member.** A member must be clean as O requires: no retained origin of any
+  category (`external:<account>`, `automation:<connector>`, `forwarded`, `unknown:<machine>`),
+  and not in a tainted workspace unit or on a machine whose machine-wide state is tainted (§5.8).
+  A member that becomes tainted is paused at once, as a sender and as a target. Unlike O, the
+  sender's instruction-file rule doesn't apply: that is the residual the owner accepted (H2).
+* **Restarts pause members (H1, owner decision).** Q53 stands. After any host restart, an update
+  included, every member on that machine is paused, because each now carries `unknown:<machine>`.
+  The person sees a counted Needs-you item, "*Machine* restarted. Its group members are paused",
+  with **Resume them**. That is one presence-signed person command that lists each member with its
+  current taint. Resuming re-admits the listed members under the same group and generation for
+  the rest of the group's time. It clears no taint, and a member with any other origin stays
+  paused. It is never automatic.
+* **Chains (M2, Product decision).** The grant applies to a message only when the host's
+  recomputed `via` (§5.4), the sender included, lies **entirely within the group's members**. A
+  person-driven turn starts with `via` = [the sender], so it qualifies. Otherwise the message falls
+  back to the per-sender path, G, exactly as if there were no group.
+  * `maxDepth` (§5.4) applies unchanged to any hop that leaves the group.
+  * Inside the group, depth is bounded by the members.
+* **Budgets (L2).** 200 messages a day per member and 10 a minute across the group, with the
+  machine's ceilings as the limit. Changing them happens inside the same signed approval.
+  * `allowAllPerTargetPerMinute` stays 3, and `perPairPerMinute` and `perTargetPerMinute` apply
+    unchanged.
+  * Inside the group these budgets take the place of §5.4's per-conversation budget (20 messages,
+    60 minutes).
+  * A pair that keeps messaging back and forth raises a loop notice on Needs-you.
+* **Signed, generation-bound, fail-closed (M4).** The grant and its revoke are signed roster
+  `set grants` entries, signed by a person device (#391's person kinds), bound to the group id and
+  its generation, and honoured only under V5's 1-hour freshness (§8.10).
+  * A host suspends the grant at start-up until its roster state has synced.
+  * A revoke binds the group and generation, so an old revoke can't end a new group and an old
+    grant can't outlive its revoke.
+  * Same-machine pipe delivery is rechecked against the same state before each message.
+* **Verification (M5).** Hosts verify the grant with #391's person-kind roster entries, presence
+  and the durable replay store. Never with `RemoteAuthorization`'s helpers, which fail open when
+  their check is disabled. An exit test proves refusal with that floor off. Delivery is a new
+  `agent.command` path; `session.reply` is never added to the Host role.
+* **Attribution (M6).** A message delivered under the grant sets the additive
+  `driverFrom.grant: "group:<id>@<gen>"` (§6.1), only from the verified grant, and is audited per
+  message (§5.6). After a restart the driver shows as unknown or agent, never as the person.
+* **The HA route (M7).** Once a member's machine runs the grant, members aren't driven over HA.
+  Product sets the order HA is retired per machine. The HA route stays as the fallback until the
+  grant ships, and gains no authority from this.
+* **Expiry.** 8 hours by default, 4 or 24 hours otherwise, and 24 hours at most (owner decision
+  (a)). Renewal is in the app only, never pushed (c).
+
+**What the person sees.** This is revision 3 of the coordination-group sheet (#912), as written.
+
+1. **Approval sheet: "Let these sessions message each other".**
+   * **How it opens:** a Needs-you item (`coordinationGroup`), "Approve today's coordination
+     group". It's never pushed on its own; it rides the hourly aggregate (§5.7 G).
+   * **The opening statement (H3), first and in body type:** "Any of these sessions, or anything
+     that misleads one of them (a GitHub comment, a web page, a file), can get commands run
+     **without asking you** in the sessions marked **Allow all**, on every machine in the group,
+     until *time*."
+   * **The residual (H2):** shown once, directly under it, and never folded away: "Members read
+     instruction files and issue comments. Text there can steer them."
+   * **Then, in smaller type:** "They can send each other messages. They can't approve anything,
+     trust folders, answer forms or stop sessions."
+   * **Members:** one row per session, showing its verified label (§6.3), machine and agent; an
+     **Allow all** badge where it applies; its current taint at that moment; and a checkbox, with
+     the accessible name "Include *title* on *machine*".
+   * **Ticks:** nothing is ticked by default. "Same as yesterday" ticks yesterday's members, and
+     the person still presses Approve (L3).
+   * **Rows shown disabled, each with its reason:**
+     * A tainted session (§5.8): "Read outside content. It can't join."
+     * A machine that isn't opted in (M1): "*Machine* doesn't allow coordination groups. Turn it
+       on at that machine."
+     * A machine outside roster `enforce` mode: "Needs roster enforcement on *machine*."
+
+     The sheet never offers a way to turn any of these on from here. Nothing cross-machine is
+     offered before #55 and AP5.
+   * **Until:** a time shown in local time; 4 h, 8 h (the default) or 24 h (the maximum).
+   * **Limits:** "200 messages a day each · 10 a minute across the group". Changing them happens
+     inside the same signed approval. Each Allow-all target is limited to 3 a minute
+     (`allowAllPerTargetPerMinute`); that limit isn't shown, because it can't be edited here.
+   * **Buttons:** **Not now** (the default, what Esc does, and where focus starts), then
+     **Approve group**, which needs presence.
+2. **While the group is active.**
+   * **Needs you's standing row:** "Coordination group · *n* sessions · until *time*", with
+     **Revoke**. It isn't counted in the badge (owner decision (b)).
+   * **Each member's row** gets a "Coordination group" chip, in words and not only a glyph.
+   * **Attribution (M6):** "From @sender · coordination group" appears only when the verified
+     grant says so. After a restart, an unverified driver reads "From an agent". It never reads as
+     yours.
+   * **Revoke** takes effect at once, with no presence and no undo. The toast reads: "Group ended.
+     These sessions need your approval to message each other again." While the revoke is still
+     reaching machines (M4), the row reads "Revoking · ended on *n* of *m* machines", and any
+     machine that hasn't confirmed is named.
+3. **Exceptions.**
+   * **A member becomes tainted:** a counted item, "*Session* was paused from the group: it read
+     outside content", with **Remove** and **Keep paused**. Re-admitting it means approving again.
+   * **The group expires:** an item, "Coordination group ended at *time*", with **Approve again**.
+     It reopens the sheet with "Same as yesterday" available, which still needs an explicit tick
+     of Approve and shows each member's current taint (L3).
+   * **A host restarts, an update included (H1):** that machine's members are paused. A counted
+     item reads "*Machine* restarted. Its group members are paused". **Resume them** is one tap
+     that needs presence, and its confirm lists each member with its current taint. It is never
+     automatic.
+   * **A session resumes, or a new session starts:** it joins only when the owner adds it.
+
+**Capture states, at implementation:** none, pending, active, member paused, paused after
+restart, revoking *n* of *m*, ended and revoked; a machine row disabled because it isn't opted
+in, and one disabled because it isn't in `enforce` mode. Each in light, dark and high contrast,
+on phone and desktop.
+
 **(R) Read-only cross-account access to allow-all sessions.** Per link, `expose.allowAllRead`
 (§7.4, §7.11.5). Off by default.
 * Linked accounts' agents may **read** (`sessions.list`, `session.get`, `session.read`, whose wait
@@ -1820,7 +1953,7 @@ content**": provenance is kept, and the receiver becomes influenced.
 |---|---|---|
 | `driver` | `Session` | `agent`, unchanged (v1-sessions.md:832) |
 | `driverPrincipal` | `Session` | `agent:<machine>/<session>` (§3.1), replacing `homeassistant:<id>` for native agents. HA-connector presses keep theirs |
-| `driverFrom` (new) | `Session` | `{ account?, login?, repo?, machine, machineName, session, title?, agent, federated?, depth, origins? }`: who drives, for display. `machineName` is the **target host's** view of the sender's roster name (signed by a person's device, #391 §3.2), never a name the envelope carries. `title` is the sender's session title as the envelope's issuer gave it (cut to 120 bytes, hidden characters made visible as `NeedsYou.Reveal` does). `account`, `login` and `repo` (the link's repository, §7.11) only when it is another account's (§7). `login` is the receiving side's own resolution of the T2-verified user id (`GET /user/{id}` by its app, recorded in its link statement and refreshed daily), never a name the peer supplied. `origins` lists the sender's **retained external origins** (§5.8), kept even when the person authorized the message through the gate |
+| `driverFrom` (new) | `Session` | `{ account?, login?, repo?, machine, machineName, session, title?, agent, federated?, depth, origins?, grant? }`: who drives, for display. `machineName` is the **target host's** view of the sender's roster name (signed by a person's device, #391 §3.2), never a name the envelope carries. `title` is the sender's session title as the envelope's issuer gave it (cut to 120 bytes, hidden characters made visible as `NeedsYou.Reveal` does). `account`, `login` and `repo` (the link's repository, §7.11) only when it is another account's (§7). `login` is the receiving side's own resolution of the T2-verified user id (`GET /user/{id}` by its app, recorded in its link statement and refreshed daily), never a name the peer supplied. `origins` lists the sender's **retained external origins** (§5.8), kept even when the person authorized the message through the gate. `grant` is `"group:<id>@<gen>"` only when the message was delivered under a verified standing coordination group (§5.7 C), and is audited; after a restart an unverified driver shows as unknown or agent, never as the person |
 | `taint` (new) | `Session` | `{ origins: [{ account?, category, firstAt, lastAt }] }`: the session's own retained external content (§5.8), for the account's own clients. It drives the badge "External Bridge content retained" |
 | `replyPath` (new) | `Session` | `direct` \| `gate` \| `gate(tainted)` \| `own-allow-all` \| `refused(<reason>)`, computed per requesting principal (§5.8). Advisory; it never reveals a hidden session |
 | `activity.userMessageFrom` | `Activity` | `agent` (PR #501), set **only** from a verified agent command or a local agent connection, never from anything the sender's text contains (the #501 security review's requirement) |
@@ -3379,6 +3512,7 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 | **A configuration change in a target** (a hook, skill, settings file, `.claude/` directory or plugin added mid-session, or `/skills reload`) | Same-user code, or the target's own agent where its mode lets it write | Keep the session an unattended reply target: the directory watches make it `unknown` before the next delivery (§5.3) | Add authority to a turn an agent's message already started: the host marks it `unknown`, audits it and offers the person **Stop** (§5.3 residuals). Win the race between the host's launch check and the CLI's load (same-user) |
 | **An unattributed same-user process** (HTTP MCP, a script, a detached helper) | The user's rights on the pipe | Act as the person: reply, launch, answer, stop or attach. Unattributed callers get typed status and no acting ops (§3.4). Read content and stay untainted | Read typed status. Imitate the app: the §1.3 same-user residual |
 | **Taint across machines** (a clean coordinator on M1 reads a tainted session on M2, or a coordinator is tainted after its window opened) | Its host's signed channel | Stay clean: content results carry signed origins that the issuing host merges into the reader before handing them over. Keep using a window or O: commands carry signed provenance, and missing or legacy provenance fails closed for O and windows (§4.3, §4.6) | Use per-message G, with "origins unknown" shown, against a peer without `agent.provenance` |
+| **A member of a standing coordination group** (§5.7 C), prompt-injected through an instruction file or issue comment it read (the residual the owner accepted, H2) | A clean member, holding its own credential, inside an approved group | Send outside the group without G. Approve, trust folders, answer forms, stop, launch or transfer. Act for another account, a connector or HA. Keep sending after taint, a restart, expiry or a revoke (M4) | Get commands run without asking in the group's allow-all members, within the budgets, until the group ends or is revoked: the risk statement the owner approved (H3) |
 | **Titles through `launch.options`** | A tainted or external launch that set an injected title | Reach a clean coordinator: agents and unattributed callers get `launch.options` as handles and typed fields, never titles (§5.2) | — |
 | **A delayed clearance** (a tainted session starts, writes and exits between the person's review and the clear) | Same-user code, or an agent of the owner's | Have the clear erase it: the clear binds the unit's contamination generation and is applied by an atomic compare under the propagation lock (§5.8) | Wait for the person to clear without checking |
 | **Git running a program in a host-made worktree or a gated session** (a `core.fsmonitor`, `remote.<name>.uploadpack` or `core.sshCommand` planted before an agent's launch request and run by the host's reclaim, fetch or hold; a finished worktree's `.git` redirected to an administration directory with its own `config.worktree` filter; a config line Git reads but a naive parser misses; a submodule's own `ext::` remote reached by a recursive fetch, a global or include-defined filter on a Git too old to honour `GIT_CONFIG_GLOBAL`, a hook dropped into the host's hooks directory, a hook in the common directory, an include, `core.fsmonitor`, a filter or LFS transfer agent, a helper or its SSH or gpg configuration edited after approval, an `insteadOf` rewrite to `ext::`, an inherited `GIT_SSH_COMMAND` or `GIT_ASKPASS`, Git's default editor or pager, a main checkout's untracked `settings.local.json`) | Same-user code, or an agent with write access to the repository | Run during an approved launch, or during any host Git command for a launch (repository resolution, reclaiming, fetch, base resolution, `worktree add`, lock), unseen: for an agent-requested launch the host parses the repository configuration itself, in a strict subset of Git's syntax cross-checked by `git config --file`, and refuses non-allowlisted keys before any other Git command, and fetches only under the closed configuration with `--no-recurse-submodules`, never running Git inside a submodule; reclaiming, for every launch, runs Git only in worktrees whose `.git` and administration directory point at each other and whose `config.worktree` passes the allowlist, with explicit `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE`; Git runs under a **closed, host-generated configuration**, for every worktree the host makes and in every gated session, at Git 2.32 or later and a maintained release, and self-verified with `git config --list --show-scope --show-origin` before use; the host's artifacts are generated per launch, hashed and rechecked (no system or global configuration; program-naming entries only from the host's file, by absolute protected path; a frozen, translated ssh config with no program directives; `protocol.allow=never` but `https` and `ssh`, with per-protocol `never` pins and submodule recursion pinned off; editor `:` and pager `cat`); repository configuration may hold only allowlisted non-program keys for any agent-requested launch, hashed and rechecked; the environment is rebuilt from an allowlist; `worktree add` skips LFS smudge (§5.7 G) | Reduced, not removed: an allow-all session can undo the configuration or environment itself; repository configuration can change **after** launch; same-user code can race the check-then-use window; a process that rebuilds its environment, or a Git client outside the session, doesn't get it |
@@ -3470,6 +3604,7 @@ Each slice is one PR, security-reviewed independently before merge.
 | AP8 | **The gate, as the main path** (§5.7 G, §5.3 (B)), and **provenance** (§5.8). It covers:<br>• `inbound.*.gate` (`off`/`quiet`/`push`, default `quiet`), holds with absolute expiry, the bounded queue, `held` and the `gateDenied`/`gateExpired`/`gateCancelled` codes;<br>• the Needs-you `agentMessage` item with its deterministic partial summary and full text;<br>• the presence-signed `gate v1` approval, batches, windows over fixed instance sets with the expansion fold, and G delegation grants;<br>• **gated launches**, with the manifest, the **base commit** bound at hold time, the source report over that tree, and a fresh worktree at exactly that commit;<br>• mute, pause and block without biometrics, and the refusal nudge;<br>• taint tracking, **transitive through every content-bearing read and every launch**, with in-host Home Assistant presses (Q43) recorded as `automation:homeassistant`, **workspace-unit taint** merged into every resident, presence-signed clearing, `driverFrom.origins`, `taint`, `replyPath`, the badge, and "Start a fresh coordinator";<br>• the typed, non-tainting `sessions.status` and `session.status` for own sessions, as the MCP default; **unattributed callers (HTTP MCP, the pipe without `agent.hello`, the CLI apart from its three exceptions, anything else) limited to typed status, with no acting ops**, superseding local-pipe.md:93-98, and host-launch.md's "Isolation" (:118-136) and "Reclaiming finished worktrees" (:142-214) for agent-requested launches; `launch.options` without titles for agents; workspace units by `unitsOf` with containment; generation-bound clearing; gated launches bound to the base commit and the hashed local git state, with Git under a closed, host-generated configuration and a rebuilt environment for every host-made worktree and every gated session;<br>• workflow budgets;<br>• audit of origin, authorizer, grant and outcome.<br>**Exit tests:**<br>• an approval for different text, sender, origins, target or instance is refused, and so is a replayed one;<br>• an approval without presence, or from an agent connection, a connector or the `homeassistant:` path, is refused;<br>• a hold expires at its absolute deadline even when approved late, and the person's input cancels it;<br>• **no hold is ever pushed individually**;<br>• a batch can't change after signing;<br>• a window never grows except by a presence-signed expansion, and pauses on a new origin;<br>• taint survives resume, compaction, transfer and a person's reply;<br>• **external → A → a same-account `session.read` by B → B is tainted with A's origins**, and the same through `session.get`, a list and a wait result;<br>• **a content read over HTTP MCP, or over the pipe without `agent.hello`, is refused, and typed status is served instead**;<br>• typed status taints nothing;<br>• a tainted session's forced-ask or gated launch produces a tainted session;<br>• **a tainted session in worktree W1 taints the unit**: a clean resident already running in the main checkout W0 inherits its origins, and C reading that resident inherits them too;<br>• clearing a unit needs presence, and is refused while a tainted session runs there;<br>• **a push to the default branch after a gated launch's approval doesn't change what launches**, and a missing base commit refuses it;<br>• a batch containing a gated launch is refused;<br>• a batch with two senders, or mixed tainted and untainted items, is refused;<br>• an external sender's resend returns `held` until the common deadline;<br>• mute, pause or block from an agent, a connector or Home Assistant is refused, and none of them hides the mid-turn configuration-change notice;<br>• a gated launch can't change after approval, and a cross-account gated launch requesting `allowAll` is refused;<br>• a connector reply into allow-all is refused with no hold;<br>• delivery still runs §5.2's guard;<br>• **an unattributed caller (HTTP MCP, the pipe without `agent.hello`, a script) can't reply, launch, answer, stop or attach**, and HTTP-mode MCP exposes no acting tools; the CLI gets only `launch`, `agents adopt` and `agents revoke`, and **`agent-bridge-host launch` run from inside an agent session is refused** by the full-ancestry check;<br>• `launch.options` reaches an agent or unattributed caller with no titles;<br>• **unit containment**: a tainted session whose working directory is a non-git parent taints every nested repository's unit; a submodule is in its superproject's unit; an `--add-dir` root taints the unit it falls in; a tainted allow-all session taints every unit on the machine for O;<br>• **across machines**: external → A on M2, then a content read of A by B on M1, taints B on M1 before the content is handed over; a coordinator tainted mid-window is paused at a remote destination; a peer without `agent.provenance` gets typed reads only, and its commands give the target `unknown:<machine>`;<br>• **`unknown` sticks**: a forced-ask target that received `unknown` provenance carries `unknown:<machine>` and stays ineligible after later clean messages;<br>• **durability**: after a host restart or update a tainted coordinator is still tainted; a deleted taint store makes everything `unknown:<machine>`; an old clear doesn't match after a restart;<br>• **rollback**: restoring **both** the taint store and its high-water mark from a backup taken while a coordinator was clean, then restarting only the host while the coordinator's process lives on, leaves the coordinator `unknown:<machine>` and O refused;<br>• **clear after store loss**: after the store is lost and a person clears the machine, a resumed pre-loss conversation still has `unknown:<machine>`; the first AP8 start treats every existing conversation the same way; the machine clear is refused while an unconfined tainted session runs;<br>• **canonicalisation**: one repository reached through a junction, a symlink, `subst`, a `\\?\` path or an 8.3 name is one unit; a unit first seen after a tainted allow-all session ran is tainted;<br>• **a pending wait is cancelled** when the read grant narrows mid-wait, own-account and cross-account;<br>• **a subscription** merges taint per event, including when the subscribed session becomes tainted mid-stream;<br>• **a delayed clearance is refused**: a tainted session that starts, writes and exits after the person reviewed but before the clear executes bumps the generation;<br>• **a gated launch is refused** when the common directory's hooks, its allowed configuration keys, `info/attributes`, `.lfsconfig`, or the main checkout's untracked `settings.local.json` changed after approval; `worktree add` runs no hook, and the launched session's `git status` runs no hook or monitor added later;<br>• **closed configuration**: a repository whose `config` or `config.worktree` holds any key outside the allowlist (an `include`, `core.fsmonitor`, a non-LFS `filter`, `core.gitProxy`, `remote.*.vcs`, `remote.*.uploadpack`, `url.*.insteadOf`, `protocol.*.allow`, `lfs.customtransfer.*`, `lfs.standalonetransferagent`, `lfs.extension.*`, `mergetool.*.path`, `sendemail.smtpServer`) refuses the launch, as does a `.lfsconfig` with other keys or a remote URL not in `https://`, `ssh://` or scp form; in the launched session, a `~/.gitconfig` `url."ext::sh -c …".insteadOf` rewrite with `protocol.ext.allow=always`, a global `credential.helper` script, a `~/.ssh/config` `ProxyCommand` or `Match exec`, and a `gpg.conf` program option all run **nothing**, before or after being edited post-approval;<br>• **environment**: a launch inheriting `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_EDITOR`, `GIT_PAGER`, `GIT_EXTERNAL_DIFF`, `GIT_PROXY_COMMAND`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_GLOBAL`, `GIT_EXEC_PATH` or `GNUPGHOME` pointing at a user-writable helper, which is then edited between approval and launch, runs none of them, in `worktree add` or in the session; with no configured helper, Git's default editor and pager don't run; `PATH` with `.`, an empty or relative element, or a unit directory refuses the launch;<br>• **version and self-check**: a Git older than 2.32, or below the shipped maintained-release floor, refuses the launch; a global or include-defined `filter.<x>.smudge` naming a writable script runs nothing during the host's `worktree add` or in the session; the self-check (`git config --list --show-scope --show-origin` under the exact executable and environment) refuses any entry from another origin;<br>• **scope**: an agent's forced-ask launch into a repository whose `config` holds a planted `filter.<x>.smudge` is refused; a person's own launch still runs no global filter, hook or monitor during `worktree add`; a gated launch requesting `ask` gets the same closed session configuration as one requesting `allowAll`;<br>• **host artifacts**: a `post-checkout` hook dropped into the host's empty hooks directory, or a `ProxyCommand` added to the generated ssh config, after approval refuses the launch; translating a `~/.ssh/config` with `Match exec`, or a compound `Match host *.corp exec "…"`, never runs it and drops the whole block;<br>• **every host Git command**: with `core.fsmonitor`, `remote.origin.uploadpack` or `core.sshCommand` planted in `.git/config` (or a `config.worktree`), an agent's launch request is refused by the parser before any Git command, so nothing runs during repository resolution, reclaiming, the fetch or the hold, even when the person would have denied it; with a clean repository, reclaiming and the fetch run under the closed configuration, a fetch needing the user's jump host falls back to the local base, and a gated launch's base SHA is the one resolved at hold time; a person's own launch fetches with the user's own Git; the pre-add self-check runs in the main checkout and accepts repository keys only for a person's own launch; a forced-ask session isn't self-checked;<br>• **reclaiming**: a finished worktree whose `.git` is redirected to `<wt>\.cache\gd` (with a `commondir` back to the repository, `extensions.worktreeConfig=true`, a `config.worktree` holding `filter.x.clean`, `* filter=x` in `.gitattributes` and a touched tracked file) is kept with nothing run, and so is one whose own `.git/worktrees/<id>/config.worktree` holds `filter.x.clean` directly, both for an agent's launch and for a person's own; every host Git command carries the parser-resolved `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE`; a finished worktree whose index holds a gitlink to a submodule with a redirected `.git` and a `filter.x.clean` is kept after `ls-files --stage`, with no `status`, `rm` or `checkout-index` run;<br>• **submodules in the fetch**: in a launch workspace with a populated submodule, `.gitmodules` `fetchRecurseSubmodules=true`, and the submodule's own configuration holding `remote.origin.url=ext::<cmd>` and `protocol.ext.allow=always`, an agent's launch request that the person then denies runs no child fetch and no command; the host's fetch carries `--no-recurse-submodules`, every host Git command carries the `submodule.recurse`, `fetch.recurseSubmodules` and per-protocol `never` pins, and no host Git command runs inside a submodule;<br>• **parser fidelity**: a key on a header's line (`[filter "x"] clean = …`), a comment ending in `\`, the legacy `[remote.origin]` form, a CR, BOM or NUL byte, and a quoted `#` or `;` each refuse an agent's launch, Git's own `<TAB>name = value` layout is accepted, a subsection containing `=` cross-checks correctly, and a file where `git config --file <f> --list --null` disagrees with the host's parse refuses it;<br>• **base source**: the approval screen shows whether the base was fetched or is the local ref after a failed fetch, with the reason; a `branch.<name>.remote` holding a URL refuses the launch;<br>• **LFS**: `worktree add` on an SSH remote with LFS runs no SSH and no smudge; a later `git lfs pull` in the session loads no custom transfer agent;<br>• **instance**: a session adopted, discovered or resumed from a terminal (`--resume`, `--continue`, a forked id) after a host start is `unknown:<machine>`; a fresh coordinator started after a restart but before the machine clear stays `unknown:<machine>` after the clear; an allow-all session started after the restart blocks the clear; an open window pauses after a restart | AP1, AP6, #391 person commands with presence (§7.2) and R6. Remote targets also AP5 | Same machine first; remote with AP5 |
 | AP9 | **Own agents into own allow-all sessions** (§5.7 O): `inbound.*.allowAllTargets`, its warning in Settings, workspace scope. **Exit tests:**<br>• off by default;<br>• refused for another account's, a connector's, a federated or `homeassistant:` principal, and for a chain with a cross-account hop;<br>• refused for a tainted sender, including taint from a read (**external → A → read by B → O from B refused**), from a launch, and from the workspace unit;<br>• refused to and from a tainted unit, and anywhere under `"any"` while any unit is tainted;<br>• **refused for a sender that loaded workspace instruction files, or whose loading is unknown; allowed for a target that loads them**;<br>• refused for a sender without a host-owned configuration home (personal instruction files, custom agents or skills loaded);<br>• refused when the sender's signed `provenance` is missing, legacy or `unknown`, `oEligible` isn't `true`, or `origins` isn't exactly `[]`;<br>• **remote O**: external → A on M2, read by B on M1, then O from B is refused; `"same"` never matches a sender on another machine;<br>• **`"same"` is exact**: a sender rooted at a non-git parent, or with an `--add-dir` in another unit, fails `"same"`; a network path is refused;<br>• refused outside the workspace scope;<br>• `allowAllPerTargetPerMinute`, depth and budget apply; the guard still applies | AP1 and **AP8's taint tracking** (O can't ship before taint, because O's exclusions depend on it). `inbound.remote`: AP5 | Local first; remote with AP5 |
 | AP10 | **Sandboxed allow-all** (§5.7 S): OS-enforced restriction of the filesystem, credentials, IPC and network egress. **Immediately after AP9 (owner decision, Q50).** It doesn't remove the gate without separately demonstrated boundaries | AP9, a separate design and review | Local |
+| AP11 | **Standing coordination group** (§5.7 C): `inbound.*.coordinationGroups`, the approval sheet (which leads with the risk statement and the residual, and is never shown without them), the standing row, **Revoke**, **Resume them**, `driverFrom.grant`. **Exit tests:**<br>• off by default, set only at the machine, and refused outside roster `enforce` mode;<br>• only `session.reply` text into members; approvals, folder trust, forms, stop, launch, transfer and attachments refused, and every §5.2 **Never** row holds;<br>• refused for another account's, a connector's, a federated or `homeassistant:` principal, and for a chain with a cross-account hop;<br>• a tainted member is paused as sender and target, and taint from a read pauses it (**external → A → read by B → B paused**);<br>• after a host restart, an update included, every member on that machine is paused until **Resume them**, which clears no taint (H1);<br>• the grant applies only when the recomputed `via` lies within the members; otherwise G, with `maxDepth` on hops that leave the group (M2);<br>• budgets 200 a day per member and 10 a minute across the group, `allowAllPerTargetPerMinute` 3, and a loop notice;<br>• grant and revoke are signed, generation-bound roster `set grants` entries honoured only under V5 freshness; suspended at start-up until synced; an old revoke can't end a new group and an old grant can't outlive its revoke (M4);<br>• **refused with `RemoteAuthorization`'s floor off** (M5);<br>• `driverFrom.grant` set only from the verified grant; after a restart the driver shows as unknown or agent, never the person (M6);<br>• a transfer drops the member; a new or newly resumed session id joins only when the owner adds it (L1) | AP5, AP8 (taint), #55 roster v2 (V5 and `set grants`) | Local first; remote with AP5 |
 | F1-F7 | Federation (§7.10), with repo discovery (§7.11) as F6 and the person view (§7.12) as F7 | AP5, owner approval, separate review. F6 also needs the Cosmos DB directory store (§7.11.10) | Cross-account |
 | C1-C6 | Connector API (§9.7). C1 is the read-only first slice | C1: #534, #407. Production (C5): §8.7 | C5 only |
 
@@ -3497,6 +3632,7 @@ Each has a recommendation. None is decided by this note.
    format change. **Recommended: (a)**, which gives verifiable audit, verifiable chains and clean
    federation. It must be decided before #391 R1 is built. If v2 slips, (b) lets single-account
    cross-machine messaging proceed with only V3, V5 and V6.
+   **Decided by the owner (2026-11-07): (a) `hostSign`.** The standing coordination group (§5.7 C) relies on it.
 2. **Q2. Default remote policy when AP5 ships.** (a) Read any session. Reply to sessions the host
    launched in forced-ask mode (§5.1 `reply: forced-ask`, §5.3). Launch with an explicit `ask` in
    approved workspaces. All of it from any of the account's non-probationary hosts. (b) Read only.
@@ -3854,3 +3990,4 @@ Decisions the reviews of `f3559996` asked to make explicit:
 
     **Decided: (a).** (b) stays a possible later design, to be reconsidered only if O proves
     unusable after updates.
+    Members of a standing coordination group (§5.7 C) pause on the same restart, and resume only with the person's **Resume them** (H1).
