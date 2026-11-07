@@ -592,7 +592,8 @@ owns what the host keeps on disk; slice 0 lands only with all of Trust's conditi
      result turning anything but `unconfirmed` (`delivered` included); the claim expiring or
      being cancelled (the session or its question gone, the claim released, or the ledger's own
      `Keep`); and, for an `unconfirmed` entry nobody retries, the end of the claim's life, and
-     never later than 24 hours after they were typed. Without the words, the entry keeps its
+     never later than 24 hours after they were typed (a delete that fails is retried and counted
+     as under Startup sweep until it succeeds). Without the words, the entry keeps its
      outcome, stage and hash, so an identical retry is still told nothing was typed again
      (#1100's reply), never typed again.
    * **Startup sweep** (condition 4). A host that starts deletes, before serving, every leftover
@@ -600,14 +601,20 @@ owns what the host keeps on disk; slice 0 lands only with all of Trust's conditi
      cancelled claims included), and words with no ledger entry. **A failed delete fails
      closed:** that entry is treated as having no words, so a retry gets #1100's reply
      (`unconfirmed`, nothing typed again) and is never re-read from stale words; that is how
-     Trust's "refused, not retried" is met, since nothing is typed or read from them. The delete
-     is tried again at the next write and start.
+     Trust's "refused, not retried" is met, since nothing is typed or read from them.      Trust
+          confirmed that reading (#1161, comment 6712803540).      The delete is tried again at every write, at every start, and before
+          every cap check (so an answer that finds the cap full first retries the pending deletes,
+          then checks again, with no restart needed), and until it succeeds the words stay in `answer-words.json` and **still count against
+          the caps below**.
    * **Bounds** (condition 5). At most 32 entries hold words, at most 16 KiB of words each and
-     256 KiB in all. The protocol's own request limit (`Limits.AnswerRequest`, 16 KiB) already
+     256 KiB in all, counting words whose delete failed. The protocol's own request limit (`Limits.AnswerRequest`, 16 KiB) already
      refuses a longer answer with its own reason; an answer that would pass the entry or total
      cap is refused before any key, as a `refused` answer whose reason says to answer at the
      machine (the words added to v1-sessions.md's answer reasons in this slice). Nothing is
-     evicted to make room and no words are truncated.
+     evicted to make room and no words are truncated. So a delete that keeps failing fills the
+     caps and the host stops accepting new answers from other devices (each refused, saying to
+     answer at the machine) until a delete succeeds and frees the space; it never evicts
+     silently.
    * **Never anywhere else** (condition 2). The words never go into a log, diagnostics, a
      support bundle, `host-state`, a local-API response, a trace, an error message, or anything
      sent to the relay or a device; only their outcome does, as today. Trust: "Compliance review
@@ -631,7 +638,9 @@ owns what the host keeps on disk; slice 0 lands only with all of Trust's conditi
    leftover temporary files, expired or cancelled claims' words and words with no entry"; "a
    failed delete gets #1100's reply on retry, never a re-read from the words"; "cap reached: the
    33rd entry or the 256 KiB total is refused before any key, saying to answer at the machine,
-   and nothing held is evicted or cut"; "ACL: `private\` and `answer-words.json` grant this user and SYSTEM
+   and nothing held is evicted or cut"; "cap after a failed delete: words whose delete failed
+   still count, so a full cap refuses the next answer, and once the delete can succeed the next
+   answer's cap check retries it and is admitted, with no restart (and at start too)"; "ACL: `private\` and `answer-words.json` grant this user and SYSTEM
    alone, after every rewrite too, and a wider ACL keeps no words"; "`answer-attempts.json`
    never holds an answer's words"; "canary: an answer carrying a known canary string, driven
    through delivered, unconfirmed, refused, a failed delete and a restart, never appears in the
