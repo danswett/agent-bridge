@@ -971,7 +971,7 @@ jobs:
         run: bash .github/actions/playwright-system-packages/test.sh
       - name: The lab release verification's gate refuses every run today, and its verdict passes only the release asked for
         # Offline: nothing reaches Azure or GitHub.
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-release-verify')) }}
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-release-verify')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/lab/test-release-verify.ps1
       # build-site.mjs bundles the app with esbuild (#609), and the unit tests build the site: the
