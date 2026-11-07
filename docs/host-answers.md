@@ -11,7 +11,7 @@ how the host does it and what it refuses.
 |---|---|---|
 | Copilot CLI | `ask_user` with no form or list: free text, or a `requestedSchema` with no fields the host can read (empty, not an object, or with a property that is not an object) | Refused, `answerAtMachine`: there is no form on screen to hold its keys to (below), or one the host cannot read |
 | Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`type: string` with `enum` or `oneOf`), `boolean`, `multi` (`type: array`, items `anyOf` or `enum`), `text`, `number`, any number of fields | Yes |
-| Copilot CLI | Other words for a question that is one option list | Refused for now, before any key, and shown disabled with why (`otherUnavailable`: `otherNotSendable`; the refusal carries that `code` and sentence): a live 1.0.105 session takes them in a box of its own drawn apart from the form (`bOe`, pinned under or over it), which the host cannot yet hold its keys to (below). agent-ha-bridge typed them blind. A temporary exception to #876 until #908 |
+| Copilot CLI | Other words for a question that is one option list | Refused for now, before any key, and shown disabled with why (`otherUnavailable`: `otherNotSendable`; the refusal carries that `code` and sentence). The pinned box cannot yet be proved empty (below). A temporary exception to #876 |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format (any `choices`, an empty list or one beside a `requestedSchema` included) | Refused, `answerAtMachine`: agent-ha-bridge never drove it, and no current build writes it |
 | Copilot CLI | Permission prompts: a shell command, path access, a file edit or read, a URL, an MCP tool, a custom tool | Yes, beyond agent-ha-bridge (below): approve once or deny. Refused, `answerAtMachine`, when `permissions.remoteApproval` is off. A character not drawn where it runs and a right-to-left letter are shown escaped (#220); such an approval carries `escaped`, and Approve on it takes the two-step confirmation from a person's device this machine approved, through the relay only, or is held at the machine by `permissions.escapedApproval` (#803, [v1-sessions.md](protocol/v1-sessions.md#escaped-approvals)). Deny goes as for any approval. While other permission requests wait, such a character in the text Copilot was given for any of them, the listed one's own included, makes the listed one `answerAtMachine`, Deny included, unless it is only in a path request's access kind (#690, below) |
@@ -278,8 +278,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
   key here is held to that box, so the host does not type into it (#510 review). The field is
   listed with `otherUnavailable: "otherNotSendable"`, so the PWA and the Windows app show Other
   disabled with "Your own answer can't be sent from here yet. Pick an option, or answer at the
-  machine."; an Other answer sent anyway is refused with that sentence and `code`. Temporary,
-  an exception to #876, until #908 types into the box.
+  machine."; an Other answer sent anyway is refused with that sentence and `code`. This remains
+  a temporary exception to #876. #908 prepares a read-only recognizer for the captured
+  below-form rail box, but it does not authorize keys: the captured empty box's placeholder
+  could also be a draft with the same text, and a blank row could hide trailing spaces. Other
+  footer layouts and wrapped boxes are unrecognized. A later capture must establish how to
+  prove the box empty before the interim can be removed.
 
 Typed words have every control character (C0, C1, CR, LF, tab, escape) and line or
 paragraph separator collapsed to a space first, and a lone surrogate replaced. The worker
