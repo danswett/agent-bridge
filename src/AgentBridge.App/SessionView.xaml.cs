@@ -509,14 +509,33 @@ public sealed partial class SessionView : UserControl
     }
 
     // Its line is drawn a pass after the fold goes (the lines were hidden, and one changed words in
-    // place), so it is looked for again for a moment.
+    // place), so it is looked for again for a moment. A line with no name to go to (two started
+    // within a minute are one "Started 2 delegates" line) sends focus where those delegates are
+    // listed, the strip or the Delegates tab, rather than leave it with nothing.
     async void FocusFirstDelegate(int tries)
     {
+        if (!NamedLines())
+        {
+            DelegatesPlace()?.Focus(FocusState.Programmatic);
+            return;
+        }
         for (var i = 0; i < tries; i++)
         {
             if (FirstDelegateLink(EventsRule) is { } link && link.Focus(FocusState.Programmatic)) { return; }
             await Task.Delay(60);
         }
+    }
+
+    // Whether any line names a delegate to go to: two started within a minute are one "Started 2
+    // delegates" line, with no name.
+    bool NamedLines() => Card?.Delegates.Events.Any(l => l.HasName) == true;
+
+    // Where the delegates are listed, for focus to go to when no line has a name: the strip at three
+    // panes, else the Delegates tab.
+    Control? DelegatesPlace()
+    {
+        if (DelegateStrip.Visibility == Visibility.Visible && DelegateStrip.ContainerFromIndex(0) is Control item) { return item; }
+        return Tabs.Visibility == Visibility.Visible && DelegatesTab.Visibility == Visibility.Visible ? DelegatesTab : null;
     }
 
     // The same, as the framework moves focus off a control it has hidden (§9.1 A4): said as it
@@ -529,6 +548,7 @@ public sealed partial class SessionView : UserControl
         var d = c.Delegates;
         if (!onFold || (d.HasFold && (d.HasFoldLink || ReferenceEquals(from, EventsToggle)))) { return false; }
         if (d.HasFold) { return ReferenceEquals(e.NewFocusedElement, EventsToggle) || e.TrySetNewFocusedElement(EventsToggle); }
+        if (!NamedLines()) { return DelegatesPlace() is { } place && e.TrySetNewFocusedElement(place); }
         if (FirstDelegateLink(EventsRule) is { } first) { return e.TrySetNewFocusedElement(first); }
         FocusFirstDelegate(10);
         return false;

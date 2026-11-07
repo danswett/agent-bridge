@@ -1302,6 +1302,9 @@ test.describe('a pending approval as delegates come and go above it', () => {
         await page.setViewportSize({ width: size.width, height: size.height });
         await openDemo(page);
         const c = card(page);
+        // Opened while the demo's own lines are folded: its open state is the session's, so the
+        // lines these cases add are drawn, and push Deny as they did before the fold (#1063).
+        await unfold(c);
         const t0 = Date.now();
         const iso = (ms) => new Date(t0 + ms).toISOString();
         await asking(page, k.before(iso(60_000), iso(-20 * 60_000)), iso(60_000));

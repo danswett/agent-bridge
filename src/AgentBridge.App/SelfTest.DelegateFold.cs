@@ -187,6 +187,16 @@ static partial class SelfTest
             check(toName, $"moves focus to the first delegate's name when the fold goes with it ({FocusManager.GetFocusedElement(window.RootElement.XamlRoot)?.GetType().Name}; fold {card.Delegates.HasFold}, {Find<HyperlinkButton>(list).Count} links, {card.Delegates.Events.Count} lines, rule drawn {Drawn(rule)})");
             await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow });
             await Until(() => card.Delegates.HasFold && Drawn(toggle), TimeSpan.FromSeconds(10));
+
+            // Two started within a minute are one "Started 2 delegates" line with no name to go to: focus goes to where the delegates are listed.
+            toggle.Focus(FocusState.Keyboard);
+            await Task.Delay(200);
+            await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow, Subagents = [.. original.Subagents!.Where(a => a.Id is "demo-agent-witness" or "demo-agent-suite")] });
+            var strip = ById<ListView>(view, "DelegateStrip");
+            var toStrip = await Until(() => !card.Delegates.HasFold && FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is ListViewItem item && strip is not null && Under(item, strip), TimeSpan.FromSeconds(5));
+            check(toStrip, $"moves focus to the delegate strip when the fold goes and its one line, \"Started 2 delegates\", has no name to go to ({FocusManager.GetFocusedElement(window.RootElement.XamlRoot)?.GetType().Name}; {card.Delegates.Events.Count} lines)");
+            await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow });
+            await Until(() => card.Delegates.HasFold && Drawn(toggle), TimeSpan.FromSeconds(10));
         }
         finally
         {
