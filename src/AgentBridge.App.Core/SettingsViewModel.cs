@@ -202,6 +202,14 @@ public sealed class SettingsViewModel : Observable
         set { if (Status is { } s && s.Settings.RemoteApproval != value) { _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(RemoteApproval: value))); } }
     }
 
+    // permissions.phoneSignIn (#972): a person's device may run Copilot's own device-code sign-in
+    // here. Off unless turned on; applies when the host restarts.
+    public bool PhoneSignIn
+    {
+        get => Status?.Settings.PhoneSignIn ?? false;
+        set { if (Status is { } s && s.Settings.PhoneSignIn != value) { _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(PhoneSignIn: value))); } }
+    }
+
     // launch.remoteFolderTrust: a person may answer a launched agent's folder-trust question from
     // their devices, each approved here (launch.remoteFolderTrustDevices). Both apply at once.
     // Turned on with none approved yet, this app is approved with it: the way most people
