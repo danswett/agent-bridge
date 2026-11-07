@@ -109,6 +109,8 @@ for ($i = 1; $i -le $Runs; $i++) {
     Copy-Item $package.FullName $copy -Force
 
     $old = $null; $update = $null; $new = $null
+    # Whether the run itself failed: its error is the one that surfaces, not a cleanup's after it.
+    $failed = $true
     try {
         $old = Start-Process (Join-Path $root 'current\AgentBridge.exe') -ArgumentList '--demo' -PassThru
         $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -136,8 +138,15 @@ for ($i = 1; $i -le $Runs; $i++) {
             WindowS = if ($new) { [math]::Round(($shown - $gone).TotalSeconds, 2) } else { $null }
             UpdateExit = $update.ExitCode
         }
+        $failed = $false
     }
-    finally { Stop-Run $root @($old, $update, $new) }
+    finally {
+        try { Stop-Run $root @($old, $update, $new) }
+        catch {
+            Write-Host "run ${i}: cleanup failed: $($_.Exception.Message)"
+            if (-not $failed) { throw }
+        }
+    }
     Start-Sleep -Seconds 2
 }
 
