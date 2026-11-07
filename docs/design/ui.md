@@ -2043,12 +2043,14 @@ up / Repair and Remove connection. You can't tell whether anything is needed. No
 | State | Mark (§2.1) | Headline | Verb |
 |---|---|---|---|
 | Ready | `done` in `ready` | "Ready · last hook 3:01 PM" (or "· test session passed 3:01 PM") | None |
-| Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Test session** (#716). Until it ships: no button, and a hint. Copilot CLI and Claude Code: "Start a session in it to confirm". Agency, whose hooks can't confirm it: "Agency can't be checked yet" |
+| Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Run test session** (#716). Until it ships: no button, and a hint. Copilot CLI and Claude Code: "Start a session in it to confirm". Agency, whose hooks can't confirm it: "Agency can't be checked yet" |
 | Not set up | `needs` | "Not set up" | **Set up** |
-| Needs repair | `failed`, Danger | Names what failed ("Hooks changed outside Slipgates") | **Repair hooks** |
-| Managed elsewhere | `failed`, Danger | Names the owner ("Hooks managed by policy") | None |
+| Needs repair | `failed`, Danger | "Setup didn't finish" | **Repair hooks** |
+| Managed elsewhere | None; neutral secondary text, no status colour | "Read-only · *why*" ("another bridge profile owns its hooks", "this machine's bridge is older" or "set in this bridge's settings") | None |
+| Couldn't be checked | None; neutral secondary text, no status colour | "Hook ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or "Hook intake couldn't be checked · *why*" | None |
+| Can't check | None; neutral secondary text, no status colour | "Can't check · this machine's bridge is older" | None |
 | Setting up (while it runs) | `working`, Active | "Setting up…" | The pressed verb (Set up or Repair hooks) stays, busy (A4) |
-| Not installed | None | One quiet line in text3: "*Agent* · not installed" (D7) | None |
+| Not installed | None | One quiet line in text3: "*Agent* · not installed" (D7) | **Install CLI** where the host can install it, as a subtle button on that line; otherwise "*Agent* · not installed · install it on this machine" and none. Installing, Cancel and "Install failed · *why*" follow [app-windows.md](../app-windows.md) |
 
 - **Ready needs evidence** (D2), the same rule as §6.8's Working. An agent is Ready when either:
   - a hook from that agent was handled by the host's current run after the agent's last Set up
@@ -2060,10 +2062,18 @@ up / Repair and Remove connection. You can't tell whether anything is needed. No
 - **The other states also need evidence.** A bridge setup record, with this profile's hook
   intake on and nothing heard yet, is Not tested yet, never Needs repair, so a healthy machine
   never shows Repair on its rows. No setup record, or intake off for this profile, is Not set
-  up, with Set up, which turns intake on (#705). Two states come first, in this order:
-  hooks owned by policy or another tool are Managed elsewhere, and an incomplete setup
-  (`hookSetup: incomplete`, registration failed after the record was written) is Needs
-  repair, with Repair hooks, whatever the record and intake say. Repair is offered only when the host reports the hooks failed or changed.
+  up, with Set up, which turns intake on (#705). Four states come first, in this order,
+  whatever the record and intake say:
+  - hooks the host holds back (`blocked`) are Managed elsewhere;
+  - hooks the host reports `failed` with `hookSetup: unknown` are Couldn't be checked;
+  - `hookSetup: unknown` beside any other hooks comes only from an older host, and is Can't
+    check;
+  - an incomplete setup (`hookSetup: incomplete`, registration failed after the record was
+    written) is Needs repair, with Repair hooks.
+
+  Repair is offered only for `incomplete`. The host has no signal for hooks changed outside
+  Slipgates, so no card claims it. The three neutral states offer no Set up, Repair or Remove,
+  and a blocked row hides Install CLI.
 - **Sign-in and trust** are never shown as checked until the host can observe them. They stay
   neutral rows in Details and don't affect the roll-up.
 
@@ -2085,8 +2095,10 @@ joins `tokens.json` with the implementation, measured like the other roles (§3)
   - the executable's path and version (the version shown once);
   - the agent's home;
   - the neutral check rows (hooks, sign-in, trust, last hook);
-  - **Test session**, when Ready (as a secondary button);
-  - at its foot, **Remove bridge integration…** (D5).
+  - **Run test session**, when Ready (as a secondary button);
+  - at its foot, **Remove bridge integration…** (D5), only when the host reports a setup to
+    remove (`hookSetup` `completed` or `incomplete`). It is hidden on Not set up and on the
+    neutral states, since the host refuses a removal without a setup.
 - **Remove bridge integration…** is a subtle button in Danger's text colour. It asks for
   confirmation, naming the agent and saying what stays (the CLI, its sign-in and its sessions).
   Cancel is the default. "Remove connection" is no longer on the card.
@@ -2095,7 +2107,7 @@ joins `tokens.json` with the implementation, measured like the other roles (§3)
   ring, says it's busy, and ignores presses.
 - **When the outcome lands** (here and on the host card below), the busy verb gives way to the
   new state's verb. If focus was on it, focus moves to that verb, or to the card's headline
-  when the new state has none (Ready, Managed elsewhere). If focus was elsewhere, it stays
+  when the new state has none (Ready and the neutral states). If focus was elsewhere, it stays
   there. Stop… returns focus from its confirmation to Stop…, which is then the busy verb.
 
 **The host** (D6) is a card spanning the full width above the agents:
@@ -2124,7 +2136,7 @@ joins `tokens.json` with the implementation, measured like the other roles (§3)
 **Accessibility** (§9.1).
 - Each card is a group named "*Agent*, *state*, *headline*" (for example "Copilot CLI, Ready, last
   hook 3:01 PM").
-- Each button names its agent ("Set up Claude Code", "Test session, Agency", "Remove bridge
+- Each button names its agent ("Set up Claude Code", "Run test session, Agency", "Remove bridge
   integration, Codex").
 - Details is a button with `aria-expanded` (UIA ExpandCollapse).
 - A state change is a polite per-row announcement ("Claude Code, Ready"), never an alert.
