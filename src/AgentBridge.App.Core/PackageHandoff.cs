@@ -60,12 +60,16 @@ public sealed class PackageHandoff(DownloadMark mark, string folder)
         }
     }
 
-    // Update.exe's apply, as Velopack's UpdateExe.Apply builds it for ApplyUpdatesAndRestart (not
-    // silent, restarting), but with --package naming the copy: the shared packages folder and the
-    // installation's root are Velopack's own.
+    // Update.exe's apply, as Velopack's UpdateExe.Apply builds it for ApplyUpdatesAndRestart
+    // (restarting), but with --package naming the copy: the shared packages folder and the
+    // installation's root are Velopack's own. Silent (#1167): Velopack's own "Installing Update"
+    // window never shows; the app's Updating screen says it instead, and only where the window was
+    // open. Velopack 1.2.161 restarts the old version when a silent apply fails (apply.rs), and
+    // the app's next start says so (AutoUpdater.Announce). --silent is a global flag, first, as
+    // UpdateExe.Apply puts it.
     public static IReadOnlyList<string> Arguments(string package, uint waitPid, string rootDir, string packagesDir, IReadOnlyList<string> restartArgs)
     {
-        List<string> args = ["apply", "--package", package, "--waitPid", waitPid.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        List<string> args = ["--silent", "apply", "--package", package, "--waitPid", waitPid.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "--rootDir", rootDir, "--packageDir", packagesDir];
         if (restartArgs.Count > 0) { args.Add("--"); args.AddRange(restartArgs); }
         return args;

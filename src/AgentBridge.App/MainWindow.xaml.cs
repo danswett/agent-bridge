@@ -124,13 +124,54 @@ public sealed partial class MainWindow : Window
     AppUpdateViewModel? announcing;
     void FollowAppUpdate()
     {
-        if (announcing is not null) { announcing.Announced -= AnnounceUpdate; }
+        if (announcing is not null)
+        {
+            announcing.Announced -= AnnounceUpdate;
+            announcing.PropertyChanged -= FollowUpdating;
+        }
         announcing = ViewModel.AppUpdate;
         announcing.Announced += AnnounceUpdate;
+        announcing.PropertyChanged += FollowUpdating;
+        FollowUpdating(null, null);
     }
 
-    void AnnounceUpdate() =>
-        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(UpdateReady)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
+    void AnnounceUpdate() => AnnounceLive(UpdateReady);
+
+    void AnnounceLive(UIElement region) =>
+        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(region)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
+
+    // The Updating screen (#1167) takes the window's content: what is under it takes no input,
+    // search included, and its title is said once. Should the install not go ahead, focus goes back
+    // where it was (the bar's button, now Try again, ui.md §9.1 A4). The Updated bar is said once as
+    // it opens.
+    bool showingUpdating;
+    bool showingUpdated;
+    Control? focusBeforeUpdating;
+    void FollowUpdating(object? sender, System.ComponentModel.PropertyChangedEventArgs? e)
+    {
+        var update = ViewModel.AppUpdate;
+        if (update.IsUpdating != showingUpdating)
+        {
+            showingUpdating = update.IsUpdating;
+            if (showingUpdating) { focusBeforeUpdating = Root.XamlRoot is { } x ? FocusManager.GetFocusedElement(x) as Control : null; }
+            Nav.IsEnabled = !showingUpdating;
+            SearchBox.IsEnabled = !showingUpdating;
+            if (showingUpdating) { AnnounceLive(UpdatingTitle); }
+            else
+            {
+                var back = focusBeforeUpdating;
+                focusBeforeUpdating = null;
+                if (back is { IsLoaded: true, IsEnabled: true, Visibility: Visibility.Visible }) { back.Focus(FocusState.Programmatic); }
+            }
+        }
+        if (update.HasUpdated != showingUpdated)
+        {
+            showingUpdated = update.HasUpdated;
+            if (showingUpdated) { AnnounceLive(UpdatedBar); }
+        }
+    }
+
+    void OnCloseUpdated(InfoBar sender, object args) => ViewModel.AppUpdate.CloseUpdated();
 
     public MainViewModel ViewModel { get; }
     public LaunchViewModel Launch { get; }
@@ -253,12 +294,19 @@ public sealed partial class MainWindow : Window
     // a window that is neither hidden in the tray nor minimised.
     void SyncSessionsOnScreen()
     {
+        var shown = AppWindow.IsVisible && AppWindow.Presenter is not OverlappedPresenter { State: OverlappedPresenterState.Minimized };
+        open = shown;
         if (SessionsView.Layout is { } layout)
         {
-            layout.OnScreen = SessionsView.Visibility == Visibility.Visible && AppWindow.IsVisible
-                && AppWindow.Presenter is not OverlappedPresenter { State: OverlappedPresenterState.Minimized };
+            layout.OnScreen = SessionsView.Visibility == Visibility.Visible && shown;
         }
     }
+
+    // On screen, neither hidden in the tray nor minimised; read off the UI thread, by the updater
+    // as it begins an install (#1167): the Updating screen, and the window again afterwards, are
+    // only for a window someone could be looking at.
+    volatile bool open;
+    public bool IsOpen => open;
     // A toast, the tray or the search box asked for a session: it is MainViewModel.Selected
     // already, so the Sessions page shows it, its row scrolled into view.
     void Reveal(SessionCardViewModel card) => Nav.SelectedItem = SessionsItem;

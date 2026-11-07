@@ -1690,6 +1690,17 @@ machine, online ones first, then the account's offline machines (#213):
   the press. The restart
   reads "Restarting to update…", never "Updating…" (#950); the result reads "Updated to *v*" or
   "Not updated: *reason*", the reason fixed by its code, never the machine's text (#826).
+- **The machine's own window while it updates** (#1167; [app-windows.md](../app-windows.md)):
+  not a row on another device, so "Updating" is right here. With the window open as the install
+  begins, its content becomes one centred state, with no buttons: an indeterminate progress ring,
+  "Updating to version *v*" (a heading, said once as a polite live region) and "*Product* closes
+  for a moment and opens again by itself. Your agents keep running.", on the page's layer, the
+  window colour in high contrast. Velopack's own window never shows (the apply is silent). The new
+  version opens the window again and shows "Updated to version *v*." as a closable success bar
+  with **What's new**; with the window closed, the toast as before. A start still on the old
+  version shows the update bar as a warning, "Couldn't install version *v*. *Product* is still on
+  *old*.", with **Try again**, and a toast too when the window was closed: never silent, never an
+  error's own text.
 - **When an update is ready** (owner decision on #689, 6674007815; Product, 6674016765; Creative,
   6674096426): a per-machine setting, a two-choice picker, never a toggle. Each choice carries its
   note.

@@ -173,6 +173,26 @@
                             </Button>
                         </InfoBar.ActionButton>
                     </InfoBar>
+                    <!-- The new version's first start, where the window was open for the update (#1167): a
+                         success the person closes, with the release's notes a link away. A polite live
+                         region, said once as it opens (MainWindow.FollowUpdating). -->
+                    <InfoBar
+                        x:Name="UpdatedBar"
+                        Margin="24,12,24,0"
+                        AutomationProperties.AutomationId="Updated"
+                        AutomationProperties.LiveSetting="Polite"
+                        IsClosable="True"
+                        Severity="Success"
+                        IsOpen="{x:Bind ViewModel.AppUpdate.HasUpdated, Mode=OneWay}"
+                        Message="{x:Bind ViewModel.AppUpdate.UpdatedMessage, Mode=OneWay}"
+                        CloseButtonClick="OnCloseUpdated">
+                        <InfoBar.ActionButton>
+                            <HyperlinkButton
+                                AutomationProperties.AutomationId="WhatsNew"
+                                Content="What's new"
+                                NavigateUri="{x:Bind ViewModel.AppUpdate.ReleaseNotes, Mode=OneWay}" />
+                        </InfoBar.ActionButton>
+                    </InfoBar>
                 </StackPanel>
 
                 <!-- Sessions (ui.md §5.2, §6): the list, the session and its inspector, by the window's width. -->
@@ -329,5 +349,46 @@
                 <local:SettingsView x:Name="SettingsPane" Grid.Row="1" Visibility="Collapsed" />
             </Grid>
         </NavigationView>
+
+        <!-- Updating (#1167): while this machine's update is handed to Velopack, with the window open,
+             the window's content is one centred state, on the page's layer (the window colour in high
+             contrast), over the rail and the pages, which take no input meanwhile. No buttons: the
+             app closes for a moment and opens again by itself. The title is a polite live region,
+             said once as the screen appears (MainWindow.FollowUpdating). -->
+        <Grid
+            x:Name="UpdatingPane"
+            Grid.Row="1"
+            Background="{ThemeResource AbLayer}"
+            AutomationProperties.AutomationId="Updating"
+            Visibility="{x:Bind local:Ui.Show(ViewModel.AppUpdate.IsUpdating), Mode=OneWay}">
+            <StackPanel MaxWidth="440" Padding="24" Spacing="12" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <ProgressRing
+                    Width="32"
+                    Height="32"
+                    HorizontalAlignment="Center"
+                    IsIndeterminate="True"
+                    IsActive="{x:Bind ViewModel.AppUpdate.IsUpdating, Mode=OneWay}"
+                    AutomationProperties.AutomationId="UpdatingProgress"
+                    AutomationProperties.Name="{x:Bind ViewModel.AppUpdate.UpdatingTitle, Mode=OneWay}" />
+                <TextBlock
+                    x:Name="UpdatingTitle"
+                    Style="{StaticResource AbTypeTitle}"
+                    HorizontalAlignment="Center"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap"
+                    AutomationProperties.AutomationId="UpdatingTitle"
+                    AutomationProperties.HeadingLevel="Level1"
+                    AutomationProperties.LiveSetting="Polite"
+                    Text="{x:Bind ViewModel.AppUpdate.UpdatingTitle, Mode=OneWay}" />
+                <TextBlock
+                    Style="{StaticResource AbTypeRow}"
+                    Foreground="{ThemeResource AbText2}"
+                    HorizontalAlignment="Center"
+                    TextAlignment="Center"
+                    TextWrapping="Wrap"
+                    AutomationProperties.AutomationId="UpdatingBody"
+                    Text="{x:Bind core:AppUpdateViewModel.UpdatingBody}" />
+            </StackPanel>
+        </Grid>
     </Grid>
 </Window>

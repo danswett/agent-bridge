@@ -189,7 +189,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         // Not Velopack's ApplyUpdatesAndRestart, which names the shared packages folder's file to
         // Update.exe (#984): the bytes verified and marked, copied into this profile's own folder
         // and checked again from the handle that keeps them until this process ends, then
-        // Update.exe started as ApplyUpdatesAndRestart starts it, with --package naming the copy
+        // Update.exe started as ApplyUpdatesAndRestart starts it, but silent (#1167), with --package naming the copy
         // and the shared --packageDir, where its install lock is.
         Manager();
         var handoff = Handoff ?? throw new InvalidOperationException("this copy of the app has no profile folder to hand an update over from; nothing was installed");

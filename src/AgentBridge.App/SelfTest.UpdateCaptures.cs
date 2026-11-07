@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
@@ -91,6 +92,10 @@ static partial class SelfTest
             check(bar is { Severity: InfoBarSeverity.Warning } && !bar.Message.Any(char.IsDigit) && Action() is { } retry && AutomationProperties.GetName(retry) == "Try again" && retry.Style == accent,
                 $"draws a failed install as a warning with Try again and no machine detail{where}");
 
+            // #1167: the Updating screen, the open window's while the release is handed to
+            // Velopack, and the new version's Updated bar, and an install that didn't take.
+            await CaptureUpdating(window, main, check, File, Under, Looks, where, contrast);
+
             // Settings' update row, over the stand-in release, under the banner offering it: the
             // banner says the offer, so Settings' line doesn't repeat it, and its Restart to update
             // stays (Creative, 6677102646, principle 6). Captured with the banner, the whole window.
@@ -164,5 +169,59 @@ static partial class SelfTest
             if (!contrast) { window.RootElement.RequestedTheme = ElementTheme.Default; }
             window.ShowPage("sessions");
         }
+    }
+
+    // #1167's captures: the Updating screen (one centred state, no buttons, its title a heading said
+    // once, on the page's layer, which high contrast draws in the window colour), the Updated bar
+    // with What's new, and a start still on the old version, as a warning with Try again.
+    static async Task CaptureUpdating(MainWindow window, MainViewModel main, Action<bool, string> check, Func<string, string, string> file,
+        Func<DependencyObject, Windows.UI.Color> under, Func<Func<string, Task>, Task> looks, string where, bool contrast)
+    {
+        var before = main.AppUpdate;
+        try
+        {
+            var updating = new AppUpdateViewModel(() => null, _ => Task.FromResult<string?>(null), () => "0.1.999");
+            main.AppUpdate = updating;
+            var pane = ById<Grid>(window.RootElement, "Updating");
+            var title = pane is null ? null : ById<TextBlock>(pane, "UpdatingTitle");
+            var ring = pane is null ? null : ById<ProgressRing>(pane, "UpdatingProgress");
+            var body = pane is null ? null : ById<TextBlock>(pane, "UpdatingBody");
+            var drawn = await Until(() => pane is { Visibility: Visibility.Visible, ActualHeight: > 0 } && title is not null && Text(title) == "Updating to version 0.1.999", TimeSpan.FromSeconds(5));
+            check(drawn, $"captures the Updating screen{where}");
+            check(title is not null && AutomationProperties.GetHeadingLevel(title) == AutomationHeadingLevel.Level1 && AutomationProperties.GetLiveSetting(title) == AutomationLiveSetting.Polite
+                && ring is { IsActive: true, IsIndeterminate: true } && AutomationProperties.GetName(ring) == "Updating to version 0.1.999"
+                && body is not null && Text(body) == AppUpdateViewModel.UpdatingBody
+                && pane is not null && Find<Button>(pane).Count == 0 && !window.Rail.IsEnabled && !window.Search.IsEnabled,
+                $"draws the Updating screen as one state, its title a polite heading, its ring named, with no buttons and nothing under it to press{where}");
+            if (contrast)
+            {
+                var windowColour = Application.Current.Resources.TryGetValue("SystemColorWindowColor", out var w) && w is Windows.UI.Color c ? c : (Windows.UI.Color?)null;
+                check(pane?.Background is SolidColorBrush { Color: var fill } && fill == windowColour, $"draws the Updating screen on the window colour in high contrast ({(pane?.Background as SolidColorBrush)?.Color}, wanted {windowColour})");
+            }
+            if (drawn) { await looks(look => Picture(window.RootElement, file("updating", look), under(window.RootElement))); }
+
+            var updated = new AppUpdateViewModel(() => null, _ => Task.FromResult<string?>(null));
+            main.AppUpdate = updated;
+            updated.Show(new UpdateAnnouncement(true, "0.1.0", "0.1.999", "0.1.999", WindowOpen: true));
+            var bar = ById<InfoBar>(window.RootElement, "Updated");
+            var shown = await Until(() => pane is { Visibility: Visibility.Collapsed } && window.Rail.IsEnabled && bar is { IsOpen: true, ActualHeight: > 0 } && bar.Message == "Updated to version 0.1.999.", TimeSpan.FromSeconds(5));
+            // Its action is in the bar's template, there only once the bar is open.
+            var link = bar is null ? null : ById<HyperlinkButton>(bar, "WhatsNew");
+            check(shown && bar is { Severity: InfoBarSeverity.Success, IsClosable: true } && AutomationProperties.GetLiveSetting(bar) == AutomationLiveSetting.Polite
+                && link is { NavigateUri: { } notes } && notes.ToString().EndsWith("/releases/tag/v0.1.999", StringComparison.Ordinal) && link.Content as string == "What's new",
+                $"draws the Updated bar as a closable success with What's new{where} ({bar?.Message}; {link?.NavigateUri})");
+            if (shown) { await looks(look => Picture(bar!, file("updated", look), under(bar!))); }
+
+            var failed = new AppUpdateViewModel(() => "0.1.999", _ => Task.FromResult<string?>(null));
+            main.AppUpdate = failed;
+            failed.Show(new UpdateAnnouncement(false, "0.1.0", "0.1.0", "0.1.999", WindowOpen: false));
+            var ready = ById<InfoBar>(window.RootElement, "UpdateReady");
+            var couldNot = $"Couldn't install version 0.1.999. {Product.Name} is still on 0.1.0.";
+            var warned = await Until(() => ready is { IsOpen: true, Severity: InfoBarSeverity.Warning, ActualHeight: > 0 } && ready.Message == couldNot
+                && ById<Button>(ready, "RestartToUpdate") is { } again && AutomationProperties.GetName(again) == "Try again", TimeSpan.FromSeconds(5));
+            check(warned, $"says an install that didn't take as a warning with Try again{where} ({ready?.Message})");
+            if (warned) { await looks(look => Picture(ready!, file("bar-could-not-install", look), under(ready!))); }
+        }
+        finally { main.AppUpdate = before; }
     }
 }

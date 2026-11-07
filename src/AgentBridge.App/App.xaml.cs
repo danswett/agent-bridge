@@ -203,14 +203,25 @@ public partial class App : Application
         // changed.
         if (!options.Demo && updater.InstalledVersion is not null)
         {
-            AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write, blockers: InstallBlockers.Find);
-            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui, preflight: InstallBlockers.Find);
+            var announced = AutoUpdater.Announce(Prefs, SavePrefs, updater, sink, AppLog.Write, blockers: InstallBlockers.Find);
+            MainWindow shownIn = window;
+            autoUpdater = new AutoUpdater(updater, connection, manager, Prefs, SavePrefs, AppLog.Write, PackageProcesses.Others, ui: ui, preflight: InstallBlockers.Find)
+            {
+                WindowOpen = () => shownIn.IsOpen,
+            };
             // The banner's Restart to update, and Settings' (#516): the updater's changes come on
             // whichever thread made them.
             var appUpdate = AppUpdateViewModel.For(autoUpdater);
             autoUpdater.StateChanged += () => ui.Post(appUpdate.Changed);
             updater.Changed += () => ui.Post(settings.UpdatesChanged);
             main.AppUpdate = appUpdate;
+            // How the update went (#1167): where the window was open for it, it opens again and says
+            // so; an install that didn't take is said in the window either way, with Try again.
+            if (announced is { } a)
+            {
+                if (a.WindowOpen) { window.Activate(); }
+                if (a.WindowOpen || !a.Took) { appUpdate.Show(a); }
+            }
             // One restart, with one state, whichever control starts it (Creative, 6676653935).
             settings.ShareRestart(appUpdate);
             // When an update is ready, changed in Settings, is acted on and said to the devices at once.
