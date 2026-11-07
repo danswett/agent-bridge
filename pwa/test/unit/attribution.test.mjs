@@ -398,7 +398,7 @@ test('each line gives its absolute time in the viewer\'s own time zone, with no 
   }
 });
 
-test('more than three lines in a row fold into one that counts failed and ended apart from reported back, with a link of its own to the earliest still working (D3)', () => {
+test('two or more lines in a row fold into one that counts failed and ended apart from reported back, with a link of its own to the earliest still working (D3, #1063)', () => {
   const run = lines([
     ...['a', 'b', 'c'].map((id, i) => ({ id, name: id, status: 'ended', outcome: 'done', startedAt: minsAgo(50 - i * 5), endedAt: minsAgo(10) })),
     { id: 'd', name: 'd', status: 'ended', outcome: 'failed', startedAt: minsAgo(30), endedAt: minsAgo(9) },
@@ -409,8 +409,9 @@ test('more than three lines in a row fold into one that counts failed and ended 
   assert.equal(run.length, 7);
   // The button is the counts alone, its chevron ending it; its name reads on to the link, as drawn.
   assert.deepEqual(delegateFold(run), { button: '7 delegates · 3 reported back, 1 failed, 1 ended', link: '2 still working', workingId: 'e', label: '7 delegates · 3 reported back, 1 failed, 1 ended, 2 still working' });
-  // Three lines are shown as they are.
+  // One line stays a line, as short as the fold; two fold.
   assert.equal(delegateFold(run.slice(0, FOLD_AFTER)), null);
+  assert.deepEqual(delegateFold(run.slice(0, 2)), { button: '2 delegates · 2 reported back', link: null, workingId: null, label: '2 delegates · 2 reported back' });
   // With none still working there is no link: the line is the button alone, and a count of 0 is left out.
   const done = run.slice(0, 4);
   assert.deepEqual(delegateFold(done), { button: '4 delegates · 3 reported back, 1 failed', link: null, workingId: null, label: '4 delegates · 3 reported back, 1 failed' });

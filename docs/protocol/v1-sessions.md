@@ -664,10 +664,10 @@ reads it as absent: no disabled Other, and the `reason` as usual.
 | `otherNotSendable` | "Your own answer can't be sent from here yet. Pick an option, or answer at the machine." | On a field: Other, its label unchanged, disabled, and the sentence as one muted line under the choices and as their accessible description. On a refusal: "Not sent · " and the sentence |
 
 `otherNotSendable` is a **temporary exception to #876** ("offer Other exactly when the CLI
-does"), decided by Product for #510 and removed when
-[#908](https://github.com/danswett/agent-bridge/issues/908) lands: Copilot CLI 1.0.105 offers
-Other on a lone option list, but a live session takes its words in a box drawn apart from the
-form, which the host cannot yet hold its keys to ([host answers](../host-answers.md)).
+does"), decided by Product for #510: Copilot CLI 1.0.105 offers Other on a lone option list,
+but the host cannot yet prove that its pinned input box is empty. The read-only preparation
+in [#908](https://github.com/danswett/agent-bridge/issues/908) does not remove this exception
+or enable typing ([host answers](../host-answers.md)).
 
 Accepted by the session is `delivered`, never a stage. A stage a client does not know reads as
 `typed`; an older host sends none. A repeat of a request whose outcome was `unconfirmed`
@@ -692,7 +692,7 @@ permission prompts goes beyond it, at the user's request:
 
 | Agent | Prompt | `kind` | Answered | `delivered` when |
 |---|---|---|---|---|
-| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes, for a form the host can read on screen; free text, and a form it cannot, is `answerAtMachine` ([host answers](../host-answers.md)). Not with Other words for now: a lone list has `otherUnavailable` (`otherNotSendable`, a temporary exception to #876 until #908), since a live session takes them in a box drawn apart from the form | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
+| Copilot CLI | `ask_user`: free text, or a form of `choice`, `multi`, `boolean`, `text` and `number` fields | `form` | Yes, for a form the host can read on screen; free text, and a form it cannot, is `answerAtMachine` ([host answers](../host-answers.md)). Not with Other words for now: a lone list has `otherUnavailable` (`otherNotSendable`, a temporary exception to #876), since the host cannot yet prove its pinned box empty | Its `human_response.recorded` (or, for free text, its completion) holds the answer typed |
 | Copilot CLI | Permission request for a shell command, path access, a file edit or read, a URL, an MCP tool or a custom tool | `approval` | Yes, with `sessions.approve`: approve once or deny, nothing that grants more | Its `permission.completed` for that request records `approved` (approve), or `denied-interactively-by-user` with no message or `cancelled` followed by the session's abort of the turn (deny) |
 | Copilot CLI | Any other permission request (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read, or any on a host with `permissions.remoteApproval` off | `approval` | No: `answerAtMachine` | |
 | Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
