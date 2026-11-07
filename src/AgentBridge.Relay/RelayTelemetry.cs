@@ -8,16 +8,27 @@ namespace AgentBridge.Relay;
 // the counters existed but never left the process. Registered only when a connection string is
 // configured, so a relay without one exports nothing. Metrics only, no traces or logs, and the
 // meter carries no ids (RelayMetrics.AllowedTags), so nothing exported identifies a person.
-public sealed class RelayTelemetry(string connectionString) : IHostedService
+public sealed class RelayTelemetry(string connectionString, ILogger<RelayTelemetry> log) : IHostedService
 {
     MeterProvider? provider;
 
     public Task StartAsync(CancellationToken ct)
     {
-        provider = Sdk.CreateMeterProviderBuilder()
-            .AddMeter(RelayMetrics.MeterName)
-            .AddAzureMonitorMetricExporter(o => o.ConnectionString = connectionString)
-            .Build();
+        // A telemetry setting must never stop the relay from serving: a malformed string makes the
+        // exporter throw here, so the relay starts without one. The exception is not logged, as
+        // its message can quote the connection string.
+        try
+        {
+            provider = Sdk.CreateMeterProviderBuilder()
+                .AddMeter(RelayMetrics.MeterName)
+                .AddAzureMonitorMetricExporter(o => o.ConnectionString = connectionString)
+                .Build();
+        }
+        catch (Exception e)
+        {
+            provider = null;
+            log.LogWarning("Application Insights export is off: the connection string setting is not valid ({Error})", e.GetType().Name);
+        }
         return Task.CompletedTask;
     }
 

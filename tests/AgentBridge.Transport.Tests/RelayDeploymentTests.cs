@@ -222,4 +222,26 @@ public class RelayDeploymentTests
         Assert.Contains(seen, s => s.Instrument == "relay.connect.duration" && s.Value == 40 && (string?)s.Kind == "host");
         Assert.Contains(seen, s => s.Instrument == "relay.sockets.live" && s.Value == 2 && (string?)s.Kind == "host");
         Assert.All(seen.Where(s => s.Instrument is "relay.forward.latency" or "relay.connect.duration" or "relay.sockets.live"), s => Assert.Equal(["kind"], s.Keys));
+    }
+
+    [Fact]
+    public async Task A_malformed_Application_Insights_connection_string_leaves_the_relay_running_without_export()
+    {
+        const string bad = "not-a-connection-string-secret-value";
+        var lines = new List<string>();
+        var telemetry = new RelayTelemetry(bad, new ListLogger<RelayTelemetry>(lines));
+
+        await telemetry.StartAsync(default);
+        await telemetry.StopAsync(default);
+
+        var warning = Assert.Single(lines);
+        Assert.Contains("export is off", warning);
+        Assert.DoesNotContain("secret-value", warning);
+    }
+
+    sealed class ListLogger<T>(List<string> lines) : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel level, Microsoft.Extensions.Logging.EventId id, TState state, Exception? e, Func<TState, Exception?, string> format) => lines.Add(format(state, e));
     }}
