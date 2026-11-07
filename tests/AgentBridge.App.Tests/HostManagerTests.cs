@@ -736,15 +736,46 @@ public sealed class HostManagerTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
-    public async Task Stopping_asks_the_host_to_stop_and_a_host_that_will_not_is_ended()
+    public async Task Stopping_does_not_forcibly_end_a_host_that_will_not_exit()
     {
         host.On(HostOps.Stop, _ => new { stopping = true });
         host.Start();
 
-        await Assert.ThrowsAsync<TimeoutException>(() => manager.StopAsync());
+        await Assert.ThrowsAsync<HostBusyException>(() => manager.StopAsync());
 
         Assert.Single(host.Sent(HostOps.Stop));
-        Assert.Equal([4242], processes.Killed);
+        Assert.Empty(processes.Killed);
+        Assert.True(File.Exists(StopMarker));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_lost_stop_response_leaves_a_running_host_and_keeps_the_stop_marker()
+    {
+        processes.Alive.Add(4242);
+        host.OnAsync(HostOps.Stop, async _ => { await host.StopAsync(); return new { stopping = true }; });
+        host.Start();
+
+        await Assert.ThrowsAsync<HostBusyException>(() => manager.StopAsync());
+
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Empty(processes.Killed);
+        Assert.True(File.Exists(StopMarker));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_host_whose_pipe_closes_but_process_remains_is_not_reported_stopped()
+    {
+        processes.Alive.Add(4242);
+        host.StopsWhenAsked();
+        host.Start();
+
+        await Assert.ThrowsAsync<HostBusyException>(() => manager.StopAsync());
+
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Empty(processes.Killed);
+        Assert.True(File.Exists(StopMarker));
     }
 
     [Fact]
@@ -761,6 +792,7 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.Equal(stop.Message, restart.Message);
         Assert.Empty(processes.Killed);
         Assert.Empty(processes.Started);
+        Assert.False(File.Exists(StopMarker));
         Assert.True(await manager.IsRunningAsync());
     }
 

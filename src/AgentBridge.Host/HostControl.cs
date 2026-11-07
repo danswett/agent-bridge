@@ -36,6 +36,7 @@ public sealed class HostControlOptions
     // Keeps a finished sign-in (the profile's account and relay) and starts using it.
     public required Action<SignInResult, Uri> SignedIn { get; init; }
     public required Action Stop { get; init; }
+    public Func<Task<IDisposable?>>? PrepareStop { get; init; }
     public required Action Restart { get; init; }
     // host.probes.hold: holds the usage probes whose process goes with the host, and says why the
     // host should not be stopped yet, or null when it may be (#238).
@@ -219,6 +220,12 @@ public sealed class HostControl
                 return RelayAccount();
             case HostOps.Stop:
                 log("stopping: asked by the app");
+                var prepared = options.PrepareStop is { } prepare ? await prepare() : null;
+                if (options.PrepareStop is not null && prepared is null)
+                {
+                    throw new InvalidOperationException("a delivery or typing is still in progress; the host was not stopped, try again later");
+                }
+                ServedRequest.Current?.OnResponded(sent => { if (!sent) { prepared?.Dispose(); } });
                 return new ChannelReply(new { stopping = true }, _ => { options.Stop(); return Task.CompletedTask; });
             case HostOps.Restart:
                 log("restarting: asked by the app");
