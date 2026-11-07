@@ -98,8 +98,7 @@ if ($Publish) {
             }
             Write-Host 'Existing Beta manifest matches; retained without uploading'
         } finally {
-            if (Test-Path -LiteralPath $checkPath) { Remove-Item -LiteralPath $checkPath }
-            Remove-Item -LiteralPath $checkDir
+            Remove-Item -LiteralPath $checkDir -Recurse -Force
         }
     } else {
         # Without --clobber, even an asset added after the metadata read cannot be deleted.

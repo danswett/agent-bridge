@@ -24,6 +24,11 @@ function gh {
     if ($a[1] -ceq $global:RmGhFailure) { $global:LASTEXITCODE = 1; return }
     if ($a[1] -ceq 'download') {
         $dir = $a[[array]::IndexOf($a, '--dir') + 1]
+        if ($global:RmGhFailure -ceq 'partial-download') {
+            [IO.File]::WriteAllText((Join-Path $dir 'beta-release.json.partial'), 'incomplete')
+            $global:LASTEXITCODE = 1
+            return
+        }
         [IO.File]::WriteAllText((Join-Path $dir 'beta-release.json'), $global:RmPublished)
     } else {
         if ($null -ne $global:RmPublished) { $global:LASTEXITCODE = 1; return }
@@ -93,6 +98,7 @@ try {
         @{ Name = 'matching manifest is retained'; Existing = $true; Remote = 'matching'; Failure = $null; Error = $null; Calls = 1 }
         @{ Name = 'mismatched manifest is not replaced'; Existing = $true; Remote = '{}'; Failure = $null; Error = '*does not match*'; Calls = 1 }
         @{ Name = 'download failure does not replace a manifest'; Existing = $true; Remote = 'matching'; Failure = 'download'; Error = '*download failed*'; Calls = 1 }
+        @{ Name = 'partial download cleanup preserves the download failure'; Existing = $true; Remote = 'matching'; Failure = 'partial-download'; Error = '*download failed*'; Calls = 1 }
         @{ Name = 'upload failure is surfaced'; Existing = $false; Remote = $null; Failure = 'upload'; Error = '*upload failed*'; Calls = 1 }
         @{ Name = 'asset added after metadata read is not clobbered'; Existing = $false; Remote = 'matching'; Failure = $null; Error = '*upload failed*'; Calls = 1 }
     )) {
@@ -120,6 +126,7 @@ try {
         }
         $wanted = if ($case.Existing -or $case.Error) { $before } else { $expected }
         Assert ($global:RmPublished -ceq $wanted) "$($case.Name): published content was lost or changed"
+        Assert (@(Get-ChildItem -LiteralPath $scratch -Directory -Filter 'beta-manifest-*').Count -eq 0) "$($case.Name): download scratch was not removed"
         $passed++
         Write-Host "PASS: $($case.Name)"
     }
