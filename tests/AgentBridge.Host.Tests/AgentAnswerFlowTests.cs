@@ -227,7 +227,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
 
         var again = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
 
-        Assert.Equal(first, again);
+        Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, again);
         Assert.Equal(typed, injector.Plans.Count);
     }
 
@@ -281,8 +281,45 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         var typed = injector.Plans.Count;
 
         Assert.Equal(first, await answerer.AnswerAsync(request));
-        Assert.Equal(first, await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen)));
+        Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen)));
         Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // #1093 review: the memory of a first answer must not tell a stranger whether a guess was
+    // right. The same text from another sender goes the usual way, and is refused exactly as
+    // other text is; only the sender of the first answer is given its outcome again.
+    [Fact]
+    public async Task Another_sender_giving_the_identical_text_gets_the_same_refusal_as_one_giving_other_text_and_only_the_first_sender_gets_the_outcome()
+    {
+        var answerer = Answerer();
+        var first = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
+        Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
+        var typed = injector.Plans.Count;
+        var other = new Dictionary<string, object> { ["Which database?"] = "DuckDB", ["Which features?"] = new[] { "Auth", "Search" } };
+
+        var guessed = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "laptop");
+        var missed = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", other), sender: "laptop");
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "an answer was already typed into this prompt once, and is never typed again"), guessed);
+        Assert.Equal(missed, guessed);
+        Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone"));
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    [Fact]
+    public async Task An_unconfirmed_first_answer_is_read_again_for_an_identical_retry_long_after_the_request_s_own_record_is_forgotten()
+    {
+        var answerer = Answerer(remembered: TimeSpan.FromTicks(-1));
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
+        var typed = injector.Plans.Count;
+
+        Fixture.Append(claude, Recorded());
+        var again = await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), again);
+        Assert.Equal(typed, injector.Plans.Count);
+        // And it stays delivered.
+        Assert.Equal(AnswerOutcome.Delivered, (await answerer.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen))).Outcome);
     }
 
     [Fact]
@@ -305,7 +342,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         var first = await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" }));
         Assert.Equal(AnswerOutcome.Unconfirmed, first.Outcome);
 
-        Assert.Equal(first, await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" })));
+        Assert.Equal(first with { Reason = DeliveryReasons.AnswerNotConfirmed }, await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "approve" })));
         var denied = await answerer.AnswerAsync(Request(CodexId, CodexQuestion, new { decision = "deny" }));
 
         Assert.Equal(AnswerOutcome.Refused, denied.Outcome);

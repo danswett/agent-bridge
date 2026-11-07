@@ -510,8 +510,13 @@ In order, for every answer:
    whatever it was (`stale`, `refused` and `busy` included), is remembered for 15 minutes
    and returned for a resend, which types nothing. So is the outcome of a prompt's first
    answer, for any request that says the same thing (the same fields and text) for the
-   same session and question: a phone that reloaded, or a second device, sends it under a
-   new UUID, and gets the first outcome instead of the refusal in step 6 (#1093). That
+   same session and question, from the same sender (the channel's peer; a second device
+   gets the plain refusal, and so does the same text from any other sender, so a guess
+   cannot be told from a miss): a phone that reloaded sends it under a
+   new UUID, and gets the first outcome instead of the refusal in step 6 (#1093). An
+   `unconfirmed` one is read again from the session each time (step 9), so it turns
+   `delivered` once recorded; while it is not, the retry is told only that the bridge could not
+   confirm it (`DeliveryReasons.AnswerNotConfirmed`) and nothing is typed. That
    record is the host's memory only, and is kept while the prompt's claim is; it never
    covers an answer that typed nothing, nor a different answer.
 4. The session's process is still the live agent process; it does not run elevated

@@ -839,6 +839,55 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(1, injector.Plans.Sum(p => p.Plan.Sends.Count(s => s.Enter)));
     }
 
+    // #1093, the owner's case on a real machine: the form's fields were typed, the words never
+    // showed within the wait, so the last Enter was held and the answer left unconfirmed, with
+    // the form part answered. Sent again under a new request (the phone had reloaded), it is
+    // never typed again, and is neither delivered nor refused until the session records it.
+    [Fact]
+    public async Task An_identical_retry_of_a_two_field_answer_whose_Enter_was_held_types_nothing_and_turns_delivered_once_recorded()
+    {
+        await AskFormAsync();
+        injector.Screen = () => FormScreen(Picked(), words: false, moved: Moved());
+        var ch = await OpenAsync();
+
+        var first = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+        Assert.Equal(("unconfirmed", "typed"), (first.GetProperty("outcome").GetString(), Stage(first)));
+        Assert.Contains("only the form's first 1 of 2 fields were answered", first.GetProperty("reason").GetString());
+        var typed = injector.Plans.Count;
+
+        foreach (var _ in new[] { 1, 2, 3 })
+        {
+            var retry = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+            Assert.Equal(("unconfirmed", "typed", DeliveryReasons.AnswerNotConfirmed), (retry.GetProperty("outcome").GetString(), Stage(retry), retry.GetProperty("reason").GetString()));
+        }
+        Assert.Equal(typed, injector.Plans.Count);
+
+        Fixture.Append(events, Recorded("q2", FormAnswer));
+        var recorded = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+        Assert.Equal("delivered", recorded.GetProperty("outcome").GetString());
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    [Fact]
+    public async Task An_identical_retry_of_a_one_field_answer_whose_Enter_was_held_types_nothing_and_turns_delivered_once_recorded()
+    {
+        await AskDataAsync();
+        injector.Screen = () => DataScreen("", injector.Plans.Count > 0 ? "ae" : null);
+        var ch = await OpenAsync();
+
+        var first = await AnswerResultAsync(ch, new { data = "ae" }, Guid.NewGuid().ToString());
+        Assert.Equal(("unconfirmed", "typed"), (first.GetProperty("outcome").GetString(), Stage(first)));
+        var typed = injector.Plans.Count;
+
+        var retry = await AnswerResultAsync(ch, new { data = "ae" }, Guid.NewGuid().ToString());
+        Assert.Equal(("unconfirmed", "typed", DeliveryReasons.AnswerNotConfirmed), (retry.GetProperty("outcome").GetString(), Stage(retry), retry.GetProperty("reason").GetString()));
+        Assert.Equal(typed, injector.Plans.Count);
+
+        Fixture.Append(events, Recorded("q2", new { data = "ae" }));
+        Assert.Equal("delivered", (await AnswerResultAsync(ch, new { data = "ae" }, Guid.NewGuid().ToString())).GetProperty("outcome").GetString());
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
     [Fact]
     public async Task An_answer_given_at_the_machine_while_the_words_wait_to_show_gets_no_Enter_from_the_host()
     {

@@ -687,13 +687,19 @@ half-typed prompt holds, and a second answer would land on top of the first. Onl
 attempt that typed nothing (the session's console could not be reached) leaves the prompt
 answerable. A host records the attempt before the first key, and refuses when it cannot.
 
-The same answer sent again for such a prompt under a different request UUID (a phone that
-was reloaded keeps its UUIDs in memory only, and a second device has none) is that request
-sent again, not a second attempt: while the host still has the first answer in memory, it
-gets the first outcome (`unconfirmed` read again as above, so `delivered` once the session
-has recorded it) and nothing is typed. Only a *different* answer is `refused` for a prompt
-already typed into. A host that restarted has forgotten the first answer, and refuses any
-second request for the prompt, as the record of attempts alone does.
+The same answer sent again for such a prompt under a different request UUID by the **same
+sender** (a phone that was reloaded keeps its UUIDs in memory only) is that request sent
+again, not a second attempt: while the host still has the first answer in memory, it gets the
+first outcome and nothing is typed. An `unconfirmed` one is read again from the session as
+above, however long after, so it becomes `delivered` once the session has recorded it; while
+nothing is recorded it stays `unconfirmed`, with a reason that says only that the bridge could
+not confirm the answer reached the session and that the person should check the session
+before sending it again. Only a *different* answer, or the same words from **another sender**,
+is `refused` for a prompt already typed into, and the two are refused alike, so that no
+sender can learn what a first answer said by guessing it. A sender is the channel's peer (a
+device); the host has no person-level identity, so a second device of the same person gets the
+plain refusal. A host that restarted has forgotten the first answer, and refuses any second
+request for the prompt, as the record of attempts alone does.
 
 What a host answers, by agent. agent-ha-bridge is the baseline; answering Copilot
 permission prompts goes beyond it, at the user's request:

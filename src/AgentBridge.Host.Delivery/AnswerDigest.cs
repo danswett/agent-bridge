@@ -11,7 +11,7 @@ namespace AgentBridge.Host.Delivery;
 // The digest is kept in the host's memory beside the prompt it answered, never logged or sent.
 internal static class AnswerDigest
 {
-    public static string Of(AnswerRequest request)
+    public static byte[] Of(AnswerRequest request)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -28,7 +28,7 @@ internal static class AnswerDigest
             writer.WriteEndObject();
             writer.WriteEndObject();
         }
-        return Convert.ToHexString(SHA256.HashData(stream.ToArray()));
+        return SHA256.HashData(stream.ToArray());
     }
 
     static void Write(Utf8JsonWriter writer, JsonElement value)
