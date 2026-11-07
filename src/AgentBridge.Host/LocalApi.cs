@@ -25,7 +25,7 @@ public static class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null, AgentCredentials? credentials = null) => async (channel, op, data) =>
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null,     RemoteAuthorization? authorization = null, AgentCredentials? credentials = null, Func<string, AgentBridge.Host.Core.SessionProcess?>? processOf = null) => async (channel, op, data) =>
     {
             // Pipe only, and Windows only for now (§3.4): a relay channel never reaches this handler.
             if (op == AgentProtocol.Hello)
@@ -42,6 +42,46 @@ public static class LocalApi
                     throw new InvalidOperationException($"refused: {decision.Refusal}");
                 }
                 return credentials.Accept(channel, credential);
+            }
+            // The adopted session asking for what it was adopted for (§3.5). The caller is checked
+            // by ancestry alone, in full; the token goes back on this connection and is not logged.
+            if (op == AgentProtocol.Credential)
+            {
+                if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException("refused: agent.credential isn't available on this host"); }
+                var ancestry = (channel as LocalChannel)?.Peer?.Ancestry ?? ProcessAncestry.Unknown;
+                var claim = credentials.Claim(ancestry);
+                if (claim is not { Token: { } token, Credential: { } issued }) { throw new InvalidOperationException($"refused: {claim.Refusal}"); }
+                return new AgentCredentialResult(token, credentials.PrincipalOf(issued.Session), issued.Scope, issued.ExpiresAt);
+            }
+            // Only the person: from the app, or the host's own command line outside any agent session.
+            if (op is AgentProtocol.Adopt or AgentProtocol.Revoke)
+            {
+                if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException($"refused: {op} isn't available on this host"); }
+                if (channel is not LocalChannel || callers.Classify(channel, fresh: true) is not { Kind: CallerKind.App or CallerKind.HostCli } person)
+                {
+                    throw Refuse(op, callers.Classify(channel), $"adopting a session, or ending its adoption, is for the person at this machine, from the {Product.App} or the host's own command line", log);
+                }
+                if (op == AgentProtocol.Revoke)
+                {
+                    AgentRevokeRequest revoke;
+                    try { revoke = data.Deserialize<AgentRevokeRequest>(ProtocolJson.Options) ?? throw new ArgumentException("agent.revoke needs a session"); }
+                    catch (JsonException) { throw new ArgumentException("agent.revoke needs a session"); }
+                    return new AgentRevokeResult(revoke.Session, credentials.Revoke(revoke.Session, $"revoked by a person ({person.Description})"));
+                }
+                AgentAdoptRequest adopt;
+                try { adopt = data.Deserialize<AgentAdoptRequest>(ProtocolJson.Options) ?? throw new ArgumentException("agent.adopt needs a session"); }
+                catch (JsonException) { throw new ArgumentException("agent.adopt needs a session"); }
+                if (processOf?.Invoke(adopt.Session) is not { StartedAt: { } started } process)
+                {
+                    throw new InvalidOperationException("refused: the host has no running process for that session to adopt");
+                }
+                try
+                {
+                    var adoption = credentials.Adopt(adopt.Session, process.Id, started, adopt.Scope ?? AgentProtocol.ScopeRead);
+                    log?.Invoke($"local pipe: {person.Description} adopted session {adopt.Session} as {adoption.Scope}");
+                    return new AgentAdoptResult(adoption.Session, adoption.Scope, adoption.ExpiresAt);
+                }
+                catch (ArgumentException e) { throw new InvalidOperationException($"refused: {e.Message}"); }
             }
         // Managing a machine from another device (#801) is for the relay alone. Refused here for
         // every caller, the app included, so nothing on this machine, an agent least of all, can
@@ -79,6 +119,7 @@ public static class LocalApi
         return await sessions.HandleAsync(channel, op, data, hello => callers.Classify(channel).Kind switch
         {
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
+                .. credentials is not null && OperatingSystem.IsWindows() ? new[] { AgentProtocol.AdoptCapability } : [],
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
                 .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : []] },

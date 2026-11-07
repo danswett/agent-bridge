@@ -37,6 +37,8 @@ using AgentBridge.Transport;
 //                                               phones of questions and finished turns. One per
 //                                               profile; it logs to <profile>\logs\host.log too
 //   agent-bridge-host whoami                    this device and the account it signed in to
+//   agent-bridge-host agents adopt|revoke <session>   Windows: let a session started by hand act as an agent, or stop it (a person's, never inside an agent session)
+//   agent-bridge-host agents credential         inside an adopted session: receive its credential, once
 //   agent-bridge-host usage                     ask each agent for its allowance once, as JSON
 //                                               (serve does it on a timer; docs/protocol/v1-usage.md)
 //   agent-bridge-host workspace list|add|remove the folders sessions may be launched in from
@@ -182,6 +184,59 @@ switch (command)
             Console.WriteLine($"signed in as {result.Login}; device {Wire.DeviceId(identity.Key.Public)}, key in {identity.Storage}");
             return 0;
         }
+    case "agents" when arguments.ElementAtOrDefault(1) is "adopt" or "revoke":
+        {
+            var verb = arguments[1];
+            var target = arguments.ElementAtOrDefault(2);
+            if (string.IsNullOrEmpty(target) || target.StartsWith("--", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine($"usage: agent-bridge-host agents {verb} <session id> {(verb == "adopt" ? "[--scope read|read+reply] " : "")}[--profile <name>]");
+                return 2;
+            }
+            if (!OperatingSystem.IsWindows()) { Console.Error.WriteLine("agent-bridge-host: adopting a session is Windows only for now"); return 2; }
+            // The host checks again, from the pipe: this refusal is the friendly one.
+            if (Refused(verb == "adopt" ? "adopt a session" : "end a session's adoption")) { return 4; }
+            var identity = LoadIdentity();
+            try
+            {
+                await using var channel = await LocalClient.ConnectAsync(LocalEndpoint.For(identity.Folder));
+                if (verb == "adopt")
+                {
+                    var adopted = await channel.CallAsync<AgentAdoptResult>(AgentProtocol.Adopt, new AgentAdoptRequest { Session = target, Scope = Option("--scope") });
+                    Console.WriteLine($"adopted session {adopted.Session} as {adopted.Scope}. Inside that session, run `agent-bridge-host agents credential` within {AgentProtocol.AdoptionMinutes} minutes (by {adopted.ExpiresAt.ToLocalTime():t}) to receive its credential.");
+                }
+                else
+                {
+                    var revoked = await channel.CallAsync<AgentRevokeResult>(AgentProtocol.Revoke, new AgentRevokeRequest { Session = target });
+                    Console.WriteLine(revoked.Revoked ? $"session {revoked.Session} no longer acts as an agent" : $"session {revoked.Session} had no adoption or credential");
+                }
+                return 0;
+            }
+            catch (Exception e) when (e is IOException or HostErrorException or TimeoutException)
+            {
+                Console.Error.WriteLine($"agent-bridge-host: {e.Message}");
+                return 1;
+            }
+        }
+    case "agents" when arguments.ElementAtOrDefault(1) == "credential":
+        {
+            // Run by the adopted session itself. The token goes to stdout alone, to whatever asked.
+            if (!OperatingSystem.IsWindows()) { Console.Error.WriteLine("agent-bridge-host: adopting a session is Windows only for now"); return 2; }
+            var identity = LoadIdentity();
+            try
+            {
+                await using var channel = await LocalClient.ConnectAsync(LocalEndpoint.For(identity.Folder));
+                var issued = await channel.CallAsync<AgentCredentialResult>(AgentProtocol.Credential);
+                Console.WriteLine(issued.Token);
+                Console.Error.WriteLine($"credential for {issued.Principal}, scope {issued.Scope}, until {issued.ExpiresAt.ToLocalTime():g}. Keep it to this session.");
+                return 0;
+            }
+            catch (Exception e) when (e is IOException or HostErrorException or TimeoutException)
+            {
+                Console.Error.WriteLine($"agent-bridge-host: {e.Message}");
+                return 1;
+            }
+        }
     case "whoami":
         {
             var identity = LoadIdentity();
@@ -296,6 +351,7 @@ switch (command)
         Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
         Console.Error.WriteLine("       agent-bridge-host hooks cleanup [--profile <name>]");
         Console.Error.WriteLine("       agent-bridge-host migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status");
+        Console.Error.WriteLine("       agent-bridge-host agents adopt <session> [--scope read|read+reply] | agents revoke <session> | agents credential");
         Console.Error.WriteLine("       agent-bridge-host devbox status | devbox dry-run");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
@@ -689,7 +745,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // The roster changing changes who the app's Settings lists (#972).
     personRoster.Changed += control.Refresh;
     LocalServer? local = null;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers, agentCredentials, source.ProcessOf), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);

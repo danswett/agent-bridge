@@ -63,5 +63,41 @@
                 Foreground="{x:Bind local:Ui.ToneBrush(Card.End.StatusTone), Mode=OneWay}"
                 Visibility="{x:Bind local:Ui.Some(Card.End.StatusText), Mode=OneWay, FallbackValue=Collapsed}" />
         </StackPanel>
+
+        <!-- Let this session message other sessions (design §3.5): this machine only, two steps. -->
+        <StackPanel Spacing="4" Visibility="{x:Bind local:Ui.Some(Card.Adopt), Mode=OneWay, FallbackValue=Collapsed}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button
+                    Content="Let this session message other sessions…"
+                    MinHeight="32"
+                    AutomationProperties.AutomationId="AdoptSession"
+                    IsEnabled="{x:Bind Card.Adopt.CanBegin, Mode=OneWay, FallbackValue=False}"
+                    Click="OnAdoptBegin" />
+                <Button
+                    Content="Stop this session acting as an agent"
+                    MinHeight="32"
+                    AutomationProperties.AutomationId="AdoptStop"
+                    IsEnabled="{x:Bind Card.Adopt.CanStop, Mode=OneWay, FallbackValue=False}"
+                    Click="OnAdoptStop" />
+            </StackPanel>
+            <StackPanel Spacing="4" Visibility="{x:Bind local:Ui.Show(Card.Adopt.Asking), Mode=OneWay, FallbackValue=Collapsed}">
+                <TextBlock Style="{StaticResource AbTypeMeta}" TextWrapping="Wrap" Text="{x:Bind Card.Adopt.Explanation}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Adopt: read only" MinHeight="32" AutomationProperties.AutomationId="AdoptRead"
+                            IsEnabled="{x:Bind Card.Adopt.CanConfirm, Mode=OneWay, FallbackValue=False}" Click="OnAdoptRead" />
+                    <Button Content="Adopt: read and reply" MinHeight="32" AutomationProperties.AutomationId="AdoptReply"
+                            IsEnabled="{x:Bind Card.Adopt.CanConfirm, Mode=OneWay, FallbackValue=False}" Click="OnAdoptReply" />
+                    <Button Content="Cancel" MinHeight="32" Click="OnAdoptCancel" />
+                </StackPanel>
+            </StackPanel>
+            <TextBlock
+                Style="{StaticResource AbTypeMeta}"
+                TextWrapping="Wrap"
+                AutomationProperties.AutomationId="AdoptStatus"
+                AutomationProperties.LiveSetting="Polite"
+                Text="{x:Bind Card.Adopt.StatusText, Mode=OneWay}"
+                Foreground="{x:Bind local:Ui.ToneBrush(Card.Adopt.StatusTone), Mode=OneWay}"
+                Visibility="{x:Bind local:Ui.Some(Card.Adopt.StatusText), Mode=OneWay, FallbackValue=Collapsed}" />
+        </StackPanel>
     </StackPanel>
 </UserControl>

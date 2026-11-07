@@ -950,5 +950,16 @@ public static class ProtocolVectors
             .Valid("a-token", new AgentHelloRequest { Token = AgentProtocol.TokenPrefix + Repeat('A', 43) });
         f.Record<AgentHelloResult>(Host)
             .Valid("a-reader", new AgentHelloResult("agent:machine1/session-1", AgentProtocol.ScopeRead));
+        f.Record<AgentAdoptRequest>(Client)
+            .Valid("read-by-default", new AgentAdoptRequest { Session = "session-1" })
+            .Valid("read-and-reply", new AgentAdoptRequest { Session = "session-1", Scope = AgentProtocol.ScopeReadReply });
+        f.Record<AgentAdoptResult>(Host)
+            .Valid("adopted", new AgentAdoptResult("session-1", AgentProtocol.ScopeRead, T0));
+        f.Record<AgentRevokeRequest>(Client)
+            .Valid("a-session", new AgentRevokeRequest { Session = "session-1" });
+        f.Record<AgentRevokeResult>(Host)
+            .Valid("revoked", new AgentRevokeResult("session-1", true));
+        f.Record<AgentCredentialResult>(Host)
+            .Valid("a-credential", new AgentCredentialResult(AgentProtocol.TokenPrefix + Repeat('A', 43), "agent:machine1/session-1", AgentProtocol.ScopeRead, T0));
     }
 }

@@ -17,6 +17,14 @@ public sealed record AgentHelloDecision(AgentCredential? Accepted, string? Refus
     public static AgentHelloDecision Refused(string why) => new(null, why);
 }
 
+// An adoption waiting for its session to ask (§3.5). No secret: the token is minted when it is claimed.
+public sealed record AgentAdoption(string Session, int RootPid, DateTimeOffset RootStartUtc, string Scope, DateTimeOffset ExpiresAt);
+
+public sealed record AgentClaimDecision(string? Token, AgentCredential? Credential, string? Refusal)
+{
+    public static AgentClaimDecision Refused(string why) => new(null, null, why);
+}
+
 // The credentials the host has issued to agent sessions on this machine, and who may present one
 // (§3.3, §3.4). Only SHA-256(token) is stored, so the file holds nothing that authenticates, and
 // a host restart doesn't strip a running session of its credential. The store fails closed: a file
@@ -73,7 +81,84 @@ public sealed class AgentCredentials
 
     public string? Problem { get { lock (gate) { return problem; } } }
 
+    public string PrincipalOf(string session) => AgentProtocol.Principal(machine, session);
+
     public int Count { get { lock (gate) { return records.Count; } } }
+
+    // The launch id an adopted session's credential carries: it was not launched by the host.
+    public const string AdoptedLaunch = "adopted";
+    public const int MaxPending = 64;
+
+    readonly List<AgentAdoption> pending = [];
+
+    // A person's yes for one session (§3.5). Nothing is issued yet: the session has to ask
+    // (Claim), from inside itself, so the token goes to it and to nothing else. Held in memory:
+    // a host restart lapses it, which is the safe way to lose one.
+    public AgentAdoption Adopt(string session, int rootPid, DateTimeOffset rootStartUtc, string scope)
+    {
+        if (!AgentProtocol.AdoptableScopes.Contains(scope, StringComparer.Ordinal)) { throw new ArgumentException($"a session can be adopted as {string.Join(" or ", AgentProtocol.AdoptableScopes)}, not '{scope}'", nameof(scope)); }
+        if (!ValidSession(session)) { throw new ArgumentException("an adoption is for a session id", nameof(session)); }
+        var now = time.GetUtcNow();
+        var adoption = new AgentAdoption(session, rootPid, rootStartUtc, scope, now + TimeSpan.FromMinutes(AgentProtocol.AdoptionMinutes));
+        lock (gate)
+        {
+            if (problem is not null) { throw new InvalidOperationException($"agent credentials are unavailable: {problem}"); }
+            if (records.Any(r => r.Credential.Session == session && r.Credential.LaunchId != AdoptedLaunch))
+            {
+                throw new InvalidOperationException("this session was launched with its own credential; adoption is only for sessions the host did not launch");
+            }
+            pending.RemoveAll(p => p.ExpiresAt <= now || p.Session == session);
+            if (pending.Count >= MaxPending) { throw new InvalidOperationException("too many adoptions waiting"); }
+            pending.Add(adoption);
+        }
+        log($"agent credentials: session {session} adopted by a person at this machine as {scope}; waiting for it to ask (until {adoption.ExpiresAt:O})");
+        return adoption;
+    }
+
+    // agent.credential: issues the credential an adoption waits to give, once, to a caller whose
+    // ancestry was read in full and includes the adopted session's process (id and start time).
+    // AGENT_BRIDGE_SESSION never counts. Exactly one adoption must cover the caller.
+    public AgentClaimDecision Claim(ProcessAncestry ancestry)
+    {
+        var now = time.GetUtcNow();
+        lock (gate)
+        {
+            if (problem is not null) { return AgentClaimDecision.Refused($"the credential store is unavailable: {problem}"); }
+            pending.RemoveAll(p => p.ExpiresAt <= now);
+            if (!ancestry.Complete) { return Declined("the caller's ancestry could only be read in part"); }
+            var covering = pending.Where(p => ancestry.Processes.Any(a => a.Id == p.RootPid && a.StartedAt is { } s && (s - p.RootStartUtc).Duration() <= StartSlack)).ToList();
+            if (covering.Count == 0) { return Declined("no adopted session covers this caller"); }
+            if (covering.Count > 1) { return Declined("more than one adopted session covers this caller"); }
+            var adoption = covering[0];
+            if (!rootAlive(adoption.RootPid, adoption.RootStartUtc))
+            {
+                pending.Remove(adoption);
+                return Declined("the adopted session's process has ended");
+            }
+            var token = Mint(adoption.Session, AdoptedLaunch, adoption.RootPid, adoption.RootStartUtc, adoption.Scope);
+            pending.Remove(adoption);
+            var issued = records.First(r => r.Credential.Session == adoption.Session).Credential;
+            log($"agent credentials: issued credential {issued.Id} to adopted session {adoption.Session} as {adoption.Scope}");
+            return new AgentClaimDecision(token, issued, null);
+        }
+    }
+
+    AgentClaimDecision Declined(string why)
+    {
+        log($"agent credentials: refused agent.credential: {why}");
+        return AgentClaimDecision.Refused(why);
+    }
+
+    // The person withdraws an adoption or the credential it gave. True when anything was there.
+    public bool Revoke(string session, string why)
+    {
+        lock (gate)
+        {
+            var waiting = pending.RemoveAll(p => p.Session == session) > 0;
+            if (waiting) { log($"agent credentials: adoption of session {session} withdrawn: {why}"); }
+            return Remove(r => r.Credential.Session == session, why) || waiting;
+        }
+    }
 
     // Issues a credential for the process a launch started and returns the token, which is shown
     // once: the caller puts it in the child's environment and keeps nothing of it.

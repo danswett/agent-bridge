@@ -171,6 +171,31 @@ session replaces its old one, so a resumed session's old token is dead. This sli
 holds a credential; what each scope may do, and minting at launch, follow in later slices. Until
 then an agent connection is refused the acting ops exactly as before.
 
+### Adopting a manually started session: `agent.adopt`, `agent.credential`, `agent.revoke`
+
+Windows only, pipe only (the relay answers `unknown op`), this machine only. A session the host
+discovered but did not launch has no credential, and none is ever given automatically
+(design/agent-principals.md §3.5). A person adopts it:
+
+| Op | Caller | Data | Result |
+|---|---|---|---|
+| `agent.adopt` | the app, or `agent-bridge-host agents adopt <session>` run by the person (fresh caller classification; an agent or other caller is refused) | `{ "session": id, "scope"?: "read" \| "read+reply" }`, default `read` | `{ "session", "scope", "expiresAt" }` |
+| `agent.credential` | any process, asked from inside the adopted session: `agent-bridge-host agents credential` | none | `{ "token", "principal", "scope", "expiresAt" }` |
+| `agent.revoke` | the app, or `agent-bridge-host agents revoke <session>` | `{ "session": id }` | `{ "session", "revoked": bool }` |
+
+`agent.adopt` records a pending authorisation for the session's process (id and start time, read
+from the host's own discovery, not from the caller). It is held in memory only, lasts 10 minutes
+and is spent by one claim, so a host restart lapses it. It mints nothing. `agent.credential` issues the
+credential (stored like any other) only when the caller's ancestry was read in full and contains
+exactly one adopted session's process, id and start time. It refuses on no adoption, an
+adoption that has lapsed or been used, an ambiguous match, an unreadable store, or an exited
+process, and `AGENT_BRIDGE_SESSION` is never proof. The token appears only in that reply, which the CLI
+prints to the asking process's stdout; it is never logged. `read+reply+launch` can't be adopted, and a session the host
+launched (it has its own credential) is refused. An adopted session is still no reply target.
+Adopting again, a resume, `agent.revoke`, or the process ending replaces or ends the credential.
+The same safety-rail caveat applies: this does not defend against a same-user process that
+spoofs its parent.
+
 
 Local only: a relay channel answers each of these with `unknown op`. All but `host.status`
 and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).

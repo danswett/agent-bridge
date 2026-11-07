@@ -231,6 +231,8 @@ public sealed partial class SessionCardViewModel : Observable
     public QuestionViewModel? Question { get => question; private set => Set(ref question, value); }
     public ReplyViewModel? Reply { get => reply; private set => Set(ref reply, value); }
     public EndSessionViewModel? End { get => end; private set => Set(ref end, value); }
+    AdoptSessionViewModel? adopt;
+    public AdoptSessionViewModel? Adopt { get => adopt; private set => Set(ref adopt, value); }
 
     // An answer typed for a question that changed or went before it was sent: kept, not lost.
     public string? OrphanText { get => orphanText; private set { if (Set(ref orphanText, value)) { Raise(nameof(HasOrphan)); } } }
@@ -405,6 +407,11 @@ public sealed partial class SessionCardViewModel : Observable
         if (stops && end is null) { End = new EndSessionViewModel(session, ctx.Deliveries, name, ctx.Current); }
         else if (!stops && end is not null) { end.Dispose(); End = null; }
         end?.Update(session);
+
+        // Adoption is this machine's own, from its pipe: no other machine's card offers it.
+        var adopts = caps.Contains(AgentProtocol.AdoptCapability) && ctx.Host is not null && ctx.BlobsFor is null;
+        if (adopts && Adopt is null) { Adopt = new AdoptSessionViewModel(session.Id, ctx.Host!, ctx.Deliveries.Ui); }
+        else if (!adopts && Adopt is not null) { Adopt = null; }
     }
 
     void UpdateReceipt()

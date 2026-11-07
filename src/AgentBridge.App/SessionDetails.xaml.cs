@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -62,4 +63,15 @@ public sealed partial class SessionDetails : UserControl
     }
     void OnEnd(object sender, RoutedEventArgs e) => Card?.End?.Press();
     void OnResendEnd(object sender, RoutedEventArgs e) => Card?.End?.Resend();
+    void OnAdoptBegin(object sender, RoutedEventArgs e) => Card?.Adopt?.Begin();
+    void OnAdoptCancel(object sender, RoutedEventArgs e) => Card?.Adopt?.Cancel();
+    void OnAdoptStop(object sender, RoutedEventArgs e) => _ = Card?.Adopt?.StopAsync();
+    void OnAdoptRead(object sender, RoutedEventArgs e) => Adopt(AgentProtocol.ScopeRead);
+    void OnAdoptReply(object sender, RoutedEventArgs e) => Adopt(AgentProtocol.ScopeReadReply);
+    void Adopt(string scope)
+    {
+        if (Card?.Adopt is not { } adopt) { return; }
+        adopt.Scope = scope;
+        _ = adopt.ConfirmAsync();
+    }
 }
