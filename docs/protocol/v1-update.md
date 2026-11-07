@@ -419,10 +419,14 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
    (`HostStatus.UpdateAsks`), marked `now` with its `release` and `accept`.
 2. The app takes it, refuses at once what it refuses today (another profile, a build folder),
    then downloads and checks the package **outside the lease** (`DownloadMark`, and #984's
-   per-profile copy). It holds the usage probes (#238) as every install does, waiting up to 11
-   minutes for a Codex usage check to end (settled Q5), with `waitingCode` `usage-check`; if
-   those 11 minutes run out first, the press ends `refused` with code `usage-check` (its own
-   15-minute life running out first is `expired`, as below). It does not wait
+   per-profile copy). Once the download is checked it holds the usage probes (#238) as every
+   install does: the press is in phase `waiting` with `waitingCode` `usage-check`, a hold of
+   its own before any quiet check, not "the next quiet moment". It waits up to 11 minutes for a
+   Codex usage check to end (settled Q5); waiting spends no restart slot (slots are spent only at
+   the commit, step 3) and touches no lease. When the check ends, what is busy is compared again
+   with what the person confirmed, as below, before anything else. If the 11 minutes run out
+   first, the press ends `refused` with code `usage-check`; if its own 15-minute life runs out
+   first (the 11 minutes plus a slow download can pass it), it ends `expired`, as below. It does not wait
    for a quiet machine unless, when it is ready, what is busy isn't covered by the person's
    confirmation: then it keeps the download and waits for the next quiet moment ([After the
    press](#the-confirmation)), never going on sessions the confirmation didn't cover. Throughout,
@@ -546,7 +550,8 @@ remedy is the one #801 has: `permissions.remoteManage` off, and #55's roster.
 
 Each slice is its own PR. Slices 0, 1 and 2 are sensitive (answer delivery, protocol, updater and install path) and
 need an independent review and a second model family; 3 and 4 touch how a confirmation renders,
-so they need one too.
+so they need one too. **Trust reviews slice 0** as well: answers can contain secrets, and Trust
+owns what the host keeps on disk.
 
 0. **Answer results across the restart** (settled Q4; must land before Update now ships). The
    durable record of typed answers, `AttemptLedger` (`answer-attempts.json`, written through
@@ -558,8 +563,27 @@ so they need one too.
    result is `unconfirmed`, what `AnswerService`'s re-read needs to read the session again (its
    context today, `FirstAnswer.Read`): the agent, the transcript path, the call or tool-use id,
    the read offset, and the typed plan the re-read compares with. The plan is the answer's
-   words, kept only in the host's private profile folder (the agent's own transcript holds the
-   same words) and dropped once the result is `delivered` or the claim ends. It is updated when
+   words. **This departs from #1100's hash-only plan on purpose:** the re-read compares the
+   words the session recorded with the words typed, which a hash can't do once the host that
+   typed them is gone. The agent's own transcript already holds the same words on the same disk,
+   so the only new copy is the host's. The rules for that copy:
+   * **Exits.** The words are dropped at the first of: the result turning `delivered`; the
+     result turning anything but `unconfirmed`; the claim ending (the session or its question
+     gone, or the ledger's own `Keep`); and **24 hours** after they were typed, for an
+     `unconfirmed` entry nobody retries. Without the words, the entry keeps its outcome, stage
+     and hash, so an identical retry is still told nothing was typed again (#1100's reply),
+     never typed again.
+   * **Startup sweep.** A host that starts drops, before serving, the words of every entry past
+     an exit above, and any partial file a crash left (the ledger is written to a temporary file
+     and renamed, so a half-written ledger is never read).
+   * **Bounds.** At most 256 entries hold words, at most 64 KiB of words each and 4 MiB in all;
+     past that the oldest words are dropped first, with the same fallback as above.
+   * **Where it lives.** `answer-attempts.json` in the host's profile folder, with a protected
+     ACL granting this Windows user alone, nothing inherited (as the app's `PrivateFolder`).
+     The words never go into a log, diagnostics, a support bundle, `host-state` or anything sent
+     to the relay or a device; only their outcome does, as today.
+
+   It is updated when
    the outcome settles and when an `unconfirmed` one is read again as `delivered`. A host that
    starts reads it back, so an identical retry from the
    same sender after a restart gets the first outcome, and a different answer or sender still
@@ -567,7 +591,12 @@ so they need one too.
    Tests: "an answer delivered before a restart is told delivered when retried after it"; "an
    unconfirmed answer retried after a restart is read again and never typed again"; "a
    different answer after a restart is still refused"; "a delivered answer's words are dropped
-   from the ledger".
+   from the ledger"; "a refused or stale answer's words are dropped"; "the words go when the
+   session or question goes"; "an unconfirmed answer nobody retries loses its words after 24
+   hours and a later retry types nothing"; "a host starting after a crash drops expired words and
+   a partial ledger file"; "past 256 entries or 4 MiB the oldest words go first"; "the ledger
+   file grants this user alone"; "no log, diagnostics, host-state or relay message carries an
+   answer's words".
 
 1. **Host and protocol.** `Update.cs`: `now` on the command, `canUpdateNow`, `busy`,
    `requestNow`, `waitingCode`, outcome `confirm`, `code`. `UpdateService` verifies `now` through the same
@@ -613,7 +642,12 @@ so they need one too.
    press that finds a turn running after the download keeps the download, installs nothing and
    waits with turn-running"; "a waiting Update now installs at the next quiet moment"; "an
    Update now pressed again while one waits replaces it without downloading again"; "a waiting
-   Update now 15 minutes past its signature is dropped expired and keeps the download offered".
+   Update now 15 minutes past its signature is dropped expired and keeps the download offered";
+   "an Update now waits in usage-check while a Codex usage check runs, spending no restart slot";
+   "when the usage check ends, busy is compared with the confirmation again before the lease";
+   "an Update now still held by a usage check after 11 minutes ends refused usage-check"; "an
+   Update now whose 15 minutes run out during the usage-check wait ends expired, not
+   usage-check".
 3. **PWA.** Update now beside Install, or the row's reason when it can't be pressed, the
    confirmation, signing the press with `accept`, the `confirm` outcome shown as the
    confirmation again, the lines while it goes, the 90 s "Restarting to update…" across the
