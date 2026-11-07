@@ -57,7 +57,7 @@ Layers used in the cases:
 
 | Axis | Values |
 |---|---|
-| OS and CPU | Windows 11 x64 (full B and C); Windows 11 Arm64 (full B, C smoke subset: L-01, L-03, Q-01, Q-03, Q-12, R-01) |
+| OS and CPU | Windows 11 x64 (full B and C); Windows 11 Arm64 (full B; C smoke subset of Q-01, Q-03, R-01 only) |
 | Window size (columns x rows) | narrow 60x25; standard 100x30; wide 200x30; tall 100x60; short 100x15 (form taller than window) |
 | Terminal host | Windows Terminal (default); legacy conhost. Narrow and short sizes run in both; other sizes in Windows Terminal, plus one standard-size pass in conhost |
 | CLI version | **candidate** (new), **pin** (current), **previous** (the pin before it, to prove rollback works) |
@@ -65,7 +65,8 @@ Layers used in the cases:
 
 Budget per candidate: layer A on every size and all three versions; layer B on
 {x64, Arm64} x {narrow, standard, short} x {candidate, pin}, with conhost as above; layer C on
-x64 standard, candidate and pin. `previous` runs layer A plus one live pass (L-01, Q-01, Q-06, R-01).
+x64 standard, candidate and pin (full), plus the Arm64 smoke subset (Q-01, Q-03, R-01) at standard
+size. `previous` runs layer A plus one live pass (L-01, Q-01, Q-06, R-01).
 
 ## 4. Test cases
 
