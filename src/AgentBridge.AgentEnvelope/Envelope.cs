@@ -33,12 +33,21 @@ public sealed class UnverifiedEnvelope
     public byte[] Signature { get; }
     public EnvelopeBody Body { get; }
 
+    public const int MaxSkewSeconds = 60;
+
     // `hostSignPoint` is the uncompressed P-256 point of the hostSign key that the roster binds to
-    // `Body.Principal.Add`; resolving it is the caller's job (roster v2).
-    public VerifiedEnvelope Verify(ReadOnlySpan<byte> hostSignPoint)
+    // `Body.Principal.Add`; resolving it is the caller's job (roster v2). `nowSeconds` is the
+    // verifier's clock (Unix seconds): an envelope that has expired, or was issued more than
+    // MaxSkewSeconds in the future, is refused. What stays with the caller, because it needs state
+    // this library does not hold: that the key really is the one bound to `principal.add` and
+    // still current, that `dataSha256` matches the op's bytes (`Body.BindsData`), and replay of
+    // `request`.
+    public VerifiedEnvelope Verify(ReadOnlySpan<byte> hostSignPoint, long nowSeconds)
     {
         if (!P256.IsPoint(hostSignPoint)) { throw new EnvelopeException(Refusal.Point, "hostSign"); }
         if (!P256.Verify(hostSignPoint, Framing.AgentCommand(BodyBytes), Signature)) { throw new EnvelopeException(Refusal.Signature, "sig"); }
+        if (nowSeconds >= Body.ExpiresAt) { throw new EnvelopeException(Refusal.Lifetime, "expiresAt"); }
+        if (Body.IssuedAt > nowSeconds + MaxSkewSeconds) { throw new EnvelopeException(Refusal.Lifetime, "issuedAt"); }
         return new VerifiedEnvelope(Body, BodyBytes);
     }
 }

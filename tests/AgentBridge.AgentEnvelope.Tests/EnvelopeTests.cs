@@ -31,6 +31,10 @@ public class EnvelopeVectorTests
         }
         var first = Sample.Body("session.read", b => b with { Chain = b.Chain with { Prev = Codec.Base64Url(new byte[32]), Root = "11111111-2222-4333-8444-555555555555", Depth = 2, Messages = 3 } });
         positives.Add(Case("valid reply that follows an earlier message", Envelope.Seal(first, new EcdsaEnvelopeSigner(key)), null));
+        var a = good.Chain.Via[0];
+        var b2 = new ChainSender(new string('c', 32), new string('3', 32), "agent-c3");
+        var thirdMessage = Sample.Body("session.reply", b => b with { Chain = b.Chain with { Prev = Codec.Base64Url(new byte[32]), Root = "11111111-2222-4333-8444-555555555555", Depth = 2, Messages = 3, Via = [a, b2] } });
+        positives.Add(Case("valid third message of A to B to A, sender is the first via entry", Envelope.Seal(thirdMessage, new EcdsaEnvelopeSigner(key)), null));
 
         var negatives = new JsonArray();
         void Neg(string name, byte[] envelope, string by) => negatives.Add(Case(name, envelope, by));
@@ -94,11 +98,42 @@ public class EnvelopeVectorTests
                 ["refusedBy"] = Refusal.Point,
             });
         }
+        void NegAt(string name, long now, string by)
+        {
+            var o = Case(name, Sample.Wrap(key, goodBytes), by);
+            o["now"] = now;
+            negatives.Add(o);
+        }
+        NegAt("envelope that has expired", 1_800_000_060, Refusal.Lifetime);
+        NegAt("envelope issued too far in the future", 1_799_999_939, Refusal.Lifetime);
+
+        byte[] Changed(Func<EnvelopeBody, EnvelopeBody> edit, string action = "session.reply") => Sample.Wrap(key, Sample.Body(action, edit).Encode());
+        var zero32 = Codec.Base64Url(new byte[32]);
+        const string otherRoot = "11111111-2222-4333-8444-555555555555";
+        var self = good.Chain.Via[0];
+        var third = new ChainSender(new string('c', 32), new string('3', 32), "agent-c3");
+        Neg("expiresAt equal to issuedAt", Changed(b => b with { ExpiresAt = b.IssuedAt }), Refusal.Lifetime);
+        Neg("via longer than depth", Changed(b => b with { Chain = b.Chain with { Prev = zero32, Root = otherRoot, Depth = 1, Messages = 2, Via = [third, self] } }), Refusal.Chain);
+        Neg("via that repeats a sender", Changed(b => b with { Chain = b.Chain with { Prev = zero32, Root = otherRoot, Depth = 2, Messages = 2, Via = [self, self] } }), Refusal.Chain);
+        Neg("via that leaves out the sender", Changed(b => b with { Chain = b.Chain with { Prev = zero32, Root = otherRoot, Depth = 2, Messages = 2, Via = [third] } }), Refusal.Chain);
+        Neg("prev with the root as the request", Changed(b => b with { Chain = b.Chain with { Prev = zero32, Depth = 2, Messages = 2, Via = [third, self] } }), Refusal.Chain);
+        Neg("first message with a prev missing but two messages", Changed(b => b with { Chain = b.Chain with { Messages = 2 } }), Refusal.Chain);
+        Neg("no heads", Changed(b => b with { Heads = [] }), Refusal.Length);
+        Neg("depth zero", Changed(b => b with { Chain = b.Chain with { Depth = 0 } }), Refusal.Value);
+        Neg("depth above the limit", Changed(b => b with { Chain = b.Chain with { Depth = EnvelopeBody.MaxChainDepth + 1 } }), Refusal.Value);
+        Neg("messages zero", Changed(b => b with { Chain = b.Chain with { Messages = 0 } }), Refusal.Value);
+        Neg("messages above the limit", Changed(b => b with { Chain = b.Chain with { Messages = EnvelopeBody.MaxMessages + 1 } }), Refusal.Value);
+        Neg("window with a character outside the set", Changed(b => b with { Provenance = b.Provenance with { Window = "a b" } }), Refusal.Value);
+        Neg("origin category with a capital first letter", Changed(b => b with { Provenance = b.Provenance with { Origins = [new Origin(null, "User", 1_800_000_000)] } }), Refusal.Value);
+        Neg("origin account that is not an id", Changed(b => b with { Provenance = b.Provenance with { Origins = [new Origin("nope", "user", 1_800_000_000)] } }), Refusal.Value);
+        Neg("request in upper case", Changed(b => b with { Request = b.Request.ToUpperInvariant(), Chain = b.Chain with { Root = b.Request.ToUpperInvariant() } }), Refusal.Value);
+        Neg("session with a character outside the set", Changed(b => b with { Principal = b.Principal with { Session = "agent a1" } }), Refusal.Value);
 
         return new JsonObject
         {
-            ["description"] = "Signed agent-command envelopes (docs/design/agent-principals.md §4.3). Each envelope is verified with hostSign. A case with refusedBy is refused with that code; one without verifies.",
+            ["description"] = "Signed agent-command envelopes (docs/design/agent-principals.md §4.3). Each envelope is verified with hostSign at `now` (a case may carry its own). A case with refusedBy is refused with that code; one without verifies.",
             ["hostSign"] = Codec.Base64Url(Sample.Point(key)),
+            ["now"] = 1_800_000_030,
             ["valid"] = positives,
             ["refused"] = negatives,
         };
@@ -123,16 +158,18 @@ public class EnvelopeVectorTests
         }
         var vectors = VectorFiles.Read(File);
         Assert.True(Codec.TryBase64Url((string)vectors["hostSign"]!, out var point));
+        var now = (long)vectors["now"]!;
 
         foreach (var c in vectors["valid"]!.AsArray())
         {
-            var verified = Envelope.Parse(Utf8((string)c!["envelope"]!)).Verify(point);
+            var verified = Envelope.Parse(Utf8((string)c!["envelope"]!)).Verify(point, now);
             Assert.Equal(Utf8((string)c["envelope"]!), Envelope.Encode(verified.BodyBytes, Envelope.Parse(Utf8((string)c["envelope"]!)).Signature));
         }
         foreach (var c in vectors["refused"]!.AsArray())
         {
             var key = c!["hostSign"] is { } own && Codec.TryBase64Url((string)own!, out var ownPoint) ? ownPoint : point;
-            var ex = Assert.Throws<EnvelopeException>(() => Envelope.Parse(Utf8((string)c!["envelope"]!)).Verify(key));
+            var at = c["now"] is { } own2 ? (long)own2 : now;
+            var ex = Assert.Throws<EnvelopeException>(() => Envelope.Parse(Utf8((string)c!["envelope"]!)).Verify(key, at));
             Assert.True((string)c!["refusedBy"]! == ex.Code, $"{c["name"]}: expected {c["refusedBy"]}, got {ex.Code} ({ex.Where})");
         }
     }
@@ -166,12 +203,22 @@ public class EnvelopeVectorTests
         Assert.Throws<EnvelopeException>(() => Envelope.Seal(body, new EcdsaEnvelopeSigner(key)));
     }
 
+    [Theory]
+    [InlineData(17)]
+    public void A_body_with_too_many_heads_or_origins_is_refused(int count)
+    {
+        var heads = Sample.Body(edit: b => b with { Heads = Enumerable.Range(0, count).Select(i => Codec.Base64Url(new byte[32].Select(_ => (byte)i).ToArray())).ToList() });
+        Assert.Equal(Refusal.Length, Assert.Throws<EnvelopeException>(() => EnvelopeBody.Parse(heads.Encode())).Code);
+        var origins = Sample.Body(edit: b => b with { Provenance = b.Provenance with { Origins = Enumerable.Range(0, EnvelopeBody.MaxOrigins + 1).Select(i => new Origin(null, "user", 1_800_000_000 + i)).ToList() } });
+        Assert.Equal(Refusal.Length, Assert.Throws<EnvelopeException>(() => EnvelopeBody.Parse(origins.Encode())).Code);
+    }
+
     [Fact]
     public void A_sealed_envelope_round_trips_and_binds_its_data()
     {
         using var key = Sample.NewKey();
         var data = Utf8("{\"text\":\"hello\"}");
-        var verified = Envelope.Parse(Envelope.Seal(Sample.Body(), new EcdsaEnvelopeSigner(key))).Verify(Sample.Point(key));
+        var verified = Envelope.Parse(Envelope.Seal(Sample.Body(), new EcdsaEnvelopeSigner(key))).Verify(Sample.Point(key), 1_800_000_030);
         Assert.True(verified.Body.BindsData(data));
         Assert.False(verified.Body.BindsData(Utf8("{\"text\":\"HELLO\"}")));
         Assert.Equal(Sample.Body(), verified.Body, EqualityComparer<EnvelopeBody>.Create((a, b) => a!.Encode().AsSpan().SequenceEqual(b!.Encode())));
