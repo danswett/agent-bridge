@@ -42,6 +42,8 @@ public static class Refusal
     // Signer rules a body alone decides: a genesis signed by another device, a self-removal with
     // a keep list or a cosigner, a cosigner that is the signer or the target.
     public const string Signer = "signer";
+    // A v2 host add whose hostSignProof is not hostSign's signature over the binding (V1).
+    public const string HostProof = "host-proof";
     // cosig and uv's members not matching the body's cosigner.
     public const string Cosigner = "cosigner";
     // Over 46 KiB for a removal, or 8 KiB for anything else, of fixed content.

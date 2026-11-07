@@ -41,7 +41,8 @@ public sealed record WebAuthnCredential(string RpId, byte[] CredentialId, byte[]
 
 public sealed record DeviceDescriptor(
     string Id, byte[] Dh, byte[]? Sign, string? SignAlg, string? Presence, WebAuthnCredential? WebAuthn,
-    string Kind, string Platform, string Name)
+    string Kind, string Platform, string Name,
+    byte[]? HostSign = null, string? HostSignAlg = null, byte[]? HostSignProof = null)
 {
     public bool IsPerson => RosterKinds.IsPerson(Kind);
 }
@@ -54,7 +55,7 @@ public sealed record Target(string Id, byte[] Add);
 // Whether it is valid in its parents' state (§3.3) is the acceptance rule's to say.
 public sealed record EntryBody(
     EntryOp Op, string Account, string Generation, int Seq, IReadOnlyList<byte[]> Prev, string By, string? Cosigner,
-    string At, DeviceDescriptor? Device, Approval? Approval, Target? Target, IReadOnlyList<byte[]> Keep, string? Name, bool Adopt)
+    string At, DeviceDescriptor? Device, Approval? Approval, Target? Target, IReadOnlyList<byte[]> Keep,     string? Name, bool Adopt, int Version = 1)
 {
     public const int MaxKeep = 512;
     public const int MaxNameScalars = 64;
@@ -101,9 +102,12 @@ public sealed record EntryBody(
         var root = StrictJson.Object(doc.RootElement, "body");
 
         if (!root.TryGetProperty("v", out var v)) { throw new RosterFormatException(Refusal.Missing, "body.v"); }
-        if (v.ValueKind != JsonValueKind.Number || v.GetRawText() != "1") { throw new RosterFormatException(Refusal.Version, "body.v"); }
+        // Version 2 is a host's add carrying a `hostSign` key (agent-principals.md §8.10, V1).
+        if (v.ValueKind != JsonValueKind.Number || v.GetRawText() is not ("1" or "2")) { throw new RosterFormatException(Refusal.Version, "body.v"); }
+        var version = v.GetRawText() == "2" ? 2 : 1;
         if (!root.TryGetProperty("op", out var opElement)) { throw new RosterFormatException(Refusal.Missing, "body.op"); }
         var op = ParseOp(StrictJson.String(opElement, "body.op")) ?? throw new RosterFormatException(Refusal.Value, "body.op");
+        if (version == 2 && op != EntryOp.Add) { throw new RosterFormatException(Refusal.Version, "body.v: 2 is only for a host's add"); }
         var (required, optional) = Fields(op);
         StrictJson.Members(root, [.. required, .. optional], Order.Where(required.Contains), "body");
 
@@ -116,7 +120,7 @@ public sealed record EntryBody(
         var by = DeviceId(root.GetProperty("by"), "body.by");
         var cosigner = root.TryGetProperty("cosigner", out var c) ? DeviceId(c, "body.cosigner") : null;
         var at = Time(StrictJson.String(root.GetProperty("at"), "body.at"));
-        var device = root.TryGetProperty("device", out var d) ? ParseDevice(d) : null;
+        var device = root.TryGetProperty("device", out var d) ? ParseDevice(d, version, account, generation) : null;
         var approval = root.TryGetProperty("approval", out var a) ? ParseApproval(a, op) : null;
         var target = root.TryGetProperty("target", out var t) ? ParseTarget(t) : null;
         IReadOnlyList<byte[]> keep = root.TryGetProperty("keep", out var k) ? Hashes(k, "body.keep", 0, MaxKeep) : [];
@@ -135,7 +139,7 @@ public sealed record EntryBody(
             if (target!.Id == by && (keep.Count > 0 || cosigner is not null)) { throw new RosterFormatException(Refusal.Signer, "a self-removal keeps nothing and has no cosigner"); }
             if (cosigner is not null && (cosigner == by || cosigner == target.Id)) { throw new RosterFormatException(Refusal.Signer, "a cosigner is neither the signer nor the target"); }
         }
-        return new EntryBody(op, account, generation, seq, prev, by, cosigner, at, device, approval, target, keep, name, adopt);
+        return new EntryBody(op, account, generation, seq, prev, by, cosigner, at, device, approval, target, keep, name, adopt, version);
     }
 
     // The relay's account id: 1 to 128 UTF-8 bytes with no control character.
@@ -185,13 +189,16 @@ public sealed record EntryBody(
 
     static readonly string[] DeviceOrder = ["id", "dh", "sign", "signAlg", "presence", "webauthn", "kind", "platform", "name"];
 
-    static DeviceDescriptor ParseDevice(JsonElement e)
+    static readonly string[] HostV2Order = ["id", "dh", "hostSign", "hostSignAlg", "hostSignProof", "kind", "platform", "name"];
+
+    static DeviceDescriptor ParseDevice(JsonElement e, int version, string account, string generation)
     {
         var d = StrictJson.Object(e, "body.device");
         if (!d.TryGetProperty("kind", out var kindElement)) { throw new RosterFormatException(Refusal.Missing, "body.device.kind"); }
         var kind = StrictJson.String(kindElement, "body.device.kind");
         if (!RosterKinds.IsKnown(kind)) { throw new RosterFormatException(Refusal.Value, "body.device.kind"); }
         var person = RosterKinds.IsPerson(kind);
+        if (version == 2 && person) { throw new RosterFormatException(Refusal.Version, "body.v: 2 is only for a host's add"); }
         string? presence = null;
         if (person)
         {
@@ -199,7 +206,7 @@ public sealed record EntryBody(
             presence = StrictJson.String(pe, "body.device.presence");
             if (presence is not (Presence.Key or Presence.WebAuthn or Presence.None)) { throw new RosterFormatException(Refusal.Value, "body.device.presence"); }
         }
-        string[] fields = !person ? ["id", "dh", "kind", "platform", "name"]
+        string[] fields = !person ? (version == 2 ? HostV2Order : ["id", "dh", "kind", "platform", "name"])
             : presence == Presence.WebAuthn ? DeviceOrder
             : ["id", "dh", "sign", "signAlg", "presence", "kind", "platform", "name"];
         StrictJson.Members(d, fields, fields, "body.device");
@@ -217,10 +224,22 @@ public sealed record EntryBody(
             if (signAlg != SignAlgorithm) { throw new RosterFormatException(Refusal.Value, "body.device.signAlg"); }
             if (presence == Presence.WebAuthn) { webauthn = Credential(d.GetProperty("webauthn")); }
         }
+        byte[]? hostSign = null;
+        string? hostSignAlg = null;
+        byte[]? hostSignProof = null;
+        if (version == 2)
+        {
+            hostSign = P256.Point(StrictJson.String(d.GetProperty("hostSign"), "body.device.hostSign"), "body.device.hostSign");
+            hostSignAlg = StrictJson.String(d.GetProperty("hostSignAlg"), "body.device.hostSignAlg");
+            if (hostSignAlg != SignAlgorithm) { throw new RosterFormatException(Refusal.Value, "body.device.hostSignAlg"); }
+            hostSignProof = Codec.FromBase64Url(StrictJson.String(d.GetProperty("hostSignProof"), "body.device.hostSignProof"), "body.device.hostSignProof");
+            P256.CheckRosterSignature(hostSignProof, "body.device.hostSignProof");
+        }
         var platform = StrictJson.String(d.GetProperty("platform"), "body.device.platform");
         if (platform is not ("windows" or "macos" or "linux" or "ios" or "ipados" or "android")) { throw new RosterFormatException(Refusal.Value, "body.device.platform"); }
         var name = DeviceName(d.GetProperty("name"), "body.device.name");
-        return new DeviceDescriptor(id, dh, sign, signAlg, presence, webauthn, kind, platform, name);
+        if (hostSign is not null && !P256.Verify(hostSign, HostKey.Binding(account, generation, dh), hostSignProof!)) { throw new RosterFormatException(Refusal.HostProof, "body.device.hostSignProof"); }
+        return new DeviceDescriptor(id, dh, sign, signAlg, presence, webauthn, kind, platform, name, hostSign, hostSignAlg, hostSignProof);
     }
 
     static readonly string[] CredentialFields = ["rpId", "credentialId", "key", "attested", "backupEligible"];

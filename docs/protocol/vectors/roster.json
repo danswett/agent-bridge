@@ -49,6 +49,11 @@
       "d": "9ddd2000a0ec4e612b9f19c6ad73fb3d29aa43e43fd06c46f2b0844e1e02f4cd",
       "public": "BE3vff5mkrx1WnEAjgYsfpjfEtfBzXAdvWLu7q_IiJLC_eMqjO9wuioSDaOYY0Xck7KkyhcxcBeoUCyjaOXYUGI",
       "device": "601136f3a23da6f9ec014d372d90ca21"
+    },
+    "host-one-sign": {
+      "d": "eccb7d0b8c3fe0002d07f082caefb23872a13f4e775ab5b09f866783f638e7f0",
+      "public": "BOzoCAUA-_5Y0TtWRQj-6ZLYiPeQKuOTWtE8bCabPMTxF14Z01SeQrMcEgGbTNDpeqlgfsUqkthLzQwfYHjfqSU",
+      "device": "9507bd455aa642c9eaf074af07665bf9"
     }
   },
   "framing": [
@@ -279,6 +284,14 @@
         "hash": "jgcDka2CsawRmek0tHaSUrgF5jyNXpNkCMFOdSiyW_Y",
         "size": 341,
         "signer": "pwa-sign"
+      },
+      {
+        "name": "add-host-v2",
+        "wrapper": "{\"body\":\"eyJ2IjoyLCJvcCI6ImFkZCIsImFjY291bnQiOiJvd25lckBleGFtcGxlIiwiZ2VuZXJhdGlvbiI6ImFiNGZiM2NjMjRhM2NjOTkyNDlhYjA2OTRjMzYxYTg4Iiwic2VxIjoyLCJwcmV2IjpbInRoOGxJUHI3emRiU3FsOXdDYkJDUTBRbFFlZjZVYm9sbl9iR0UzZnp3VzAiXSwiYnkiOiI5M2VjNWVkYjgyNjlkZmU5MmI4NjkwNjdiY2Y3NGE5OSIsImF0IjoiMjAyNi0xMS0wM1QxNzozMTowMFoiLCJkZXZpY2UiOnsiaWQiOiI1Njk3MmM0ZDRlN2FhZmFiNTk0YjdiYTA2MDNiMzk0OCIsImRoIjoiQk1XZVg4WVZWOURPV1V2dEFhNFk4U1BkT3ZXcFp4S0pCMVVBV0c5UXl4eU00cVNZcjZOdlVkbXlVbzNZb1Z1YnVkZU9Cd2twT0tpZUZqVURQSzlNbURRIiwiaG9zdFNpZ24iOiJCT3pvQ0FVQS1fNVkwVHRXUlFqLTZaTFlpUGVRS3VPVFd0RThiQ2FiUE1UeEYxNFowMVNlUXJNY0VnR2JUTkRwZXFsZ2ZzVXFrdGhMelF3ZllIamZxU1UiLCJob3N0U2lnbkFsZyI6InAyNTYtc2hhMjU2LWRlciIsImhvc3RTaWduUHJvb2YiOiJNRVFDSUU5ZUt2WXZBVjZ4SWNrU0tDbGVPWm5pU0ZPR1I4Rkd0UXJxZldoazdXT09BaUJkREpQT0Q1Z3NQVm5WOFdBSFdhVHFMT0xmZWNVTHRNWlFTMkVNYnBnbHpRIiwia2luZCI6Imhvc3QiLCJwbGF0Zm9ybSI6ImxpbnV4IiwibmFtZSI6IkFnZW50IGhvc3QifSwiYXBwcm92YWwiOnsibWV0aG9kIjoicXIiLCJ0cmFuc2NyaXB0IjoiWXhhdklqVzR0U2VKdTRwMXV6THgtN01ibW5vWTlhRUt0UlE3cVR2cnpJcyIsInNob3duIjoiam9pbmVyIn19\",\"sig\":\"MEQCICAZE27FMzKk28kfSD1xrl2uCTooild2xDcvq0ckj4OxAiAZDmGaYr-LDyj9FIl-LsbKm2VidwLWzsVroyK41vtbdA\"}",
+        "op": "add",
+        "hash": "14lmuk8UydhUVNqOWNaKsF4gvsx4dngHbl0ZLkA78Uo",
+        "size": 841,
+        "signer": "phone-sign"
       },
       {
         "name": "add-at-8-kib",
