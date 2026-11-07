@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using AgentBridge.Host.Core.Parsing;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Copilot;
 
@@ -322,14 +323,14 @@ public static partial class CopilotFormScreen
     // title counted a column a character; a wide character takes two). Wider than the console
     // the host launches sessions with, widening is no advice: a maximized window on the owner's
     // screen was still too narrow, and the card told him to widen it (#1123), so it says to
-    // answer at the machine or ask with shorter titles. Said "Slipgates", never "phone": a
+    // answer at the machine or ask with shorter titles. It names the product, never "phone": a
     // browser or the Windows app answers the same way.
     internal static string Narrow(IReadOnlyList<string> labels)
     {
         var needed = BarColumns(labels);
         return needed > Launch.LaunchService.ConsoleColumns
-            ? "this question's titles are too long for Slipgates to check which field is open; answer it at the machine, or ask with shorter titles"
-            : $"the session's window is too narrow for Slipgates to check which field this question's form is at (its titles need a window at least {needed} columns wide); widen it or make its font smaller, then answer again, or answer it at the machine";
+            ? $"this question's titles are too long for {Product.Name} to check which field is open; answer it at the machine, or ask with shorter titles"
+            : $"the session's window is too narrow for {Product.Name} to check which field this question's form is at (its titles need a window at least {needed} columns wide); widen it or make its font smaller, then answer again, or answer it at the machine";
     }
 
     // The fewest columns a console needs for the bar to show every label: each ` <label> ` (or

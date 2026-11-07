@@ -1673,8 +1673,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var (outcome, reason) = await AnswerAsync(ch, SixAnswer, question: "q2");
 
+        var needed = AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(SixTitles);
         Assert.Equal("refused", outcome);
-        Assert.Contains($"too narrow for Slipgates to check which field this question's form is at (its titles need a window at least {global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(SixTitles)} columns wide)", reason);
+        Assert.Contains($"too narrow for {Product.Name} to check which field this question's form is at (its titles need a window at least {needed} columns wide)", reason);
         Assert.Contains("widen it or make its font smaller, then answer again, or answer it at the machine", reason);
         Assert.DoesNotContain("phone", reason);
         Assert.Empty(injector.Attempts);
@@ -1783,7 +1784,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
 
         Assert.Equal("refused", outcome);
-        Assert.Equal("this question's titles are too long for Slipgates to check which field is open; answer it at the machine, or ask with shorter titles", reason);
+        Assert.Equal($"this question's titles are too long for {Product.Name} to check which field is open; answer it at the machine, or ask with shorter titles", reason);
         Assert.DoesNotContain("no longer showed", reason);
         Assert.Empty(injector.Attempts);
         Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
@@ -1804,7 +1805,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var tooLong = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(over);
 
         Assert.Contains($"at least {columns} columns wide); widen it or make its font smaller", widen);
-        Assert.Contains("too long for Slipgates", tooLong);
+        Assert.Contains($"too long for {Product.Name}", tooLong);
         Assert.DoesNotContain("widen", tooLong);
         Assert.All(new[] { widen, tooLong }, r => Assert.DoesNotContain("phone", r));
     }
