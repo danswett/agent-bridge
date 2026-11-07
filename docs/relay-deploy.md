@@ -259,12 +259,11 @@ Rollout, staging first, production on the owner's approval, by someone with Azur
 4. Set the repository variable `RELAY_SLIPGATES_LIVE` to `true` so every later promotion smoke-tests the new name too.
 
 Rollback: first set `RELAY_SLIPGATES_LIVE` to `false` (otherwise every promotion smoke-tests a name that is gone and fails), then remove `extraCustomDomains` from `production` and re-run step 2. The hostname comes off the app
-(an incremental deploy leaves its certificate behind, harmless) and `relay.bad-duck.com` is untouched; nothing else changed, since no client defaults moved. Leave the
+(an incremental deploy leaves its certificate behind, harmless) and `relay.bad-duck.com` is untouched; client defaults now point at `relay.slipgates.com` (#1112), so revert that change first (`S4_RELAY` in `pages.yml`, the app's default relay); apps with a saved relay keep it. Leave the
 DNS records in place (they are harmless unbound). To delete the leftover certificate:
 `az containerapp env certificate delete -n <environment> -g <resource group> --certificate mc-relay-slipgates-com`.
 
-Moving new pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) to `relay.slipgates.com`
-is a later change, once both names pass step 3. Retiring `relay.bad-duck.com` is the owner's later decision.
+New pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) moved to `relay.slipgates.com` in #1112, with both names live. Retiring `relay.bad-duck.com` is the owner's later decision.
 
 The first name's steps work as follows. `deploy.ps1` steps it forward
 as DNS allows: it prints both records while they are missing; once they resolve it puts the

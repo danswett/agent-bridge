@@ -390,7 +390,7 @@ public partial class App : Application
 // The relay the app offers to sign in to, until the person names another.
 static class HostDefaults
 {
-    public const string Relay = "https://relay.bad-duck.com";
+    public const string Relay = "https://relay.slipgates.com";
 }
 
 // Stand-ins where the real thing would touch the machine: a development copy and the demo
