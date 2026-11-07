@@ -3007,29 +3007,33 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     {
         Serve(Answerer(resume: true, resumeWait: TimeSpan.FromSeconds(5)));
         await AskFieldsAsync(TwoLists, 2, TwoPicked);
-        var prompt = false;
+        // The prompt is recorded once only (the first Enter); showing is what the screen draws, and
+        // is cleared when the prompt is answered, so the resume's own keys record nothing more.
+        var injected = false;
+        var showing = false;
         injector.OnInject = () =>
         {
-            if (!prompt && Enters() == 1)
+            if (!injected && Enters() == 1)
             {
-                prompt = true;
+                injected = true;
                 Fixture.Append(events, Copilot.ToolStart("c9", "powershell", new { command = "gh pr checks" }, second++, agent),
                     Copilot.Permission("r1", "c9", Copilot.Prompts["commands"], second++, agent));
+                showing = true;
             }
             if (Enters() == 2) { Fixture.Append(events, Recorded("q2", TwoPicked)); }
         };
-        injector.Screen = () => prompt ? PermissionPrompt : FieldsScreen(TwoNames);
+        injector.Screen = () => showing ? PermissionPrompt : FieldsScreen(TwoNames);
         var ch = await OpenAsync();
 
         var answering = AnswerResultAsync(ch, TwoPicked, Guid.NewGuid().ToString());
-        await Wait.UntilAsync(() => prompt, "the permission prompt over the form", Patience);
+        await Wait.UntilAsync(() => showing, "the permission prompt over the form", Patience);
         await source.RefreshAsync();
         Assert.True(source.Get(Id)?.Question is { Id: not "q2" } or { AnswerAtMachine: true });
         await Task.Delay(TimeSpan.FromMilliseconds(800));
         Assert.False(answering.IsCompleted);
         // Answered at the machine: the form is listed again, and the rest of it goes.
         Fixture.Append(events, Copilot.PermissionDone("r1", "c9", "approved", second++), Copilot.ToolDone("c9", second++));
-        prompt = false;
+        showing = false;
         await source.RefreshAsync();
         var result = await answering;
 
