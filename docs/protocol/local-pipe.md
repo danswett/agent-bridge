@@ -228,6 +228,10 @@ cannot count. The main agent must answer this run's unique prompt, not echo it o
 delegate's response. A hook must name the same session and agent, have fresh receipt/handling
 times, and identify that process in its owner or ancestry. Old spool backlog, heartbeat,
 installation markers, login exit codes and unrelated traffic cannot satisfy these checks.
+The hook spool is a same-user boundary: the host does not authenticate who wrote a record, so this
+proof assumes trusted local writers. A same-user process that forges a record naming this run's session,
+fresh times and process ancestry could satisfy the hook check once the provider answer also arrives.
+It shows the hook path reached this host, not that the record came from the agent's own hook.
 
 The test observes for at most eight minutes. Missing/unknown evidence, held discovery,
 read-only/legacy state, changed launch configuration or hook setup, cancellation and shutdown
