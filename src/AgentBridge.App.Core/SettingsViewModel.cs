@@ -240,6 +240,19 @@ public sealed class SettingsViewModel : Observable
         set { if (Status is { } s && s.Settings.PhoneSignIn != value) { _ = RunAsync(() => host.CallAsync(HostOps.Settings, new SettingsRequest(PhoneSignIn: value))); } }
     }
 
+    // Who can sign Copilot in here (#972 slice 2): under the switch, the devices the machine's roster
+    // pins, read-only, only while the running host has sign-in from devices on (the host says them
+    // only then): the switch's own value changes at once, the host's at its next start, and until then
+    // the devices listed can still sign in. No Add, no Remove and no disabled button for either yet
+    // (Creative on #972, 6700914747; ui.md §6.9). Nobody while the roster can't be read.
+    public bool ShowSignInDevices => HostRunning && Status?.SignInDevices is not null;
+    public IReadOnlyList<SignInDeviceRow> SignInDevices => Status?.SignInDevices is { State: SignInDeviceStates.Ready } listed
+        ? [.. listed.Devices.Select(SignInDeviceRow.Of)] : [];
+    public string SignInDevicesEmpty => Status?.SignInDevices?.State == SignInDeviceStates.Unreadable ? "Can't read the device list on this machine."
+        : SignInDevices.Count == 0 ? "No devices can sign Copilot in here yet." : "";
+    public string SignInDevicesNote => Status?.SignInDevices?.State == SignInDeviceStates.Unreadable ? ""
+        : SignInDevices.Count == 0 ? "Adding a device comes in a later update."
+        : "Removing a single device comes later. To stop them all, turn this off.";
     // launch.remoteFolderTrust: a person may answer a launched agent's folder-trust question from
     // their devices, each approved here (launch.remoteFolderTrustDevices). Both apply at once.
     // Turned on with none approved yet, this app is approved with it: the way most people
@@ -1029,6 +1042,16 @@ public sealed class SettingsViewModel : Observable
     }
 
     static string Host(string? url) => Uri.TryCreate(url, UriKind.Absolute, out var u) ? u.Host : url ?? "the relay";
+}
+
+// One device that can sign Copilot in on this machine (#972): its name, "(this device)" for this
+// app's own entry, then its kind and platform ("Phone · iOS"). Never its id, key or presence.
+public sealed record SignInDeviceRow(string Name, string Detail)
+{
+    public static SignInDeviceRow Of(SignInDevice d) => new(d.ThisDevice == true ? $"{d.Name} (this device)" : d.Name,
+        string.Join(" · ", new[] { Kind(d.Kind), d.Platform }.Where(s => s.Length > 0)));
+
+    static string Kind(string kind) => kind switch { "phone" => "Phone", "pwa" => "Browser", "app" => "App", _ => "" };
 }
 
 // One device on the Settings page that may be approved to answer folder-trust questions.

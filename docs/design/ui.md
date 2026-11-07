@@ -1633,6 +1633,20 @@ machine, online ones first, then the account's offline machines (#213):
     waiting for a question to be answered", and "Needs you" in its log, at most daily).
   - Set in the Windows app's Settings for now. On the phone it is a row in that machine's Settings,
     the current choice in text2; tapping it opens the same two choices with their notes (#801).
+- **Who can sign Copilot in (#972 slice 2; Creative, 6700914747):** inside the row, under its two
+  lines, in its text column like its updates, and only when the machine has "Let my devices sign
+  Copilot in on this machine" on (it offers `signin.devices`). Lines 1 and 2 stay as they are.
+  Read-only: no Add, no Remove and no disabled button, since the setting is the Windows app's.
+  - One line: "Can sign Copilot in: iPhone, Work laptop", with "(this device)" after this device's
+    name. Over three devices it reads "iPhone, Work laptop and 2 more"; every name is in the line's
+    tooltip and its accessible text.
+  - Under it, one line: "Removing a single device comes later."
+  - Empty: "No devices can sign Copilot in here yet.", then "Adding a device comes in a later
+    update."
+  - Unreadable: "Can't read the device list on this machine." alone. Sign-in is refused while the
+    list can't be read; nothing implies a device is allowed when it isn't known.
+  - If Trust rules that names don't go over the relay, the line reads "2 devices can sign Copilot
+    in" instead, in the same place. Trust accepted the lists with names (6700902097).
 - **A machine away (§6.1):** listed once, as offline ("Offline", and "Last seen 2m ago" on line
   2), with Forget, both while its rows are kept and after they have gone. A client whose relay
   keeps no roster lists it so only while its rows are kept.
@@ -1927,6 +1941,20 @@ Collaboration (§6.7) keeps its own section, after Accounts, whose Devices it fo
   the person, and the Agents nav item carries the same.
 - **Remove bridge integration** is a subtle button, and removes only Slipgates' own
   registrations and blocks. Uninstalling a CLI or its credentials is never on this page.
+- **Devices that can sign Copilot in** (#972 slice 2; Creative, 6700914747): under "Let my devices
+  sign Copilot in on this machine", and only while that is on in the running host: the switch applies
+  at the host's next start, and until then the list shows who still can. Read-only, from the
+  machine's device roster (#55); the Settings device-list pattern, no new visual language.
+  - Heading: "Devices that can sign Copilot in".
+  - One row per device. Line 1 is the name, with "(this device)" after this app's own entry. Line 2
+    is the kind and platform: "Phone · iOS", "Browser · Windows", "App · Windows". No device id,
+    key, generation or presence code.
+  - Under the list, one line: "Removing a single device comes later. To stop them all, turn this
+    off." No Remove, no Add and no disabled button.
+  - Empty: "No devices can sign Copilot in here yet.", then "Adding a device comes in a later
+    update." Until #55's roster ships, every machine reads this.
+  - Unreadable: "Can't read the device list on this machine." alone. Sign-in is refused while the
+    list can't be read.
 - **Dev Box keep-awake** is shown only on a Dev Box, Off by default, with its consequence on
   its row ("Signs in with az login · an awake Dev Box keeps billing").
 - **Workspaces and trust** is **Parked (#699)**, except its two answer toggles, which ship

@@ -41,6 +41,7 @@ import { checkReply, typedForm } from './replies.js';
 import { readQuestion } from './protocol.js';
 import { USAGE } from './usage.js';
 import { UPDATE } from './update.js';
+import { SIGN_IN_DEVICES } from './signin-devices.js';
 import { LAUNCH, TRUST, checkLaunch, flattenPrompt, trustAction } from './launch.js';
 import { TRANSFER, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
 import { ESCAPED_CAPABILITY } from './escaped.js';
@@ -318,6 +319,9 @@ export class DemoHost {
       case UPDATE.install:
         if (!this.capabilities.includes(UPDATE.capability)) { break; }
         return reply(this.#updateAsk(op, data));
+      case SIGN_IN_DEVICES.op:
+        if (!this.capabilities.includes(SIGN_IN_DEVICES.capability)) { break; }
+        return reply(this.signInDevices);
       case SIGN_IN.start:
       case SIGN_IN.cancel:
         if (!this.capabilities.includes(SIGN_IN.capability)) { break; }

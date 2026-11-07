@@ -24,6 +24,9 @@ public sealed class HostControlOptions
     public Func<RelayAccount?> Credential { get; init; } = () => null;
     // The device id the app beside this host gives when it reads the relay account (#801).
     public Action<string?>? LocalAppDevice { get; init; }
+    // Who can sign an agent in here from their device (#972), given the app's device id: read-only,
+    // for the app's Settings. Null where nothing says.
+    public Func<string?, SignInDevices>? SignInDevices { get; init; }
     public Func<Uri?> Relay { get; init; } = () => null;
     public Func<string?> AgentHaBridge { get; init; } = () => null;
     // What Home Assistant's refusals of this machine say now (HaAuthGuard.Problem), or null.
@@ -84,6 +87,8 @@ public sealed class HostControl
     SignInStatus signIn = new(SignInState.Idle);
     CancellationTokenSource? signInStop;
     long version;
+    // The device id the app beside this host gave last (host.relay.account), for its own row.
+    string? appDevice;
 
     public HostControl(HostControlOptions options, Action<string>? log = null)
     {
@@ -156,6 +161,7 @@ public sealed class HostControl
             DevBox = options.DevBox(),
             Agents = options.Agents?.Snapshot,
             AgentInstallation = options.AgentInstall?.Snapshot,
+            SignInDevices = options.SignInDevices?.Invoke(Volatile.Read(ref appDevice)),
         };
     }
 
@@ -206,7 +212,10 @@ public sealed class HostControl
             case HostOps.Settings:
                 return Settings(Read<SettingsRequest>(data) ?? new SettingsRequest());
             case HostOps.RelayAccount:
-                options.LocalAppDevice?.Invoke(Read<RelayAccountRequest>(data)?.Device);
+                var device = Read<RelayAccountRequest>(data)?.Device;
+                options.LocalAppDevice?.Invoke(device);
+                // Its own row in Who can sign Copilot in says so from then on.
+                if (device is not null && TransferProtocol.IsDeviceId(device) && Interlocked.Exchange(ref appDevice, device) != device) { Changed(); }
                 return RelayAccount();
             case HostOps.Stop:
                 log("stopping: asked by the app");
