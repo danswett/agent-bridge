@@ -643,6 +643,21 @@ async Task<int> ServeAsync(HostHandover handover)
         }, stop.Token);
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
+    var launchConfiguration = JsonSerializer.Serialize(settings.Launch, ProtocolJson.Options);
+    string? VerificationUnavailable()
+    {
+        if (ServeReadOnly() is { } why) { return why; }
+        if (agentSetup?.RestartRequired == true) { return "Hook setup changed. Explicitly restart the host before verification."; }
+        var (configured, problem) = HostSettings.Load(identity.Folder);
+        if (problem is not null || configured.LaunchProblems.Count > 0) { return "Repair the profile's launch configuration and restart the host before verification."; }
+        if (configured.ReadOnly || JsonSerializer.Serialize(configured.Launch, ProtocolJson.Options) != launchConfiguration)
+        {
+            return "Launch settings changed. Explicitly restart the host before verification.";
+        }
+        return null;
+    }
+    await using var agentVerification = OperatingSystem.IsWindows()
+        ? new AgentVerificationService(source, launcher, intake, VerificationUnavailable, Log, stop.Token) : null;
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -677,6 +692,7 @@ async Task<int> ServeAsync(HostHandover handover)
         LocalAppDevice = manage.NoteLocalApp,
         // Only while this host runs sign-in from devices: a switch changed since applies at the next start.
         SignInDevices = signIn is null ? null : self => PersonDevices.View(personRoster, rosterAccount(), self),
+        AgentVerification = agentVerification,
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();

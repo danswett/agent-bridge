@@ -66,6 +66,7 @@ public sealed class HostControlOptions
     public AgentInstallService? AgentInstall { get; init; }
     // Host-only seam for graceful departures; it is not exposed as a pipe/relay operation.
     public LifecycleCoordinator? Lifecycle { get; init; }
+    public AgentVerificationService? AgentVerification { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -101,6 +102,7 @@ public sealed class HostControl
         if (options.Agents is { } agents) { agents.Changed += Changed; }
         if (options.AgentSetup is { } setup) { setup.Changed += Changed; }
         if (options.AgentInstall is { } install) { install.Changed += Changed; }
+        if (options.AgentVerification is { } verification) { verification.Changed += Changed; }
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -134,6 +136,7 @@ public sealed class HostControl
     public bool HasAgentReadiness => options.Agents is not null;
     public bool HasAgentSetup => options.AgentSetup is not null;
     public bool HasAgentInstall => options.AgentInstall is not null;
+    public bool HasAgentVerification => options.AgentVerification is not null;
 
     HostStatus StatusLocked(bool fresh = false)
     {
@@ -163,6 +166,7 @@ public sealed class HostControl
             Agents = options.Agents?.Snapshot,
             AgentInstallation = options.AgentInstall?.Snapshot,
             SignInDevices = options.SignInDevices?.Invoke(Volatile.Read(ref appDevice)),
+            AgentVerifications = options.AgentVerification?.Snapshot,
         };
     }
 
@@ -205,6 +209,12 @@ public sealed class HostControl
                     ?? throw new ArgumentException("CLI installation needs an agent and explicit consent."));
             case HostOps.AgentsInstallCancel when options.AgentInstall is not null:
                 return new { cancellationRequested = options.AgentInstall.Cancel() };
+            case HostOps.AgentsVerify when options.AgentVerification is not null:
+                return options.AgentVerification.Start(Read<AgentVerificationRequest>(data)
+                    ?? throw new ArgumentException("Verification needs a request UUID, agent, workspace and explicit confirmation."));
+            case HostOps.AgentsVerifyCancel when options.AgentVerification is not null:
+                return options.AgentVerification.Cancel((Read<AgentVerificationCancel>(data)
+                    ?? throw new ArgumentException("Choose the verification to stop observing.")).Request);
             case HostOps.SignIn:
                 return await SignInAsync(Read<SignInRequest>(data) ?? new SignInRequest());
             case HostOps.SignInCancel:
