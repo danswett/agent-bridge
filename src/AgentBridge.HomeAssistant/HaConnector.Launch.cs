@@ -28,6 +28,7 @@ public sealed partial class HaConnector
     LaunchOptions? launchOptions;
     DateTimeOffset launchOptionsAt = DateTimeOffset.MinValue;
     string? launchSignature;
+    string? launchOptionsVersion;
     // The card last published, while a selector it was to set to its default did not exist yet:
     // Home Assistant names a discovered entity after it, and the pin onto the dashboard's id
     // follows a pass later.
@@ -135,7 +136,21 @@ public sealed partial class HaConnector
             launchSignature = signature;
             log($"Home Assistant connector published the launch card ({card.Workspaces.Count} workspace(s), agents: {(card.Agents.Count > 0 ? string.Join(", ", card.Agents) : "none")}, {card.Resumable.Count} resumable)");
         }
+        await LaunchOptionsSensorAsync(offered, now, ct);
         await LaunchDefaultsAsync(offered, card, selected, ct);
+    }
+
+    // The read-only launch_options sensor: every agent's real lists, not the selected agent's.
+    async Task LaunchOptionsSensorAsync(LaunchOptions offered, DateTimeOffset now, CancellationToken ct)
+    {
+        var payload = HaContract.LaunchOptionsPayload(offered);
+        var version = payload["version"]!.GetValue<string>();
+        if (version == launchOptionsVersion) { return; }
+        var (topic, config) = HaContract.LaunchOptionsConfig(Slug, options.MachineName);
+        await PublishAsync(topic, config, true, ct);
+        await PublishAsync(HaContract.LaunchOptionsTopic(Slug), payload, true, ct);
+        AddPin($"agent_bridge_{Slug}_launch_options", LaunchEntity("sensor", "launch_options"), now);
+        launchOptionsVersion = version;
     }
 
     HaContract.LaunchCard Card(LaunchOptions offered, LaunchAgent? selected)
