@@ -654,7 +654,7 @@
                                         Click="OnDelegateEvent">
                                         <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                                     </HyperlinkButton>
-                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind After, Mode=OneWay}" Visibility="{x:Bind local:Ui.Some(After), Mode=OneWay}" />
+                                    <TextBlock VerticalAlignment="Center" Margin="{x:Bind local:SessionView.AgeMargin(After), Mode=OneWay}" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind After, Mode=OneWay}" Visibility="{x:Bind local:Ui.Some(After), Mode=OneWay}" />
                                 </local:FlowPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

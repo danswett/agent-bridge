@@ -196,4 +196,26 @@ static partial class SelfTest
         // Left open: its lines are the next check's.
         await Open();
     }
+
+    // The open fold in Windows' high contrast (#1063): its button, chevron, "still working" link,
+    // the lines' names and their failed icon in system colours, taken in high contrast's own pass.
+    static async Task PictureFoldInHighContrast(MainWindow window, MainViewModel main, Action<bool, string> check, string outFile)
+    {
+        var saved = false;
+        Resize(window, 1440, 1000);
+        if (window.Sessions.Layout is { } layout) { await Until(() => layout.Mode == PaneMode.Three, TimeSpan.FromSeconds(10)); }
+        if (await Choose(window, main, DelegatingId, "DelegateStrip") is { Card: { } card } view)
+        {
+            card.Delegates.EventsOpen = true;
+            var rule = ById<Border>(view, "EventsRule");
+            saved = await Until(() => rule is { ActualHeight: > 0, Visibility: Visibility.Visible }, TimeSpan.FromSeconds(5));
+            await Task.Delay(600);
+            if (saved)
+            {
+                await Picture(view, Path.ChangeExtension(outFile, ".delegates.fold.open.highcontrast.png"));
+                card.Delegates.EventsOpen = false;
+            }
+        }
+        check(saved, "pictures the open delegate fold in high contrast");
+    }
 }

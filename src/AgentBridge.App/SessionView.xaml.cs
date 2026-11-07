@@ -468,6 +468,10 @@ public sealed partial class SessionView : UserControl
     public static Thickness RulePadding(bool folded) => folded ? new(16, 0, 0, 0) : new(0);
     public static Thickness RuleThickness(bool folded) => folded ? new(1, 0, 0, 0) : new(0);
 
+    // A start line's "· 19m" comes after the name's link, a piece of its own: it is drawn as near the
+    // name as "back" is to the "·" in "reported back · 19m" (a space), not a whole piece away.
+    public static Thickness AgeMargin(string? after) => after is ['·', ..] ? new(-2.5, 0, 0, 0) : new(0);
+
     // The fold opened or closed (Disclosure, §5.3): the chevron turns, and the lines settle in 4
     // down into a space opened at once; closing is at once but for the chevron turning back.
     bool eventsShownOpen;
