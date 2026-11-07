@@ -48,6 +48,9 @@ public sealed class RelayOptions
     // The blob store for files over 256 KiB (design §4.6; Blobs.cs). Off unless configured.
     public BlobOptions Blobs { get; set; } = new();
 
+    // Beta feedback upload: write-only, to a container of its own (Feedback.cs). Off unless configured.
+    public FeedbackOptions Feedback { get; set; } = new();
+
     // The account's machines, online or not (Roster.cs, docs/protocol/roster.md). In memory
     // unless a store is configured.
     public RosterOptions Roster { get; set; } = new();
