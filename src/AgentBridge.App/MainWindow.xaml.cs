@@ -34,8 +34,6 @@ public sealed partial class MainWindow : Window
     // The UI thread's, taken while on it: the change arrives on another.
     readonly DispatcherQueue ui = DispatcherQueue.GetForCurrentThread();
     bool closed;
-    // The window has drawn once: a banner arriving after that comes in with motion.
-    bool drawn;
 
     internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest, string? placementFile = null)
     {
@@ -70,7 +68,6 @@ public sealed partial class MainWindow : Window
         KeepSmallest();
         Root.Loaded += (_, _) =>
         {
-            drawn = true;
             if (Root.XamlRoot is { } x) { x.Changed += (_, _) => KeepSmallest(); }
         };
         Root.SizeChanged += (_, e) => FitSearch(e.NewSize.Width);
