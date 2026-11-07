@@ -8246,6 +8246,14 @@
           }
         },
         {
+          "name": "stale-after-the-host-reset-a-part-answered-form",
+          "json": {
+            "outcome": "stale",
+            "reason": "this question is out of date: the answer was left part answered at the machine, so the host cancelled the form there, and the session did not ask it again",
+            "code": "formReset"
+          }
+        },
+        {
           "name": "typed-but-not-recorded",
           "json": {
             "outcome": "unconfirmed",

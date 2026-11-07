@@ -683,7 +683,7 @@ public sealed partial class FieldViewModel : Observable
     public bool AllowOther => spec.AllowOther == true && spec.Type is FieldType.Choice or FieldType.Multi;
     // Other the agent offers and this machine cannot send yet (#908): shown, disabled, with this
     // sentence under the choices and as their description. Null when Other is offered or absent.
-    public string? OtherUnavailable => !AllowOther && spec.Type is FieldType.Choice && AnswerReasons.Known(spec.OtherUnavailable)
+    public string? OtherUnavailable => !AllowOther && spec.Type is FieldType.Choice && AnswerReasons.OnField(spec.OtherUnavailable)
         ? AnswerReasons.Text(spec.OtherUnavailable!) : null;
     public ObservableCollection<OptionViewModel> Options { get; }
 
