@@ -1123,9 +1123,10 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   `build/notices/<lowercase-id>/<version>/`: `provenance.json` must match its exact package
   identity, declared SPDX expression and repository URL/commit, the restored `.nupkg` SHA-512,
   and the upstream notice's SHA-256. The notice and provenance are bundled verbatim and hashed;
-  no network lookup or SPDX-only fallback is allowed. Markdig 0.43.0 supplies its upstream
-  BSD-2-Clause notice this way. A package declaring only a licence URL may instead pin the
-  material obtained through that exact declared URL: provenance must match the package's
+  no network lookup or SPDX-only fallback is allowed. Markdig 0.43.0 (BSD-2-Clause) and
+  Velopack 1.2.161 (MIT) supply their upstream notices this way. A package declaring only a
+  licence URL may instead pin the material obtained through that exact declared URL:
+  provenance must match the package's
   licence URL and copyright, its notice source must be that URL, and both archive and notice
   hashes are still mandatory. Microsoft.Windows.SDK.NET.Ref 10.0.22621.57 supplies the
   Microsoft SDK's verbatim RTF terms this way, recording the resolved source URL without
