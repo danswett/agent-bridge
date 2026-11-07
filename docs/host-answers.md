@@ -143,12 +143,18 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     of its own (`<title ?? name>:` for a list, a Yes/No or a multi-select; the title alone,
     with no colon, for a text or number box, `Fxn` and `Lxn`; only the field being answered
     is drawn), and under it the hints
-    row (the last row ending "esc cancel", with the rows it wrapped from, every part one of
+    row (the last row ending "esc cancel" or "esc clear", with the rows it wrapped from, every part one of
     the form's hints, its spaces read as drawn but a space allowed missing where a row breaks,
     so a narrow window that breaks a hint, or a word of one, across rows still reads, #910,
-    while "enteraccept" in a row is not "enter accept"): "enter accept", "ctrl+d decline" and "esc cancel", with the field's
+    while "enteraccept" in a row is not "enter accept"): "enter accept", "ctrl+d decline" and
+    Esc's, with the field's
     place by "tab next" and "shift+tab prev" when there is more than one, read from that row
-    alone, since the question or the words typed may say them too; and no permission prompt
+    alone, since the question or the words typed may say them too. Esc's hint is "esc
+    cancel", or from Copilot CLI 1.0.106 "esc clear" while a text or number box holds
+    something (Esc then empties the box and cancels nothing); a list saying "esc clear" is
+    not the form. Read as "esc cancel" alone, every typed answer's Enter was withheld on
+    1.0.106 (#1123). 1.0.106 also draws a strip of its own above the form ("Current
+    Sessions Issues Pull requests Gists"), outside the frame, not read. And no permission prompt
     drawn against the form: one ending just above its frame or drawn under it, read by its
     structure (options numbered from 1 without a gap, exactly one under the pointer or
     "Current selection:", then its key hints and its box's edge when it has them, bare or
@@ -186,7 +192,16 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     (#1137 review). A six-field form with long titles at 102 columns showed two labels and
     "→", and was refused as no form at all, unnamed (#1123). Sessions the host launches open
     250 columns wide so such a bar shows whole (host-launch.md, Width); the screen read takes
-    each row at the console buffer's full width, the width the CLI draws to.
+    each row at the console buffer's full width, the width the CLI draws to. Copilot CLI 1.0.106's bar
+    (`_l`, window `kHi`) shows the most labels that fit around the field (any such run, each
+    read), and where not even one fits, the field's label alone, however long, wrapped over
+    as many rows as it takes with the arrows beside its first row: read across those rows
+    (words in order, a space or none at each break), it is the bar's window too, refused as
+    `bar-window`, never taken as the bar. Three titles of full sentences at 120 columns were
+    refused so live as the form gone (`bar@29`). A bar that reads as neither the whole bar
+    nor a window at this field is refused (`bar`) as "this window is too narrow, or the
+    question's titles too long, to check which field is open", not as the form gone: with
+    the question's heading and message above it, it seldom is.
     What cannot be known beforehand (a permission prompt opening over a later field, or a
     long field scrolling the form's heading off a short window) still stops the keys there:
     the answer is then `unconfirmed`, and its reason names the fields that were answered,
@@ -257,7 +272,9 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     after the words stay unseen (above).
   * Not resumed within `ResumeWait` (or after three resumes that each stopped again), the form
     is reset: one Esc (the form's own `esc cancel`), held to rows that show this very form at
-    one of its fields; a screen showing anything else gets nothing, not even the Esc, and the
+    one of its fields with that hint; a screen showing anything else gets nothing, not even
+    the Esc, nor does a field whose hints say `esc clear` (1.0.106: the Esc would only empty
+    the box), and the
     answer stays part answered as above. Cancelled, the session may ask the same question
     again: only once the transcript positively shows the old call closed, if it does within
     60 s (`ResetWait`), its arguments exactly the ones answered (the whole `ask_user` call
