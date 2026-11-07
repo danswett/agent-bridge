@@ -90,6 +90,39 @@ public sealed class FeedbackEnvelopeV1DecryptorTests
             () => new FeedbackEnvelopeV1Decryptor().DecryptAsync(bytes, new UnavailableKeys(), CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Rejects_malformed_shared_envelope_before_requesting_a_key()
+    {
+        var (bytes, keys) = CreateFixture();
+        bytes[0] = 0;
+        var error = await Assert.ThrowsAsync<FeedbackEnvelopeException>(
+            () => new FeedbackEnvelopeV1Decryptor().DecryptAsync(bytes, keys, CancellationToken.None));
+        Assert.Equal("invalid-envelope", error.Code);
+        Assert.Null(keys.RequestedId);
+    }
+
+    [Fact]
+    public async Task Shared_seal_output_is_decrypted_and_invalid_utf8_is_rejected()
+    {
+        using var recipient = Key.Create(KeyAgreementAlgorithm.X25519,
+            new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
+        var publicKey = recipient.PublicKey.Export(KeyBlobFormat.RawPublicKey);
+        var keys = new FakeKeys(recipient.Export(KeyBlobFormat.RawPrivateKey));
+        var id = RandomNumberGenerator.GetBytes(16);
+        var envelope = AgentBridge.FeedbackEnvelope.FeedbackEnvelopeV1.Seal(
+            Encoding.UTF8.GetBytes(PrivateText), KeyId, publicKey, id);
+        var decryptor = new FeedbackEnvelopeV1Decryptor();
+        var result = await decryptor.DecryptAsync(envelope, keys, CancellationToken.None);
+        Assert.Equal(PrivateText, result.PrivateContent);
+        Assert.Null(result.Metadata);
+        Assert.All(keys.Returned!, b => Assert.Equal(0, b));
+
+        var invalid = AgentBridge.FeedbackEnvelope.FeedbackEnvelopeV1.Seal([0xff], KeyId, publicKey, id);
+        await Assert.ThrowsAsync<FeedbackEnvelopeException>(
+            () => decryptor.DecryptAsync(invalid, keys, CancellationToken.None));
+        Assert.All(keys.Returned!, b => Assert.Equal(0, b));
+    }
+
     internal sealed class FakeKeys(byte[] key) : IFeedbackPrivateKeyProvider
     {
         public string? RequestedId { get; private set; }

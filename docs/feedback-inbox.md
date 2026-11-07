@@ -47,8 +47,8 @@ Envelope parsers must map malformed/authentication failures to `FeedbackEnvelope
 key-provider outages must use `FeedbackInboxTransientException`, not
 `CryptographicException`.
 
-The v1 envelope parser validates the client header, ciphertext length and canonical
-zero-padded bucket. The v1 decryptor authenticates with X25519, HKDF-SHA-256 and
+The inbox uses the shared v1 envelope parser to validate the client header, ciphertext
+length and canonical zero-padded bucket. The shared decryptor authenticates with X25519, HKDF-SHA-256 and
 AES-256-GCM. Both HKDF info and AES-GCM additional authenticated data are the UTF-8 bytes
 of `slipgates feedback envelope v1`, followed directly by the ASCII key ID and the 16 raw
 bundle ID bytes. This matches the #1068 client at

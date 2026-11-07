@@ -1,7 +1,8 @@
 using System.Buffers.Binary;
 using System.Text;
-using AgentBridge.FeedbackInbox;
+using AgentBridge.FeedbackEnvelope;
 using Xunit;
+using SharedEnvelopeException = AgentBridge.FeedbackEnvelope.FeedbackEnvelopeException;
 
 namespace AgentBridge.FeedbackInbox.Tests;
 
@@ -41,7 +42,7 @@ public sealed class FeedbackEnvelopeV1Tests
     {
         var bytes = Envelope();
         bytes[offset] = value;
-        Assert.Throws<FeedbackEnvelopeException>(() => FeedbackEnvelopeV1.Parse(bytes));
+        Assert.Throws<SharedEnvelopeException>(() => FeedbackEnvelopeV1.Parse(bytes));
     }
 
     [Fact]
@@ -52,11 +53,11 @@ public sealed class FeedbackEnvelopeV1Tests
         foreach (var length in new uint[] { 0, 15, uint.MaxValue })
         {
             BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(offset), length);
-            Assert.Throws<FeedbackEnvelopeException>(() => FeedbackEnvelopeV1.Parse(bytes));
+            Assert.Throws<SharedEnvelopeException>(() => FeedbackEnvelopeV1.Parse(bytes));
         }
-        Assert.Throws<FeedbackEnvelopeException>(() => FeedbackEnvelopeV1.Parse(new byte[4095]));
+        Assert.Throws<SharedEnvelopeException>(() => FeedbackEnvelopeV1.Parse(new byte[4095]));
         var oversizedBucket = new byte[8192];
         Envelope().CopyTo(oversizedBucket, 0);
-        Assert.Throws<FeedbackEnvelopeException>(() => FeedbackEnvelopeV1.Parse(oversizedBucket));
+        Assert.Throws<SharedEnvelopeException>(() => FeedbackEnvelopeV1.Parse(oversizedBucket));
     }
 }
