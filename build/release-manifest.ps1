@@ -53,10 +53,14 @@ foreach ($target in $AppChannels.Values) {
     if ($asset['browser_download_url'] -isnot [string] -or $asset['browser_download_url'] -cne $url) {
         throw "installer $name URL does not belong to this repository and tag"
     }
+    if ($asset['digest'] -isnot [string] -or $asset['digest'] -cnotmatch '^sha256:[0-9a-f]{64}$') {
+        throw "installer $name must have GitHub's uploaded-asset SHA-256 digest"
+    }
     $downloads[$target.Runtime] = [ordered]@{
         fileName = $name
         url = $url
         sizeBytes = $asset['size']
+        sha256 = $asset['digest'].Substring(7)
     }
 }
 $manifest = [ordered]@{

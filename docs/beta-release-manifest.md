@@ -19,6 +19,9 @@ https://github.com/danswett/agent-bridge/releases/download/<tag>/beta-release.js
 Only a non-draft pre-release with a `v<major>.<minor>.<patch>` tag, a publication
 timestamp, and exactly one uploaded, nonempty installer for each architecture is
 accepted. Installer and release-note URLs must belong to that repository and tag.
+Each installer must have GitHub's uploaded-asset `digest` in canonical
+`sha256:<64 lowercase hex characters>` form. Missing or malformed digests stop
+generation without writing a manifest; the site must not invent a checksum.
 Names come from [the existing channel definitions](../build/app-channels.ps1).
 Unrelated release assets are not exposed as installers.
 
@@ -47,21 +50,26 @@ Example shape (not a claim that this example manifest has been published):
     "win-x64": {
       "fileName": "AgentBridgeApp-win-Setup.exe",
       "url": "https://github.com/danswett/agent-bridge/releases/download/v0.1.600/AgentBridgeApp-win-Setup.exe",
-      "sizeBytes": 123
+      "sizeBytes": 123,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "win-arm64": {
       "fileName": "AgentBridgeApp-win-arm64-Setup.exe",
       "url": "https://github.com/danswett/agent-bridge/releases/download/v0.1.600/AgentBridgeApp-win-arm64-Setup.exe",
-      "sizeBytes": 456
+      "sizeBytes": 456,
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
   }
 }
 ```
 
 `publishedAt` is the release's UTC ISO timestamp, not the snapshot-generation time.
-`sizeBytes` is a positive integer from GitHub's uploaded asset metadata, not a
-signature, hash or proof of installer execution. The runtime keys distinguish the
-real Windows architectures; a browser's user-agent string is not architecture proof.
+`sizeBytes` is a positive integer from GitHub's uploaded asset metadata. `sha256`
+is the required lowercase, 64-character checksum from that asset's `digest`,
+without the `sha256:` prefix. The producer does not download the installer or
+independently hash its bytes. Neither field proves signing or installer execution.
+The runtime keys distinguish the real Windows architectures; a browser's
+user-agent string is not architecture proof.
 Additive fields may be ignored; an unsupported `schemaVersion` must not be used.
 
 ## Site build and failure handling
@@ -70,8 +78,9 @@ The site's authenticated CI selects the highest semantic version among complete,
 published Betas that have both installers and `beta-release.json`. Include
 pre-releases; do not use `releases/latest`, draft releases or a newer release that
 has not finished uploading its manifest. Verify the manifest's version, tag and
-installer URLs against that selected release, then copy it into the site artifact
-as `beta-release.json` using a base-aware local URL. No token ships in that file.
+installer URLs and checksums against that selected release, then copy it into
+the site artifact as `beta-release.json` using a base-aware local URL. Render
+each architecture's `sha256` in the download table. No token ships in that file.
 
 Visitors read the site's static snapshot and make no GitHub API requests. Missing,
 invalid or incomplete metadata keeps the explicit GitHub Releases fallback or
