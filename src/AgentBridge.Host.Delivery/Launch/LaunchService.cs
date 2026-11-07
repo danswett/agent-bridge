@@ -995,7 +995,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         {
             for (var tries = 1; ; tries++)
             {
-                var widened = await injector.WidenAsync(p.Started.ProcessId, ConsoleColumns);
+                var widened = await injector.WidenAsync(p.Started.ProcessId, p.Started.StartedAt, ConsoleColumns);
                 if (widened.Columns is { } columns)
                 {
                     log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console is {columns} columns wide");
@@ -1004,6 +1004,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 if (!widened.NotYet || tries >= WidenTries)
                 {
                     log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: {widened.Problem}");
+                    return;
+                }
+                // Its id may later be another process's: the worker checks that too; this ends the asking.
+                if (!starter.Running(p.Started))
+                {
+                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: its process (pid {p.Started.ProcessId}) has exited");
                     return;
                 }
                 await Task.Delay(WidenEvery, options.Time);

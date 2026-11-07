@@ -226,6 +226,23 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         var widen = Assert.Single(screens.Widens);
         Assert.Equal(LaunchService.ConsoleColumns, widen.Columns);
         Assert.True(widen.Pid > 0);
+        // The process's creation time goes with its id, for the worker to check it is still that process.
+        Assert.NotEqual(default, widen.CreatedAt);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_widen_is_not_asked_again_once_the_launched_process_has_exited_so_a_reused_id_is_never_widened()
+    {
+        starter.Registers = false;
+        starter.ExitsAtOnce = true;
+        screens.Widened = _ => new ConsoleWidth(null, "the console could not be widened (attach error 6)", true);
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Prompt = "go" }, "fixture");
+
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("console was not widened: its process (pid", StringComparison.Ordinal))));
+        Assert.Single(screens.Widens);
         Assert.Empty(screens.Typed);
     }
 
@@ -1262,12 +1279,12 @@ public abstract partial class LaunchFlowFixture
         public Func<Task>? Reading;
 
         // Every console widened, and how wide; Widened says what a widen leaves (as asked, by default).
-        public readonly System.Collections.Concurrent.ConcurrentQueue<(int Pid, int Columns)> Widens = new();
+        public readonly System.Collections.Concurrent.ConcurrentQueue<(int Pid, DateTimeOffset CreatedAt, int Columns)> Widens = new();
         public Func<int, ConsoleWidth>? Widened;
 
-        public Task<ConsoleWidth> WidenAsync(int processId, int columns, CancellationToken cancellationToken = default)
+        public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default)
         {
-            Widens.Enqueue((processId, columns));
+            Widens.Enqueue((processId, createdAt, columns));
             return Task.FromResult(Widened?.Invoke(columns) ?? new ConsoleWidth(columns, null, false));
         }
     }

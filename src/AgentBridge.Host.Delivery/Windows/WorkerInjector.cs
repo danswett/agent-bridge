@@ -53,9 +53,10 @@ public sealed class WorkerInjector : IConsoleInjector
         finally { One.Release(); }
     }
 
-    // agent-bridge-injector <pid> --widen <columns>: one attach that types nothing and makes the
-    // console's screen buffer at least that wide, "width <n>" as read back, then "ok".
-    public async Task<ConsoleWidth> WidenAsync(int processId, int columns, CancellationToken cancellationToken = default)
+    // agent-bridge-injector <pid> --widen <columns> <created>: one attach that types nothing and
+    // makes the console's screen buffer at least that wide, only while <pid> is the process
+    // created then; "width <n>" as read back, then "ok".
+    public async Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(path)) { return new ConsoleWidth(null, $"the injector is missing beside the host ({FileName})", false); }
         await One.WaitAsync(cancellationToken);
@@ -73,6 +74,7 @@ public sealed class WorkerInjector : IConsoleInjector
             start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
             start.ArgumentList.Add("--widen");
             start.ArgumentList.Add(columns.ToString(CultureInfo.InvariantCulture));
+            start.ArgumentList.Add(createdAt.ToFileTime().ToString(CultureInfo.InvariantCulture));
             Process? process;
             try { process = ProcessLaunch.Start(start); }
             catch (Exception e) { return new ConsoleWidth(null, CouldNotStart(processId, e), false); }
@@ -106,6 +108,8 @@ public sealed class WorkerInjector : IConsoleInjector
                     var stage = parts.Length > 1 ? parts[1] : "?";
                     var code = parts.Length > 2 && int.TryParse(parts[2], CultureInfo.InvariantCulture, out var c) ? c : 0;
                     // A console not yet allocated to a process just started: not attached yet.
+                    // "process": not the process started (gone, or its id another's): never again.
+                    if (stage == "process") { return new ConsoleWidth(null, "the process is no longer the one started, so its console was left alone", false); }
                     return new ConsoleWidth(null, $"the console could not be widened ({stage} error {code})", stage == "attach" && code is 6 or 31 or 87);
                 }
                 return new ConsoleWidth(null, $"the injector stopped before widening the console (exit 0x{process.ExitCode:X8})", false);

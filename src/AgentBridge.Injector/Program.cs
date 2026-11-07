@@ -4,7 +4,7 @@ using System.Text;
 
 namespace AgentBridge.Injector;
 
-// agent-bridge-injector <pid> [--screen | --widen <columns>]
+// agent-bridge-injector <pid> [--screen | --widen <columns> <created>]
 //
 // Reads a key plan on stdin (KeyPlan.ToWorkerScript in AgentBridge.Host.Delivery) and
 // types it into the console of <pid>, one attach-write-detach per send, the shape
@@ -25,8 +25,10 @@ namespace AgentBridge.Injector;
 // trimmed), "+<row>" contains one of the given texts, "-<row>" contains none of them, "_<row>"
 // is blank (ASCII spaces at most) and so is every row below it, "^<row>" starts, leading
 // spaces aside, with none of them. With --screen nothing is typed at all: it says "row <base64>" for each row
-// of the visible window, top to bottom, then "ok". With --widen nothing is typed either: the
-// console's screen buffer is made at least <columns> wide (SetConsoleScreenBufferSize, its
+// of the visible window, top to bottom, then "ok". With --widen nothing is typed either: only
+// while <pid> is still the process created at <created> (a FILETIME), held open throughout,
+// else "fail process <code>", the console's screen buffer is made at least <columns> wide
+// (SetConsoleScreenBufferSize, its
 // height kept), the width an agent in it draws to, and it says "width <columns>" as read back,
 // then "ok". A buffer already as wide is left as it is.
 //
@@ -44,15 +46,17 @@ internal static unsafe partial class Program
         // Taken before any attach: these are the pipes the host gave us, and stay so.
         output = Console.OpenStandardOutput();
         var columns = 0;
-        if (args.Length is not (1 or 2 or 3) || (args.Length == 2 && args[1] != "--screen")
-            || (args.Length == 3 && (args[1] != "--widen" || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out columns) || columns is < 1 or > short.MaxValue))
+        long created = 0;
+        if (args.Length is not (1 or 2 or 4) || (args.Length == 2 && args[1] != "--screen")
+            || (args.Length == 4 && (args[1] != "--widen" || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out columns) || columns is < 1 or > short.MaxValue
+                || !long.TryParse(args[3], NumberStyles.None, CultureInfo.InvariantCulture, out created) || created <= 0))
             || !uint.TryParse(args[0], NumberStyles.None, CultureInfo.InvariantCulture, out var pid) || pid == 0)
         {
             Say("fail usage 0");
             return 2;
         }
         if (args.Length == 2) { return Screen(pid); }
-        if (args.Length == 3) { return Widen(pid, (short)columns); }
+        if (args.Length == 4) { return Widen(pid, (short)columns, created); }
         var sends = Read(Console.OpenStandardInput());
         if (sends is null)
         {
@@ -191,7 +195,30 @@ internal static unsafe partial class Program
     // while "wrap text output on resize" is on, as it is by default); a buffer set wider than its
     // window afterwards is kept, the window scrolling across it, until the window is restored
     // from minimized or resized, when the buffer follows the window again (#1123).
-    static int Widen(uint pid, short columns)
+    static int Widen(uint pid, short columns, long created)
+    {
+        // The process must be the one the host started (its creation time, as a FILETIME), and is
+        // held open until the widen is done, so its id cannot pass to another process meanwhile.
+        var process = OpenProcess(ProcessQueryLimitedInformation, false, pid);
+        if (process == 0)
+        {
+            Say($"fail process {Marshal.GetLastPInvokeError()}");
+            return 3;
+        }
+        try
+        {
+            if (!GetExitCodeProcess(process, out var code) || code != StillActive
+                || !GetProcessTimes(process, out var actual, out _, out _, out _) || actual != created)
+            {
+                Say("fail process 0");
+                return 3;
+            }
+            return WidenAttached(pid, columns);
+        }
+        finally { CloseHandle(process); }
+    }
+
+    static int WidenAttached(uint pid, short columns)
     {
         FreeConsole();
         if (!AttachConsole(pid))
@@ -381,6 +408,20 @@ internal static unsafe partial class Program
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetConsoleScreenBufferSize(nint output, Coord size);
+
+    const uint ProcessQueryLimitedInformation = 0x1000;
+    const uint StillActive = 259;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial nint OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint processId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetExitCodeProcess(nint process, out uint code);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetProcessTimes(nint process, out long creation, out long exit, out long kernel, out long user);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -16,6 +16,6 @@ internal sealed class GateTrackedInjector(IConsoleInjector inner, DeliveryGate g
         inner.ReadScreenAsync(processId, cancellationToken);
 
     // --widen sends no keys either.
-    public Task<ConsoleWidth> WidenAsync(int processId, int columns, CancellationToken cancellationToken = default) =>
-        inner.WidenAsync(processId, columns, cancellationToken);
+    public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+        inner.WidenAsync(processId, createdAt, columns, cancellationToken);
 }

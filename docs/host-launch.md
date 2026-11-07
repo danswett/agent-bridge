@@ -33,9 +33,11 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   and the screen clamps the window, so STARTUPINFO's count of characters
   (`STARTF_USECOUNTCHARS`) of 250 gave 75 columns on a 640-pixel screen, and `STARTF_USESIZE`
   no more (found by #1160's CI). A buffer set wider once the console exists is kept, the window
-  scrolling across it. So the host widens it then: `agent-bridge-injector <pid> --widen 250`
-  attaches, types nothing, and calls `SetConsoleScreenBufferSize` (its height kept; never
-  narrower), asked again every 100 ms for up to 5 s while the new process has no console yet.
+  scrolling across it. So the host widens it then: `agent-bridge-injector <pid> --widen 250
+  <created>` holds the process open, checks it is still the one launched (its creation time,
+  so a later process given the same id is never touched), attaches, types nothing, and calls
+  `SetConsoleScreenBufferSize` (its height kept; never narrower), asked again every 100 ms for
+  up to 5 s while the new process has no console yet, and not once it has exited.
   The log says the width it got, or why not. Windows Terminal, as the default terminal, takes
   a new console over and sizes it itself (its `ConptyConnection::InitializeFromHandoff`); the
   console host does not hand over a console started hidden or minimized

@@ -26,9 +26,11 @@ public interface IConsoleInjector
         Task.FromResult(new ConsoleScreen(null, "this host cannot read the session's screen; answer at the machine"));
 
     // A process's console made at least `columns` wide (its screen buffer, the width an agent in
-    // it draws to), typing nothing; the width read back after, or why not. NotYet: the console
-    // could not be reached, as before a process just started has one, so it may be asked again.
-    Task<ConsoleWidth> WidenAsync(int processId, int columns, CancellationToken cancellationToken = default) =>
+    // it draws to), typing nothing, and only while the id is still the process created at
+    // `createdAt` (so never a later process given the same id); the width read back after, or
+    // why not. NotYet: the console could not be reached, as before a process just started has
+    // one, so it may be asked again.
+    Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
         Task.FromResult(new ConsoleWidth(null, "this host cannot widen a session's console", false));
 }
 
