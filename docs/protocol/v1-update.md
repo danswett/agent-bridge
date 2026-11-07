@@ -88,7 +88,7 @@ review, Low). A client sends it only to a machine whose state says `canUpdateNow
 | `available` | string? | The newer release the last check found, from a device's press, the app's own schedule or its Settings; still there if its download failed, gone once a check finds nothing newer or the app's Include pre-releases changes. Before any check, or while the feed refuses, a release an earlier run of the app downloaded |
 | `notes` | string? | Its release notes |
 | `checkedAt` | time? | When the app last checked |
-| `phase` | `idle` `checking` `downloading` `waiting` `installing` | `waiting`: a release is downloaded and will install, because a device asked, once the host is idle; for an Update now (`requestNow`), at the next quiet moment within its 15 minutes, else `last` says `refused` with code `expired` ([The confirmation](#the-confirmation)). One downloaded and waiting for the person at the machine is `idle`, with `available` set |
+| `phase` | `idle` `checking` `downloading` `waiting` `installing` | `waiting`: a release is downloaded and will install, because a device asked, once the host is idle; for an Update now (`requestNow`), at the next quiet moment within its 15 minutes, after any usage-check hold (`waitingCode` `usage-check`, which ends `refused` with code `usage-check` after 11 minutes), else `last` says `refused` with code `expired` ([The confirmation](#the-confirmation)). One downloaded and waiting for the person at the machine is `idle`, with `available` set |
 | `progress` | int? | 0–100 while downloading |
 | `waiting` | string? | While waiting: for what (a session busy, another profile running). Also, in any phase, once a release has waited more than six hours (held by the machine, or downloaded and not restarted into): "Needs you: the update to X has waited since T because Y" (#800, a reminder; nothing installs because of it) |
 | `request` | string? | The press being carried out now, if one is |
@@ -251,7 +251,7 @@ Update now interrupts what Install would wait for.
 | The app not running, a build folder rather than an installed copy, or an app too old for Update now | `unavailable`, `old-app` | Nothing would carry it out. An old app is told apart, since Install still works there |
 | A Codex usage check still running after the 11 minutes every install waits for it (#238) | `usage-check` (the app's, in `last`) | Stopping the host cuts the app-server's input and can sign Codex out; Product kept the wait for now (settled Q5) |
 | #800's agent sign-in entrypoint on | `sign-in` | A restart cancels a pending sign-in, as for `manage.restart` (Connection, Q-C8) |
-| More than 3 presses of Update now from one device in 10 minutes; 8 presses waiting already; another Update now downloading or leaving on the machine | `rate-limited`, `busy` | As today. Update now is its own kind for the per-device limit, so Install stays usable. An Update now **waiting for a quiet moment** is not "under way": a new press replaces it, keeping its download (decision 3) |
+| More than 3 presses of Update now from one device in 10 minutes; 8 presses waiting already; another Update now downloading or leaving on the machine | `rate-limited`, `busy` | As today. Update now is its own kind for the per-device limit, so Install stays usable. An Update now **waiting for a quiet moment**, or in its usage-check hold, is not "under way": a new press replaces it, keeping its download (decision 3) |
 | Update now's **own allowance** (1 committed restart per machine in 6 hours) **and** the **shared cap** (2 committed restarts in 6 hours, counted together with `manage.restart`; 6 an hour once #55's roster is enforced) both used | `restart-cap` | The owner's ruling (settled Q7): an Update now spends its own allowance first, and only when that is used does it spend a slot of the shared cap, so it adds at most one restart in 6 hours beyond what `manage.restart` may do. `manage.restart` never spends Update now's allowance. The words say when it works again |
 | The same press sent again | (none) | The same-press rule: one request is one press. The host's durable record of verified `request`s, kept 15 minutes from `issuedAt` plus `Skew` across its own restart ([The press](#the-press)), decides it; the app's record of its last 32 is a second line |
 | The release offered is no longer `args.release` | `release-changed` | The person confirmed one version |
@@ -325,7 +325,7 @@ waiting. A quiet machine updates on one press.
   person presses Update now again, sees the confirmation again with what is busy now, and that
   press replaces the waiting one, with no second download. Nothing is downloaded twice.
 * **A press lives 15 minutes from its `issuedAt`** (security review, Medium 1), whatever it is
-  doing then: downloading, waiting for a quiet moment, or trying the lease. A press that hasn't
+  doing then: downloading, held for a usage check, waiting for a quiet moment, or trying the lease. A press that hasn't
   committed by then is dropped: `last` says `refused` with code `expired`, nothing restarts, it
   spends no restart slot (its own or a shared one) and cancels no pending agent sign-in, and a fresh press with
   a fresh confirmation is needed. The download is never discarded for it: the release stays
@@ -426,7 +426,9 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
    the commit, step 3) and touches no lease. When the check ends, what is busy is compared again
    with what the person confirmed, as below, before anything else. If the 11 minutes run out
    first, the press ends `refused` with code `usage-check`; if its own 15-minute life runs out
-   first (the 11 minutes plus a slow download can pass it), it ends `expired`, as below. It does not wait
+   first (the 11 minutes plus a slow download can pass it), it ends `expired`, as below. A new
+   press during the hold replaces this one like one waiting for a quiet moment (it keeps the
+   download and the hold, whose 11 minutes don't start again, and has its own 15-minute life). It does not wait
    for a quiet machine unless, when it is ready, what is busy isn't covered by the person's
    confirmation: then it keeps the download and waits for the next quiet moment ([After the
    press](#the-confirmation)), never going on sessions the confirmation didn't cover. Throughout,
@@ -566,7 +568,8 @@ owns what the host keeps on disk.
    words. **This departs from #1100's hash-only plan on purpose:** the re-read compares the
    words the session recorded with the words typed, which a hash can't do once the host that
    typed them is gone. The agent's own transcript already holds the same words on the same disk,
-   so the only new copy is the host's. The rules for that copy:
+   so the only new copy is the host's. The rules for that copy, which `AnswerService`'s memory
+   follows too, so a retry is told the same before a restart as after it:
    * **Exits.** The words are dropped at the first of: the result turning `delivered`; the
      result turning anything but `unconfirmed`; the claim ending (the session or its question
      gone, or the ledger's own `Keep`); and **24 hours** after they were typed, for an
@@ -579,7 +582,9 @@ owns what the host keeps on disk.
    * **Bounds.** At most 256 entries hold words, at most 64 KiB of words each and 4 MiB in all;
      past that the oldest words are dropped first, with the same fallback as above.
    * **Where it lives.** `answer-attempts.json` in the host's profile folder, with a protected
-     ACL granting this Windows user alone, nothing inherited (as the app's `PrivateFolder`).
+     ACL granting this Windows user alone, nothing inherited (as the app's `PrivateFolder`). The
+     temporary file each write goes through is created with that same ACL, never inheriting the
+     folder's, so the rename carries it onto the ledger.
      The words never go into a log, diagnostics, a support bundle, `host-state` or anything sent
      to the relay or a device; only their outcome does, as today.
 
@@ -593,9 +598,9 @@ owns what the host keeps on disk.
    different answer after a restart is still refused"; "a delivered answer's words are dropped
    from the ledger"; "a refused or stale answer's words are dropped"; "the words go when the
    session or question goes"; "an unconfirmed answer nobody retries loses its words after 24
-   hours and a later retry types nothing"; "a host starting after a crash drops expired words and
+   hours and a later retry types nothing, before a restart and after it alike"; "a host starting after a crash drops expired words and
    a partial ledger file"; "past 256 entries or 4 MiB the oldest words go first"; "the ledger
-   file grants this user alone"; "no log, diagnostics, host-state or relay message carries an
+   file grants this user alone, after every rewrite too"; "no log, diagnostics, support bundle, host-state, relay or device message carries an
    answer's words".
 
 1. **Host and protocol.** `Update.cs`: `now` on the command, `canUpdateNow`, `busy`,
@@ -610,7 +615,7 @@ owns what the host keeps on disk.
    an automatic one, and host-lifecycle.md says so (decision 2). `ManageService`'s header comment changes from "never
    forced, never carried out later (owner, Q-O7)" to "never forced; a restart is never carried
    out later (owner, Q-O7); an update a person asks for now (#1159, owner 2026-11-07) waits for
-   its download and up to a minute for the lease, lives at most 15 minutes from its signature,
+   its download, up to 11 minutes for a Codex usage check and up to a minute for the lease, lives at most 15 minutes from its signature,
    and goes over no busy session its confirmation didn't cover: if the machine became busier
    meanwhile it keeps the download and installs at the next quiet moment within that life
    (Product and the security review, #1161)". Vectors in `update.json`
@@ -647,7 +652,8 @@ owns what the host keeps on disk.
    "when the usage check ends, busy is compared with the confirmation again before the lease";
    "an Update now still held by a usage check after 11 minutes ends refused usage-check"; "an
    Update now whose 15 minutes run out during the usage-check wait ends expired, not
-   usage-check".
+   usage-check"; "a new press during the usage-check hold replaces the first without restarting
+   the 11 minutes".
 3. **PWA.** Update now beside Install, or the row's reason when it can't be pressed, the
    confirmation, signing the press with `accept`, the `confirm` outcome shown as the
    confirmation again, the lines while it goes, the 90 s "Restarting to update…" across the
