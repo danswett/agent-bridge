@@ -187,6 +187,7 @@ sensitive_paths:
   - apple/scripts/**
   - src/AgentBridge.Host.Delivery/**
   - tools/AgentBridge.RelaySmoke/**
+  - tools/epic-dashboard/**
   - pwa/js/host-client.js
   - pwa/js/protocol.js
   - pwa/js/relay.js

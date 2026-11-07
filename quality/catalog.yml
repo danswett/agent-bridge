@@ -653,6 +653,28 @@ suites:
     where: relay.yml production, rollback
     status: exists
 
+  - id: epic-dashboard-unit
+    kind: unit
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [linux-x64]
+    runner: local
+    triggers: [tools/epic-dashboard/**]
+    command: python3 -m unittest discover -s tools/epic-dashboard -v
+    where: ci.yml light
+    status: exists
+
+  - id: epic-dashboard
+    kind: static
+    ring: 4
+    select: always
+    platforms: [linux-x64]
+    runner: hosted
+    command: see epic-dashboard.yml read and write (hourly, issue close/reopen, main-push CI completion and dispatch; rewrites only issue 755's body)
+    where: epic-dashboard.yml read, write
+    status: exists
+
   - id: ops-probe
     kind: live
     ring: 4

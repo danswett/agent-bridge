@@ -960,6 +960,9 @@ jobs:
       - name: Playwright's system packages leave a slow apt mirror only for Canonical's archive
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'playwright-apt')) }}
         run: bash .github/actions/playwright-system-packages/test.sh
+      - name: Epic dashboard renders safely from offline fixtures
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'epic-dashboard-unit')) }}
+        run: python3 -m unittest discover -s tools/epic-dashboard -v
       # build-site.mjs bundles the app with esbuild (#609), and the unit tests build the site: the
       # PWA's packages, as locked, without Playwright's browsers (only the pwa-ui jobs fetch those).
       # Without install scripts, as pages.yml builds the published site (#650), so a build that
