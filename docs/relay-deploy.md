@@ -466,7 +466,7 @@ Azure Storage on URLs the relay signs; no blob byte passes through a relay node.
 * A second private container, `feedback` (docs/protocol/feedback.md): the relay takes each
   beta-feedback bundle itself (exact ticketed size, 8 MiB cap) and writes it with
   create-only semantics. Its role assignment there is Blob Data Contributor with a condition
-  that removes read, list, tags and delete, and a 30-day time-based retention policy on the
+  that removes read, list and delete, and a 30-day time-based retention policy on the
   container means the relay cannot overwrite or delete a bundle before the
   30 days are up. A lifecycle rule deletes `feedback/` at 31 days; the `blobs` rule is
   scoped to its own container. Reading feedback is a role given to the feedback lead's
