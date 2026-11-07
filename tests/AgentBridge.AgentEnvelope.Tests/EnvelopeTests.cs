@@ -105,7 +105,7 @@ public class EnvelopeVectorTests
             negatives.Add(o);
         }
         NegAt("envelope that has expired", 1_800_000_060, Refusal.Lifetime);
-        NegAt("envelope issued too far in the future", 1_799_999_939, Refusal.Lifetime);
+        NegAt("envelope issued more than 120 seconds in the future", 1_799_999_879, Refusal.Lifetime);
 
         byte[] Changed(Func<EnvelopeBody, EnvelopeBody> edit, string action = "session.reply") => Sample.Wrap(key, Sample.Body(action, edit).Encode());
         var zero32 = Codec.Base64Url(new byte[32]);
@@ -211,6 +211,18 @@ public class EnvelopeVectorTests
         Assert.Equal(Refusal.Length, Assert.Throws<EnvelopeException>(() => EnvelopeBody.Parse(heads.Encode())).Code);
         var origins = Sample.Body(edit: b => b with { Provenance = b.Provenance with { Origins = Enumerable.Range(0, EnvelopeBody.MaxOrigins + 1).Select(i => new Origin(null, "user", 1_800_000_000 + i)).ToList() } });
         Assert.Equal(Refusal.Length, Assert.Throws<EnvelopeException>(() => EnvelopeBody.Parse(origins.Encode())).Code);
+    }
+
+    [Fact]
+    public void Verify_accepts_an_issue_time_120_seconds_ahead_and_refuses_121()
+    {
+        using var key = Sample.NewKey();
+        var envelope = Envelope.Parse(Envelope.Seal(Sample.Body(), new EcdsaEnvelopeSigner(key)));
+        var point = Sample.Point(key);
+        envelope.Verify(point, 1_800_000_000 - 120);
+        Assert.Equal(Refusal.Lifetime, Assert.Throws<EnvelopeException>(() => envelope.Verify(point, 1_800_000_000 - 121)).Code);
+        envelope.Verify(point, 1_800_000_059);
+        Assert.Equal(Refusal.Lifetime, Assert.Throws<EnvelopeException>(() => envelope.Verify(point, 1_800_000_060)).Code);
     }
 
     [Fact]

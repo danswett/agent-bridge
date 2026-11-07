@@ -33,7 +33,7 @@ public sealed class UnverifiedEnvelope
     public byte[] Signature { get; }
     public EnvelopeBody Body { get; }
 
-    public const int MaxSkewSeconds = 60;
+    public const int MaxSkewSeconds = 120;
 
     // `hostSignPoint` is the uncompressed P-256 point of the hostSign key that the roster binds to
     // `Body.Principal.Add`; resolving it is the caller's job (roster v2). `nowSeconds` is the
