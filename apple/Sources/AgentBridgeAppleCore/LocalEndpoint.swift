@@ -3,8 +3,12 @@
     import Foundation
 
     public enum LocalEndpoint {
-        public enum Failure: LocalizedError {
+        public enum Failure: LocalizedError, BridgeFixedSentenceError {
             case invalidProfile
+            public var sentence: String {
+                errorDescription ?? ""
+            }
+
             public var errorDescription: String? {
                 "Use 1–64 letters, numbers, dots, hyphens or underscores for the profile name (not . or ..)."
             }
