@@ -52,6 +52,7 @@ test('feedback disclosure stays keyboard accessible and actions remain pinned ac
 
   await page.emulateMedia({ colorScheme: 'light', forcedColors: 'none', reducedMotion: 'no-preference' });
   await included.evaluate((element) => { element.open = false; });
+  await settleAnimations(page);
   const closedChevron = await summary.evaluate((element) => getComputedStyle(element, '::after').transform);
   await page.locator('#feedback-note').focus();
   await page.keyboard.press('Tab');
@@ -59,9 +60,9 @@ test('feedback disclosure stays keyboard accessible and actions remain pinned ac
   await expect(summary).toHaveCSS('outline-style', 'solid');
   await page.keyboard.press('Enter');
   await expect(included).toHaveAttribute('open', '');
+  await settleAnimations(page);
   const openChevron = await summary.evaluate((element) => getComputedStyle(element, '::after').transform);
   expect(openChevron).not.toBe(closedChevron);
-  await settleAnimations(page);
 
   const layout = await page.evaluate(() => {
     const surface = document.querySelector('#feedback-dialog');
