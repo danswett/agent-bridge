@@ -9,7 +9,7 @@ namespace AgentBridge.Relay;
 
 // Routes opaque frames between the devices of one account. It sees routing ids, sizes and
 // timing, and nothing a session says: payloads are Noise ciphertext end to end.
-public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, FeedbackService feedback, MachineRoster roster, RelayMetrics metrics, ILogger<RelayHub> log)
+public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway push, BlobService blobs, FeedbackService feedback, MachineRoster roster, DeviceRoster deviceRoster, RelayMetrics metrics, ILogger<RelayHub> log)
 {
     static readonly HashSet<string> Kinds = ["host", "app", "pwa", "phone", "test"];
     // The kinds a person uses. Only these may forget a machine: never a host, which is where an
@@ -264,6 +264,12 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                     var message = m.Clone();
                     _ = Task.Run(async () => await c.SendJsonAsync(await feedback.HandleAsync(c.Account, message)));
                 }
+                else if (m.TryGetProperty("t", out var rt) && rt.GetString() is "roster-get" or "roster-append")
+                {
+                    var c = conn;
+                    var message = m.Clone();
+                    _ = Task.Run(async () => await c.SendJsonAsync(await RosterMessageAsync(c, message)));
+                }
                 else if (m.TryGetProperty("t", out var ft) && ft.GetString() == "forget")
                 {
                     await ForgetAsync(conn, devices, m);
@@ -323,6 +329,31 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         log.LogInformation("forget {Conn} {Kind}: {Outcome}", conn.Tag, conn.Kind, error ?? "ok");
         await conn.SendJsonAsync(new { t = "forget-result", id, machine = Wire.IsDeviceId(machine) ? machine!.ToLowerInvariant() : null, error });
         if (error is null) { await RosterChangedAsync(conn.Account.Id); }
+    }
+
+    // The signed device roster (docs/protocol/devices.md): read it, or offer entries to it. Open to
+    // every kind of device, host included, because a host needs the log to verify it. The relay
+    // only stores; it enforces nothing.
+    async Task<object> RosterMessageAsync(Connection c, JsonElement m)
+    {
+        var id = m.TryGetProperty("id", out var idp) && idp.TryGetInt64(out var n) ? n : 0;
+        if (m.GetProperty("t").GetString() == "roster-get")
+        {
+            var s = await deviceRoster.GetAsync(c.Account.Id);
+            return s is null
+                ? new { t = "roster", id, error = "unavailable" }
+                : (object)new { t = "roster", id, mode = s.Mode, generation = s.Generation, entries = s.Entries };
+        }
+        if (!m.TryGetProperty("entries", out var arr) || arr.ValueKind != JsonValueKind.Array
+            || arr.GetArrayLength() is 0 or > DeviceRoster.MaxPerAppend
+            || arr.EnumerateArray().Any(e => e.ValueKind != JsonValueKind.String))
+        {
+            return new { t = "roster-append-result", id, error = "bad-request" };
+        }
+        var results = await deviceRoster.AppendAsync(c.Account.Id, [.. arr.EnumerateArray().Select(e => e.GetString()!)]);
+        return results is null
+            ? new { t = "roster-append-result", id, error = "unavailable" }
+            : (object)new { t = "roster-append-result", id, results };
     }
 
     bool WithinRate(Connection c)
