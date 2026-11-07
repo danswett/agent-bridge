@@ -104,9 +104,9 @@ $Prerequisites = @(
         Need = 'The role''s S0 snapshot (snap-lab-<code>-s0: Trusted Launch, Windows client licence) built from a clean image with no reusable credential, and a restore proof that a run from it has no previous identity, hooks, settings or processes.' }
     [pscustomobject]@{ Id = 'arm64-feasibility'; Roles = @('win-arm64'); Met = $false; Owner = 'Platform, owner'
         Need = 'A feasibility receipt for native Windows Arm64 in this subscription and region: the image, Standard_D4ps_v5 (or the size chosen) unrestricted, Trusted Launch and licence billing (#357 B1). Until then win-arm64 is unproven; x64 emulation and Linux are no substitute.' }
-    [pscustomobject]@{ Id = 'expiry-sweeper'; Roles = @('win-x64', 'win-arm64'); Met = $false; Owner = 'Platform'
+    [pscustomobject]@{ Id = 'expiry-sweeper'; Roles = @('win-x64', 'win-arm64'); Met = $false; Owner = 'SRE'
         Need = "A durable sweeper, independent of this script, that deletes expired run-owned resources in $ResourceGroup by exact name from its trusted inventory of runs (never from tags, a listing or a pattern), treats a registered name that doesn't exist as already gone, and forgets their lab devices. This script's own cleanup is best effort: a cancelled run never reaches it." }
-    [pscustomobject]@{ Id = 'run-registration'; Roles = @('win-x64', 'win-arm64'); Met = $false; Owner = 'Platform'
+    [pscustomobject]@{ Id = 'run-registration'; Roles = @('win-x64', 'win-arm64'); Met = $false; Owner = 'Platform, SRE'
         Need = 'This script registers each run in the sweeper''s trusted inventory before its first create: the subscription, run id, role, the exact resource names and their expiry, written durably and read back as a receipt that matches the plan. Unbuilt: no inventory exists, and Register-LabRun refuses until a reviewed change implements it.' }
     [pscustomobject]@{ Id = 'cost-alerts'; Roles = @('win-x64', 'win-arm64'); Met = $false; Owner = 'SRE'
         Need = 'Lab cost and resource-age alerts (infra/modules/monitoring.bicep) against the owner''s $75/month budget, with nightly runs of both roles (#357 B1).' }

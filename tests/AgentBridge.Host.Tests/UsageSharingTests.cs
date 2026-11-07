@@ -176,7 +176,7 @@ public sealed class UsageSharingTests : IAsyncLifetime
 
         Assert.Equal(1, await desk.Peers.PassAsync());
         await vm.Device.DisposeAsync();
-        await Wait.UntilAsync(() => desk.Device.Relay.Presence.All(p => p.Id != vm.Device.Id), "the VM to leave presence", Patience);
+        await HostWait.UntilAsync(() => desk.Device.Relay.Presence.All(p => p.Id != vm.Device.Id), "the VM to leave presence", Patience);
 
         var phone = await relay.ConnectAsync(token, "Phone", "pwa");
         var served = await AskAsync(phone, desk.Device, shared: true);
@@ -451,7 +451,7 @@ public sealed class UsageSharingTests : IAsyncLifetime
     {
         await using var older = await TestRelay.StartAsync(o => o.Roster.Backend = "off");
         var device = await older.ConnectAsync(older.TokenFor(1, "octo"), "Desk", "host");
-        await Wait.UntilAsync(() => device.Relay.Snapshot.Presence.Any(p => p.Id == device.Id), "the older relay's presence", Patience);
+        await HostWait.UntilAsync(() => device.Relay.Snapshot.Presence.Any(p => p.Id == device.Id), "the older relay's presence", Patience);
         var store = PeerUsage.Load(null, device.Id, device.Relay.AccountId, time);
         var offline = new UsageReader(Id('a'), "Offline laptop");
         Assert.Equal(1, store.Take([Claude(12, Now)], offline));
@@ -477,11 +477,11 @@ public sealed class UsageSharingTests : IAsyncLifetime
             // transient omission without using the confirmed roster-change path.
             var before = desk.Device.Relay.Snapshot;
             await departures.Dequeue().DisposeAsync();
-            await Wait.UntilAsync(() => !ReferenceEquals(before, desk.Device.Relay.Snapshot), "one presence message", Patience);
+            await HostWait.UntilAsync(() => !ReferenceEquals(before, desk.Device.Relay.Snapshot), "one presence message", Patience);
         }
         Assert.Equal(1, desk.Store.Take([Claude(12, Now)], new UsageReader(old.Id, "Old laptop")));
         await old.DisposeAsync();
-        await Wait.UntilAsync(() => desk.Device.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop", Patience);
+        await HostWait.UntilAsync(() => desk.Device.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop", Patience);
         var roster = relay.App.Services.GetRequiredService<MachineRoster>();
 
         Assert.Null(roster.Forget("1", old.Id, _ => false));
@@ -519,13 +519,13 @@ public sealed class UsageSharingTests : IAsyncLifetime
         Assert.Equal(1, desk.Store.Take([Claude(12, Now)], new UsageReader(old.Id, "Old laptop")));
         await old.DisposeAsync();
         var phone = await relay.ConnectAsync(token, "Phone", "pwa");
-        await Wait.UntilAsync(() => desk.Device.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true
+        await HostWait.UntilAsync(() => desk.Device.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true
             && phone.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop before forgetting", Patience);
         desk.Peers.Start();
 
         Assert.Null(await phone.Relay.ForgetAsync(old.Id));
 
-        await Wait.UntilAsync(() => desk.Store.Entries.Count == 0, "the relay's forget confirmation to remove cached usage", Patience);
+        await HostWait.UntilAsync(() => desk.Store.Entries.Count == 0, "the relay's forget confirmation to remove cached usage", Patience);
         var confirmed = desk.Device.Relay.Snapshot;
         Assert.DoesNotContain(confirmed.Known!, k => k.Id == old.Id);
         Assert.DoesNotContain(confirmed.Previous!.Known!, k => k.Id == old.Id);
@@ -541,7 +541,7 @@ public sealed class UsageSharingTests : IAsyncLifetime
         await desk.Device.DisposeAsync();
         await old.DisposeAsync();
         var phone = await relay.ConnectAsync(token, "Phone", "pwa");
-        await Wait.UntilAsync(() => phone.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop", Patience);
+        await HostWait.UntilAsync(() => phone.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop", Patience);
         Assert.Null(await phone.Relay.ForgetAsync(old.Id));
         Assert.Single(desk.Store.Entries);
 
@@ -549,7 +549,7 @@ public sealed class UsageSharingTests : IAsyncLifetime
         desk.Peers.Attach(returning.Relay, returning.Hub);
         desk.Peers.Start();
 
-        await Wait.UntilAsync(() => desk.Store.Entries.Count == 0, "the returning host's roster confirmation", Patience);
+        await HostWait.UntilAsync(() => desk.Store.Entries.Count == 0, "the returning host's roster confirmation", Patience);
         Assert.NotNull(returning.Relay.Snapshot.Known);
         Assert.NotNull(returning.Relay.Snapshot.Previous!.Known);
     }
@@ -564,14 +564,14 @@ public sealed class UsageSharingTests : IAsyncLifetime
         var cache = PeerUsage.Load(null, desk.Id, desk.Relay.AccountId, time);
         Assert.Equal(1, cache.Take([Claude(12, Now)], new UsageReader(old.Id, "Old laptop")));
         await old.DisposeAsync();
-        await Wait.UntilAsync(() => desk.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop", Patience);
+        await HostWait.UntilAsync(() => desk.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop", Patience);
         await using var peers = new UsagePeers(cache, desk.Id, time: time);
         peers.Attach(desk.Relay, desk.Hub);
         peers.Start();
 
         await capped.ConnectAsync(account, "Replacement laptop", "host");
 
-        await Wait.UntilAsync(() => cache.Entries.Count == 0, "confirmed removal by the roster cap", Patience);
+        await HostWait.UntilAsync(() => cache.Entries.Count == 0, "confirmed removal by the roster cap", Patience);
     }
 
     [Theory]
@@ -586,14 +586,14 @@ public sealed class UsageSharingTests : IAsyncLifetime
         var cache = PeerUsage.Load(null, desk.Id, desk.Relay.AccountId, time);
         Assert.Equal(1, cache.Take([Claude(12, Now)], new UsageReader(old.Id, "Old laptop")));
         await old.DisposeAsync();
-        await Wait.UntilAsync(() => desk.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop before pruning", Patience);
+        await HostWait.UntilAsync(() => desk.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop before pruning", Patience);
         await using var peers = new UsagePeers(cache, desk.Id, time: time);
         peers.Attach(desk.Relay, desk.Hub);
         peers.Start();
 
         await capped.App.Services.GetRequiredService<MachineRoster>().FlushAsync(all: all);
 
-        await Wait.UntilAsync(() => cache.Entries.Count == 0, "confirmation of removal by writer pruning", Patience);
+        await HostWait.UntilAsync(() => cache.Entries.Count == 0, "confirmation of removal by writer pruning", Patience);
     }
 
     [Theory]
@@ -611,7 +611,7 @@ public sealed class UsageSharingTests : IAsyncLifetime
         var cache = PeerUsage.Load(null, desk.Id, desk.Relay.AccountId, time);
         Assert.Equal(1, cache.Take([Claude(12, Now)], new UsageReader(old.Id, "Old laptop")));
         await old.DisposeAsync();
-        await Wait.UntilAsync(() => desk.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop", Patience);
+        await HostWait.UntilAsync(() => desk.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop", Patience);
         var roster = receiving.App.Services.GetRequiredService<MachineRoster>();
         await roster.FlushAsync(all: true);
         await using var peers = new UsagePeers(cache, desk.Id, time: time);
@@ -626,7 +626,7 @@ public sealed class UsageSharingTests : IAsyncLifetime
         time.Advance(TimeSpan.FromSeconds(61));
         await roster.FlushAsync(all: writeConflict);
 
-        await Wait.UntilAsync(() => cache.Entries.Count == 0, "confirmation of a storage-driven forget", Patience);
+        await HostWait.UntilAsync(() => cache.Entries.Count == 0, "confirmation of a storage-driven forget", Patience);
     }
 
     [Fact]
@@ -641,10 +641,10 @@ public sealed class UsageSharingTests : IAsyncLifetime
         desk.Store.Take([Claude(12, Now)], new UsageReader(oldId, "Old laptop"));
         await old.DisposeAsync();
         var phone = await relay.ConnectAsync(token, "Phone", "pwa");
-        await Wait.UntilAsync(() => phone.Relay.Known?.Any(k => k.Id == oldId) == true, "the old laptop to be listed offline", Patience);
+        await HostWait.UntilAsync(() => phone.Relay.Known?.Any(k => k.Id == oldId) == true, "the old laptop to be listed offline", Patience);
 
         Assert.Null(await phone.Relay.ForgetAsync(oldId));
-        await Wait.UntilAsync(() =>
+        await HostWait.UntilAsync(() =>
         {
             var snap = desk.Device.Relay.Snapshot;
             return snap.Known?.All(k => k.Id != oldId) == true && snap.Previous?.Known?.All(k => k.Id != oldId) == true;

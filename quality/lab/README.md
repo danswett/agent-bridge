@@ -15,6 +15,10 @@ The agreement it records:
 - The owner's decisions B1, B3 and B4: [#357](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6645343882),
   accepted by Platform [here](https://github.com/danswett/agent-bridge/issues/357#issuecomment-6646500327).
   B3's lab-token plan is superseded by Trust's choice A, device flow, recorded in §8.
+- Current source routing: [Engineering's assignment](https://github.com/danswett/agent-bridge/issues/689#issuecomment-6705673879).
+  Platform delivers the runner first, then rebases the held #854 nightly and advances #863.
+  SRE supplies inventory/sweeper and cost fences; the owner supplies contract/S0 approval and
+  per-run device flow. Source ownership does not authorize execution or spend.
 
 Where this file and those comments disagree, the comments win and this file is fixed.
 
@@ -25,12 +29,13 @@ Where this file and those comments disagree, the comments win and this file is f
 | This contract | **Written** (this file) | Platform |
 | `provision.ps1`: the resources of one run of one role | **Draft.** Plans only; `-Apply` refuses before any Azure call until §10's prerequisites are met. Never run against Azure | Platform |
 | `test-provision.ps1`: its checks against a stand-in `az` | **Written**, catalog suite `lab-scripts` (ring 0, ci.yml `light` on Linux, so a draft's fast ring runs it). Never run against Azure | Platform |
-| `run.ps1` (§5) | **Unbuilt**: the interface is design only | Platform |
+| `run.ps1` (§5) | **Nonexecuting interface draft.** Validates requests and plans only; `-Apply` always refuses. No scenario, result or evidence is produced | Platform |
+| `test-run.ps1`: offline runner-interface checks | **Written**, in the same `lab-scripts` suite; no Azure or product execution | Platform |
 | `fleet.yml`, the images and their S0 snapshots | **Unbuilt** | Platform |
 | Scenarios and the simulated agent (`tests/AgentBridge.AgentSim`) | **Unbuilt** | Platform |
 | The `lab` environment, OIDC principal and reusable workflow | **Unbuilt**; nothing is scheduled or dispatchable | Platform, owner (bootstrap) |
-| The expiry sweeper (§4) | **Unbuilt**, and required before anything is created | Platform |
-| Run registration in the sweeper's inventory, before the first create (§4) | **Unbuilt**: `provision.ps1`'s `Register-LabRun` refuses | Platform (`provision.ps1`) |
+| The trusted inventory and expiry sweeper (§4) | **Unbuilt**, and required before anything is created | SRE |
+| Run registration in the sweeper's inventory, before the first create (§4) | **Unbuilt**: `provision.ps1`'s `Register-LabRun` refuses | Platform (`provision.ps1`), using SRE's inventory |
 | The temporary nightly cut and schedule (§6) | **Unbuilt**; no cron is enabled | Platform, until SRE's #590 replaces it |
 | PPE, cut freeze, promotion and monitoring (#590, #451) | **Pending**, not part of this folder | SRE |
 | Lab cost and age alerts (`infra/modules/monitoring.bicep`) | **Unbuilt** | SRE |
@@ -44,9 +49,9 @@ shadow soak, not this lab) until a scenario runs here.
 ## 2. Ownership
 
 - **Platform** owns the fleet, images and S0 snapshots, `run.ps1`, the scenarios, the `lab`
-  environment, its OIDC principal and reusable workflow, and bounded cleanup (the sweeper).
+  environment, its OIDC principal and reusable workflow, and the run's bounded cleanup.
 - **SRE** owns PPE (#590), the cut, freeze and promotion consumers (Dev to Beta, #451), and
-  the lab's cost and age alerts in `infra/modules/monitoring.bicep`.
+  the trusted inventory, independent expiry sweeper, and lab cost and age fences.
 - **Dogfood** consumes the same lab and its results. There is never a second lab, runner or
   set of timers.
 - **Quality** alone decides what lab evidence is admitted (quality/README.md §4.9).
@@ -109,14 +114,33 @@ registration's place and its receipt check, but `Register-LabRun` refuses uncond
 Restoring S0 must be proven, not assumed: a run from S0 has no previous run's device
 identity, hooks, settings or processes. That proof is part of the S0 receipt (§10).
 
-## 5. `run.ps1`: the interface (design only)
+## 5. `run.ps1`: the nonexecuting interface draft
 
 ```
 quality/lab/run.ps1 -Subscription <id> -Role <win-x64|win-arm64> -Build <immutable CI artifact or release>
                     -Scenario <name> -Relay <staging|ppe> [-RunId <id>] [-Out <folder>]
 ```
 
-There is no `run.ps1` yet, and nothing here pretends to be one.
+The first source slice is **Part of #736**, not completion of it. Without `-Apply`,
+`run.ps1` validates the request and returns a draft plan (`planVersion: 1`,
+`executionAllowed: false`), including `provision.ps1`'s plan and unmet prerequisites.
+It makes no resource, Azure, network or sign-in calls and writes no files. The digest is
+unverified input, not a provenance receipt. A plan is never a `result.json`, outcome or
+coverage claim.
+
+`-Apply` always throws a clear refusal listing what is missing, including with
+`-Confirm:$false` or `-WhatIf`. There is no input or environment switch that enables it.
+Scenario execution, AgentSim, transport/evidence and S0 need separate later PRs. Neither
+this interface's existence nor its offline tests clear #854's execution gate.
+
+The draft accepts only `-Scenario nightly-v1` and a pinned release build in the form
+`-Build v0.1.N@sha256:<64 lowercase hex>`, matching the held nightly's intended interface.
+Other build sources need a separately reviewed provenance implementation, not a URL
+escape hatch. A legacy `LAB_GITHUB_TOKEN` environment variable is explicitly refused
+without reading or printing its value. Offline guards are `test-run.ps1` in `lab-scripts`;
+CI is the only validation path on execution-restricted hosts.
+
+The full runner contract remains:
 
 - `-Subscription` is required and has no default. Every Azure call names the owner-approved
   Visual Studio Enterprise subscription; the CLI's default (a trial on this machine) never
@@ -139,8 +163,12 @@ run's artifacts are never a cut.
 
 There is one nightly source. Until SRE's #590 delivers the cut and promotion path, Platform
 may add one temporary default-branch schedule and cut resolver; #590 replaces it in one
-coordinated change, so there are never two timers or two cuts. Neither exists yet, and nothing
-is scheduled by this folder.
+coordinated change, so there are never two timers or two cuts. The orchestration draft is
+`.github/workflows/lab-nightly.yml`: its cron is commented out and its fixed source gate always
+refuses before cut resolution, OIDC or Azure sign-in. It calls the sole runner's refusing
+`-Apply` entrypoint, never treating a returned plan as execution. The landed provisioner and
+runner interface clear no execution prerequisite. No lab token is supplied; owner device flow
+on each role's fresh VM in every run remains required (§8). Nothing is scheduled by this folder.
 
 The nominal start is 01:00 Pacific. GitHub's cron is in UTC, so a fixed `0 9 * * *` starts at
 01:00 PST and 02:00 PDT; GitHub may also start a scheduled run late. `result.json` records the
@@ -205,7 +233,7 @@ One per run per role. Fields are only ever added to version 1, never renamed or 
   - After sign-in the app keeps its normal local relay credential on that VM, as any
     installation does, only on that run's OS disk. The disk stays private inside
     `rg-agent-bridge-lab` and is already named in the sweeper's inventory before creation
-    (§4). Platform deletes it by exact name at run end; Platform's independent sweeper
+    (§4). Platform deletes it by exact name at run end; SRE's independent sweeper
     deletes it by that same name after expiry even if the run crashes. No credential-bearing
     disk is kept between runs, exported, shared, snapshotted or made into an image; S0 stays
     credential-free. Cleanup never depends on deleting the shared resource group.
@@ -240,14 +268,17 @@ Each item blocks execution, not this draft. `provision.ps1 -Apply` lists the one
 refuses while any is unmet; each is marked met only by the reviewed change that delivers its
 receipt.
 
+Any separately approved manual proof has its own scope; it clears none of these nightly
+execution gates.
+
 | Item | State | Owner |
 |---|---|---|
 | Owner authorization to execute and spend | **Absent**. Accepting the contract and this draft authorized neither | owner |
 | Cadence and budget (B1) | **Decided**: nightly, both roles, $75/month. Cost unmeasured | owner |
 | Native Windows Arm64: image, size, Trusted Launch, licence billing in this subscription | **Unproven** | Platform, owner |
 | Bootstrap (B2): `rg-agent-bridge-lab`, its network, the `lab` environment, an OIDC principal scoped to that group only, a subscription receipt | **Absent** | owner, Platform |
-| S0 snapshots per role, with the restore proof (§4) | **Absent** | Platform |
-| Durable expiry sweeper (§4) | **Absent** | Platform |
+| S0 snapshots per role, with the restore proof (§4) | **Absent** | owner |
+| Durable expiry sweeper and trusted inventory (§4) | **Absent** | SRE |
 | Run registration before the first create (§4): the trusted inventory, `provision.ps1` writing each run's exact names and expiry to it, and a verified read-back receipt | **Absent**; `Register-LabRun` refuses | Platform |
 | Cost and age alerts | **Absent** | SRE |
 | B3 sign-in (§8): the relay OAuth app's device flow enabled with no organization-membership scope, the owner's device-flow sign-in as `Slipgates-lab-bot` on each role's fresh VM in every run, and proof the credential, relay and device guards hold. No lab token, secret or signed-in image | **Absent**: account named, OAuth settings unverified, per-run sign-in not done | owner, Platform |

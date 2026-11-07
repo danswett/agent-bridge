@@ -49,3 +49,17 @@ This core slice is tested with fakes only. It does not configure a real private 
 Key Vault, storage identity or schedule deployment. Those adapters must be wired with
 least-privilege identities and secrets held outside the repository before live feedback is
 processed.
+
+The shared `AgentBridge.FeedbackEnvelope` project provides v1 `Seal`, `Parse` and `Open`
+for Windows senders and the inbox. `Seal` takes nonempty plaintext, a validated key ID, a
+32-byte X25519 public key and a 16-byte bundle ID; it generates an ephemeral key, salt
+and nonce. `Open` takes the envelope and the 32-byte recipient private key and returns
+plaintext bytes. Callers must clear returned plaintext and private-key buffers when finished.
+The key ID and bundle ID are authenticated alongside the label
+`slipgates feedback envelope v1`; their concatenation is both HKDF info and AES-GCM AAD.
+The envelope uses 4 KiB-to-8 MiB canonical zero-padded buckets and matches the client v1
+format. This library does not select or persist keys, send feedback, or enable the inbox.
+`FeedbackEnvelopeSharedTests.Synthetic_vectors_interoperate_with_independent_webcrypto`
+exercises both directions across bucket boundaries with freshly generated, synthetic
+keys; no fixture private key is checked in. Run the process-category test explicitly
+when validating interoperability, since the local fast ring excludes process tests.
