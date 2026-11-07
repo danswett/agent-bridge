@@ -27,9 +27,19 @@ public sealed partial class CopilotAnswerTrace(TimeProvider time, string request
     string? cli;
     string shape = "-";
     int fields;
-    int reads, rereads, retries, taken;
+    int reads, rereads, retries, taken, resumes;
     bool steady = true;
     string check = "none";
+    string resume = "-";
+
+    // What became of a form left part answered (AnswerService.RecoverAsync), by these keys only.
+    public const string ResumeResumed = "resumed";
+    public const string ResumeGone = "gone";
+    public const string ResumeHeld = "held";
+    public const string ResumeRedone = "redone";
+    public const string ResumeReplaced = "replaced";
+    public const string ResumeStale = "stale";
+    public const string ResumeUncancelled = "uncancelled";
 
     // The Copilot CLI the session started under, as its transcript's first event says.
     public void Cli(string? version) { lock (gate) { cli = version; } }
@@ -54,6 +64,16 @@ public sealed partial class CopilotAnswerTrace(TimeProvider time, string request
     public void Retried() { lock (gate) { retries++; } }
 
     public void Taken(int count) { lock (gate) { taken = count; } }
+
+    // A part-answered form typed into again from the field it stopped at.
+    public void Resumed() { lock (gate) { resumes++; } }
+
+    // Once redone, what became of the redo itself is kept with it ("redone-held"), never in its
+    // place: a redo that ended held or resumed is not logged as one that went whole.
+    public void Resume(string outcome)
+    {
+        lock (gate) { resume = resume == ResumeRedone || resume.StartsWith(ResumeRedone + "-", StringComparison.Ordinal) ? $"{ResumeRedone}-{outcome}" : outcome; }
+    }
 
     public void Failed(FormCheck failed, int row)
     {
@@ -82,6 +102,7 @@ public sealed partial class CopilotAnswerTrace(TimeProvider time, string request
             line.Append(CultureInfo.InvariantCulture, $" check={check} taken={taken}/{fields}");
             line.Append(CultureInfo.InvariantCulture, $" stages={(stages.Count == 0 ? "-" : string.Join(',', stages.Select(s => $"{s.Name}:{s.Ms}")))} total={total}");
             line.Append(CultureInfo.InvariantCulture, $" outcome={(result is null ? "failed" : result.Outcome.ToString().ToLowerInvariant())}");
+            line.Append(CultureInfo.InvariantCulture, $" resume={resume} resumes={resumes}");
             return line.ToString();
         }
     }

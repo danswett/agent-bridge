@@ -205,16 +205,79 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     the same there. A field drawn otherwise gets nothing more. Each refusal logs which check
     failed (`heading`, `bottom-rule`, `under`, `message`, `bar`, `bar-window`, `field`,
     `field-heading`, `hints` or `prompted`, with the row) and the screen's outline (its row count, widest
-    row, blank rows, where its rules and form headings are), never what any row says. A form
-    left part answered across attempts is not yet resumed by a later answer: the attempt that
-    stopped says which fields were answered, for the person to finish at the machine.
+    row, blank rows, where its rules and form headings are), never what any row says.
+  * A form left part answered is not left so if the host can help it (#1123; design #1135,
+    section 4). The delivery waits, holding no keys and not the typing slot, while the screen
+    is read every second (`ResumePoll`) for up to 60 s (`ResumeWait`); the prompt's own
+    delivery slot stays held, so nothing else is typed into the session meanwhile. Only a read
+    that shows this very form at the field the keys stopped at, the question still asked and
+    no other prompt open, lets anything more go, and then only from that field on, every
+    check made as for a first pass: no field is typed twice. A field whose keys went but not
+    its Enter gets only the Enter, and only once the screen shows exactly what those keys left
+    there: an option list drawn as its walk left it, the same row highlighted, or the words
+    typed showing in its input whole and exactly as typed, every character compared
+    (`CopilotFormScreen.Holds`; only a row-wrap break read as the question's are, never just
+    their last characters, so words edited at the machine to another answer that ends the
+    same get no Enter). The words are read from the column right after the input's "❯ ", so a
+    leading space added or removed is a different answer. A screen read does not show a row's
+    trailing spaces (the injector trims the window's padding), so words typed with one are
+    never entered on resume (the form is reset), and a row showing a space after the words is
+    not them; an edit at the machine that only adds spaces after the words is the one change
+    a screen read cannot show. Words the input cannot be read whole in (scrolled or clipped) are not
+    entered: the form is reset instead. A field whose keys may have gone in part, or whose
+    walk went and never settled, or a pass whose keys were cut short, has nothing to check
+    that by, and is not resumed, but is still given the whole wait before any Esc. A permission prompt
+    over the form is waited out, read from the transcript (a pending permission over this
+    still-open call, no other question asked), even while the session's listing shows that
+    approval as its question or the form as answered at the machine; the question no longer
+    asked ends it. What a resume checks is
+    kept in memory for that delivery only, never the answer's words on disk: after a host
+    restart, a resent answer finds the prompt in the attempt ledger and types nothing.
+  * Before the first key goes into a text or number field, on a first pass and a resume alike
+    (the first field included), the screen must show that field as it opens
+    (`CopilotFormScreen.Untouched`): its input's "❯ " alone, or, for a field that opens with
+    its default typed in, exactly that default. Keys typed into a box add to what is there,
+    so a "9" typed at the machine and an answer's "0" would be submitted as "90"; a field
+    showing anything else gets no keys (`refused` on a first pass with nothing typed; on a
+    resume nothing is typed, and the form is reset as below). An option list or a Yes/No
+    needs no such check: its keys walk from the top whatever row the pointer was left on,
+    and nothing typed stays in it. A checkbox list's ticks are not read (see "What no plan
+    can see"). Spaces typed at the machine into an empty box are the one thing this check
+    cannot see: a screen read trims each row, so a box holding only spaces reads as its
+    "❯ " alone. No key is known to clear a box (none has been proven against the CLI, so none
+    is guessed at, Ctrl+U included), so instead, once the answer's words show in the box, a
+    first pass presses their Enter only if they start the input at the column right after
+    the "❯ " (`CopilotFormScreen.Begins`): spaces before them show then, and the words are
+    left unsubmitted (`unconfirmed`; a resume's whole-contents check refuses them too, so the
+    form is reset). This holds for a number box as well, although the CLI records one as
+    `Number(text)`, which would ignore the spaces and record the same number. Only spaces
+    after the words stay unseen (above).
+  * Not resumed within `ResumeWait` (or after three resumes that each stopped again), the form
+    is reset: one Esc (the form's own `esc cancel`), held to rows that show this very form at
+    one of its fields; a screen showing anything else gets nothing, not even the Esc, and the
+    answer stays part answered as above. Cancelled, the session may ask the same question
+    again: only once the transcript positively shows the old call closed, if it does within
+    60 s (`ResetWait`), its arguments exactly the ones answered (the whole `ask_user` call
+    compared in order, property by property, so any change to the message, a title, an
+    option, a constraint or the order of the fields fails it), the same answer is typed into
+    it afresh, once, for the same card and request, every check made again from its first
+    field; that one is never reset again. A different question retires the card, and so does
+    none within 60 s once the old call is positively closed: `stale`, "this question is out
+    of date: ...", with nothing typed into whatever the session shows next. A form not seen
+    to close (still asked after 60 s, a permission prompt drawn over it, or a transcript that
+    cannot say) leaves it `unconfirmed` (`resume=uncancelled`), for the person to finish at
+    the machine. `ResumeWait` zero turns all of this off.
   * Every answer to a Copilot form logs one line (`CopilotAnswerTrace`), whatever it ended
     in, with no word of the question, the screen or the answer: `answer-attempt v=1
     request=<8> session=<8> cli=<version> fields=<n> shape=<kind[options]+...>
     reads=<n> rereads=<n> steady=yes|no retries=<n> check=<name@row|none> taken=<k>/<n>
-    stages=slot:<ms>,typed:<ms>,confirmed:<ms> total=<ms> outcome=<outcome>`. Its keys keep
-    their order and names; new ones are only added at the end, so what reads it (#1132's
-    feedback reports) keeps reading it.
+    stages=slot:<ms>,typed:<ms>,confirmed:<ms> total=<ms> outcome=<outcome>
+    resume=<-|resumed|held|gone|redone|redone-<outcome>|replaced|stale|uncancelled> resumes=<n>`, the last two
+    saying what became of a form left part answered and how many resumes typed into it (a
+    form answered afresh that stopped again keeps what became of that, `redone-held` say,
+    never plain `redone`). Its
+    keys keep their order and names; new ones are only added at the end, so what reads it
+    (#1132's feedback reports) keeps reading it.
   * It fails closed: such an answer is not typed at all into a screen the host cannot
     read, nor words made only of spaces and line-drawing characters, which leave nothing to
     look for (`refused`, nothing typed); and a field or words that do not show, or a screen
@@ -348,7 +411,9 @@ through a code page.
 somebody left in it at the terminal without submitting (boxes ticked in a checkbox list,
 words half-typed into a text field) is in no transcript, so the keys add to it: ticking
 `b` after `a` was ticked locally submits both. The caret position is normalized (above);
-ticks and typed text cannot be, short of reading the screen. Such an answer is never
+ticks cannot be, short of reading the screen. Words in a text or number field can: such a
+field is read before its first key, and one not as it opens gets none (above, "as it
+opens"). Such an answer is never
 reported as delivered: the structured record differs, so the outcome is `unconfirmed`
 and the client says to check the conversation. agent-ha-bridge has the same exposure.
 

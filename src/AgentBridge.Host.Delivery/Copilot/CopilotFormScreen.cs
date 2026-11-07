@@ -178,6 +178,101 @@ public static partial class CopilotFormScreen
         return form.Fields[index].Kind == CopilotFieldKind.Choice ? [.. region.Select(Unplaceheld)] : [.. region];
     }
 
+    // Whether the text or number field `index` shows exactly `words` in its input, and nothing
+    // else (#1123 review): the box's two rules (`Fxn`, `qc`), its first row "❯ " and the words, the
+    // rows they wrap onto at the same column, read as the question is (Drawn) with only its
+    // row-wrap tolerance, every character of the words compared from the column right after the
+    // caret's "❯ " (never inferred from the words, so " OK" is not "OK"), leading spaces included.
+    // A resume presses a field's Enter on nothing less: words edited at the machine since they
+    // were typed can end the same way. False for any other field or layout, for words the box
+    // cannot be read whole in (scrolled or clipped), with white space other than spaces, or
+    // control characters, and for words ending in a space: a screen read does not show a row's
+    // trailing spaces (the injector trims its padding), so they cannot be verified. A row that
+    // does show one after the words is something else typed there. (An edit adding only
+    // trailing spaces is the one change the screen cannot show; see docs/host-answers.md.)
+    public static bool Holds(IReadOnlyList<string> rows, CopilotForm form, int index, string words)
+    {
+        var text = words;
+        if (text.Trim(' ').Length == 0 || text.EndsWith(' ') || text.Any(c => char.IsControl(c) || (char.IsWhiteSpace(c) && c != ' '))) { return false; }
+        if (!Box(rows, form, index, out var box, out var caret, out var width)) { return false; }
+        var first = box[0].TrimEnd(' ');
+        if (first.Length < caret + 3 || first[caret + 1] != ' ') { return false; }
+        // The caret's two columns read as indent: the words start right after them, where the
+        // rows they wrap onto do, and are read from that column exactly (anchor).
+        List<string> drawn = [new string(' ', caret + 2) + box[0][(caret + 2)..], .. box.Skip(1)];
+        if (drawn.LastOrDefault(r => r.Trim(' ').Length > 0) is not { } last || last.EndsWith(' ')) { return false; }
+        var at = 0;
+        return Drawn(drawn, ref at, text, width, caret + 2) && drawn.Skip(at).All(r => r.Trim(' ').Length == 0);
+    }
+
+    // Whether the text or number field `index` shows its input starting with `words`, read from
+    // the column right after the caret's "❯ " (#1123 review): spaces typed at the machine into
+    // an empty box do not show on a screen read (rows are trimmed), so the box passes Untouched,
+    // but once the words are typed after them they do, and the words no longer start there. As
+    // much of the words as the box's first row shows is compared, character for character; no
+    // key is known to clear a box (CopilotPlanner), so a first pass withholds the Enter on any
+    // other start. False for any other field or layout, and when the first row shows none of
+    // the words (scrolled, say).
+    public static bool Begins(IReadOnlyList<string> rows, CopilotForm form, int index, string words)
+    {
+        if (words.Length == 0 || !Box(rows, form, index, out var box, out var caret, out _)) { return false; }
+        var first = box[0].TrimEnd(' ');
+        if (first.Length < caret + 3 || first[caret + 1] != ' ') { return false; }
+        var shown = first[(caret + 2)..];
+        return shown.Length <= words.Length && string.CompareOrdinal(shown, 0, words, 0, shown.Length) == 0;
+    }
+
+    // Whether field `index` is drawn as it opens, nothing typed into it at the machine, before the
+    // first key goes into it (#1123 review): keys typed into a box add to what is there, so a
+    // local "9" and a remote "0" submitted "90". A text or number box must show its caret alone,
+    // or, opening with its default typed in (Prefill), exactly that default (Holds, so one that
+    // cannot be read whole, or ends in a space, is not taken as untouched). An option list's or
+    // a Yes/No's keys walk from the top whatever row the caret was left on (CopilotPlanner.ToRow),
+    // and nothing typed stays in one, so it is true for them; a checkbox list's ticks are not
+    // read (docs/host-answers.md, "What no plan can see"). False on any screen that is not this
+    // form at that field.
+    public static bool Untouched(IReadOnlyList<string> rows, CopilotForm form, int index)
+    {
+        if (index < 0 || index >= form.Fields.Count || Locate(rows, form, index, out _, out _) is not null) { return false; }
+        var field = form.Fields[index];
+        if (field.Kind is not (CopilotFieldKind.Text or CopilotFieldKind.Number)) { return true; }
+        if (field.Prefill is { } prefill) { return Shown(prefill).Any(text => Holds(rows, form, index, text)); }
+        return Box(rows, form, index, out var box, out var caret, out _)
+            && box[0].TrimEnd(' ').Length == caret + 1 && box.Skip(1).All(r => r.Trim(' ').Length == 0);
+    }
+
+    // A default as a box may draw it: a string as it is; a number as written, or as the CLI's
+    // JavaScript prints it (3.0 as 3).
+    static IEnumerable<string> Shown(System.Text.Json.JsonElement value)
+    {
+        if (value.ValueKind == System.Text.Json.JsonValueKind.String) { yield return value.GetString()!; yield break; }
+        var raw = value.GetRawText();
+        yield return raw;
+        if (value.ValueKind == System.Text.Json.JsonValueKind.Number && value.TryGetDouble(out var d) && double.IsFinite(d)
+            && d.ToString("R", System.Globalization.CultureInfo.InvariantCulture) is { } printed && printed != raw && !printed.Contains('E'))
+        {
+            yield return printed;
+        }
+    }
+
+    // A text or number field's box at `index`: the rows between its two rules (`Fxn`, `qc`), the
+    // first starting with the caret, the column the caret is at, and the width the words wrap at.
+    static bool Box(IReadOnlyList<string> rows, CopilotForm form, int index, out List<string> box, out int caret, out int width)
+    {
+        (box, caret, width) = ([], -1, 0);
+        if (index < 0 || index >= form.Fields.Count || form.Fields[index].Kind is not (CopilotFieldKind.Text or CopilotFieldKind.Number)) { return false; }
+        if (Locate(rows, form, index, out var heading, out var hints) is not null) { return false; }
+        var region = rows.Skip(heading + 1).Take(hints - heading - 1).ToList();
+        var rules = Enumerable.Range(0, region.Count).Where(r => IsRule(region[r])).ToList();
+        if (rules.Count != 2 || rules[1] - rules[0] < 2) { return false; }
+        box = region.GetRange(rules[0] + 1, rules[1] - rules[0] - 1);
+        var first = box[0].TrimEnd(' ');
+        caret = first.IndexOf('\u276F');
+        if (caret < 0 || first[..caret].Trim(' ').Length != 0) { return false; }
+        width = Math.Max(1, region[rules[0]].TrimEnd(' ').Length - caret - 2);
+        return true;
+    }
+
     static string? Locate(IReadOnlyList<string> rows, CopilotForm form, int index, out int fieldHeading, out int hintsStart) =>
         Locate(rows, form, index, out fieldHeading, out hintsStart, out _, out _);
 
@@ -440,10 +535,11 @@ public static partial class CopilotFormScreen
     // left out or drawn at the next row's start; where there is none, the break must be one
     // line breaking allows (Breaks), and the next row starts at the question's column, so
     // "ag-" over " test-ops" (a space after the hyphen the CLI would not draw there) is not
-    // "ag-test-ops". Blank rows are taken only between lines.
-    static bool Drawn(IReadOnlyList<string> rows, ref int at, string text, int width)
+    // "ag-test-ops". Blank rows are taken only between lines. With `anchor`, the column is that
+    // one, never inferred from the text's own indent.
+    static bool Drawn(IReadOnlyList<string> rows, ref int at, string text, int width, int anchor = -1)
     {
-        var (p, column, spaced) = (0, -1, false);
+        var (p, column, spaced) = (0, anchor, false);
         while (true)
         {
             if (at >= rows.Count) { return false; }
