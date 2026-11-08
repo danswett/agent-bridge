@@ -180,11 +180,15 @@ email only. The support mailbox can be read by the operator; send only the minim
 personal information in public GitHub issues. Screenshots, logs and attachments can contain names,
 paths, prompts, code, tokens or other private information; check them before sharing.
 
-The confirmed contact for beta support and privacy requests is support@slipgates.com. Cloudflare
-Email Routing forwards messages sent there to the operator's personal email inbox. The destination
-inbox provider, other authorized reader/forwarding roles, and the receiving inbox's retention and
-deletion limits are not yet confirmed. Do not assume that only the operator can technically access
-every copy or that support messages are automatically deleted within 30 days.
+The confirmed contact for beta support and privacy requests is support@slipgates.com. Beta support
+is email only: reply to your invitation email or write support@slipgates.com. Teams is not a beta
+support route. Cloudflare Email Routing forwards messages sent to support@slipgates.com to the
+operator's personal Gmail account. Only the operator reads support mail in the current beta setup;
+there are no delegates, further forwarding or integrations receiving its content. There is no
+automatic deletion: the operator keeps mail until he deletes it. Gmail and Cloudflare processing
+locations, provider access, backup retention and other provider-copy/deletion limits remain
+unconfirmed. This is not a guarantee that only the operator can technically access every provider
+copy or that support messages are erased within 30 days.
 
 The owner has confirmed:
 
