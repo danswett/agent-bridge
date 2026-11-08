@@ -29,4 +29,4 @@ credentials in URLs, whole `Authorization` values, quoted or bare values of keys
 promise to catch every secret, which is why the person sees the exact bytes first. Nothing here is logged.
 
 
-`FeedbackRedactor.ContainsSecret` and `BundleHasSecret` use the same credential patterns, so the sender's last check before upload cannot disagree with the redactor. A source that fails or ignores cancellation is cut off at the 10 s bound; a failing session source refuses with `SessionUnavailable`.
+`FeedbackRedactor.ContainsSecret` and `BundleHasSecret` use the same credential patterns, so the sender's last check before upload cannot disagree with the redactor. `BundleHasSecret` also joins each JSON name with its string or number value, so `{"password":"hunter2"}` is caught. A source that fails or ignores cancellation is cut off at the 10 s bound; a failing session source refuses with `SessionUnavailable`.

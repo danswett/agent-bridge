@@ -70,13 +70,27 @@ public static partial class FeedbackRedactor
                     foreach (var p in e.EnumerateObject())
                     {
                         if (p.NameEquals("screenshotPng")) { continue; }
-                        if (ContainsSecret(p.Name) || Scan(p.Value)) { return true; }
+                        if (ContainsSecret(p.Name) || ScalarPairHasSecret(p) || Scan(p.Value)) { return true; }
                     }
                     return false;
                 default: return false;
             }
         }
+
+        // A name:value pair is split across two JSON tokens, so the key rule needs them joined.
+        static bool ScalarPairHasSecret(System.Text.Json.JsonProperty p)
+        {
+            var v = p.Value.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.String => p.Value.GetString(),
+                System.Text.Json.JsonValueKind.Number => p.Value.GetRawText(),
+                _ => null,
+            };
+            if (string.IsNullOrEmpty(v) || v == Mark) { return false; }
+            return ContainsSecret(p.Name + "=" + v.Replace('"', ' '));
+        }
     }
+
     [GeneratedRegex(@"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)")]
     private static partial Regex PrivateKey();
 

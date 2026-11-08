@@ -167,6 +167,16 @@ public class FeedbackBundleTests
         Assert.False(FeedbackRedactor.BundleHasSecret(bundle.Text));
         Assert.True(FeedbackRedactor.BundleHasSecret(bundle.Text.Replace("\"note\": \"", "\"note\": \"" + Pat + " ")));
     }
+    [Theory]
+    [InlineData("{\"password\":\"hunter2\"}", true)]
+    [InlineData("{\"x\":{\"api_key\":\"abc def ghi\"}}", true)]
+    [InlineData("{\"token\":12345678}", true)]
+    [InlineData("{\"password\":\"[redacted]\"}", false)]
+    [InlineData("{\"password\":\"\"}", false)]
+    [InlineData("{\"name\":\"hunter2\"}", false)]
+    public void BundleHasSecret_sees_name_value_pairs_split_across_json_tokens(string json, bool expected)
+        => Assert.Equal(expected, FeedbackRedactor.BundleHasSecret(json));
+
     [Fact]
     public async Task A_failing_environment_source_becomes_unavailable_instead_of_throwing()
     {
