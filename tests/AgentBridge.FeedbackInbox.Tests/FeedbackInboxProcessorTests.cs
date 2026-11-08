@@ -25,6 +25,26 @@ public sealed class FeedbackInboxProcessorTests
         }, source, new FakeKeys(), decryptor, privateStore, publicStore);
 
     [Fact]
+    public async Task Real_v1_decryption_reaches_only_the_private_unclassified_store()
+    {
+        var (bytes, keys) = FeedbackEnvelopeV1DecryptorTests.CreateFixture();
+        var source = new FakeSource(("fixture", bytes));
+        var privateStore = new FakePrivateStore();
+        var publicStore = new FakePublicStore();
+        var processor = new FeedbackInboxProcessor(
+            new FeedbackInboxOptions { Enabled = true },
+            source, keys, new FeedbackEnvelopeV1Decryptor(), privateStore, publicStore);
+
+        await processor.ProcessAsync();
+
+        var record = Assert.Single(privateStore.Unclassified);
+        Assert.Equal("unclassified", record.UnclassifiedReason);
+        Assert.Equal(FeedbackEnvelopeV1DecryptorTests.PrivateText, record.PrivateContent);
+        Assert.Empty(publicStore.Issues);
+        Assert.Empty(source.Pending);
+    }
+
+    [Fact]
     public async Task Public_issues_contain_only_validated_fields_and_never_decrypted_content()
     {
         var source = new FakeSource(("random-name", [1, 2, 3]));
@@ -379,7 +399,7 @@ public sealed class FeedbackInboxProcessorTests
             return Task.FromResult(Pending.TryGetValue(bundleName, out var bytes) ? (ReadOnlyMemory<byte>?)bytes : null);
         }
 
-        public Task DeleteAsync(string bundleName, CancellationToken cancellationToken)
+        public Task MarkProcessedAsync(string bundleName, CancellationToken cancellationToken)
         {
             Pending.Remove(bundleName);
             DeletedBundle.TrySetResult();
