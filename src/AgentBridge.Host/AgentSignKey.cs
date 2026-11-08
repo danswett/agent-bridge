@@ -8,7 +8,9 @@ namespace AgentBridge.Host;
 // private half stays inside this class: it lives in the host's private folder, DPAPI-protected
 // (CurrentUser) on Windows and a 0600 file elsewhere, and is never logged or returned. A key file
 // that is present but cannot be read or does not match its own recorded public point is refused,
-// not replaced: a new key would be an identity no peer has pinned, made silently.
+// not replaced (a truncated file included: the owner deletes it to start over): a new key would
+// be an identity no peer has pinned, made silently. The file is written whole to a temp file and
+// moved in without overwrite, so a crash or a concurrent first caller never leaves a partial key.
 public sealed class AgentSignKey : IDisposable
 {
     public const string FolderName = "agent-sign";
@@ -48,14 +50,28 @@ public sealed class AgentSignKey : IDisposable
         using var fresh = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var point = Point(fresh);
         var pkcs8 = fresh.ExportPkcs8PrivateKey();
+        var final = Path.Combine(folder, FileName);
+        var temp = Path.Combine(folder, $"{FileName}.{Guid.NewGuid():N}.tmp");
+        byte[] content = [.. point, .. pkcs8];
         try
         {
-            byte[] content = [.. point, .. pkcs8];
-            PrivateFolder.WriteNew(Path.Combine(folder, FileName), OperatingSystem.IsWindows() ? Protect(content) : content);
-            CryptographicOperations.ZeroMemory(content);
+            // Written whole to a temp file and moved in without overwrite, so the final path never
+            // holds a partial key and a concurrent first caller loses cleanly to the winner.
+            using (var stream = PrivateFolder.CreateNew(temp))
+            {
+                stream.Write(OperatingSystem.IsWindows() ? Protect(content) : content);
+                stream.Flush(true);
+            }
+            try { File.Move(temp, final, overwrite: false); }
+            catch (IOException) when (File.Exists(final)) { }
         }
-        finally { CryptographicOperations.ZeroMemory(pkcs8); }
-        return Read(PathOf(profileFolder));
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+            CryptographicOperations.ZeroMemory(pkcs8);
+            try { File.Delete(temp); } catch (IOException) { }
+        }
+        return Read(final);
     }
 
     static AgentSignKey Read(string path)

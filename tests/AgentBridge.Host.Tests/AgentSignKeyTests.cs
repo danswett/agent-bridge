@@ -47,6 +47,27 @@ public sealed class AgentSignKeyTests : IDisposable
     }
 
     [Fact]
+    public void A_truncated_file_is_refused_with_a_clear_error_and_left_alone()
+    {
+        using (AgentSignKey.OpenOrCreate(folder, true)) { }
+        var path = AgentSignKey.PathOf(folder);
+        var half = File.ReadAllBytes(path)[..20];
+        File.WriteAllBytes(path, half);
+        Assert.Throws<InvalidDataException>(() => AgentSignKey.OpenOrCreate(folder, true));
+        Assert.Equal(half, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void Concurrent_first_callers_all_get_the_same_key_and_leave_no_temp_files()
+    {
+        var points = Enumerable.Range(0, 8).AsParallel().WithDegreeOfParallelism(8)
+            .Select(_ => { using var k = AgentSignKey.OpenOrCreate(folder, true); return Convert.ToHexString(k.PublicPoint); })
+            .ToList();
+        Assert.Single(points.Distinct());
+        Assert.Equal([AgentSignKey.FileName], Directory.GetFiles(Path.Combine(folder, AgentSignKey.FolderName)).Select(Path.GetFileName));
+    }
+
+    [Fact]
     public void A_tampered_file_is_refused_and_not_replaced()
     {
         using (AgentSignKey.OpenOrCreate(folder, true)) { }
