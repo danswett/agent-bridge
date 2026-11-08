@@ -179,12 +179,11 @@ participants can read what you send; send only the minimum needed. Do not post s
 personal information in public GitHub issues. Screenshots, logs and attachments can contain names,
 paths, prompts, code, tokens or other private information; check them before sharing.
 
-The privacy email address is live. support@slipgates.com uses Cloudflare Email Routing, which
-forwards mail to the owner's personal inbox. Whether anyone else can read that inbox, which
-provider hosts it, how long mail is kept there, Teams support context, Cloudflare's own retention
-and processing locations, other participants, delegates and administrators, exports, recipient
-copies and actual deletion-execution limits have not yet been confirmed. There is no blanket
-30-day support-message deletion promise.
+The confirmed contact for beta support and privacy requests is support@slipgates.com. Cloudflare
+Email Routing forwards messages sent there to the operator's personal email inbox. The destination
+inbox provider, other authorized reader/forwarding roles, and the receiving inbox's retention and
+deletion limits are not yet confirmed. Do not assume that only the operator can technically access
+every copy or that support messages are automatically deleted within 30 days.
 
 The owner has confirmed:
 
@@ -198,12 +197,17 @@ a request or erase data within three days. Requests will be handled as required 
 law. Request coordination does not itself establish each service's ability or procedure to delete
 records.
 
-For the beta, Slipgates does not promise manual deletion. Records age out on their own schedules:
-roster entries 180 days after they were last used, connection and fault logs 30 days in Log
-Analytics and 90 days in Application Insights, temporary transfer blobs after one day, and feedback
-under the 30-day plaintext policy described below. You can revoke Slipgates' authorization in
-GitHub at any time. There is no account-erasure feature and no promise that a request removes every
-copy. The privacy address still receives and answers requests.
+The beta does not offer an account-erasure feature or promise manual deletion. Roster records have
+a configured expiry after 180 days untouched. Log Analytics is configured for 30 days and
+Application Insights for 90 days. Temporary transfer blobs have lifecycle deletion configured one
+day after creation. These are the specified schedules, not a guarantee of erasure from every copy;
+support-mail and other provider-copy retention are not yet fully confirmed.
+
+You can revoke Slipgates' authorization in GitHub. That does not delete Slipgates records or
+guarantee immediate invalidation of already-issued Slipgates account tokens. For privacy questions
+or requests, email support@slipgates.com. The privacy address still receives and answers requests
+as required by applicable law. This description does not waive rights or duties that applicable
+law imposes.
 
 ### In-app feedback, the preview and the redactor
 
