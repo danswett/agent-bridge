@@ -281,10 +281,18 @@ public sealed partial class ReplyTests : IDisposable
         await using var c = await Ready();
         await Do(c, ha.SendFromCard(Node, "try", rid: "r-retry"));
         Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
-
-        outcome = _ => Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+        sessions.Set(sessions.Get(A)! with { Title = "Renamed after the refusal" });
+        await Pass(c);
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        var duringSend = new List<bool>();
+        outcome = _ =>
+        {
+            duringSend.Add(Detail.TryGetProperty("reply_ack", out var seen));
+            return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+        };
         await Do(c, ha.SendFromCard(Node, "try", rid: "r-retry"));
 
+        Assert.Equal([false], duringSend);
         Assert.Equal(2, replied.Count);
         Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
         Assert.False(Ack.TryGetProperty("duplicate", out _));

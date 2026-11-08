@@ -807,6 +807,7 @@ public sealed partial class HaConnector
         foreach (var key in new[] { "error", "hint", "waiting_on", "sent", "unsent", "recorded", "answer", "at" }) { detail.Remove(key); }
         foreach (var (key, value) in extra) { detail[key] = value?.DeepClone(); }
         if (p.Reply.Ack is { } ack) { detail["reply_ack"] = ack.DeepClone(); }
+        else { detail.Remove("reply_ack"); }
         // A card that no longer asks for a second press of End session does not take one: the
         // next press is a first press again, so nothing ends on a question nobody can see.
         // Before publishing, as a publish that half-succeeds can still replace the question. (A
