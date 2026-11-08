@@ -65,6 +65,33 @@ static partial class SelfTest
         return null;
     }
 
+    // What a button's template has drawn it with now: the presenter's Background and Foreground
+    // (the visual state sets these), as colours, or null for a brush that is not a solid colour.
+    static (Windows.UI.Color? Fill, Windows.UI.Color? Label, Windows.UI.Color? Border) DrawnWith(Button button)
+    {
+        var presenter = Find<ContentPresenter>(button).FirstOrDefault();
+        static Windows.UI.Color? Of(Brush? brush) => brush is SolidColorBrush solid ? solid.Color : null;
+        return (Of(presenter?.Background), Of(presenter?.Foreground), Of(presenter?.BorderBrush));
+    }
+
+    // For a failed pointer-over check to say why: the system colours, and what the button had.
+    static string HoverFacts(Button button)
+    {
+        string System(string key) => Application.Current.Resources.TryGetValue(key, out var c) && c is Windows.UI.Color colour ? colour.ToString() : "missing";
+        var (fill, label, border) = DrawnWith(button);
+        string Show(Windows.UI.Color? colour) => colour?.ToString() ?? "not a solid colour";
+        var own = (button.Background as SolidColorBrush)?.Color.ToString() ?? "none";
+        var ownLabel = (button.Foreground as SolidColorBrush)?.Color.ToString() ?? "none";
+        return $"Highlight {System("SystemColorHighlightColor")}, HighlightText {System("SystemColorHighlightTextColor")}, Window {System("SystemColorWindowColor")}, WindowText {System("SystemColorWindowTextColor")}; "
+            + $"button Background {own}, Foreground {ownLabel}; presenter fill {Show(fill)}, label {Show(label)}, border {Show(border)}; state {VisualStateName(button)}";
+    }
+
+    static string VisualStateName(Button button)
+    {
+        var groups = Find<FrameworkElement>(button).SelectMany(e => VisualStateManager.GetVisualStateGroups(e) ?? new List<VisualStateGroup>()).ToList();
+        return string.Join("/", groups.Select(g => g.CurrentState?.Name ?? "none"));
+    }
+
     static async Task CaptureFrame(FrameworkElement root)
     {
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
