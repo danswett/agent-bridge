@@ -68,7 +68,7 @@ public sealed class EnrollmentExchangeTests
         var n = new EnrollmentJoiner(Account, H, JoinerLimits(), Now, NN);
         a.OnCommit(n.Commit()!, NA);
 
-        Assert.False(a.OnReveal(Encoding.UTF8.GetBytes("a different nonce, 32 bytes long!")));
+        Assert.False(a.OnReveal(Enumerable.Repeat((byte)7, 32).ToArray()));
         Assert.Equal(CodeResult.Ended, a.EnterCode1(n.Code1Shown ?? "000 000"));
     }
 

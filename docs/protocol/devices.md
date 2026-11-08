@@ -197,6 +197,11 @@ Neither the relay nor the other device can reset them. An expiry blocks no pendi
 approver. A relay that ends both channels has two different `h`, so the codes it could read off one
 leg do not match the other.
 
+`EnrollmentLockout` holds its counts in memory only. A restart would forget them, so the host that
+runs an exchange must persist and restore the counts and blocks, or the limits can be reset by
+restarting. That persistence belongs to the host slice that runs enrollment over the pipe (R3 in the
+design's §12 table); until then a caller that does not persist them does not meet §4.4.
+
 Not here: the channel, the relay's `pending` list and its 8-pending and 20-attempts limits (R2),
 the QR paths (§4.3), signing the `add`, and any screen.
 
