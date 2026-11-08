@@ -358,6 +358,27 @@ dotnet test tests/AgentBridge.Transport.Tests -c Release --filter "FullyQualifie
 # A_TPM_signing_key_… must pass, not be skipped. Then no test key may be left in the TPM:
 certutil -user -csp "Microsoft Platform Crypto Provider" -key | Select-String agent-bridge-roster-sign
 ```
+## The relay's copy
+
+The relay keeps one append-only log per account and is an untrusted store (design §3.6): it keeps an entry only if the entry is valid against the relay's own copy, and a host verifies what it reads for itself and never takes the relay's word. Mode is `observe`: the relay serves every account's log and enforces nothing; no connection is refused for want of a roster entry.
+
+Both messages are text frames from an admitted device of any kind, counted against the frame rate. Entries are the canonical text of §Framing. A device's own `id` (a number) is echoed so a reply can be matched.
+
+```
+-> {"t":"roster-get","id":1}
+<- {"t":"roster","id":1,"mode":"observe","generation":"<hex>|null","entries":["<entry>",...]}
+
+-> {"t":"roster-append","id":2,"entries":["<entry>",...]}
+<- {"t":"roster-append-result","id":2,"results":[{"hash":"<b64url>","verdict":"accepted|quarantined|duplicate|refused","reason":"<code>|null"}]}
+```
+
+* One append carries 1 to 16 entries, offered in the order given (a parent before its child). Anything else is `{"error":"bad-request"}`; a store that could not be reached is `{"error":"unavailable"}` and nothing was kept.
+* The first entry kept for an account must be a genesis whose `account` is the account's id; its `generation` then fixes the log. Any other first entry is refused `genesis`, a genesis for another account `account`.
+* An entry that does not parse is refused with its parse code and an empty `hash`. Accepted and quarantined entries are kept; refused and duplicate ones are not.
+* An entry over a signer's budget or a cap is refused for now. A later removal in the same append that needs it as evidence (§3.3) brings it in: it is kept, ahead of the removal, and its result becomes `accepted` with reason `evidence`. So send such ancestors and the removal in one append, parent first.
+* `roster-get` is `{"error":"unavailable"}` too when the store cannot be reached. A stored log that does not rebuild is never added to: an append says `unavailable`.
+* The log is bounded at 224 KiB stored; an append that would pass it is refused `cap`.
+* The relay judges time by its own clock. That is defence in depth: a host applies the same rules on its own clock.
 ## Vectors
 
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:
