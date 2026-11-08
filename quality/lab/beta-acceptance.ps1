@@ -49,28 +49,30 @@ function Save-Screenshot([string]$file) {
     $g.Dispose(); $bmp.Dispose()
 }
 
-# The app's own window and what UI Automation shows of its Get started rows.
+# The app's own window and what UI Automation shows of its Get started rows. The rows are text
+# elements named "<step> · <state> · <hint>"; the section's own panel has no automation peer, so
+# they are found by the heading and by that shape, not by the panel's AutomationId.
 function Read-GetStarted([Diagnostics.Process]$app) {
     Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+    $A = [Windows.Automation.AutomationElement]
     $deadline = [Diagnostics.Stopwatch]::StartNew()
+    $last = @()
     while ($deadline.Elapsed.TotalSeconds -lt 90) {
         $app.Refresh()
         if ($app.HasExited) { throw "the app exited with $($app.ExitCode) before showing a window" }
         if ($app.MainWindowHandle -ne 0) {
-            $root = [Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
-            $cond = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'GetStarted')
-            $gs = $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $cond)
-            if ($gs) {
-                $texts = $gs.FindAll([Windows.Automation.TreeScope]::Descendants,
-                    [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Text))
-                return @($texts | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
-            }
+            $root = $A::FromHandle($app.MainWindowHandle)
+            $all = $root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
+            $last = @($all | ForEach-Object { "$($_.Current.ControlType.ProgrammaticName) | $($_.Current.AutomationId) | $($_.Current.Name)" })
+            $names = @($all | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text } | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
+            $rows = @($names | Where-Object { $_ -match '^.+ · .+ · .+' })
+            if (($names -contains 'Get started') -and $rows.Count) { return $rows }
         }
         Start-Sleep -Milliseconds 500
     }
-    throw 'the Get started section did not appear within 90 s'
+    $last | Set-Content (Join-Path $Out 'ui-tree.txt')
+    throw 'the Get started heading and rows did not appear in UI Automation within 90 s (ui-tree.txt has what it did show)'
 }
-
 Step '1-download' @() {
     $tags = if ($Tag) { @($Tag) } else { @(gh release list --repo $Repo --limit 40 --json tagName --jq '.[].tagName') }
     $manifest = $null
