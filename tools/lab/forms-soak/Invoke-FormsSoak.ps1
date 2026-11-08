@@ -45,6 +45,8 @@ param(
     [string]$NodePath = 'node',
     # How long to wait for the form to be drawn, and for the CLI to report after the keys.
     [int]$FormTimeoutSeconds = 45,
+    # Run folders (CLI home and logs, config, stub log) kept under -OutDir\work; older ones are deleted.
+    [int]$KeepRuns = 30,
     [int]$SettleSeconds = 20,
     # Extra arguments for every CLI start (for example a model-free or trusted-folder flag).
     [string[]]$CopilotArguments = @(),
@@ -82,15 +84,7 @@ function Invoke-FullPathAnswer {
     throw 'Mode full is not implemented: it needs a model turn (quota) so the host has a transcript to read. See the comment above this function.'
 }
 
-function Get-Redacted([string]$text) {
-    $t = $text
-    foreach ($v in @($env:USERNAME, $env:COMPUTERNAME, $env:USERDOMAIN) | Where-Object { $_ -and $_.Length -gt 2 }) {
-        $t = $t -replace [regex]::Escape($v), '<redacted>'
-    }
-    $t = $t -replace '[A-Za-z]:\\[^\s]*', '<path>'
-    $t = $t -replace '(gh[pousr]_|github_pat_)\w+', '<token>'
-    $t -replace '[\w.+-]+@[\w-]+\.[\w.-]+', '<email>'
-}
+. (Join-Path $PSScriptRoot 'Redaction.ps1')
 
 function Read-Rows($injector, [int]$id) {
     $screen = $injector.ReadScreenAsync($id, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
@@ -135,7 +129,16 @@ function Invoke-OneRun {
         $w, $h = $Run.Size -split 'x'
         $cliArgs = (@('--no-auto-update', '--log-dir', "`"$workDir\logs`"", '--additional-mcp-config', "`"@$mcpFile`"") + $CopilotArguments) -join ' '
         $line = "mode con: cols=$w lines=$h >nul && `"$($Run.Cli)`" $cliArgs"
-        $console = Start-Process -FilePath $env:ComSpec -ArgumentList '/d', '/c', "`"$line`"" -WorkingDirectory $workDir -WindowStyle Hidden -PassThru
+        # A fresh CLI home per run, inside the run folder: the CLI keeps its config and session
+        # state there, so a run never reads or writes the user's own, and it is pruned with the run.
+        # The token, if any, comes from the environment the rig was started in.
+        $previousHome = $env:COPILOT_HOME
+        $env:COPILOT_HOME = Join-Path $workDir 'home'
+        New-Item -ItemType Directory -Force $env:COPILOT_HOME | Out-Null
+        # The folder is trusted up front, or the CLI asks about it before it draws anything else.
+        @{ trustedFolders = @($workDir) } | ConvertTo-Json | Set-Content (Join-Path $env:COPILOT_HOME 'config.json') -Encoding utf8
+        try { $console = Start-Process -FilePath $env:ComSpec -ArgumentList '/d', '/c', "`"$line`"" -WorkingDirectory $workDir -WindowStyle Hidden -PassThru }
+        finally { $env:COPILOT_HOME = $previousHome }
         $consoleId = $console.Id
 
         $deadline = [DateTime]::UtcNow.AddSeconds($FormTimeoutSeconds)
@@ -245,6 +248,7 @@ while (($Iterations -eq 0 -or $pass -lt $Iterations) -and -not (Test-Path $stop)
         $detail = (Get-Redacted ([string]$r.Detail)) -replace '[\r\n",]+', ' '
         ('{0:o},{1},{2},{3},{4},{5},"{6}"' -f [DateTime]::UtcNow, $cli.Version, $shape, $size, $pass, $r.Outcome, $detail) | Add-Content $csv -Encoding utf8
         Write-Host ("{0} {1} {2} pass {3}: {4}" -f $cli.Version, $shape, $size, $pass, $r.Outcome)
+        Get-ChildItem (Join-Path $OutDir 'work') -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -Skip $KeepRuns | ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
         if ($r.Outcome -ne 'delivered') {
             $section = "`n## $($cli.Version) / $shape / $size / pass ${pass}: $($r.Outcome)`n`n$detail`n"
             if ($r.Rows -and $r.Rows.Count) {

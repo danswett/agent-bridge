@@ -22,4 +22,7 @@ One pass, Copilot CLI 1.0.107, run on the author's Windows machine (not a dedica
   before typing, and the CLI was given the last option instead (`half-answered`); the rig now
   stops there as the host does, and one re-run at 200x50 confirmed `refused`.
 
-Not covered: other CLI versions, repeat passes (flakiness), a dedicated machine, a hosted runner.
+Not covered: the host's field-by-field typing (the rig types a whole form blind), other CLI
+versions, repeat passes (flakiness), a dedicated machine, a hosted runner. This page was
+measured before each run got its own CLI home; a re-run with the isolated home delivered
+choice-text at 200x50.

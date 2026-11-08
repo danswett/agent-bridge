@@ -9,7 +9,8 @@ no model call for the form, so it can run unattended in a loop on a dedicated ma
 It is a piece of the agent CLI compatibility lab ([#1138](https://github.com/danswett/agent-bridge/issues/1138)):
 it checks that every delivery ends delivered or refused before any key, and never half-answered
 or wedged, for each CLI build available. It is screen-only: it tests the screen reader and the
-injector, not `session.answer` or the host's transcript reading. See the README for the result
+injector, not `session.answer` or the host's transcript reading, and it types a whole form blind
+rather than field by field as the host does (see the README). See the README for the result
 classes, how to run it as a scheduled task, how to stop it, and what it never touches.
 
 The design for #1138 is `docs/design/host-answer-delivery.md` (PR #1135, not yet on `main`;
