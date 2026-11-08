@@ -230,7 +230,7 @@ for (const layout of LAYOUTS) {
 
       test('Launch, a folder-trust question, Machines, usage and settings have no serious or critical violations', async ({ page }) => {
         // Forget stays armed for the scan however slow the machine is.
-        await openDemo(page, '&updates=1&offline=1&forgetMs=60000');
+        await openDemo(page, '&updates=1&updateNow=1&offline=1&forgetMs=60000');
         await go(page, 'launch');
         await expect(page.locator('#launch [name="agent"]')).toBeVisible();
         await check(page, 'Launch');
@@ -247,6 +247,13 @@ for (const layout of LAYOUTS) {
         await offline.first().click();
         await expect(page.locator('#machine-list').getByRole('button', { name: /^Press again to forget / })).toBeVisible();
         await check(page, 'Machines, updating and offline, with Forget armed');
+
+        // Update now's confirmation (#1159), listing the sessions it would go over.
+        await page.locator('#machine-list .machine-update-now').click();
+        await expect(page.locator('dialog.update-now-sheet')).toBeVisible();
+        await check(page, "Update now's confirmation");
+        await page.keyboard.press('Escape');
+        await expect(page.locator('dialog.update-now-sheet')).toHaveCount(0);
 
         await go(page, 'usage');
         await check(page, 'usage');

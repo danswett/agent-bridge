@@ -44,7 +44,7 @@ import { UPDATE } from './update.js';
 import { SIGN_IN_DEVICES } from './signin-devices.js';
 import { DIAGNOSTICS } from './diagnostics.js';
 import { LAUNCH, TRUST, checkLaunch, flattenPrompt, trustAction } from './launch.js';
-import { TRANSFER, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
+import { TRANSFER, signEscapedApproval, signTransfer, signTrust, signUpdateNow } from './transfer.js';
 import { ESCAPED_CAPABILITY } from './escaped.js';
 import { P256KeyPair } from './noise-p256.js';
 import { deviceIdOf } from './identity.js';
@@ -188,6 +188,8 @@ export class DemoHost {
   updateLog = [];
   #updateScript = [];
   updateStepMs = 400;
+  // An Update now that stops as it restarts (installing), for a test to take the machine away.
+  holdUpdateNow = false;
   // Sign-in (#800): every signin.start and signin.cancel as received; the next starts' failures
   // (their errors) and outcomes ({ outcome, reason } in place of started); the code the next flow
   // shows, when a test wants another (a spoofed one, say); and the flow under way, with the
@@ -216,13 +218,14 @@ export class DemoHost {
   // a busy session waits for its second. usage: false plays a host from before usage.get;
   // launching: false, one that can't launch sessions; transferring: false, one that takes no
   // sessions from other machines. readOnly: why it takes nothing from the phone, as hello says.
-  // updating: true plays a host whose app installs updates asked for from the phone (#51).
+  // updating: true plays a host whose app installs updates asked for from the phone (#51), and
+  // updatingNow: true, one that offers Update now there too (#1159).
   // signingIn: true, one that runs an agent's own device-code sign-in when a person asks (#800).
   // progress: false plays a host from before sessions.progress, which says nothing of an answer
   // or a reply until its outcome.
   // confirming: false, one that does not take an escaped approval's confirmation from this device (#803).
   // diagnosing: true, one that offers its diagnostics to this device (#802).
-  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, confirming = approving, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, signingIn = false, progress = true, diagnosing = false } = {}) {
+  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, confirming = approving, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, updatingNow = false, signingIn = false, progress = true, diagnosing = false } = {}) {
     this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
@@ -235,6 +238,7 @@ export class DemoHost {
     this.sessions = new Map();
     for (const s of fixture.sessions ?? []) { this.sessions.set(s.id, s); }
     this.revision = fixture.revision ?? 1;
+    if (updating && updatingNow) { Object.assign(this.update, { canUpdateNow: true, busy: demoBusy([...this.sessions.values()]) }); }
   }
 
   connect() {
@@ -822,7 +826,8 @@ export class DemoHost {
 
   #event(t, ev, data) { t.deliver({ ev, seq: ++t.seq, data }); }
 
-  // The next presses' refusals, in order (their reasons); none scripted, a press is taken.
+  // The next presses' refusals, in order (their reasons); none scripted, a press is taken. An
+  // Update now's is { code, reason }: the reason is the machine's text, which no client shows.
   scriptUpdates(reasons) { this.#updateScript.push(...reasons); }
 
   // What the app reports, sent to every channel following it as update.state.
@@ -834,9 +839,10 @@ export class DemoHost {
   // As the machine's app would: a check finds what it finds; an install downloads, installs
   // and comes back on the new release, each step updateStepMs apart.
   #updateAsk(op, data) {
+    if (op === UPDATE.install && data?.now) { return this.#updateNow(data.now); }
     this.updateLog.push({ op, request: data?.request ?? null });
     const refused = this.#updateScript.shift();
-    if (refused) { return { outcome: 'refused', reason: refused, state: clone(this.update) }; }
+    if (refused) { return { outcome: 'refused', reason: typeof refused === 'string' ? refused : refused.reason, state: clone(this.update) }; }
     const request = data?.request ?? null;
     const step = (fn, after) => setTimeout(fn, after * this.updateStepMs);
     if (op === UPDATE.check) {
@@ -852,6 +858,35 @@ export class DemoHost {
       ...this.update, current: to, available: null, notes: null, phase: 'idle', request: null, checkedAt: now(),
       last: { outcome: 'updated', from, to, request, at: now() },
     }), 2);
+    return { outcome: 'accepted', state: clone(this.update) };
+  }
+
+  // Update now (#1159), as the host and its app would carry it: the signed body read for its args
+  // (this page signed it; the demo trusts its own key), a confirmation that doesn't cover what is
+  // busy answered confirm, else downloaded, then restarted onto the release (held there with
+  // holdUpdateNow), each step updateStepMs apart.
+  #updateNow(command) {
+    let body = null;
+    try { body = JSON.parse(fromUtf8.decode(fromBase64url(command.body))); } catch { /* read below */ }
+    const args = body?.args ?? {};
+    const request = body?.request ?? null;
+    this.updateLog.push({ op: UPDATE.install, now: true, request, release: args.release ?? null, accept: args.accept ?? null, expires: body ? body.expiresAt - body.issuedAt : null });
+    const scripted = this.#updateScript.shift();
+    if (scripted) { return { outcome: 'refused', reason: scripted.reason ?? 'the machine refused it in words no client shows', code: scripted.code ?? null, state: clone(this.update) }; }
+    if (body?.action !== 'update.install.now' || args.now !== true || !request) { return { outcome: 'refused', reason: 'not an Update now', code: 'bad-args', state: clone(this.update) }; }
+    if (args.release !== this.update.available) { return { outcome: 'refused', reason: 'the release changed', code: 'release-changed', state: clone(this.update) }; }
+    if (!demoCovered(this.update.busy, args.accept)) { return { outcome: 'confirm', reason: 'more is busy here than the confirmation covered', code: null, state: clone(this.update) }; }
+    const from = this.update.current;
+    const to = this.update.available;
+    const step = (fn, after) => setTimeout(fn, after * this.updateStepMs);
+    this.setUpdate({ ...this.update, phase: 'downloading', progress: 40, request, requestNow: true, canUpdateNow: false, busy: null });
+    step(() => this.setUpdate({ ...this.update, phase: 'installing', progress: null }), 1);
+    if (!this.holdUpdateNow) {
+      step(() => this.setUpdate({
+        ...this.update, current: to, available: null, notes: null, phase: 'idle', request: null, requestNow: false, checkedAt: now(),
+        last: { outcome: 'updated', from, to, request, at: now() },
+      }), 2);
+    }
     return { outcome: 'accepted', state: clone(this.update) };
   }
 
@@ -1158,6 +1193,51 @@ export async function demoConfirm(host) {
     // Tests hold signing (host.holdSigning()) to press Cancel or Back while it is under way.
     await host.signing;
     return signEscapedApproval({ key: me, deviceId, machinePublic: host.key.public, session, question, shown, request, now, to: host.machine.id });
+  };
+}
+
+// Update now (#1159): what a host counts as busy among its sessions (UpdateBusyView), approvals
+// first, then questions, then turns; at most 32 listed and the rest counted by kind.
+export function demoBusy(sessions) {
+  const stateOf = (s) => (s.question?.kind === 'approval' ? 'approval'
+    : s.question || s.status === 'waiting' ? 'question'
+      : s.status === 'working' || (s.status === 'idle' && s.activity?.background) ? 'working' : null);
+  const rank = { approval: 0, question: 1, working: 2 };
+  const all = sessions.map((s) => ({ id: s.id, state: stateOf(s) })).filter((s) => s.state)
+    .map((s, i) => ({ s, i })).sort((a, b) => rank[a.s.state] - rank[b.s.state] || a.i - b.i).map((x) => x.s);
+  const left = all.slice(32);
+  const working = all.filter((s) => s.state === 'working').length;
+  return {
+    working, waiting: all.length - working,
+    ...(all.length ? { sessions: all.slice(0, 32) } : {}),
+    ...(left.length ? { moreApprovals: left.filter((s) => s.state === 'approval').length, moreOther: left.filter((s) => s.state !== 'approval').length } : {}),
+  };
+}
+
+// Whether what is busy is covered by what the person was shown (accept), simplified from the
+// host's UpdateBusyView.CoveredBy: quiet, or every listed busy session the same there, nothing more
+// left out than the confirmation left out, and no count above what it said.
+export function demoCovered(busy, accept) {
+  const b = busy ?? { working: 0, waiting: 0, unknown: true };
+  if (!b.unknown && b.working === 0 && b.waiting === 0) { return true; }
+  if (!accept) { return false; }
+  if (b.unknown && accept.unknown !== true) { return false; }
+  if (b.working > accept.working || b.waiting > accept.waiting) { return false; }
+  const listed = new Map((accept.sessions ?? []).map((s) => [s.id, s.state]));
+  const unlisted = (b.sessions ?? []).filter((s) => listed.get(s.id) !== s.state);
+  return unlisted.length + (b.moreApprovals ?? 0) + (b.moreOther ?? 0) <= (accept.moreApprovals ?? 0) + (accept.moreOther ?? 0);
+}
+
+// Update now's presses signed by a key this page makes for itself, for each demo machine's key.
+export async function demoUpdateNow(machines) {
+  const me = await P256KeyPair.generate();
+  const deviceId = await deviceIdOf(me.public);
+  for (const m of machines) { m.key ??= await P256KeyPair.generate(); }
+  const byId = new Map(machines.map((m) => [m.machine.id, m]));
+  return ({ id, release, accept, request }) => {
+    const m = byId.get(id);
+    if (!m) { return Promise.reject(new Error('not connected to that machine')); }
+    return signUpdateNow({ key: me, deviceId, machinePublic: m.key.public, release, accept, request });
   };
 }
 

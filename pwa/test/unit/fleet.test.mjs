@@ -403,6 +403,24 @@ test("a machine shown is followed on its own channel, and a press goes on that c
   assert.equal(fleet.update('v'), null);
 });
 
+test("a press signed for a machine is made with the key that machine's channel proved, on its own channel or a short one", async () => {
+  const { connection, hosts, fleet } = fleetWith({ b: { machine: {}, capabilities: ['update'], update: found } });
+  const sent = [];
+  const client = { synced: true, on: () => {}, subscribeUpdate: async () => readUpdateState(found), request: async (op, data) => { sent.push({ op, data }); return {}; } };
+  hosts.view({ id: 'v', client, channel: { hs: { remoteStatic: new Uint8Array([1, 2]) } }, machine: {}, capabilities: ['sessions.read', 'update'] });
+  await flush();
+  await fleet.idle();
+  const keys = [];
+  const make = (key) => { keys.push(key && [...key]); return { now: 'signed' }; };
+  await fleet.call('v', 'update.install', make);
+  assert.deepEqual(sent, [{ op: 'update.install', data: { now: 'signed' } }]);
+  // A short channel with no handshake to read: no key, and the press is made all the same.
+  await fleet.call('b', 'update.install', make);
+  assert.deepEqual(connection.hosts.b.requests, [{ op: 'update.install', data: { now: 'signed' } }]);
+  assert.deepEqual(keys, [[1, 2], null]);
+  fleet.clear();
+});
+
 test('a machine shown that starts offering updates on a refreshed hello is followed from then, on the same channel', async () => {
   const { hosts, fleet } = fleetWith({});
   let subscribed = 0;

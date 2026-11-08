@@ -1721,7 +1721,7 @@ machine, online ones first, then the account's offline machines (#213):
   "Update ready · waiting for a question to be answered", never "answer at the machine".
   Every action is the same small secondary button. Check for updates, for every machine at once,
   sits under the rows in the same column.
-- **Update now** (#1159; design, not built; Creative's rules, 6711605555, are spelled out in
+- **Update now** (#1159; built in the PWA, slice 3; the Windows app's is slice 4; Creative's rules, 6711605555, are spelled out in
   [v1-update.md](../protocol/v1-update.md#what-the-person-sees)): beside Install, only when an
   update is ready and this device can carry it out; otherwise the row says why in text2. A quiet
   machine updates on one press; a busy one, or one the bridge can't read, confirms first, listing

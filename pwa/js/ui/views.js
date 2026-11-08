@@ -7,7 +7,8 @@ import { SessionOrder } from '../session-order.js';
 import { ago } from './time.js';
 import { whileVisible } from './ticker.js';
 import { enter, leave, seen, select as showSelection, slide } from './motion.js';
-import { updateLine, lastLine, canCheck, canInstall } from '../update.js';
+import { updateLine, lastLine, canCheck, canInstall, canUpdateNow, updateNowReason, RESTARTING } from '../update.js';
+import { openUpdateNowSheet } from './update-now-sheet.js';
 import { signInDevicesLines } from '../signin-devices.js';
 import { BRAND } from '../brand.js';
 
@@ -590,32 +591,49 @@ export function offlineMachines({ presence, known, me }) {
 const drawnAs = new WeakMap();
 
 // The update block inside a machine's row, under its two lines (#51, #213): what its app is
-// doing, how the last update ended, Check and Install, and a refused press's reason.
+// doing, how the last update ended, Check, Install and Update now (or why Update now can't be
+// pressed there, #1159), and a refused press's reason.
 function updateRow(updates, id, name, now) {
   const s = updates?.state(id);
   if (!s) { return { key: null, el: null }; }
-  const { busy, note } = updates.stateOf(id);
+  const { busy, asking, note } = updates.stateOf(id);
+  // Seen leaving for an Update now while online: its row reads so once it has gone (renderMachines).
+  updates.restarting?.(id, true);
   const said = updateLine(s, now);
-  const last = lastLine(s, now);
-  const check = canCheck(s) && !busy;
-  const install = canInstall(s) && !busy;
-  const key = [said, last, note, busy, check, install];
+  const last = lastLine(s, now, { updateNow: updates.isUpdateNow?.(s.last?.request) ?? false });
+  const check = canCheck(s) && !busy && !asking;
+  const install = canInstall(s) && !busy && !asking;
+  const offerNow = updates.signs === true && canUpdateNow(s);
+  const pressNow = offerNow && !busy && !asking;
+  const why = updates.signs === true ? updateNowReason(s) : null;
+  const key = [said, last, note, busy, asking, check, install, offerNow, pressNow, why];
   // Not disabled when it cannot be pressed: a disabled button loses focus, and the next draw
   // could not give it back. A press then does nothing (UpdateControl, and the host's own rules).
-  const button = (cls, label, aria, can, kind) => h('button', {
+  const button = (cls, label, aria, can, onPress) => h('button', {
     type: 'button', class: `button secondary small ${cls}`, 'aria-label': aria,
     'aria-disabled': can ? null : 'true',
-    onclick: () => { if (can) { updates.press(id, kind); } },
+    onclick: (e) => { if (can) { onPress(e); } },
   }, label);
+  // Back to Update now once its confirmation closes, or to the row's first action: the row has
+  // been drawn again meanwhile.
+  const refocus = (doc) => () => {
+    const row = [...(doc.getElementById('machine-list')?.children ?? [])].find((li) => li.dataset.deviceId === id);
+    (row?.querySelector('.machine-update-now') ?? row?.querySelector('.machine-update-check'))?.focus();
+  };
   return {
     key,
     el: h('div', { class: 'machine-update' },
       h('p', { class: 'machine-update-line' }, said),
       last ? h('p', { class: 'machine-update-last' }, last) : null,
+      why ? h('p', { class: 'machine-update-why' }, why) : null,
       note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
       s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
-        button('machine-update-check', busy ? 'Asking…' : 'Check', `Check ${name} for updates`, check, 'check'),
-        s.available ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, 'install') : null) : null),
+        button('machine-update-check', busy ? 'Asking…' : 'Check', `Check ${name} for updates`, check, () => updates.press(id, 'check')),
+        s.available ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, () => updates.press(id, 'install')) : null,
+        offerNow ? button('machine-update-now', 'Update now', `Update now: ${s.available} on ${name}, without waiting`, pressNow, (e) => {
+          const doc = e.currentTarget.ownerDocument;
+          updates.pressNow(id, { machine: name, confirm: (sheet, { signal } = {}) => openUpdateNowSheet(sheet, { doc, returnFocus: refocus(doc), signal }) });
+        }) : null) : null),
   };
 }
 
@@ -698,6 +716,20 @@ function factsLine(facts) {
   return { el, key: detail };
 }
 
+// What an Update now is doing, said politely once a step (update.js nowAnnouncement): the row's line
+// is redrawn with the list, so it can't be the live region itself. The region sits beside the list.
+function announceUpdates(list, updates, hosts) {
+  if (!updates?.announce || !list.parentElement) { return; }
+  const said = hosts.map((d) => [d.name, updates.announce(d.id)]).filter(([, text]) => text).map(([name, text]) => `${name}: ${text}`);
+  if (!said.length) { return; }
+  let region = list.parentElement.querySelector(':scope > .machine-update-announce');
+  if (!region) {
+    region = h('p', { class: 'sr-only machine-update-announce', 'aria-live': 'polite' });
+    list.after(region);
+  }
+  region.textContent = said.join('. ');
+}
+
 // One row: the icon and the trailing state on line 1 with the name, the facts on line 2, and
 // anything more (updates, Forget, an error) under them in the same text column.
 function machineRow({ id, name, select = null, selected = false, facts, state, offline = false, more = [] }) {
@@ -720,6 +752,13 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
   const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
   const rows = new Map(hosts.map((d) => [d.id, updateRow(updates, d.id, d.name, now)]));
+  // A machine that left for an Update now reads "Restarting to update…" for a while (#1159, until
+  // #815's planned restart is negotiated), in its offline row, or in a row of its own while the
+  // relay doesn't list it yet.
+  const restarting = new Set([...offline.map((k) => k.id), ...(updates?.leavingIds?.() ?? [])]
+    .filter((id) => id !== me && !presence.some((d) => d.id === id) && updates?.restarting?.(id, false)));
+  const leftNow = [...restarting].filter((id) => !offline.some((k) => k.id === id));
+  announceUpdates(list, updates, hosts);
   const signInRows = new Map(hosts.map((d) => [d.id, signInRow(signInDevices?.(d.id))]));
   const diagnoses = new Map(hosts.map((d) => [d.id, diagnoseRow(diagnose, d.id, d.name)]));
   const updating = hosts.filter((d) => rows.get(d.id).el);
@@ -735,13 +774,13 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
   const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key, signInRows.get(d.id).key, diagnoses.get(d.id).key]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
-    offline.map((k) => [k.id, k.name, k.lastSeen, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget]);
+    offline.map((k) => [k.id, k.name, k.lastSeen, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget, [...restarting]]);
   if (drawnAs.get(list) === key) { return hosts.length; }
   drawnAs.set(list, key);
   // Every change redraws the list, so the button that had focus is replaced: Forget's first
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
-  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics'].find((c) => active.classList.contains(c)) } : null;
+  const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-update-now', 'machine-check-all', 'machine-diagnose', 'machine-diagnose-close', 'machine-diagnose-review', 'machine-diagnose-copy', 'machine-diagnostics'].find((c) => active.classList.contains(c)) } : null;
   const everyMachine = hosts.length > 1 ? [machineRow({
     id: ALL, name: 'All machines', select: () => onSelect(ALL), selected: all,
     facts: h('span', { class: 'machine-status' }, allStatus || `${hosts.length} machines`),
@@ -753,14 +792,17 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
       id: d.id, name: d.name, select: () => onSelect(d.id), selected,
       facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online', more: [rows.get(d.id).el, signInRows.get(d.id).el, diagnoses.get(d.id).el],
     });
-  }), ...offline.map((k) => {
+  }), ...leftNow.map((id) => machineRow({
+    id, name: updates.nameOf?.(id) ?? 'This machine', offline: true,
+    facts: h('span', { class: 'machine-seen' }), state: RESTARTING,
+  })), ...offline.map((k) => {
     const name = typeof k.name === 'string' && k.name ? k.name : 'unnamed';
     const seen = ago(k.lastSeen, now);
     const s = forget?.stateOf(k.id) ?? { armed: false, busy: false, error: null };
     return machineRow({
       id: k.id, name, offline: true,
       facts: h('span', { class: 'machine-seen' }, `Last seen ${seen || 'a while ago'}`),
-      state: 'Offline',
+      state: restarting.has(k.id) ? RESTARTING : 'Offline',
       more: [
         forget ? h('div', { class: 'machine-actions' }, h('button', {
           type: 'button', class: `button secondary small machine-forget${s.armed ? ' armed' : ''}`,
