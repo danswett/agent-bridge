@@ -253,6 +253,13 @@ for (const layout of LAYOUTS) {
 
         await go(page, 'settings');
         await check(page, 'settings');
+
+        // The keyboard check on, with its practice targets and a key listed (#1209).
+        await page.locator('#key-check-toggle').click();
+        await page.locator('.key-check-button').focus();
+        await page.keyboard.press('Alt+ArrowUp');
+        await expect(page.locator('#key-check-list li').filter({ hasText: 'key "ArrowUp"' })).toHaveCount(1);
+        await check(page, 'settings with the keyboard check on');
       });
 
       test('the sign-in page has no serious or critical violations', async ({ page }) => {

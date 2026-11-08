@@ -1987,7 +1987,10 @@ with its grey dot on the rail's Settings item, "Settings, new agent found", unti
 exists. It is offered only for Copilot CLI, Claude Code and Codex whose version was read: an
 agent whose version couldn't be read has no card, and its row keeps its Set up. Removing an
 agent's connection also holds its card at that version. The PWA's Settings also has Text size
-(§4.4), on this device only.
+(§4.4), on this device only, and **Keyboard check** (#1209): while on, each key pressed anywhere
+in the app is listed (key, code, Option, Control, Command, Shift, what had focus, never its words,
+and whether the app used it), so a hardware keyboard can be read back on a real device; nothing is
+saved or sent.
 
 **An agent's row today** (the creative director's #784 words; #705's per-row names and
 verbs). Every state is words on the row, with at most one verb:
