@@ -156,8 +156,9 @@ public sealed class ToastResponder
             try { result = await done.Task.WaitAsync(OutcomeWait); }
             catch (TimeoutException)
             {
-                if (Gone() || Closed(action)) { return; }
-                Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, "Still sending your answer. Open the session to see what became of it.", action.Machine));
+                // The send is still unresolved, so this notice does not depend on the question staying open.
+                if (Gone()) { return; }
+                Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, "Still sending your answer. Open the session to see what became of it.", action.Machine), outlives: true);
                 return;
             }
             if (Gone() || (Closed(action) && !QuestionViewModel.OutlivesQuestion(result))) { return; }
