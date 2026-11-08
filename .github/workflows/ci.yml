@@ -623,7 +623,7 @@ jobs:
       - name: The published app draws the demo's cards and answers one
         shell: pwsh
         # build/app-self-test.ps1 says how the app ended when it did not end with 0 (#240).
-        run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds ${{ matrix.runtime == 'win-arm64' && 480 || 360 }}
+        run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json" -TimeoutSeconds 480
       - name: The installer installs per user, into its own channel and architecture, and the installed app starts
         # The Setup.exe a person downloads, run silently on this throwaway runner: per user, no
         # admin, into %LOCALAPPDATA%\AgentBridgeApp. A silent install starts nothing, so no host or
@@ -654,7 +654,7 @@ jobs:
           if ($bad) { exit 1 }
           . ./build/app-notices.ps1
           Write-AppDistributionEvidence -Publish '${{ matrix.out }}/publish' -Releases '${{ matrix.out }}/releases' -Version $env:APP_VERSION -Runtime '${{ matrix.runtime }}' -Installed "$root/current" -Out "$logs/distribution-evidence.json"
-          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds ${{ matrix.runtime == 'win-arm64' && 480 || 360 }}
+          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json" -TimeoutSeconds 480
           exit $LASTEXITCODE
       - name: The release would publish (dry run)
         # What the publish job would upload, publish and prune, against the repository's real

@@ -93,6 +93,7 @@ export class HostSession {
   #opening = 0;
   // A notification's machine, shown with every other, until presence says whether it is online.
   #linked = null;
+  #focus = null;
   // null (nothing shown: signed out), ALL, or one machine's device id.
   selection = null;
 
@@ -146,6 +147,27 @@ export class HostSession {
   // Calls fn(hostId) each time a channel to a machine shown is open, subscribed and its snapshot
   // whole: whatever waits to be resent to that machine can go.
   onOpen(fn) { this.#openListeners.add(fn); return () => this.#openListeners.delete(fn); }
+
+  // What the page shows (#1190, sessions.focus): whether it is in sight, and the session open, on
+  // the machine it belongs to. Told to every channel now, and to each new one before it subscribes.
+  setFocus({ visible, hostId = null, id = null, question = null, idle = null } = {}) {
+    this.#focus = { visible: visible === true, hostId, id, question, idle };
+    for (const link of this.#links.values()) { this.#tellFocus(link); }
+  }
+
+  // The person is active again, or still: each channel says its focus again, with a fresh idleMs.
+  refreshFocus() {
+    for (const link of this.#links.values()) {
+      try { link.client?.refreshFocus?.(); } catch (e) { console.error(e); }
+    }
+  }
+
+  #tellFocus(link) {
+    const f = this.#focus;
+    if (!f || typeof link.client?.setFocus !== 'function') { return; }
+    const mine = f.hostId === link.id;
+    try { link.client.setFocus({ visible: f.visible, open: mine ? f.id : null, openQuestion: mine ? f.question : null, idle: f.idle }); } catch (e) { console.error(e); }
+  }
 
   // Where something sent from a card goes: its own machine's channel, open now, or null. Never
   // another machine's, whichever is chosen; and never a machine's whose list may be out of date
@@ -496,6 +518,7 @@ export class HostSession {
       client = this.makeClient(channel, link.store);
       link.channel = channel;
       link.client = client;
+      this.#tellFocus(link);
       // A new channel's first whole snapshot says what is there now: only then is anything sent
       // to it again.
       link.stale = true;
