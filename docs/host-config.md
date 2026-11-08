@@ -69,7 +69,8 @@ follow.
     "idleIntervalSeconds": 900,
     "copilotAccounts": ["dswett_microsoft"]
   },
-  "devBox": { "keepAwake": false, "intervalMinutes": 15 }
+  "devBox": { "keepAwake": false, "intervalMinutes": 15 },
+  "agentMessaging": { "remote": "off", "allowAllTargets": false }
 }
 ```
 
@@ -131,6 +132,8 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `usage.copilotAccounts` | `[]` | Further GitHub logins whose Copilot allowance this machine reports beside the account Copilot is signed in as, as agent-ha-bridge's own setting: up to three, each its own row on the phone and the app, under its login, and on the Home Assistant connector's `usage_copilot_2`, `_3` or `_4` by its place in the list. Each is read with the token `gh` holds for exactly that login (`gh auth token --user <login>`) and nothing else, at the idle pace, one at a time; a reading that answers for another login is refused. So `gh auth login` as that account is all the setup there is. Logins only, never tokens |
 | `devBox.keepAwake` | `false` | On a Microsoft Dev Box, keep the machine from hibernating on disconnect while the host runs ([below](#dev-box-keep-awake)), as agent-ha-bridge's own setting. Set it in the Windows app's Settings (shown on a Dev Box only; applies at once) or here (applies when the host restarts). `migrate` carries agent-ha-bridge's. Nothing happens on a machine that is not a Dev Box |
 | `devBox.intervalMinutes` | `15` | How often a pass runs, from 1 to 30. More than 30 is read as 30 and said, and `config set` refuses it: a pass less often than the pool's grace period (never under 60 minutes) can miss the pending stop entirely |
+| `agentMessaging.remote` | `"off"` | The temporary AP5-lite mode (#728): `"off"` or `"own-account"`, for the owner's own agents on the owner's own account, ahead of the signed roster (#55), which still gates everything beyond it. Off means nothing of it is active, and an install or upgrade never writes it. Read afresh for each message, so changing it needs no restart and switching it to `"off"` holds from the next message; a message not sent this way goes over Home Assistant. This slice holds only the setting: nothing sends or receives yet |
+| `agentMessaging.allowAllTargets` | `false` | Counts only while `agentMessaging.remote` is `"own-account"`. `false`: own agents may not type into allow-all sessions, and those targets fall back to Home Assistant. Left `false` until the owner decides otherwise |
 
 How a file that is wrong is read: one that cannot be read or parsed turns remote approval,
 launching, notifications and agent usage off and makes the host read-only ("this host's config.json has a
@@ -146,8 +149,11 @@ one shaped like a token is refused. In `launch`, a workspace entry that is wrong
 that is not `true` or `false`) is left out and said in the log, and any other value that is
 wrong turns launching off. In `homeAssistant`, any value that is wrong turns the connector off
 and is said in the log. In `devBox`, a `keepAwake` that is not `true` or `false`, or a `devBox` that
-is not an object, leaves keep-awake off; an interval that is not a whole number from 1 is 15. A
-setting someone may have meant as off is never read as on.
+is not an object, leaves keep-awake off; an interval that is not a whole number from 1 is 15. In
+`agentMessaging`, a `remote` that is not exactly `"off"` or `"own-account"`, or an `agentMessaging`
+that is not an object, is off, and an `allowAllTargets` that is not `true` or `false` is `false`;
+each is said, and `config set` refuses to write it. A setting
+someone may have meant as off is never read as on.
 
 ## Trusted peers: disposable-host foundation
 

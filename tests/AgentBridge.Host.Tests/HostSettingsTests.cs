@@ -1,4 +1,5 @@
 using AgentBridge.Host;
+using AgentBridge.Host.Core.AgentMessaging;
 using AgentBridge.Protocol;
 using Xunit;
 
@@ -336,6 +337,60 @@ public sealed class HostSettingsTests : IDisposable
         Assert.Equal(0, Run("config", "set", "devBox.intervalMinutes", "10"));
         var devBox = HostSettings.Load(folder).Settings.DevBox;
         Assert.Equal((true, 10), (devBox.KeepAwake, devBox.IntervalMinutes));
+    }
+
+    [Fact]
+    public void Remote_agent_messaging_is_off_and_all_targets_refused_without_a_file_or_a_setting()
+    {
+        Assert.Equal(AgentMessagingSettings.Default, With(null).Settings.AgentMessaging);
+        Assert.Equal(("off", false), (AgentMessagingSettings.Default.Remote, AgentMessagingSettings.Default.AllowAllTargets));
+        // An upgrade or install that writes other sections never turns it on.
+        var settings = With("""{ "devBox": { "keepAwake": true } }""").Settings;
+        Assert.False(settings.AgentMessaging.RemoteEnabled);
+        Assert.Empty(settings.AgentMessagingProblems);
+    }
+
+    [Theory]
+    [InlineData("""{ "agentMessaging": { "remote": "own_account" } }""", "agentMessaging.remote")]
+    [InlineData("""{ "agentMessaging": { "remote": true } }""", "agentMessaging.remote")]
+    [InlineData("""{ "agentMessaging": { "remote": "on", "allowAllTargets": true } }""", "agentMessaging.remote")]
+    [InlineData("""{ "agentMessaging": { "allowAllTargets": "yes" } }""", "agentMessaging.allowAllTargets")]
+    [InlineData("""{ "agentMessaging": "own-account" }""", "agentMessaging is not an object")]
+    public void A_remote_agent_messaging_value_that_cannot_be_read_means_off_and_says_so(string text, string said)
+    {
+        var settings = With(text).Settings;
+
+        Assert.False(settings.AgentMessaging.RemoteEnabled);
+        Assert.False(settings.AgentMessaging.AllowAllTargets);
+        Assert.Contains(settings.SectionProblems, p => p.Contains(said, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Allow_all_targets_counts_only_while_remote_is_own_account()
+    {
+        Assert.False(With("""{ "agentMessaging": { "allowAllTargets": true } }""").Settings.AgentMessaging.AllowAllTargets);
+        Assert.True(With("""{ "agentMessaging": { "remote": "own-account", "allowAllTargets": true } }""").Settings.AgentMessaging.AllowAllTargets);
+        Assert.False(With("""{ "agentMessaging": { "remote": "own-account" } }""").Settings.AgentMessaging.AllowAllTargets);
+    }
+
+    [Fact]
+    public void Switching_remote_agent_messaging_off_takes_effect_on_the_next_read_without_a_restart_and_a_newer_file_is_off()
+    {
+        Assert.Equal(0, Run("config", "set", "agentMessaging.remote", "own-account"));
+        Assert.Contains("no restart", Said);
+        Assert.True(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+
+        Assert.Equal(0, Run("config", "set", "agentMessaging.remote", "off"));
+        Assert.False(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+
+        // config set refuses a value that would be read as off for being wrong.
+        Assert.Equal(1, Run("config", "set", "agentMessaging.remote", "everyone"));
+        Assert.Contains("Not written", Said);
+
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), """{ "version": 99, "agentMessaging": { "remote": "own-account" } }""");
+        Assert.False(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
+        File.WriteAllText(Path.Combine(folder, HostSettings.FileName), "{ not json");
+        Assert.False(HostSettings.CurrentAgentMessaging(folder).RemoteEnabled);
     }
 
     [Fact]

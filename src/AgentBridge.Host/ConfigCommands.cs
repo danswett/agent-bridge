@@ -36,6 +36,7 @@ public static class ConfigCommands
         "homeAssistant.machineName", "homeAssistant.disposable", "homeAssistant.agentUserIds",
         "usage.publish", "usage.intervalSeconds", "usage.idleIntervalSeconds", "usage.copilotAccounts",
         "devBox.keepAwake", "devBox.intervalMinutes",
+        "agentMessaging.remote", "agentMessaging.allowAllTargets",
     ];
 
     static readonly string[] AgentKeys = ["path", "model", "effort", "context", "models", "efforts", "contexts", "extraArgs"];
@@ -187,7 +188,7 @@ public static class ConfigCommands
             parent[parts[^1]] = node;
         }
         if (!Save(path, root, error)) { return 1; }
-        output.WriteLine($"{(value is null ? "Unset" : "Set")} {key}. Restart agent-bridge-host serve to apply it.");
+        output.WriteLine($"{(value is null ? "Unset" : "Set")} {key}." + (key.StartsWith("agentMessaging.", StringComparison.Ordinal) ? " It applies from the next message; no restart is needed." : " Restart agent-bridge-host serve to apply it."));
         return 0;
     }
 
