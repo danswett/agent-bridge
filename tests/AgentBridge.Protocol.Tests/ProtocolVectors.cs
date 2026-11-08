@@ -511,6 +511,7 @@ public static class ProtocolVectors
             .Valid("refused", new AnswerResult(AnswerOutcome.Refused, "\"Spike\" needs an answer"))
             .Valid("refused-for-other-the-machine-cannot-send-yet", new AnswerResult(AnswerOutcome.Refused, AnswerReasons.Text(AnswerReasons.OtherNotSendable)) { Code = AnswerReasons.OtherNotSendable })
             .Valid("stale", new AnswerResult(AnswerOutcome.Stale, "the question is no longer pending"))
+            .Valid("stale-after-the-host-reset-a-part-answered-form", new AnswerResult(AnswerOutcome.Stale, "this question is out of date: the answer was left part answered at the machine, so the host cancelled the form there, and the session did not ask it again") { Code = AnswerReasons.FormReset })
             .Valid("typed-but-not-recorded", new AnswerResult(AnswerOutcome.Unconfirmed, "the answer was typed into the prompt, but the session did not record an answer within 15 seconds, so it may not have been submitted; check at the machine", AnswerStage.Typed))
             .Valid("recorded-differently", new AnswerResult(AnswerOutcome.Unconfirmed, "the session recorded a different answer for \"spike\"; check at the machine", AnswerStage.Recorded))
             .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"queued","reason":"later"}""")

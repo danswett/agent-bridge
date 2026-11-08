@@ -44,6 +44,7 @@ param staging = {
   customDomain: 'relay-staging.slipgates.com'
   blobStorageName: 'abblobstgwus2'
   rosterStorageName: 'abrosterstgwus2'
+  feedbackReaderIdentityName: 'id-agent-bridge-feedback-reader-staging'
   minReplicas: 0
   maxReplicas: 1
   cpu: '0.25'

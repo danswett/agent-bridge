@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "packageId": "Markdig",
+  "packageVersion": "0.43.0",
+  "licenseExpression": "BSD-2-Clause",
+  "packageSha512": "83ab75dfb2c5b201316b4b4cdf0115e3b94baf172a64861886d689ec118649820ed4aa76660562df4f7fa50e3227172a98ebeaec0bc89fe91ba7d4577f8a284d",
+  "repositoryUrl": "https://github.com/xoofx/markdig",
+  "repositoryCommit": "8c01cf054971a1ec4cd663edaca6e2d035236133",
+  "noticeFile": "license.txt",
+  "noticeSourceUrl": "https://github.com/xoofx/markdig/blob/8c01cf054971a1ec4cd663edaca6e2d035236133/license.txt",
+  "noticeSha256": "ae543293657b6782e3d4a76257dc4157210ce88a352ef8392065d3f04dcd88d1"
+}

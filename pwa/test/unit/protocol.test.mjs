@@ -148,3 +148,12 @@ test('Other the machine cannot send yet is read only by a reason this app knows,
   assert.equal(readAnswerResult({ outcome: 'refused', reason: 'r', code: 'somethingNewer' }).code, undefined);
   assert.equal(readAnswerResult({ outcome: 'delivered', code: 'otherNotSendable' }).code, undefined);
 });
+
+test('A stale answer keeps the form reset code, which is said only on a stale answer and never on a field', () => {
+  const field = (extra) => readQuestion({ id: 'q', kind: 'form', message: 'm', fields: [{ name: 'f', type: 'choice', options: [{ value: 'a' }], ...extra }] }).fields[0];
+  assert.equal(readAnswerResult({ outcome: 'stale', reason: 'r', code: 'formReset' }).code, 'formReset');
+  assert.equal(readAnswerResult({ outcome: 'stale', reason: 'r', code: 'otherNotSendable' }).code, undefined);
+  assert.equal(readAnswerResult({ outcome: 'refused', reason: 'r', code: 'formReset' }).code, undefined);
+  assert.equal(readAnswerResult({ outcome: 'unconfirmed', reason: 'r', code: 'formReset' }).code, undefined);
+  assert.equal(field({ otherUnavailable: 'formReset' }).otherUnavailable, null);
+});

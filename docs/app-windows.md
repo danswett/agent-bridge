@@ -342,9 +342,16 @@ into one folder with one version. An app update is a host update, so they never 
   is running (up to about 10 minutes for one that is slow to answer, usually under a minute) and
   Codex happens to be refreshing its sign-in, the person may have to sign in to Codex again.
   Keeping the probe alive across those is #974. The same holds for uninstall, whose hook has
-  30 s, and which then goes on;
-  `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon
-  task, waiting at most 10 s.
+  30 s, and which then goes on.
+  There is no `OnAfterUpdateFastCallback` (#497, #1167). It used to start the host through its
+  logon task and wait up to 10 s for it, but Velopack 1.2.161 ends every process in the package
+  as soon as a hook exits (`run_hook` in its `windows/util.rs`), so that host never survived.
+  Observed in Velopack's own log on one machine (`velopack_AgentBridgeApp.log`, 49 updates), that
+  hook took 4–15 s: 38 finished in 4.3–14.5 s, and 11 ran into its 15 s limit and were killed.
+  A host it started then ended at once matches the double start #497 reports after an update.
+  Every update here
+  restarts the app, from Restart to update or from the host's own update, and the restarted app
+  starts the host once.
   The app also stops the host itself before it hands an update to `Update.exe`, and starts it on
   launch if it is not running.
 * `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
@@ -385,6 +392,68 @@ into one folder with one version. An app update is a host update, so they never 
   when GitHub last answered, not when the shared copy was read.
   No static feed is published (no Pages copy of `releases.<channel>.json`, and every release is a
   pre-release, so `releases/latest/download` finds nothing), so the API list stays the source.
+* **The release list from the CDN first** (#927, on since the relay went live). Only the list is
+  rate limited, so SRE's relay at `releases.slipgates.com` caches just that response for every
+  machine. `ReleaseDiscovery.ReadCdnFirst` is on (a constant a release flips, never a setting), so
+  discovery asks
+  `https://releases.slipgates.com/repos/danswett/agent-bridge/releases?per_page=10&page=1` (the same
+  page and size as GitHub's request, pinned in code) before GitHub, whenever its shared copy is
+  due again, and GitHub only when the relay's answer isn't used (a 502 from the relay, which is
+  how it answers when it has no copy and GitHub fails, a body that isn't a list, no `Age`, and
+  so on). `feed.txt` always wins over both. The relay is untrusted transport, so its list is used only
+  if it answers 200 itself (no redirect is followed), within 10 seconds, and the list:
+  * is one GitHub could have given (the same checks as GitHub's), with no draft and every
+    release tagged `v<version>`;
+  * names every asset's download under
+    `https://github.com/danswett/agent-bridge/releases/download/<that release's tag>/<asset name>`
+    (and its API `url`, if any, under this repository's release assets), with nothing else in the
+    URL: a checksum only proves a package matches the feed that names it, so a list naming
+    another host's feed could name a hostile package;
+  * has something to install on this machine (a release carrying its channel's
+    `releases.<channel>.json`): an empty list, one cut short or one with nothing for this channel
+    is a failed read, never "nothing newer";
+  * offers this channel nothing older than GitHub's last list here offered it, nor than the
+    version installed. That is judged by the newest release carrying this channel's index (with
+    pre-releases only when they are on), which is what Velopack offers from it, never by the
+    newest tag anywhere in the list: a forged newer release with only another channel's index
+    must not pass while Velopack takes an older one. Only GitHub's own lists set that floor, so a
+    relay's list can't make later ones look old;
+  * says how old its copy is (`Age`, which the relay must send, `0` for a fresh fetch) and that
+    is at most an hour: a copy of unknown age is not used.
+
+  A relay's list kept in the shared file is judged again, the same way, for each check that
+  would be answered from it (its channel, pre-release choice, floor and installed version may
+  differ from the check that fetched it), and by its age then (`Age` at fetch plus the time
+  since), so a copy taken just under the hour isn't served past it; one that fails for that
+  check sends it to GitHub.
+
+  Feeds and packages still download from those GitHub URLs and are still checked against their
+  checksums as before (#719). A list from the relay counts as old as the relay says (`FetchedAt`
+  is when its copy was made, so `UpdateState.CheckedAt` and Settings say that), and it doesn't
+  end GitHub's backoff: only GitHub answering does, and if the relay then fails, the check is
+  held until GitHub's time as before. Which answered is kept with the list (`Source`, `cdn` or
+  `github`) and said in the app's and the host's logs at each ask, with the relay copy's age or
+  the plain reason it wasn't used, never an exception's text.
+
+  **GitHub must answer at least every 6 hours** (`ReleaseDiscovery.GithubRevalidateEvery`). The
+  relay says how old its copy is, so a compromised relay could serve an old but valid list with
+  `Age: 0` for ever, and the floor above only moves when GitHub answers: machines would be frozen
+  on that list and never offered anything newer. So when GitHub last answered a check (a 200, or a
+  304 for its list) is kept in the same state file, `release-discovery.json` (`gitHubAnsweredAt`,
+  written atomically; one file shared by the app and every profile's host, so a GitHub answer to
+  any of them counts for all), and only GitHub's own answer moves it, never the relay's. Once it
+  is 6 hours old, or missing, unreadable or in the future, neither the relay nor a relay's list
+  kept in the file is used for the check: GitHub is asked. If GitHub then fails (limited,
+  offline) the check fails as any GitHub failure does (the hold and backoff of #934), and is never
+  answered from the relay. A machine that has never had an answer from GitHub asks GitHub first.
+  Inside the 6 hours the relay is used as above.
+
+  **What a compromised relay can still do** (a risk both reviewers of #1175 accepted): choose
+  among this repository's genuine releases, whose feeds and packages still come from GitHub and
+  are checked against their checksums, and flip a release's pre-release flag, so a machine with
+  Include pre-releases off could be offered a genuine pre-release. It cannot offer anything older
+  than GitHub's last list here or than the installed version, and it cannot hold a machine on an
+  older genuine list for more than 6 hours.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and
@@ -424,6 +493,20 @@ into one folder with one version. An app update is a host update, so they never 
     update line and the app's machine rows show that line as it is. An Install pressed on another
     device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
     effect at once (the app looks again). Setting it from the phone is #801's.
+  * **Update now, from another device** (#1159; design in
+    [v1-update.md](protocol/v1-update.md#update-now-1159-design-not-built-yet), not built): the
+    person's phone, or this app on another machine, asks for the release ready here to go now,
+    accepting about a minute of downtime. The app then skips its two-minute wait, the backstop
+    and its own "Restart to update now?" dialog (the phone's confirmation stands in), but nothing
+    else: another profile running, a build folder, the probes' hold and the checked package copy
+    all apply, and it leaves only through the host's #805 quiet lease, so it never stops the host
+    while an answer or reply is being typed. If the machine is busier than the person confirmed
+    when it is ready (a turn started during the download), it keeps the download and installs at
+    the next quiet moment, using the settled gap, or when the person confirms again (Product, on
+    #1161), within the press's 15 minutes from its signature; after that the press is dropped and
+    the release stays ready. A press signed on that device within two minutes, `permissions.remoteManage` on, and
+    one restart in six hours of its own, then the two in six hours it shares with a remote restart
+    (owner, #1161).
   * **Ready:** a banner over every page, "Version *v* is ready. Restart to update." with
     **Restart to update** (an `InfoBar` with no close button, like the other app banners, so it
     stays while the release waits), and the same line and button in Settings. No toast: toasts
@@ -574,7 +657,8 @@ into one folder with one version. An app update is a host update, so they never 
     is a failure like any other); it holds for an hour, then two hours each time, until one
     succeeds, as Velopack's error carries no headers. The next check is made at the hold's end,
     however recently a press was answered. A check from Settings that succeeds meanwhile ends the
-    hold (#934), and a change of source (Include pre-releases, `feed.txt`) drops it. A press from a
+    hold (#934), unless its answer is a copy older than the refusal (the machine's shared one, or
+    the CDN's, #927), and a change of source (Include pre-releases, `feed.txt`) drops it. A press from a
     device in the meantime is answered with
     the reason without asking the feed. The reason goes to the devices as the last update's
     outcome (`failed`), once each time, though never over an update made, or a press answered,
@@ -683,21 +767,33 @@ connector's Install button on a machine the dashboard drives.
   waiting publish (`queue: max`, up to 100; GitHub cancels one arriving to a full queue, never
   one already waiting), where by default the next to arrive would replace the one waiting, so a
   re-run of an old run could leave a newer run's app unpublished; the order waiting publishes
-  start in is not promised, which is why the checks above keep the order.
+  start in is not promised, which is why the checks above keep the order. With signing on, the
+  `sign` job (Signing, above) runs between `publish-gate` and `publish`, and `publish` runs only
+  once `sign` has succeeded, so it never falls back to the unsigned packages.
 * **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
   --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
   each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
   `v<version>` on the exact commit; a client never sees half a release, nor a release with one
-  architecture (the script refuses to publish without both folders). Assets, x64's exactly as on
-  the first release (`v0.1.583`, published by hand) plus the delta:
+  architecture (the script refuses to publish without both folders). Assets retain x64's original
+  package/feed identities (`v0.1.583`, published by hand), with branded public downloads:
   `AgentBridgeApp-<v>-full.nupkg`, `AgentBridgeApp-<v>-delta.nupkg`,
-  `AgentBridgeApp-win-Setup.exe`, `AgentBridgeApp-win-Portable.zip`, `releases.win.json`
+  `Slipgates-win-Setup.exe`, `Slipgates-win-Portable.zip`, `releases.win.json`
   (this version's packages), `RELEASES` and `assets.win.json`; and Arm64's beside them,
   `AgentBridgeApp-<v>-win-arm64-full.nupkg`, `AgentBridgeApp-<v>-win-arm64-delta.nupkg`,
-  `AgentBridgeApp-win-arm64-Setup.exe`, `AgentBridgeApp-win-arm64-Portable.zip`,
+  `Slipgates-win-arm64-Setup.exe`, `Slipgates-win-arm64-Portable.zip`,
   `releases.win-arm64.json` and `assets.win-arm64.json`. Before anything goes up it checks that
   each folder's app is built for its channel's machine, so an Arm64 package can never land in
   x64's feed.
+  `vpk 1.2.161` derives Setup/Portable names from pack ID, not `--packTitle`, and has no separate
+  filename option. After packing, `pack-app.ps1` renames only those two downloads and their
+  `assets.<channel>.json` upload-index entries, before signature verification or upload.
+  The files' bytes and signatures, pack ID `AgentBridgeApp`, `.nupkg`/delta names, channel feeds
+  and `%LOCALAPPDATA%\AgentBridgeApp` install folder stay unchanged. `releases.<channel>.json`
+  lists only the unchanged packages. Older releases keep their actual historical asset names;
+  do not construct new-name URLs for them or replace historical CDN evidence with invented names.
+  Manifest v1 and site links must use the actual uploaded branded installers together (#1177),
+  with complete dual-architecture metadata and required SHA-256; otherwise keep the release-page
+  fallback rather than a partial or old-name manifest. Portable files do not expand schema v1.
 * **Release notes:** `build/release-notes.ps1` lists the commits since the latest release, newest
   first (GitHub's compare API; the commit alone when that cannot be read), and `pack-app.ps1
   -ReleaseNotes` packs them (`vpk pack --releaseNotes`), so they are in the feed's
@@ -741,7 +837,7 @@ connector's Install button on a machine the dashboard drives.
 * **Pull requests** prove it without publishing: each app job runs the same script with
   `-DryRun` on its own folder, which checks the folder and its delta against the latest release
   as above, has vpk read it into a scratch feed (`vpk upload local`) that must list that
-  channel's packages and nothing else,
+    channel's packages once each, with this pack id, version, type, size and hash, and nothing else,
   and prints what it would upload, publish and prune against the real releases (in the job
   summary too), writing nothing.
 * **Release builds only.** The app job packs with `pack-app.ps1 -Release` exactly when the run
@@ -763,24 +859,24 @@ connector's Install button on a machine the dashboard drives.
     longer gives the G6 refusal.
 
   Nothing else reads it: not updates, delivery, migration or the relay.
-* A pre-release is unsigned (below), but attested: once `publish` has uploaded it (not on a
+* A pre-release is unsigned until the owner turns signing on (Signing, below), but attested: once `publish` has uploaded it (not on a
   re-run that finds it already out, whose rebuilt SBOMs would not be of it), CI's `attest` job downloads
   the release's packages back (the full and delta packages, `Setup.exe` and `Portable.zip` of
   each architecture) and records, in GitHub's attestation store, SLSA build provenance for each
   (the workflow run and commit that built it) and its architecture's CycloneDX SBOM (every
   NuGet package and project in the published folder, read from its `.deps.json` files by Trivy
   in the `app` job, which keeps it as the `sbom-<runtime>-<version>` artifact on every build).
-  To check a download: `gh attestation verify AgentBridgeApp-win-Setup.exe -R
+  To check a download: `gh attestation verify Slipgates-win-Setup.exe -R
   danswett/agent-bridge`, and add `--predicate-type https://cyclonedx.org/bom` for the SBOM.
 
 To install the latest, download the installer for the machine from the newest pre-release at
-<https://github.com/danswett/agent-bridge/releases> and run it (SmartScreen: More info, then Run
-anyway):
+<https://github.com/danswett/agent-bridge/releases> and run it (unsigned, or signed by a publisher
+SmartScreen does not know yet: More info, then Run anyway):
 
 | Machine | Installer |
 |---|---|
-| x64 (Intel or AMD) | `AgentBridgeApp-win-Setup.exe` |
-| Windows on Arm (Snapdragon and other Arm64) | `AgentBridgeApp-win-arm64-Setup.exe` |
+| x64 (Intel or AMD) | `Slipgates-win-Setup.exe` |
+| Windows on Arm (Snapdragon and other Arm64) | `Slipgates-win-arm64-Setup.exe` |
 
 Settings, System, About, "System type" says which. The Arm64 installer refuses an x64 machine.
 The x64 one does install on Windows on Arm, but runs under emulation, which is untested (#222),
@@ -789,7 +885,7 @@ the Arm64 one (the host's profile in `%LOCALAPPDATA%\AgentBridge` stays). From a
 
 ```powershell
 $arm = (Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture -eq 12   # 12: ARM64, also from an emulated shell
-$setup = if ($arm) { 'AgentBridgeApp-win-arm64-Setup.exe' } else { 'AgentBridgeApp-win-Setup.exe' }
+$setup = if ($arm) { 'Slipgates-win-arm64-Setup.exe' } else { 'Slipgates-win-Setup.exe' }
 $tag = gh release list -R danswett/agent-bridge -L 1 --exclude-drafts --json tagName --jq '.[0].tagName'
 gh release download $tag -R danswett/agent-bridge -p $setup
 & ".\$setup"
@@ -801,15 +897,87 @@ offers **Restart to update**, or Settings, **Check for updates**, then **Restart
 takes it there at once; turning off "Include
 pre-releases" in Settings stops it finding them until there are full releases.
 
-### Signing (later)
+### Signing
 
-Releases are unsigned for now. The hook is in place: `build/pack-app.ps1` passes
-`-SignParams` (signtool arguments) or `-AzureTrustedSignFile` (an Azure Trusted Signing
-`metadata.json`) to `vpk pack`, which signs every executable in the package and `Setup.exe`
-before the delta and installer are built. To turn it on, hold the certificate or Trusted Signing
-account as a repository secret and add the argument to the app job's pack step for pushes to
-main only (a pull request from a fork gets no secrets). Until then a downloaded `Setup.exe` meets
-SmartScreen and, where it is on, Smart App Control.
+The owner chose **Azure Artifact Signing** (formerly Trusted Signing), reached from CI over
+OIDC (#734). The code is in place but **off**: until the owner turns it on, every release is
+unsigned, as before, and an unsigned release is a legacy build, not a dogfood-ready one. A
+downloaded `Setup.exe` then meets SmartScreen and, where it is on, Smart App Control.
+
+**How it signs.** In a job of its own, `sign`, which runs only for the commit `main` is at, after
+every check has passed (`publish-gate`), and with signing on. Signing is kept out of the jobs
+that build and run the source: the `app` jobs publish, pack and self-test unsigned, with no
+OIDC token and no Azure session, and with signing on each uploads its publish folder as it
+published it, before anything runs the app from it. The `sign` job builds and runs nothing from
+the source: it downloads both folders and packs each with `build/pack-app.ps1 -PackOnly`, which
+reads the folder it is given, checks its files, host build and architecture, and packs it,
+publishing nothing. There, `azure/login` signs in to Azure with the run's OIDC token: no secret,
+password or certificate is stored anywhere, and the signing key never leaves Artifact Signing's
+HSM. `build/app-signing.ps1` writes the `metadata.json` (endpoint, account and certificate
+profile, and only the Azure CLI credential allowed), and `pack-app.ps1 -AzureTrustedSignFile`
+hands it to `vpk pack`, which signs through signtool and the Artifact Signing plug-in (on .NET
+8), with an RFC 3161 timestamp from `timestamp.acs.microsoft.com`, every executable it packs and
+`Setup.exe`, before it builds the delta and the installer. Both architectures are signed in that
+one job (on x64, since signing only reads the Arm64 files), so a release is signed whole or not
+at all; a signing failure fails the job, and `publish`, which needs it, does not run. The job
+signs out of Azure after it, and `publish` takes the signed packages. With signing off, `sign`
+only notes that on Linux and `publish` takes the `app` jobs' unsigned packages, as before.
+
+**What is checked, and where.** With signing on, nothing unsigned is published:
+
+* `pack-app.ps1 -RequireSignature -SignerEku <eku>` refuses before it builds anything if signing
+  could not happen (`-NoPack`, no signing argument, no metadata file). After `vpk pack` it checks,
+  of the version it just packed: `Setup.exe`; in the full package, every `.exe`, `.dll` and
+  `.node`, which must include `AgentBridge.exe`, `agent-bridge-host.exe`,
+    `agent-bridge-hostw.exe`, the NativeAOT `agent-bridge-host-hook.exe` and
+    `agent-bridge-injector.exe`,     the updater (`Squirrel.exe`) and the one launcher stub vpk names after
+        the pack title, `lib\app\Agent Bridge_ExecutionStub.exe`; and in `Portable.zip`, the same
+        executables under `current\` and, at its root, exactly `Update.exe` and the launcher
+        `Agent Bridge.exe`. Each must have a valid Authenticode signature. Ours (`AgentBridge*`,
+  `agent-bridge*`, the updater, the stub, the launcher and `Setup.exe`) must be signed by the
+  pinned publisher: a certificate with the code-signing EKU, Artifact Signing's Public Trust EKU
+  and the owner's own identity EKU (`1.3.6.1.4.1.311.97.x.y.z.w`, which the owner's validated
+  identity alone has), and a timestamp, so the signature outlives the short-lived certificate.
+  Anything else in the package (the .NET runtime, the Windows App SDK) must carry its vendor's
+  valid signature.
+* `publish-prerelease.ps1 -RequireSignature -SignerEku <eku>` checks each architecture's folder
+  again, and that both have the same signer, before anything is created. Then, with the draft's
+  assets uploaded and before it is published, it downloads each architecture's full and delta
+  packages, `Setup.exe`, `Portable.zip` and feed back from the draft, compares their SHA-256 with
+  what it checked, checks the feed lists only those packages, once each, with this pack id,
+  version and type (full or delta), their sizes and hashes, and
+  checks the signatures once more. Any difference leaves the release a draft.
+* Authenticode covers the executables and `Setup.exe`. The `.nupkg` packages (full and delta) are
+  zip files and carry no Authenticode signature: their integrity is the feed's SHA-256 and size,
+  which the updater checks, the delta's rebuild check, and the release's attestations (above).
+
+**Turning it on** is the owner's, outside this repository, in this order:
+
+1. An Azure subscription with an Artifact Signing account, identity validation of the publisher
+   and a **Public Trust** certificate profile.
+2. An Entra app registration with one federated credential, subject
+   `repo:danswett/agent-bridge:environment:signing`, given the *Artifact Signing Certificate
+   Profile Signer* role on that profile only.
+3. A GitHub environment `signing`, deployable from `main` only, with the variables
+   `APP_SIGNING_CLIENT_ID`, `APP_SIGNING_TENANT_ID`, `APP_SIGNING_ENDPOINT` (for example
+   `https://wus2.codesigning.azure.net/`), `APP_SIGNING_ACCOUNT` and `APP_SIGNING_PROFILE` (or the
+   same as repository variables). None of them is a secret.
+4. Repository variables `APP_SIGNING_IDENTITY_EKU` (the identity's EKU from the certificate
+   profile) and, last, `APP_SIGNING` = `true`. These two are repository variables because the
+   `publish` job, which checks the signatures, has no environment.
+
+From the next push to main, both architectures are signed and checked. If any step fails (a
+missing variable, a refused sign-in, a file the publisher did not sign), that push publishes
+nothing; it never falls back to unsigned. Unsetting `APP_SIGNING` returns to unsigned releases.
+Pull requests and forks never sign, and their OIDC tokens are trusted by no Azure identity.
+
+**Not yet proven.** The tests (`build/test-publish-prerelease.ps1`) use fixture certificates and
+stand-ins for `vpk` and `gh`; they show the checks refuse what they should, not that Azure signs.
+The first signed release must be checked by hand (`Get-AuthenticodeSignature` on an installed
+copy's files) on both architectures; its signed `Setup.exe` is not install-tested in CI, whose
+self-tests run the unsigned package built from the same publish folder. And signing is not reputation: SmartScreen can still warn on
+the first downloads of a new publisher until its reputation builds, so a clean PC installing
+without a SmartScreen prompt (#747) has to be checked on a clean PC, not assumed.
 
 ### Starting with Windows
 
@@ -818,7 +986,11 @@ entry that starts the app with `--background` into the notification area, so toa
 arriving after a restart. The app needs no restart-on-failure and nothing more than
 Explorer's startup list, so a `Run` entry is enough for it. Either can be turned off in
 Settings, and stays off. Closing the window keeps the app in the notification area; its
-menu quits it, which leaves the host running.
+menu opens the window, quits it (which leaves the host running), or offers Send feedback
+(#738). Send feedback, there and at the top of Settings, opens one dialog saying feedback
+isn't available in the Windows app yet, with only Close: nothing is collected or sent, and
+there is no plaintext fallback until the encrypted upload lands. The self-test opens it from
+both (the tray's choice through `TrayIcon.Run`, from a hidden window).
 
 An elevated app (for example one started by an elevated installer) never starts the host
 directly: the host would be elevated too, unable to type into ordinary consoles and
@@ -973,7 +1145,8 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   (`agent-bridge-host migrate` / `rollback`, [migration.md](migration.md)); the page needs
   to show the dry run's report, confirm, and show the result, and it cannot be reached through
   the relay.
-* Code signing.
+* Turning code signing on: the owner's Azure Artifact Signing account, identity validation
+  and the `signing` environment (Signing, above).
 * The first-run wizard's agent detection and winget installs.
 
 ## Testing
@@ -1037,6 +1210,42 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   the package (`build/publish-prerelease.ps1
   -DryRun`) and uploads `Setup.exe` and the packages as an artifact, which the `publish` job
   publishes for a push to main.
+* Distribution notices (#744): `build/app-notices.ps1` copies the project's `LICENSE` verbatim
+  to `LICENSE.txt`, creates `SOURCE.txt` with exact-commit source/archive/build/install links,
+  and bundles restored, version-specific NuGet licence/copyright/notice files under
+  `ThirdPartyNotices/packages/`, indexed by `THIRD-PARTY-NOTICES.txt`. Its hashed manifest binds
+  those files, including the existing font OFLs, to the build version, architecture and commit.
+  Dependency identities come from the published `.deps.json` files, not a global cache sweep.
+  Missing package metadata, declared licence files or all notice material fails packing.
+  An expression-only package with no notice files may use reviewed, offline material in
+  `build/notices/<lowercase-id>/<version>/`: `provenance.json` must match its exact package
+  identity, declared SPDX expression and repository URL/commit, the restored `.nupkg` SHA-512,
+  and the upstream notice's SHA-256. The notice and provenance are bundled verbatim and hashed;
+  no network lookup or SPDX-only fallback is allowed. Markdig 0.43.0 (BSD-2-Clause) and
+  Velopack 1.2.161 (MIT) supply their upstream notices this way. A package declaring only a
+  licence URL may instead pin the material obtained through that exact declared URL:
+  provenance must match the package's
+  licence URL and copyright, its notice source must be that URL, and both archive and notice
+  hashes are still mandatory. Microsoft.Windows.SDK.NET.Ref 10.0.22621.57 supplies the
+  Microsoft SDK's verbatim RTF terms this way, recording the resolved source URL without
+  inventing an SPDX expression or a repository commit. Its licence remains UNKNOWN in SBOM
+  enrichment rather than being relabelled as an open-source licence.
+  Different versions, unreviewed packages or changed material
+  fail closed; this does not assert licence compatibility or invitation clearance.
+  A pack-only signing operation verifies this bundle without regenerating it or requiring
+  restored packages on the credential-bearing signer.
+  CI checks the actual portable and full-package entries, and the silently installed copy,
+  byte-for-byte against the notice inventory. `app-self-test-<runtime>` includes
+  `installed/distribution-evidence.json`: the installer and archive SHA-256 values, exact archive
+  file lists, installed file hashes and source identity. The SBOM step adds package-declared
+  SPDX expressions or verbatim declared licence-file text where present, and the project's
+  verbatim AGPL text for its published project entries; it retains existing fields and warns
+  rather than inventing a licence for an unmatched component.
+  These checks are packaging evidence, not compatibility certification, an exhaustive native
+  redistribution audit, or invitation clearance. The final candidate still needs Compliance's
+  actual redistributed-file/terms and corresponding-source disposition. In particular, CI's
+  installed proof is of its unsigned installer; it must not be relabelled as proof of the
+  subsequently signed installer described in **Signing** above.
 * The `product` job runs the tests on Linux, Windows x64 and Windows on Arm, including the
   NativeAOT injector typing into a real console and the NativeAOT hook, each built for the
   runner's own architecture.

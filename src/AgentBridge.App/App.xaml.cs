@@ -86,7 +86,7 @@ public partial class App : Application
 
         // One updater for Settings and the automatic updates alike, observed so that what either
         // does is what the account's other devices are told (#51).
-        var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile, manager.Layout.ProfileFolder));
+        var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile, manager.Layout.ProfileFolder, AppLog.Write));
         IAppAtSignIn atSignIn = installed ? new RunKey(Paths.Exe) : new NoRunKey();
         var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay) { LogTo = AppLog.Write, OpenGuideAtFirstLaunch = installed && !options.Demo && options.SelfTest is null && !options.Background && !options.ToastActivated };
 
@@ -182,7 +182,7 @@ public partial class App : Application
             return;
         }
 
-        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), Quit);
+        tray = new TrayIcon(window.Handle, Path.Combine(AppContext.BaseDirectory, AppAssets.Icon), () => ShowWindow(null, null), window.FeedbackFromTray, Quit);
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         timer.Tick += (_, _) =>
         {
@@ -390,7 +390,7 @@ public partial class App : Application
 // The relay the app offers to sign in to, until the person names another.
 static class HostDefaults
 {
-    public const string Relay = "https://relay.bad-duck.com";
+    public const string Relay = "https://relay.slipgates.com";
 }
 
 // Stand-ins where the real thing would touch the machine: a development copy and the demo

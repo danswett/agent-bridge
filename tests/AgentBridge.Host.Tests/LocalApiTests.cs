@@ -4,6 +4,7 @@ using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Usage;
+using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -28,6 +29,8 @@ public sealed class LocalApiTests : IAsyncLifetime
     HostControl control = null!;
     AgentReadinessService readiness = null!;
     AgentSetupService setup = null!;
+    AgentVerificationService verification = null!;
+    readonly AgentVerificationTests.Launcher verificationLauncher = new();
     UpdateService updates = null!;
     LocalServer server = null!;
     readonly P256KeyPair hostKey = P256KeyPair.Generate();
@@ -49,6 +52,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     RelayAccount? credential;
     string? probesFinishing;
     int probeHolds;
+    Func<Task<IDisposable?>> prepareStop = () => Task.FromResult<IDisposable?>(new CancellationTokenSource());
 
     public LocalApiTests()
     {
@@ -75,12 +79,14 @@ public sealed class LocalApiTests : IAsyncLifetime
         setup = new AgentSetupService(new StandaloneHooks(profile,
             new IntakeState.AgentHomes(roots.CopilotHome, roots.ClaudeHome, roots.CodexHome), hookSource,
             Path.Combine(profile, "no-legacy"), () => null, new SetupAgents(), new EmptyMarketplaces()), () => null);
+        verification = new AgentVerificationService(source, verificationLauncher, new AgentVerificationTests.Notices(), () => null);
         control = new HostControl(new HostControlOptions
         {
             Agents = readiness,
             AgentSetup = setup,
             AgentInstall = new AgentInstallService(profile, new SetupAgents(), () => { }, new NoCommands(),
                 () => throw new InvalidOperationException("an existing fixture CLI must not invoke WinGet"), _ => { }),
+            AgentVerification = verification,
             Updates = updates,
             Profile = "test",
             Folder = profile,
@@ -98,6 +104,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
             SignedIn = (account, relay) => saved = (account, relay),
             Stop = () => Interlocked.Increment(ref stops),
+            PrepareStop = () => prepareStop(),
             Restart = () => Interlocked.Increment(ref restarts),
             HoldProbes = () => { Interlocked.Increment(ref probeHolds); return probesFinishing; },
         });
@@ -112,6 +119,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         authorization.Dispose();
         hostKey.Dispose();
         if (readiness is not null) { await readiness.DisposeAsync(); }
+        if (verification is not null) { await verification.DisposeAsync(); }
         await source.DisposeAsync();
         f.Dispose();
         try { Directory.Delete(profile, recursive: true); } catch (IOException) { }
@@ -304,6 +312,24 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(0, restarts);
     }
 
+    [Fact]
+    public async Task The_local_app_explicitly_starts_and_cancels_verification_and_status_carries_the_same_run()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
+        var request = new AgentVerificationRequest(Guid.NewGuid().ToString("D"), "copilot", "Test");
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerify, request));
+        Assert.Equal(0, verificationLauncher.Calls);
+
+        var report = await ch.CallAsync<AgentVerificationReport>(HostOps.AgentsVerify, request with { Confirmed = true });
+        await verificationLauncher.Called.Task.WaitAsync(Patience);
+        Assert.Equal(report.Request, Assert.Single((await ch.CallAsync<HostStatus>(HostOps.Status)).AgentVerifications!).Request);
+        var cancelled = await ch.CallAsync<AgentVerificationReport>(HostOps.AgentsVerifyCancel, new AgentVerificationCancel(request.Request));
+
+        Assert.Equal(VerificationState.Cancelled, cancelled.State);
+        Assert.Equal(1, verificationLauncher.Calls);
+    }
+
     [Theory]
     [InlineData(CallerKind.Agent)]
     [InlineData(CallerKind.Other)]
@@ -327,6 +353,25 @@ public sealed class LocalApiTests : IAsyncLifetime
         await Assert.ThrowsAsync<HostErrorException>(() =>
             ch.CallAsync(HostOps.AgentsInstall, new AgentInstallRequest("claude", true)));
         await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsInstallCancel));
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Verification_and_its_cancellation_require_a_fresh_local_app_identity(CallerKind kind)
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+
+        var request = new AgentVerificationRequest(Guid.NewGuid().ToString("D"), "copilot", "Test", Confirmed: true);
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerify, request));
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsVerifyCancel, new AgentVerificationCancel(request.Request)));
+
+        Assert.Equal(0, verificationLauncher.Calls);
+        Assert.Empty(verification.Snapshot);
+        Assert.DoesNotContain(HostOps.AgentVerificationCapability, (await ch.HelloAsync()).Capabilities);
     }
 
     sealed class SetupAgents : IAgentLocator
@@ -604,10 +649,10 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         var stopping = await ch.CallAsync(HostOps.Stop);
         Assert.True(stopping.GetProperty("stopping").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref stops) == 1, "the stop to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref stops) == 1, "the stop to follow its response", Patience);
         var restarting = await ch.CallAsync(HostOps.Restart);
         Assert.True(restarting.GetProperty("restarting").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
     }
 
     [Fact]
@@ -628,6 +673,23 @@ public sealed class LocalApiTests : IAsyncLifetime
             Assert.Equal($"unknown op {op}", response.GetProperty("error").GetString());
         }
         Assert.Equal(0, Volatile.Read(ref stops));
+    }
+
+    [Fact]
+    public async Task A_stop_that_times_out_on_a_delivery_refuses_without_stopping_the_host()
+    {
+        var gate = new DeliveryGate();
+        using var delivery = gate.TryEnterDelivery();
+        Assert.NotNull(delivery);
+        prepareStop = () => gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50));
+        var ch = await ConnectAsync();
+
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Stop));
+
+        Assert.Contains("delivery or typing is still in progress", refused.Message);
+        Assert.Equal(0, Volatile.Read(ref stops));
+        using var next = gate.TryEnterDelivery();
+        Assert.NotNull(next);
     }
 
     // ---- §6.3 invariant 13: no agent session stops or restarts its host ----
@@ -668,7 +730,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         f.Processes.Exit(AgentKind.Copilot, parent.Id);
         await source.RefreshAsync();
         Assert.True((await ch.CallAsync(HostOps.Restart)).GetProperty("restarting").GetBoolean());
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the app's restart", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the app's restart", Patience);
     }
 
     [Fact]
@@ -758,7 +820,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(0, Volatile.Read(ref probeHolds));
         await ch.CallAsync(HostOps.Restart);
 
-        await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
+        await HostWait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the restart to follow its response", Patience);
         Assert.Equal(0, Volatile.Read(ref stops));
     }
 

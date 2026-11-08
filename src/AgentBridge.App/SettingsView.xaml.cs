@@ -15,6 +15,10 @@ public sealed partial class SettingsView : UserControl
 
     public SettingsView() => InitializeComponent();
 
+    internal event Action? FeedbackRequested;
+
+    void OnSendFeedback(object sender, RoutedEventArgs e) => FeedbackRequested?.Invoke();
+
     public SettingsViewModel ViewModel
     {
         get => viewModel!;
@@ -106,6 +110,24 @@ public sealed partial class SettingsView : UserControl
     async void OnSetUpAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: false);
     async void OnRemoveAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: true);
     async void OnCancelAgentInstall(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CancelAgentInstallAsync(); } }
+    async void OnLoadVerification(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.LoadVerificationChoicesAsync(); } }
+    async void OnRefreshVerification(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.RefreshVerificationAsync(); } }
+    async void OnCancelVerification(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is { } v && sender is Button { Tag: string request }) { await v.CancelVerificationAsync(request); }
+    }
+    async void OnRunVerification(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanRunVerification: true } v) { return; }
+        var selection = v.CaptureVerificationSelection();
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot, Title = "Open a new verification session?",
+            Content = selection.Consent, PrimaryButtonText = "Open test session", CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.RunVerificationAsync(selection); }
+    }
 
     async void OnInstallAgent(object sender, RoutedEventArgs e)
     {

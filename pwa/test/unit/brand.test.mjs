@@ -35,8 +35,8 @@ test('a new name in js/brand.js reaches every place the page, the manifest and t
   const page = renamed['index.html'];
   assert.match(page, /<title>Renamed &amp; &quot;Co&quot; &lt;App&gt;<\/title>/);
   assert.match(page, /aria-label="Renamed &amp; &quot;Co&quot; &lt;App&gt;: sessions"/);
-  assert.equal(page.match(/<span(?: class="[^"]*")? data-brand>Renamed &amp; &quot;Co&quot; &lt;App&gt;<\/span>/g).length, 3,
-    'the wordmark, sign-in and the empty machines list');
+  assert.equal(page.match(/<span(?: class="[^"]*")? data-brand>Renamed &amp; &quot;Co&quot; &lt;App&gt;<\/span>/g).length, 4,
+    'the wordmark, sign-in, empty machines list and feedback service');
   // The worker, run with the new name, titles a push that has none with it.
   let shown = null;
   const self = { registration: { scope: 'https://example.test/app/', showNotification: async (title) => { shown = title; } }, addEventListener: (type, fn) => { if (type === 'push') { self.push = fn; } }, skipWaiting() {}, clients: {} };

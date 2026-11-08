@@ -74,6 +74,19 @@ public class AnswerTests
         Assert.Null(Answers.Check(Form(field), Answer("""{"answer":"b"}""")));
     }
 
+    // #1123: a reset form's code is said on a retired answer only. It is no field's
+    // OtherUnavailable, and no refusal's reason is read back as it.
+    [Fact]
+    public void The_form_reset_code_says_the_answer_was_not_delivered_and_is_never_a_fields_reason()
+    {
+        Assert.True(AnswerReasons.Known(AnswerReasons.FormReset));
+        Assert.Equal("The session moved on from this question. Your answer was not delivered.", AnswerReasons.Text(AnswerReasons.FormReset));
+        Assert.Null(AnswerReasons.Code(AnswerReasons.Text(AnswerReasons.FormReset)));
+        Assert.False(AnswerReasons.OnField(AnswerReasons.FormReset));
+        var field = Choice("answer") with { OtherUnavailable = AnswerReasons.FormReset };
+        Assert.NotEqual(AnswerReasons.Text(AnswerReasons.FormReset), Answers.Check(Form(field), Answer("""{"answer":{"other":"DuckDB, embedded"}}""")));
+    }
+
     [Fact]
     public void A_prompt_marked_for_the_machine_takes_no_answer_however_well_formed()
     {

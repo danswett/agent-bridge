@@ -36,6 +36,7 @@ public sealed class HostControlOptions
     // Keeps a finished sign-in (the profile's account and relay) and starts using it.
     public required Action<SignInResult, Uri> SignedIn { get; init; }
     public required Action Stop { get; init; }
+    public Func<Task<IDisposable?>>? PrepareStop { get; init; }
     public required Action Restart { get; init; }
     // host.probes.hold: holds the usage probes whose process goes with the host, and says why the
     // host should not be stopped yet, or null when it may be (#238).
@@ -65,6 +66,7 @@ public sealed class HostControlOptions
     public AgentInstallService? AgentInstall { get; init; }
     // Host-only seam for graceful departures; it is not exposed as a pipe/relay operation.
     public LifecycleCoordinator? Lifecycle { get; init; }
+    public AgentVerificationService? AgentVerification { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -100,6 +102,7 @@ public sealed class HostControl
         if (options.Agents is { } agents) { agents.Changed += Changed; }
         if (options.AgentSetup is { } setup) { setup.Changed += Changed; }
         if (options.AgentInstall is { } install) { install.Changed += Changed; }
+        if (options.AgentVerification is { } verification) { verification.Changed += Changed; }
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -141,6 +144,7 @@ public sealed class HostControl
     public RelayStatus RelayNow => Volatile.Read(ref relay);
     public bool HasAgentSetup => options.AgentSetup is not null;
     public bool HasAgentInstall => options.AgentInstall is not null;
+    public bool HasAgentVerification => options.AgentVerification is not null;
 
     HostStatus StatusLocked(bool fresh = false)
     {
@@ -170,6 +174,7 @@ public sealed class HostControl
             Agents = options.Agents?.Snapshot,
             AgentInstallation = options.AgentInstall?.Snapshot,
             SignInDevices = options.SignInDevices?.Invoke(Volatile.Read(ref appDevice)),
+            AgentVerifications = options.AgentVerification?.Snapshot,
         };
     }
 
@@ -212,6 +217,12 @@ public sealed class HostControl
                     ?? throw new ArgumentException("CLI installation needs an agent and explicit consent."));
             case HostOps.AgentsInstallCancel when options.AgentInstall is not null:
                 return new { cancellationRequested = options.AgentInstall.Cancel() };
+            case HostOps.AgentsVerify when options.AgentVerification is not null:
+                return options.AgentVerification.Start(Read<AgentVerificationRequest>(data)
+                    ?? throw new ArgumentException("Verification needs a request UUID, agent, workspace and explicit confirmation."));
+            case HostOps.AgentsVerifyCancel when options.AgentVerification is not null:
+                return options.AgentVerification.Cancel((Read<AgentVerificationCancel>(data)
+                    ?? throw new ArgumentException("Choose the verification to stop observing.")).Request);
             case HostOps.SignIn:
                 return await SignInAsync(Read<SignInRequest>(data) ?? new SignInRequest());
             case HostOps.SignInCancel:
@@ -227,6 +238,12 @@ public sealed class HostControl
                 return RelayAccount();
             case HostOps.Stop:
                 log("stopping: asked by the app");
+                var prepared = options.PrepareStop is { } prepare ? await prepare() : null;
+                if (options.PrepareStop is not null && prepared is null)
+                {
+                    throw new InvalidOperationException("a delivery or typing is still in progress; the host was not stopped, try again later");
+                }
+                ServedRequest.Current?.OnResponded(sent => { if (!sent) { prepared?.Dispose(); } });
                 return new ChannelReply(new { stopping = true }, _ => { options.Stop(); return Task.CompletedTask; });
             case HostOps.Restart:
                 log("restarting: asked by the app");

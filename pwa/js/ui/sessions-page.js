@@ -30,6 +30,7 @@ import { enter, scrollBehavior, watchLane } from './motion.js';
 import { QUESTION_ARRIVAL_GUARD_MS, watchMoves } from './session-card.js';
 import { stopReceipts } from './receipt.js';
 import { CUE_MS } from '../return-grace.js';
+import { PaneDividers } from './pane-dividers.js';
 import { UPDATING } from './hold.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
@@ -235,6 +236,14 @@ export class SessionsPage {
     this.view.onInspector = () => this.#toggleInspector();
     for (const m of [this.wide, this.phone]) { m.addEventListener('change', () => this.#resized()); }
     this.#drawPanes();
+    // The widths of the panes from 760 up (#1030): the dividers only draw on those widths.
+    this.dividers = $('list-divider') && $('sessions')
+      ? new PaneDividers({
+        root: $('sessions'), list: $('list-divider'), inspector: $('inspector-divider'), storage,
+        inspectorShown: () => this.wide.matches && !this.#inspectorHidden,
+        onChange: () => { this.view.layoutChanged(); this.view.selected?.reshow(); },
+      })
+      : null;
     // Needs you · N (#165): above the list, and apart from it. Its count is the app's badge.
     this.lane = new NeedsYouLane($('needs-you'), hosts.sessions, {
       answering: (hostId) => this.answering(hostId),
@@ -696,6 +705,7 @@ export class SessionsPage {
     const was = body.dataset.sessionOpen;
     body.dataset.sessionOpen = this.#open && this.view?.selected ? 'true' : 'false';
     body.dataset.inspector = this.#inspectorHidden ? 'hidden' : 'shown';
+    this.dividers?.refresh();
     const none = this.$('no-session');
     if (none) { none.hidden = !!this.view?.selected; }
     // Push and pop (ui.md §5.3): on a phone the screen that comes covers the other at once, and

@@ -354,7 +354,19 @@ async Task<int> ServeAsync(HostHandover handover)
     if (trustedPeers.Enabled) { Log("trusted-peer enforcement is on; only explicit full-key pins grant remote authority"); }
 
     using var stop = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+    var deliveryGate = new DeliveryGate();
+    var plannedStops = new PlannedStops(deliveryGate, TimeSpan.FromSeconds(15), Log);
+    Task<IDisposable?> PrepareStop() => plannedStops.PrepareStopAsync();
+    async Task StopOnCancelAsync()
+    {
+        try { if (await PrepareStop() is not null) { stop.Cancel(); } }
+        catch (Exception ex) { Log($"the host could not prepare to stop: {ex}"); }
+    }
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        _ = StopOnCancelAsync();
+    };
     // Who drives each session (the purple edge): one record for the host's own clients and the
     // Home Assistant cards, so both show the same.
     var drivers = new SessionDrivers();
@@ -364,7 +376,9 @@ async Task<int> ServeAsync(HostHandover handover)
     // the scan a first reply would have paid for (137 ms cold, 6 ms warm, measured in #599), and
     // its command lines are already known.
     var processes = new SystemProcessInspector();
-    await using var source = new SessionSource(options, processes, drivers: drivers);
+    var attempts = new AttemptLedger(Path.Combine(identity.Folder, "answer-attempts.json"), log: Log);
+    await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed);
+    attempts.Changed += source.AnswerAttemptsChanged;
     // Writes to transcripts as the source's watcher hears them, so a delivery confirms as soon as
     // the agent records what it typed rather than at its next poll.
     var writes = new TranscriptWrites();
@@ -384,8 +398,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // types, stops or launches still looks afresh, immediately before it acts.
     var haProbe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
     var g5 = new SharedAgentHaBridgeProbe((IAgentHaBridgeProbe?)haProbe ?? new NoAgentHaBridge());
-    var deliveryGate = new DeliveryGate();
-    var (answers, replies, attachments, stops) = Typists(source, g5, processes, writes, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled, deliveryGate);
+    var (answers, replies, attachments, stops) = Typists(source, g5, processes, writes, Path.Combine(identity.Folder, "attachments"), attempts, relayBlobs, codexUnsettled, deliveryGate);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
@@ -495,7 +508,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // (delivery.readOnly), which acts on nothing from another device: the buttons are withdrawn.
     var hostUpdates = VelopackHostUpdates.For(ReadOnlyReason(), OperatingSystem.IsWindows(),
         () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log,
-            ready: ct => HostUpdateGate.ReadyAsync(HostUpdateGate.OtherHosts, usageMonitor is null ? null : usageMonitor.SettleProbesAsync, ct)));
+            ready: ct => HostUpdateGate.ReadyAsync(HostUpdateGate.OtherHosts, usageMonitor is null ? null : usageMonitor.SettleProbesAsync, ct),
+            prepareStop: PrepareStop));
     // Home Assistant's refusals of this machine, counted with every other process of this user so a
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
@@ -531,8 +545,13 @@ async Task<int> ServeAsync(HostHandover handover)
     // won over is not reported done by the next host.
     Action? handingOver = null;
     var restart = new SettledRestart(usageMonitor is null ? null : (t, ct) => usageMonitor.SettleProbesAsync(t, ct),
-        () => { handingOver?.Invoke(); handover.Request(); }, stop.Cancel, stop.Token);
-    void RestartHost() => _ = Task.Run(restart.RunAsync);
+        () => { handingOver?.Invoke(); handover.Request(); }, stop.Cancel, stop.Token,
+        ct => deliveryGate.PrepareStopAsync(TimeSpan.FromSeconds(15), ct), plannedStops.TryCommitRestart);
+    void RestartHost()
+    {
+        var interrupted = plannedStops.RestartToken();
+        _ = Task.Run(() => restart.RunAsync(interrupted));
+    }
     using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
     // Restart from a person's device through the relay (#801, docs/protocol/v1-sessions.md, "Managing
     // a machine"), every planned departure through one quiet lease (#805). ServeReadOnly is the
@@ -639,6 +658,21 @@ async Task<int> ServeAsync(HostHandover handover)
         }, stop.Token);
     await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
+    var launchConfiguration = JsonSerializer.Serialize(settings.Launch, ProtocolJson.Options);
+    string? VerificationUnavailable()
+    {
+        if (ServeReadOnly() is { } why) { return why; }
+        if (agentSetup?.RestartRequired == true) { return "Hook setup changed. Explicitly restart the host before verification."; }
+        var (configured, problem) = HostSettings.Load(identity.Folder);
+        if (problem is not null || configured.LaunchProblems.Count > 0) { return "Repair the profile's launch configuration and restart the host before verification."; }
+        if (configured.ReadOnly || JsonSerializer.Serialize(configured.Launch, ProtocolJson.Options) != launchConfiguration)
+        {
+            return "Launch settings changed. Explicitly restart the host before verification.";
+        }
+        return null;
+    }
+    await using var agentVerification = OperatingSystem.IsWindows()
+        ? new AgentVerificationService(source, launcher, intake, VerificationUnavailable, Log, stop.Token) : null;
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -673,6 +707,7 @@ async Task<int> ServeAsync(HostHandover handover)
         LocalAppDevice = manage.NoteLocalApp,
         // Only while this host runs sign-in from devices: a switch changed since applies at the next start.
         SignInDevices = signIn is null ? null : self => PersonDevices.View(personRoster, rosterAccount(), self),
+        AgentVerification = agentVerification,
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();
@@ -692,6 +727,7 @@ async Task<int> ServeAsync(HostHandover handover)
             wake.Release();
         },
         Stop = () => stop.Cancel(),
+        PrepareStop = PrepareStop,
         Restart = RestartHost,
         HoldProbes = () => usageMonitor?.HoldProbes(TimeSpan.FromMinutes(15)) == true
             ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null,
@@ -981,7 +1017,7 @@ static string OsName() =>
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, IProcessInspector processes, TranscriptWrites writes, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled, DeliveryGate gate)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, IAgentHaBridgeProbe g5, IProcessInspector processes, TranscriptWrites writes, string staging, AttemptLedger attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled, DeliveryGate gate)
 {
     if (!OperatingSystem.IsWindows())
     {
@@ -997,7 +1033,7 @@ static string OsName() =>
     Log($"approving Copilot permission prompts from other devices is {(settings.RemoteApproval ? "on" : "off")} (permissions.remoteApproval)");
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log, blobs: blobs);
     return (
-        new AnswerService(gate, source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled, Writes = writes }, Log),
+        new AnswerService(gate, source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedger = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled, Writes = writes }, Log),
         new ReplyService(gate, source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome, Writes = writes, LateWatch = TimeSpan.FromMinutes(5) }, Log, attachments),
         attachments,
         new StopService(gate, source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log));

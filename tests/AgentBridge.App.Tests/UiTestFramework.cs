@@ -44,6 +44,9 @@ public sealed class UiTestFramework(IMessageSink sink) : XunitTestFramework(sink
         : XunitTestAssemblyRunner(assembly, testCases, sink, executionSink, options)
     {
         readonly SemaphoreSlim? turns = CollectionTurns(assembly, options);
+        readonly TestCollectionActivity activity = new();
+
+        internal int ActiveCollectionCount => activity.Count;
 
         static SemaphoreSlim? CollectionTurns(ITestAssembly assembly, ITestFrameworkExecutionOptions options)
         {
@@ -60,7 +63,8 @@ public sealed class UiTestFramework(IMessageSink sink) : XunitTestFramework(sink
                 await turns.WaitAsync(cancellationTokenSource.Token);
             try
             {
-                return await new CollectionRunner(testCollection, testCases, DiagnosticMessageSink, messageBus, TestCaseOrderer, new ExceptionAggregator(Aggregator), cancellationTokenSource).RunAsync();
+                return await activity.RunAsync(() =>
+                    new CollectionRunner(testCollection, testCases, DiagnosticMessageSink, messageBus, TestCaseOrderer, new ExceptionAggregator(Aggregator), cancellationTokenSource).RunAsync());
             }
             finally
             {

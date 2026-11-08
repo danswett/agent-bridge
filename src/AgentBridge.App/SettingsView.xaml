@@ -33,6 +33,7 @@
         <Grid>
             <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="8">
                 <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Settings" />
+                <Button Content="Send feedback" AutomationProperties.AutomationId="SendFeedback" Click="OnSendFeedback" />
                 <InfoBar Severity="Error" Title="That didn't work" IsClosable="False" IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}" Message="{x:Bind ViewModel.Error, Mode=OneWay}" />
                 <ProgressBar IsIndeterminate="True" Visibility="{x:Bind local:Ui.Show(ViewModel.Busy), Mode=OneWay}" />
 
@@ -206,6 +207,34 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
     
+                <TextBlock Style="{StaticResource AbSectionTitle}" Text="Test an agent connection" />
+                <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.VerificationStateText, Mode=OneWay}" AutomationProperties.AutomationId="VerificationState" />
+                <local:WrapRow Spacing="8">
+                    <Button Content="Load launch choices" Click="OnLoadVerification" IsEnabled="{x:Bind ViewModel.CanLoadVerificationChoices, Mode=OneWay}" />
+                    <Button Content="Recheck test status" Click="OnRefreshVerification" IsEnabled="{x:Bind ViewModel.CanRefreshVerification, Mode=OneWay}" />
+                </local:WrapRow>
+                <ComboBox Header="Agent to test" ItemsSource="{x:Bind ViewModel.VerificationAgents, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.VerificationAgent, Mode=TwoWay}" DisplayMemberPath="Label" AutomationProperties.AutomationId="VerificationAgent" HorizontalAlignment="Stretch" />
+                <ComboBox Header="Approved workspace" ItemsSource="{x:Bind ViewModel.VerificationWorkspaces, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.VerificationWorkspace, Mode=TwoWay}" DisplayMemberPath="Label" AutomationProperties.AutomationId="VerificationWorkspace" HorizontalAlignment="Stretch" />
+                <ComboBox Header="Agency profile" ItemsSource="{x:Bind ViewModel.VerificationProfiles, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.VerificationProfile, Mode=TwoWay}" DisplayMemberPath="Label" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowVerificationProfiles), Mode=OneWay}" HorizontalAlignment="Stretch" />
+                <Button Content="Run new test session..." Click="OnRunVerification" IsEnabled="{x:Bind ViewModel.CanRunVerification, Mode=OneWay}" AutomationProperties.AutomationId="RunVerification" />
+                <TextBlock Text="{x:Bind ViewModel.VerificationActionStatus, Mode=OneWay}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                <ItemsControl ItemsSource="{x:Bind ViewModel.Verifications, Mode=OneWay}" AutomationProperties.AutomationId="AgentVerifications">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="core:AgentVerificationRow">
+                            <Border Background="{ThemeResource AbSubtle}" CornerRadius="{StaticResource AbRadiusCard}" Padding="16" Margin="0,0,0,8">
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="{x:Bind Selection}" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level3" />
+                                    <TextBlock Text="{x:Bind State}" TextWrapping="Wrap" />
+                                    <TextBlock Text="{x:Bind Detail}" TextWrapping="Wrap" />
+                                    <TextBlock Text="{x:Bind Checks}" TextWrapping="Wrap" />
+                                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Evidence}" IsTextSelectionEnabled="True" />
+                                    <Button Content="Stop observing" Tag="{x:Bind Request}" IsEnabled="{x:Bind CanStopObserving}" Click="OnCancelVerification" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
                 <!-- The relay: how this machine reaches the person's other devices. -->
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Your devices" />
                 <TextBlock TextWrapping="Wrap" AutomationProperties.AutomationId="Account" Text="{x:Bind ViewModel.AccountText, Mode=OneWay}" />

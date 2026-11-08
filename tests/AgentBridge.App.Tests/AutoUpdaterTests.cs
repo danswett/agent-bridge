@@ -2002,6 +2002,31 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(4, updater.Checks);
     }
 
+    // #927: a check from Settings answered from a copy of the release list older than the refusal
+    // (the CDN's, or the machine's shared one) is not the feed answering again: the hold stands.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_check_from_Settings_answered_by_a_cached_list_older_than_a_rate_limit_hold_does_not_end_it()
+    {
+        shared = new ObservedUpdater(updater, time);
+        updater.Found = null;
+        await StartAsync();
+        var refused = time.GetUtcNow();
+        updater.CheckFails = Limited(refused + TimeSpan.FromHours(2));
+        await auto.TickAsync();
+        Assert.Equal(1, updater.Checks);
+        updater.CheckFails = null;
+        updater.Found = "0.2.0";
+        updater.DiscoveredAt = refused - TimeSpan.FromMinutes(3);
+
+        time.Advance(TimeSpan.FromMinutes(5));
+        Assert.Equal("0.2.0", await shared.CheckAsync());
+        time.Advance(AutoUpdater.CheckEvery);
+        await auto.TickAsync();
+
+        Assert.Equal(2, updater.Checks);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_rate_limit_reset_five_minutes_away_is_retried_then_even_after_a_press_just_before_it()

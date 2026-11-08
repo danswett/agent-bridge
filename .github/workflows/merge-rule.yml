@@ -38,7 +38,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [Apple clients, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Merge rule review relay, Ops probe, Pages, Perf, Relay deploy, Weekly quality report, Workflow lint]
+    workflows: [Apple clients, CI, CodeQL, Dependencies, Flake hunt, HA contract drift, IaC scan, Lab nightly (held), Lab release verification (held), Merge rule review relay, Ops probe, Pages, Perf, Relay deploy, Update gap, Weekly quality report, Workflow lint]
     types: [requested, in_progress, completed]
   check_suite:
     types: [completed] # the only type Actions accepts here

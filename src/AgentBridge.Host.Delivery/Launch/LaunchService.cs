@@ -18,6 +18,12 @@ public interface ISessionLauncher
 
     Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default);
 
+    Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new LaunchResult(LaunchOutcome.Refused, "This launcher cannot guarantee standard permissions for verification."));
+
+    // Also raised when registration succeeds after the initial answer was unconfirmed.
+    event Action<Guid, string>? RequestRegistered { add { } remove { } }
+
     // The agents launches started that still run, registered or not: whatever runs inside one
     // is an agent's, and may not manage the host (§6.3 invariant 13).
     IReadOnlyList<Started> LaunchedProcesses() => [];
@@ -126,6 +132,8 @@ public sealed class LaunchServiceOptions
 //     (OutcomeMemory). One start at a time, so worktrees and Codex's binding cannot race.
 public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 {
+    public event Action<Guid, string>? RequestRegistered;
+
     readonly ISessionSource source;
     readonly IAgentHaBridgeProbe probe;
     readonly IConsoleInjector injector;
@@ -193,6 +201,14 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // agent-ha-bridge's $script:BridgeResumeCacheLimit: how many of the newest sessions in
     // approved folders it caches, and so decides the resume labels over.
     const int KindsAmong = 200;
+
+    // How wide a launched session's console is made (its screen buffer, widened by the injector
+    // once the console exists): wide enough for Copilot's form tab
+    // bar (the console's width less four) to show every field's title, so the host can tell an
+    // answer's form is the question's before typing (#1123; a six-field form with long titles
+    // took about 230). Sessions a person started keep their own width, and a too-narrow
+    // form's refusal.
+    internal const int ConsoleColumns = 250;
 
     public bool Available => Config.Enabled && options.PlatformSupported && probe.Recent() is null && starter.Unavailable() is null;
 
@@ -534,6 +550,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     public bool Running(string id) => source.Get(id) is not null || Starting(id);
 
     // ---- session.launch ----
+
+    public Task<LaunchResult> LaunchVerificationAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
+    {
+        if (Launchers.Find(request.Agent) is not { } agent) { return Task.FromResult(Refused("Choose an explicit agent for verification.")); }
+        // Extra arguments are provider-defined, including aliases and config overrides. Do
+        // not claim standard permissions by attempting an incomplete bypass-flag denylist.
+        if (Config.Agent(agent.Id).ExtraArgs.Count > 0)
+        {
+            return Task.FromResult(Refused($"Verification cannot guarantee standard permissions with configured launch.agents.{agent.Id}.extraArgs. Remove those extra arguments at the machine before testing; nothing was started."));
+        }
+        return LaunchAsync(request with { Permissions = LaunchProtocol.Ask }, peer, cancellationToken);
+    }
 
     public Task<LaunchResult> LaunchAsync(LaunchRequest request, string peer, CancellationToken cancellationToken = default)
     {
@@ -887,7 +915,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             if (options.ClaudeConfigDirExplicit is { } explicitConfigDir) { environment["CLAUDE_CONFIG_DIR"] = explicitConfigDir ? options.ClaudeHome : null; }
             else if (!Folders.Same(options.ClaudeHome, inherited.ClaudeHome)) { environment["CLAUDE_CONFIG_DIR"] = options.ClaudeHome; }
             if (!Folders.Same(options.CodexHome, inherited.CodexHome)) { environment["CODEX_HOME"] = options.CodexHome; }
-            var spec = new StartSpec(plan.Executable, args, directory, environment);
+            var spec = new StartSpec(plan.Executable, args, directory, environment, ConsoleColumns);
             if (starter.CommandLine(spec, out var tooLong) is null)
             {
                 return Refused($"the prompt is too long to start {plan.Launcher.Label} with on this machine: {tooLong}; shorten it, or send the rest as a reply once it has started");
@@ -960,6 +988,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
 
         _ = Task.Run(() => FollowAsync(follow));
+        _ = Task.Run(() => WidenAsync(follow));
         var waited = await Task.WhenAny(follow.Decided.Task, Task.Delay(options.RegistrationWait, options.Time));
         if (waited == follow.Decided.Task) { return await follow.Decided.Task; }
         // A session that registered but whose window is not yet seen ready (Copilot) did appear;
@@ -974,6 +1003,43 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         follow.Decided.TrySetResult(unconfirmed);
         return await follow.Decided.Task;
     }
+
+    // A launched session's console made ConsoleColumns wide as soon as it has one (a process just
+    // started may not yet: asked again every WidenEvery, WidenTries times). The console host
+    // takes no width from how it was started (ConsoleStartup), so it is set on the console itself,
+    // by the injector, which types nothing. Not done, the session keeps the console's own width,
+    // and an answer to a form too wide for it is refused as such (#1123).
+    async Task WidenAsync(Pending p)
+    {
+        try
+        {
+            for (var tries = 1; ; tries++)
+            {
+                var widened = await injector.WidenAsync(p.Started.ProcessId, p.Started.StartedAt, ConsoleColumns);
+                if (widened.Columns is { } columns)
+                {
+                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console is {columns} columns wide");
+                    return;
+                }
+                if (!widened.NotYet || tries >= WidenTries)
+                {
+                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: {widened.Problem}");
+                    return;
+                }
+                // Its id may later be another process's: the worker checks that too; this ends the asking.
+                if (!starter.Running(p.Started))
+                {
+                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: its process (pid {p.Started.ProcessId}) has exited");
+                    return;
+                }
+                await Task.Delay(WidenEvery, options.Time);
+            }
+        }
+        catch (Exception e) { log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: {e.GetType().Name}"); }
+    }
+
+    const int WidenTries = 50;
+    static readonly TimeSpan WidenEvery = TimeSpan.FromMilliseconds(100);
 
     // One launch followed from its start until its session registers, its process exits, or
     // FollowFor runs out, a look every PollInterval: agent-ha-bridge's Update-DaemonPendingLaunch.
@@ -1275,7 +1341,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     void Decide(Pending p, LaunchResult result)
     {
         // Before the outcome is told, so the record has it by the time anyone hears of the session.
-        if (result is { Outcome: LaunchOutcome.Started, Session: { } id }) { Noted(p, id); }
+        if (result is { Outcome: LaunchOutcome.Started, Session: { } id }) { Noted(p, id); RequestRegistered?.Invoke(p.Key, id); }
         if (!p.Decided.TrySetResult(result) && result.Outcome == LaunchOutcome.Started)
         {
             p.RegisteredLate = true;

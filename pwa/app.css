@@ -309,7 +309,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   body[data-page="sessions"] .content { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
   body[data-page="sessions"] .content > .banner { margin: var(--ab-space-3) var(--ab-space-6) 0; }
   .route-sessions:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  .sessions:not([hidden]) { display: grid; grid-template-columns: clamp(264px, 26vw, 320px) minmax(0, 1fr); flex: 1; min-height: 0; }
+  .sessions:not([hidden]) { --list-w: 320px; --inspector-w: 336px; display: grid; grid-template-columns: var(--list-w) minmax(0, 1fr); position: relative; flex: 1; min-height: 0; }
   .list-pane { min-height: 0; overflow: auto; padding: var(--ab-space-5) var(--ab-space-2) var(--ab-space-4); border-right: 1px solid var(--ab-stroke2); }
   .list-pane > :not(.session-list, .needs-you) { margin-left: var(--ab-space-3); margin-right: var(--ab-space-3); }
   .session-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -318,10 +318,9 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   .session-header .inspector-button { display: none; }
 }
 @media (min-width: 1280px) {
-  .sessions:not([hidden]) { grid-template-columns: 320px minmax(0, 1fr); }
   .session-header .inspector-button { display: inline-grid; }
   body[data-inspector="shown"] .view-tabs { display: none; }
-  body[data-inspector="shown"] .view-body { grid-template-columns: minmax(0, 1fr) 336px; }
+  body[data-inspector="shown"] .view-body { grid-template-columns: minmax(0, 1fr) var(--inspector-w); }
   body[data-inspector="shown"] .session-view .conversation { display: flex; }
   body[data-inspector="shown"] .session-view .inspector { display: grid; border-left: 1px solid var(--ab-stroke2); }
   body[data-inspector="shown"] .session-view .details, body[data-inspector="shown"] .session-view .tools-panel { display: block; }
@@ -331,6 +330,27 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   body[data-inspector="shown"] .session-view[data-delegate="open"] :is(.details, .tools-panel) { display: none; }
   body[data-inspector="shown"] .session-view[data-delegate="open"] .delegate-pane:not([hidden]) { display: block; }
   body[data-inspector="shown"] .delegate-back { display: none; }
+  body[data-inspector="shown"] .pane-divider[data-pane="inspector"] { display: block; right: calc(var(--inspector-w) - var(--divider-hit) / 2); }
+}
+/* The dividers between the panes (ui.md §5.2, #1030): as tall as the page, an 8 px zone (44 px for
+   touch, drawn as the same hairline) over the panes' own edge. Clear at rest, stroke2 pointed at,
+   Bridge dragged or focused (the focused line is the focus indicator: a ring around the zone
+   beside it would draw three lines); the pane follows the pointer, so there is no motion to reduce. */
+.pane-divider {
+  --divider-hit: 8px;
+  display: none; position: absolute; top: 0; bottom: 0; z-index: 1;
+  width: var(--divider-hit); cursor: col-resize; touch-action: none; user-select: none;
+}
+.pane-divider[data-pane="list"] { left: calc(var(--list-w) - var(--divider-hit) / 2); }
+.pane-divider::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1.5px); width: 3px; background: transparent; }
+.pane-divider:hover::before { background: var(--ab-stroke2); }
+.pane-divider:focus-visible::before, .pane-divider[data-dragging]::before { background: var(--ab-bridge); }
+.pane-divider:focus-visible { outline: none; }
+@media (pointer: coarse) and (not (any-pointer: fine)) { .pane-divider { --divider-hit: 44px; } }
+@media (min-width: 760px) { .pane-divider[data-pane="list"] { display: block; } }
+@media (forced-colors: active) {
+  .pane-divider:hover::before { background: ButtonText; }
+  .pane-divider:focus-visible::before, .pane-divider[data-dragging]::before { background: Highlight; }
 }
 /* Whatever scrolls holds what is positioned inside it (#288). Text kept for a screen reader
    (.sr-only, a delegate's "under …") is absolutely positioned; with no positioned ancestor its
@@ -360,6 +380,48 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 }
 .button.secondary { background: transparent; color: var(--ab-bridge); }
 .button:disabled, .button[aria-disabled="true"] { opacity: .55; cursor: default; }
+.feedback-dialog {
+  width: min(720px, calc(100vw - 24px)); max-height: 90vh; overflow: auto; margin: auto;
+  color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);
+  padding: 16px 16px 0; scroll-padding-bottom: calc(var(--tap) + 8px + 16px + 1px + 8px);
+}
+.feedback-dialog::backdrop { background: var(--ab-shell); opacity: .85; }
+.feedback-dialog h2 { margin: 0 0 8px; }
+.feedback-label { display: block; margin: 10px 0 4px; font-weight: 600; }
+.feedback-dialog textarea {
+  width: 100%; min-height: 96px; padding: 8px; resize: vertical; font: inherit; font-size: 16px;
+  color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control);
+}
+.feedback-included-list { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 8px; }
+.feedback-included-list > li {
+  min-width: 0; padding: 8px 10px; display: grid; grid-template-columns: minmax(8rem, .7fr) minmax(0, 1fr);
+  gap: 8px; border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control);
+}
+.feedback-included-list > li > details { grid-column: 1 / -1; }
+.feedback-included-list details ul { margin: 4px 0 0; padding-inline-start: 24px; overflow-wrap: anywhere; }
+.feedback-dialog details > summary { min-height: var(--tap); display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.feedback-dialog details > summary::after {
+  content: ""; flex: 0 0 10px; width: 10px; height: 10px; margin-inline-start: auto;
+  border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg);
+}
+.feedback-dialog details[open] > summary::after { transform: rotate(45deg); }
+@media (prefers-reduced-motion: no-preference) {
+  .feedback-dialog details > summary::after { transition: transform 120ms ease; }
+}
+.feedback-exact-data { margin-top: 8px; }
+.feedback-preview {
+  max-height: 40vh; overflow: auto; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--ab-text); background: var(--ab-shell); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-control);
+  font: var(--type-code) / var(--type-code-line) var(--ab-font-mono);
+}
+.feedback-actions {
+  position: sticky; bottom: 0; z-index: 1; justify-content: flex-end;
+  margin: 8px -16px 0; padding: 8px 16px 16px;
+  border-top: 1px solid var(--ab-stroke2); background: var(--ab-card);
+}
+@media (max-width: 420px) {
+  .feedback-included-list > li { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+}
 /* In forced colours the tokens are already system colours (Highlight under HighlightText),
    but the browser still draws its Canvas backplate behind a filled control's label, which
    hid it. These controls keep the pairs exactly as the tokens give them. */

@@ -87,6 +87,17 @@ disposable-host only: no relay enrollment, production enablement or live migrati
 is authorized by this slice. Independent implementation review and final-head CI
 remain gates; the wider HA architecture redirect is tracked separately in #388.
 
+### Test timeout diagnostics (#660)
+
+App polling waits, Host polling waits and AgentReadiness's outer task waits report
+available/busy pool workers (against the pool maximum), active test collections and
+total process threads. Collections are counted within the reporting test assembly;
+available workers mean maximum-based capacity, not already-created idle threads.
+Existing App observation-gap, pool-thread and queued-work details remain.
+These are adjacent observations, not a causal explanation for the
+Arm CI timeouts; pool settings, collection admission and wait budgets are unchanged.
+Other raw App/Host task waits are outside this bounded diagnostic slice.
+
 ### Built and merged
 
 Fresh Windows hook setup now has an explicit local CLI path (`hooks install|remove`,
@@ -174,6 +185,23 @@ before assuming a standing coordinator role.
 The following handoff/resumption notes are **historical, 2026-11-02**; use canonical
 issues and PRs for current heads, owners and gates:
 
+**Current-run verification (#384, partial #231):** the local-App backend now provides
+explicitly consented new-session tests, shared by permanent Windows Settings controls and
+the forthcoming guided flow. Settings loads the host's offered launch choices, requires
+explicit agent/workspace picks, names the exact folder/profile and paid usage in a
+cancel-default confirmation, and follows host reports across reconnects. Confirmation is
+bound to the same host run and revalidated folder/profile; stopping observation never
+claims to close the test session. Verification requires the exact launch request/session binding, a new process, the main
+provider's unique reply and a fresh hook naming that same session/process. Trust and
+sign-in remain the person's actions in the session window. Timeouts/cancellation do not
+close sessions or count as success, and results are current-host-run-only and invalidated
+for configuration/process changes or expiration, including retries of retained runs that
+are no longer the latest for their agent. Verification refuses configured extra arguments
+instead of allowing them to override its standard-permissions consent. Temporary discovery
+holds after launch keep the same test observing within its timeout. The guided shell,
+installer integration and disposable end-to-end acceptance remain incomplete; this is not dogfood
+readiness. HA onboarding is excluded. See [the pipe contract](protocol/local-pipe.md#current-run-verification).
+
 **First-run foundation (#384, partial #231):** a shared local-host agent readiness
 report and compact read-only Agents section in Windows Settings are implemented in this
 change. It distinguishes executable/version detection, ownership/intake evidence and actual
@@ -208,6 +236,25 @@ Historical native publication work under #317, superseded by #387's redirect:
 </details>
 
 ## 3. Shadow gate (#40)
+
+**Scope (owner, 2026-11-03).** The shadow gate is a checkpoint for comparing against HA and
+retiring the legacy bridge. It is **not** a prerequisite for native Agent Bridge delivery. Host,
+app, PWA, relay and native MCP work ships on its own gates:
+- tests, review and security review on the exact head;
+- truthful native product behaviour;
+- a qualified main under the serial merge rule;
+- explicit production approval where that is required.
+
+Nothing native waits for Home Assistant, for a shadow PASS, for the dashboard writer cutover
+(#317/#319/#389) or for retiring the legacy bridge. Those are an optional compatibility and
+retirement lane with their own acceptance criteria. #238 needs its own security review and
+product live checks, not a shadow PASS. #45 uses the product's native agent identity, not HA
+credentials. The VM safety and finish rules below apply to this lane only.
+
+This scoping does **not** authorize stopping another session's VM, interfering with the soak,
+starting paid resources without authority, skipping a required product test, removing installed
+compatibility or making a live cutover. #238's live checks run on its final head, with the owner's
+consent where needed, on a slot agreed with VM-M's owner or another already-authorized test slot.
 
 The gate is coverage-based (design §10, Stage 4). Since DEV-VM1 migrated (11-02 14:16 PT) and
 its shadow host was uninstalled (14:50), **VM-M's scripted soak is the only comparator.** Check it
@@ -248,13 +295,15 @@ closed. The steps below are the machine and migration steps within it.
 1. **Watch ULTRA.** Its HA entities (`*_dswett_ultra_*`) and the PWA should agree, and answers, replies and launches from the phone and the HA card should all work. Install from the PWA worked on 2026-11-01 (0.1.690 to 0.1.700); Install from the HA card's button is still untried live (#161).
 2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
 3. **Migrate machines while the soak runs** (owner, 2026-11-01): ~~ARM8~~ done. ~~DEV-VM1~~ done 11-02 14:16 PT. Its keep-awake has landed (#224), and the commands are with the owner. Then DASDESK when it's online, and the Mac after P5. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
-4. **The VM soak's gate** (§3): report it when it passes, then run `-Finish` to deallocate.
-5. **Writer migration** (P7, #317): verify the separate HA integration/card
-   replacement (#387), then reversible handover/rollback (#319). Do not resume
-   superseded #318 publication work, bypass G7, or retire HA functionality as a
-   migration prerequisite. Cleanup remains gated under #389.
+4. **The VM soak's gate** (§3; the legacy and HA-comparison lane): report it when it passes,
+   then run `-Finish` to deallocate. No native delivery waits for it.
+5. **Writer migration** (P7, #317; the optional HA compatibility lane): verify the separate
+   HA integration/card replacement (#387), then reversible handover/rollback (#319). Do not
+   resume superseded #318 publication work, bypass G7, or retire HA functionality as a
+   migration prerequisite. Cleanup remains gated under #389. None of it gates host, app, PWA,
+   relay or native MCP work.
 6. **UI design track** (§5).
-7. **Later:** code signing, macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
+7. **Later:** turning on code signing (Azure Artifact Signing, #734: built and off; the owner provisions the account, identity validation and the `signing` environment, app-windows.md "Signing"; until then releases are unsigned legacy builds, not dogfood-ready), macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
 
 ## 5. UI design track
 
@@ -290,6 +339,7 @@ took over from f7ba0bcc when DEV-VM1 began migrating. Quality now owns all merge
 | U8 | #176 | Delegates in both clients | PWA part 1 (attribution) done in #230. **App done**: #250 (closed #229), after a clean security re-review. PWA part 2 (strip, tab, inspector) is pushed to `ui/u8-pwa-delegates`, stacked on #252 (in review, security review next). It becomes a PR once #252 merges |
 | U9 | #232 | Motion (ui.md §5.3), signed off 2026-11-02 | Spec and tokens done in #233. In review: #261 (PWA, draft; security review before merge) and #275 (app, draft) |
 | U10 | #253 | One row, one question: Needs you becomes a filter, the question lives only in the conversation, and an approval's notification only opens it. Signed off 2026-11-02 (option A, every recommended answer) | Spec: #302 (ui.md, subagents.md §7, ui-plan.md, boards). Next, three slices, each with a security review: U10a PWA, U10b Windows app (its toasts already done in #377), U10c Apple in #260 (@welshofer) |
+| | #659 | Motion: nothing pops in or out. Arriving items fade in as neighbours ease aside (`shift`), leaving items fade as their slot eases closed, disclosures ease their space, values cross-fade (`value`), and bursts coalesce with a scroll anchor and "N new". **Decided by the owner 2026-11-04**, every recommended option (D1–D6), including #605's departure, the #489 prompt line and #677's banner space | Spec: #667 (ui.md §5.3, tokens `shift` and `value`; proposal, prototype and boards in `docs/design/proposals/659-no-pop-motion`). Builds: #684 (Windows app), #685 (PWA) |
 | | #600 | Reply and answer progress: one receipt under the box or on the question card, updated in place (Sending… / Sent / Passed to the agent / Up next / Delivered). **Decided by the owner 2026-11-04**, every recommended option (D1–D7: plain words, 400 ms quiet window and dwell, 3/5/10 s stalls, no timings in the UI, ring plus check badge, text2, older hosts unchanged); follow-ups settled 09:10 PT (#477): the `check` icon badge, "You answered · value", older hosts get the same waiting words and Delivered (superseding D7); **revised on re-review the same day to "quiet unless something's wrong"** (#617): Send's ring is the only in-flight signal, Send cross-fades to a check for about 1 s on Delivered, a line appears only for exceptions, stages are still spoken, and the check badge is dropped | Spec: #617 (normative in ui.md §6.5, with §5.3, §6.4, §8, §9; proposal and boards in `docs/design/proposals/600-reply-progress`). Builds on both clients after the host side, #598 / PR #611 |
 | | #167 | App icon (#167's last deliverable) | **Done**: #278. Windows and the PWA are generated from `tokens.json` `appIcon`. The SVG sources for macOS, iOS and Android are in `design/app-icon`, and their catalogs come with P5 and P8. Three proportions not on the design board need the owner's eye (#170) |
 | | #231 | Settings: each agent's state and "Set up" (UI half) | Slice 1, the card and grey dot for an agent installed after the bridge, with Set up and Not now per agent and version, is in review (Windows app only, on today's one-page Settings). Not started: the sectioned Overview and Agents panes, Repair, Install… and the PWA's read-only view |
@@ -413,8 +463,8 @@ agent-ha-bridge releases from this work:
 ## 8. Operating notes
 
 - **Install on a new machine.** Download the installer for its architecture from the newest
-  [release](https://github.com/danswett/agent-bridge/releases): `AgentBridgeApp-win-Setup.exe`
-  on an x64 PC, `AgentBridgeApp-win-arm64-Setup.exe` on Windows on Arm (DSWETT-ARM8; Settings,
+  [release](https://github.com/danswett/agent-bridge/releases): `Slipgates-win-Setup.exe`
+  on an x64 PC, `Slipgates-win-arm64-Setup.exe` on Windows on Arm (DSWETT-ARM8; Settings,
   System, About, "System type" says which). They are all pre-releases, so `releases/latest`
   does not work. Run it, then sign in from the app. Each copy updates only from its own
   architecture's channel ([app-windows.md](app-windows.md#releases-and-updates-every-merge-to-main-is-a-pre-release)).

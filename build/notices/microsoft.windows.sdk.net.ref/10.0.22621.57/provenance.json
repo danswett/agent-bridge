@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "packageId": "Microsoft.Windows.SDK.NET.Ref",
+  "packageVersion": "10.0.22621.57",
+  "licenseUrl": "https://aka.ms/WinSDKLicenseURL",
+  "copyright": "\u00a9 Microsoft Corporation. All rights reserved.",
+  "packageSha512": "a1ba0abaf386b299ea2d10474b20e7444a358f46f8409f9610c7fdc58cdb779f3c761996d8085677a80425ec4f2d02e561f49dfbe751aa24295c4fd34caf336f",
+  "packageSourceUrl": "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public/nuget/v3/flat2/microsoft.windows.sdk.net.ref/10.0.22621.57/microsoft.windows.sdk.net.ref.10.0.22621.57.nupkg",
+  "noticeFile": "sdk_license.rtf",
+  "noticeSourceUrl": "https://aka.ms/WinSDKLicenseURL",
+  "noticeResolvedUrl": "https://download.microsoft.com/download/0/F/F/0FF2B061-47DD-4F55-89B6-FD1D8C44F14D/sdk_license.rtf",
+  "noticeSha256": "dd07eb178e00c6bba4148457fc00ff77cd4887eb521d504186fe59c9ec8bbe62"
+}

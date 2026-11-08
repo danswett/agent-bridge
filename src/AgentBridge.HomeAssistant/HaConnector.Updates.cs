@@ -27,6 +27,11 @@ public interface IHostUpdates
     // Hands the downloaded release to the updater, which applies it once this process has exited,
     // and has the host exit. Throws when it cannot be handed over.
     void ApplyAndRestart(UpdateRelease release);
+    Task ApplyAndRestartAsync(UpdateRelease release)
+    {
+        ApplyAndRestart(release);
+        return Task.CompletedTask;
+    }
     // Before ApplyAndRestart: everything the update would end is safe to end (#238), or this
     // throws why not, and nothing is handed over. Velopack ends every process in the package, and a
     // usage probe's process whose input goes with a host must not be cut mid-refresh.
@@ -431,7 +436,7 @@ public sealed partial class HaConnector
             }
             await SayAsync(() => PublishUpdateAsync(time.GetUtcNow(), ct), "show the restart", ct);
             log($"Home Assistant connector: self-update: restarting into {release.Version}");
-            updates.ApplyAndRestart(release);
+            await updates.ApplyAndRestartAsync(release);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception e)

@@ -50,6 +50,7 @@ global_triggers:
   - AgentBridge.slnx
   - nuget.config
   - global.json
+  - .gitattributes
   - '**/Directory.Build.*'
   - '**/Directory.Packages.props'
   - .config/dotnet-tools.json       # coverage tools (#363)
@@ -90,6 +91,19 @@ suites:
     command: dotnet test tests/AgentBridge.Protocol.Tests -c Release
     where: ci.yml product
     baseline: { tests: 571, seconds: 3 }
+    status: exists
+
+  - id: agent-envelope
+    kind: unit
+    ring: 0
+    select: affected
+    security_sensitive: true  # AGENTS.md rule 5: signed-command parsing and verification
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.AgentEnvelope.Tests
+    triggers: [docs/protocol/vectors/agent-envelope.json]
+    command: dotnet test tests/AgentBridge.AgentEnvelope.Tests -c Release
+    where: ci.yml product
     status: exists
 
   - id: connector-conformance
@@ -177,7 +191,7 @@ suites:
     project: tests/AgentBridge.Host.Tests
     # CallerGuardTests reads the app's AssemblyName and pack-app.ps1's -e, and PushVectorTests and
     # SignedCommandVectorTests the shared vectors (#454), none of which the graph can see.
-    triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/pack-app.ps1, docs/protocol/vectors/**, docs/protocol/connector-read*]
+    triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/app-channels.ps1, build/pack-app.ps1, docs/protocol/vectors/**, docs/protocol/connector-read*]
     # Bounded by the MigrationTests and LaunchFlow classes, each split for parallelism (#496).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
     where: ci.yml product
@@ -353,6 +367,17 @@ suites:
     where: ci.yml product
     status: exists
 
+  - id: beta-release-manifest
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [linux-x64]
+    runner: local
+    triggers: [build/release-manifest.ps1, build/test-release-manifest.ps1, build/app-channels.ps1]
+    command: pwsh -NoProfile -File build/test-release-manifest.ps1
+    where: ci.yml light
+    status: exists
+
   - id: build-scripts
     kind: unit
     ring: 1
@@ -410,11 +435,13 @@ suites:
     ring: 2
     select: always
     # Every merge to main: only main's newest commit passes the gate, then the x64 and Arm64
-    # packages become one GitHub pre-release, which installed copies update from.
+    # packages become one GitHub pre-release, which installed copies update from. With
+    # APP_SIGNING, the sign job packs and signs them first (#734; docs/app-windows.md, Signing);
+    # either way it asks again whether main is still at this commit, and publish runs only on yes.
     platforms: [win-x64, win-arm64]
     runner: hosted
-    command: see ci.yml publish-gate and publish (main only)
-    where: ci.yml publish-gate, publish
+    command: see ci.yml publish-gate, sign and publish (main only)
+    where: ci.yml publish-gate, sign, publish
     status: exists
 
   - id: app-upgrade
@@ -704,6 +731,20 @@ suites:
     status: exists
 
   # ---------------------------------------------------------------- live, on disposable machines
+  - id: lab-nightly
+    kind: unit
+    ring: 0
+    select: affected
+    # The held nightly lab run's gate and cut verdict (lab-nightly.yml), offline: the gate refuses
+    # every run until the lab's prerequisites are met in reviewed source, and the verdict passes a
+    # cut only when both roles pass it. Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/lab/**, .github/workflows/lab-nightly.yml]
+    command: pwsh quality/lab/test-nightly.ps1
+    where: ci.yml light
+    status: exists
+
   - id: lab-e2e-simulated
     kind: e2e
     ring: 3
@@ -715,6 +756,8 @@ suites:
     # only nonexecuting provisioning and runner-interface drafts exist (lab-scripts).
     platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
     runner: lab
+    # Windows x64 and Arm64 nightly, once its gate lets it run (lab-nightly); it refuses today.
+    where: lab-nightly.yml
     status: planned
 
   - id: lab-e2e-agents
@@ -756,6 +799,35 @@ suites:
     runner: lab
     command: build/shadow-soak-vm.ps1 -Status (gate PASS)
     status: exists
+
+  - id: lab-release-verify
+    kind: unit
+    ring: 0
+    select: affected
+    # The held lab release verification's gate and verdict (lab-release-verify.yml), and that
+    # workflow's shape, offline: the gate refuses every verification until its prerequisites are met
+    # in reviewed source, and the verdict passes a release only when the nightly passed it and both
+    # roles' results are that release's. Ring 0 on Linux, so a draft's fast ring runs it too.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/lab/release-*, quality/lab/test-release-verify.ps1, .github/workflows/lab-release-verify.yml]
+    command: pwsh quality/lab/test-release-verify.ps1
+    where: ci.yml light
+    status: exists
+
+  - id: lab-release-verification
+    kind: e2e
+    ring: 4
+    select: always
+    # One named release run through the lab nightly (#854) on both roles and held to its results:
+    # v1 evidence about that release, never a promotion, a channel move or a Beta 1 count (§7, #736).
+    # Held: its gate refuses every run today (quality/lab/release-gate.ps1), and no ring 4 gate
+    # reads it.
+    platforms: [win-x64, win-arm64]
+    runner: lab
+    command: see lab-release-verify.yml (gh workflow run lab-release-verify.yml -f release=v0.1.N -f relay=staging, once its gate allows)
+    where: lab-release-verify.yml
+    status: planned
 
   # ---------------------------------------------------------------- security
   - id: codeql
@@ -958,6 +1030,22 @@ suites:
     triggers: [src/AgentBridge.Hook/**, src/AgentBridge.Hooks/**]
     command: see perf.yml perf (dotnet publish src/AgentBridge.Hook -c Release -r <rid> -o <dir>; dotnet run -c Release --project tests/AgentBridge.PerfHook -- --hook <dir>/agent-bridge-host-hook[.exe] --out <file.json>)
     where: perf.yml perf
+    status: exists
+
+  - id: perf-update-gap
+    kind: perf
+    ring: 2
+    select: affected
+    # How long an update keeps the Windows app away (#1167): the old window's close to the new
+    # version's process start and window, through Velopack's silent apply on a throwaway portable
+    # install, five runs, medians in the run's summary. Arm64 only here (Daily has no Arm64
+    # machine), by hand (workflow_dispatch), never on a pull request; x64 is measured locally with
+    # the same script. Records, does not gate, as perf.yml: the owner's budget is 8 s.
+    platforms: [win-arm64]
+    runner: hosted
+    triggers: [build/measure-update-gap.ps1, .github/workflows/update-gap.yml]
+    command: see update-gap.yml arm64 (pwsh build/pack-app.ps1 -Runtime win-arm64 -NoPack; pwsh build/measure-update-gap.ps1 -Runtime win-arm64 -RealHooks)
+    where: update-gap.yml arm64
     status: exists
 
   - id: perf-host

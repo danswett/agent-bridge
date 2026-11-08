@@ -5,6 +5,7 @@ using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Claude;
 using AgentBridge.Host.Delivery.Codex;
 using AgentBridge.Protocol;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // The keys for Claude Code's AskUserQuestion and a Codex approval, worked out without a
@@ -189,6 +190,97 @@ public class ClaudeAndCodexPlannerTests
 
 public class AttemptLedgerTests
 {
+    [Fact]
+    public void A_request_outcome_survives_restart_and_expires_after_fifteen_minutes()
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "profile", "answer-attempts.json");
+        var time = new FakeTimeProvider();
+        var request = Guid.NewGuid();
+        var ledger = new AttemptLedger(path, time);
+        var result = new AnswerResult(AnswerOutcome.Delivered);
+
+        Assert.Null(ledger.Claim("question", request));
+        Assert.Null(ledger.RecordOutcome(request, result));
+        Assert.Equal(result, new AttemptLedger(path, time).Outcome(request));
+        time.Advance(TimeSpan.FromMinutes(15) + TimeSpan.FromTicks(1));
+        Assert.Null(new AttemptLedger(path, time).Outcome(request));
+    }
+
+    [Fact]
+    public void A_claim_without_an_outcome_is_unconfirmed_after_restart()
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "profile", "answer-attempts.json");
+        var request = Guid.NewGuid();
+
+        Assert.Null(new AttemptLedger(path).Claim("question", request));
+        Assert.Equal(AnswerOutcome.Unconfirmed, new AttemptLedger(path).Outcome(request)!.Outcome);
+    }
+
+    [Fact]
+    public void A_transient_write_failure_recovers_once_the_obstruction_clears_and_keeps_earlier_claims()
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "profile", "answer-attempts.json");
+        var ledger = new AttemptLedger(path);
+        Assert.Null(ledger.Claim("first", Guid.NewGuid()));
+
+        // A directory where the temp file goes stands in for an antivirus lock or a full disk.
+        Directory.CreateDirectory(path + ".tmp");
+        Assert.Equal("the machine couldn't deliver it", ledger.Claim("second", Guid.NewGuid()));
+        Assert.Equal("the machine couldn't deliver it", ledger.Claim("second", Guid.NewGuid()));
+        Directory.Delete(path + ".tmp");
+
+        Assert.Null(ledger.Claim("second", Guid.NewGuid()));
+        Assert.NotNull(ledger.Claim("first", Guid.NewGuid()));
+        Assert.NotNull(new AttemptLedger(path).Claim("second", Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void A_write_failure_followed_by_a_corrupt_file_still_fails_closed()
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "profile", "answer-attempts.json");
+        var ledger = new AttemptLedger(path);
+        Assert.Null(ledger.Claim("first", Guid.NewGuid()));
+        Directory.CreateDirectory(path + ".tmp");
+        Assert.NotNull(ledger.Claim("second", Guid.NewGuid()));
+        Directory.Delete(path + ".tmp");
+        File.WriteAllText(path, "not json");
+
+        Assert.NotNull(ledger.Claim("third", Guid.NewGuid()));
+        Assert.NotNull(ledger.Claim("fourth", Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void A_ledger_from_an_unknown_version_fails_closed()
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "answer-attempts.json");
+        File.WriteAllText(path, """{"Version":2,"Attempts":{},"Outcomes":{}}""");
+        var ledger = new AttemptLedger(path);
+        Assert.Equal("the machine couldn't deliver it", ledger.Claim("question", Guid.NewGuid()));
+        Assert.Equal(AnswerOutcome.Refused, ledger.Outcome(Guid.NewGuid())!.Outcome);
+        Assert.Contains("\"Version\":2", File.ReadAllText(path));
+    }
+
+    [Theory]
+    [InlineData("""{"Version":1,"Attempts":{},"Outcomes":{"00000000-0000-0000-0000-000000000001":{"At":"2026-01-01T00:00:00Z","Result":{}}}}""")]
+    [InlineData("""{"Version":1,"Attempts":{},"Outcomes":{},"Outcomes":{}}""")]
+    [InlineData("""{"Version":1,"Attempts":{},"Outcomes":{"00000000-0000-0000-0000-000000000001":{"At":"2026-01-01T00:00:00Z","Result":{"Outcome":1,"Stage":99}}}}""")]
+    public void An_invalid_versioned_ledger_never_guesses_an_outcome(string contents)
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "answer-attempts.json");
+        File.WriteAllText(path, contents);
+        var ledger = new AttemptLedger(path);
+
+        Assert.Equal(AnswerOutcome.Refused, ledger.Outcome(Guid.NewGuid())!.Outcome);
+        Assert.Equal("the machine couldn't deliver it", ledger.Claim("question", Guid.NewGuid()));
+        Assert.Equal(contents, File.ReadAllText(path));
+    }
+
     [Fact]
     public void A_prompt_is_claimed_once_across_restarts_and_only_a_release_frees_it()
     {
