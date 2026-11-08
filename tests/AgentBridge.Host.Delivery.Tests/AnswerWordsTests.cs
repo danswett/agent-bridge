@@ -55,8 +55,86 @@ public sealed class AnswerWordsTests : IDisposable
         Assert.DoesNotContain(Canary, File.ReadAllText(ledgerPath));
         var restarted = Ledger().FirstFor("s1", "q1")!;
         Assert.Equal((request, AnswerOutcome.Delivered, "phone"), (restarted.Request, restarted.Result!.Outcome, restarted.By.Sender));
-        Assert.Equal(SHA256.HashData(Encoding.UTF8.GetBytes(Canary)), restarted.Digest);
+        Assert.Equal(ledger.Keyed(SHA256.HashData(Encoding.UTF8.GetBytes(Canary))), restarted.Digest);
         Assert.Null(restarted.Words);
+    }
+
+    // Trust (#1184 review): most answers are a choice, a yes or a short number, so a plain hash in a
+    // file the Codex sandbox group can read would give them away to anyone hashing guesses. The
+    // ledger keeps only a hash keyed with this install's key, which is in the private folder alone.
+    [Fact]
+    public void The_ledger_keeps_only_a_hash_keyed_with_a_private_key_never_a_plain_hash_of_a_short_answer()
+    {
+        var ledger = Ledger();
+        var plain = SHA256.HashData(Encoding.UTF8.GetBytes("yes"));
+        Assert.Null(ledger.Claim("k1", Guid.NewGuid(), Admit("yes")));
+        Assert.Null(ledger.Claim("k2", Guid.NewGuid(), new AttemptLedger.Admission(new("phone", "s1", "q2"), plain)));
+
+        foreach (var file in Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories))
+        {
+            var bytes = File.ReadAllBytes(file);
+            var text = Encoding.UTF8.GetString(bytes);
+            Assert.DoesNotContain(Convert.ToBase64String(plain), text);
+            Assert.DoesNotContain(Convert.ToHexString(plain), text, StringComparison.OrdinalIgnoreCase);
+            Assert.False(bytes.AsSpan().IndexOf(plain) >= 0);
+        }
+        Assert.Contains(Convert.ToBase64String(ledger.Keyed(plain)!), File.ReadAllText(ledgerPath));
+        var keyPath = Path.Combine(Path.GetDirectoryName(wordsPath)!, AnswerWords.KeyName);
+        AssertPrivate(Path.GetDirectoryName(wordsPath)!, keyPath);
+        Assert.Equal(ledger.Keyed(plain), Ledger().Keyed(plain));
+    }
+
+    // A ledger written before the hash was keyed holds a plain one under another name: it is never
+    // read, so its entry is never taken for the same answer.
+    [Fact]
+    public void An_entry_with_a_plain_hash_from_an_earlier_build_is_never_taken_for_a_match()
+    {
+        var request = Guid.NewGuid();
+        Directory.CreateDirectory(Path.GetDirectoryName(ledgerPath)!);
+        File.WriteAllText(ledgerPath, $$$"""
+            {"Version":1,"Attempts":{"k1":{"At":"2026-11-07T12:00:00+00:00","Request":"{{{request}}}","By":{"Sender":"phone","Session":"s1","Question":"q1"},"Digest":"{{{Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes("yes")))}}}"}},"Outcomes":{}}
+            """);
+
+        var ledger = Ledger();
+
+        Assert.Null(ledger.FirstFor("s1", "q1"));
+        Assert.Contains("already typed", ledger.Claim("k1", Guid.NewGuid(), Admit("yes")));
+    }
+
+    // A key lost or replaced can't open the hashes made with it: none is taken for the same answer,
+    // and the entries holding them are nobody's.
+    [Fact]
+    public void A_key_lost_makes_every_hash_kept_with_it_unusable_and_its_entries_nobodys()
+    {
+        var request = Guid.NewGuid();
+        Assert.Null(Ledger().Claim("k1", request, Admit("yes")));
+        File.Delete(Path.Combine(Path.GetDirectoryName(wordsPath)!, AnswerWords.KeyName));
+
+        var restarted = Ledger();
+
+        Assert.Null(restarted.FirstFor("s1", "q1"));
+        Assert.True(restarted.Known(request, out var by));
+        Assert.Null(by);
+    }
+
+    // No key to be had (it can't be made or read): nothing may rely on a hash, so an answer is
+    // refused before anything is claimed or typed, saying to answer at the machine.
+    [Fact]
+    public void With_no_key_to_be_had_an_answer_is_refused_before_any_claim_saying_to_answer_at_the_machine()
+    {
+        Assert.Null(Ledger().Claim("k0", Guid.NewGuid(), Admit("first", "q0")));
+        // Its key gone, and a new one can't be put in its place.
+        var keyPath = Path.Combine(Path.GetDirectoryName(wordsPath)!, AnswerWords.KeyName);
+        File.Delete(keyPath);
+        Directory.CreateDirectory(keyPath);
+        var ledger = Ledger();
+
+        Assert.Equal(DeliveryReasons.CannotHoldAnswer, ledger.Claim("refused-a", Guid.NewGuid(), Admit(Canary)));
+        Assert.Equal(DeliveryReasons.CannotHoldAnswer, ledger.Claim("refused-b", Guid.NewGuid(), new AttemptLedger.Admission(new("phone", "s1", "q2"), new byte[32])));
+        Assert.Null(ledger.Keyed(new byte[32]));
+        Assert.DoesNotContain(Canary, Words());
+        Assert.DoesNotContain("refused-", File.ReadAllText(ledgerPath));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(wordsPath)!, "*.tmp"));
     }
 
     [Theory]
@@ -217,6 +295,9 @@ public sealed class AnswerWordsTests : IDisposable
         Assert.Equal(DeliveryReasons.CannotHoldAnswer, ledger.Claim("k3", Guid.NewGuid(), Admit("third-words", "q3")));
         Assert.False(File.Exists(wordsPath));
         Assert.False(ledger.HoldsWords(first));
+        // The key may have been read: it goes too, and no hash made with it is used again.
+        Assert.False(File.Exists(Path.Combine(folder, AnswerWords.KeyName)));
+        Assert.Null(ledger.FirstFor("s1", "q1"));
     }
 
     [Fact]

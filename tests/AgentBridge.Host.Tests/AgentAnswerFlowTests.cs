@@ -56,7 +56,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    AnswerService Answerer(Func<string, string?>? codexUnsettled = null, TimeSpan? remembered = null, AttemptLedger? attempts = null) => new(source, f.Processes, probe, guard, injector, new AnswerOptions
+    AnswerService Answerer(Func<string, string?>? codexUnsettled = null, TimeSpan? remembered = null, AttemptLedger? attempts = null, ISessionSource? from = null) => new(from ?? source, f.Processes, probe, guard, injector, new AnswerOptions
     {
         AttemptLedger = attempts,
         CodexApprovalsUnsettled = codexUnsettled,
@@ -467,6 +467,75 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         var retried = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone");
         Assert.Equal(how == "gone, recorded" ? (AnswerOutcome.Delivered, null) : (AnswerOutcome.Unconfirmed, DeliveryReasons.AnswerNotConfirmed), (retried.Outcome, retried.Reason));
         Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // #1184 review: a session the host doesn't see is not a session gone. Not yet listed after a
+    // restart, or not accounted for while discovery is held for its agent (when nothing may be
+    // decided from its absence, ISessionSource.Held), or listed asking another question while held,
+    // its answer keeps its words, and is read again from them once its record turns up.
+    [Theory]
+    [InlineData("not listed yet")]
+    [InlineData("held, not listed")]
+    [InlineData("held, asking another question")]
+    public async Task An_unconfirmed_answer_keeps_its_words_while_its_session_is_unseen_or_its_agent_held_and_is_read_again_later(string how)
+    {
+        var heard = new Seen(source);
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer(from: heard).AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone")).Outcome);
+        var typed = injector.Plans.Count;
+        if (how.EndsWith("question", StringComparison.Ordinal)) { await AskAnotherAsync(); }
+        var seen = new Seen(source)
+        {
+            Hidden = how.EndsWith("listed", StringComparison.Ordinal) || how.EndsWith("yet", StringComparison.Ordinal),
+            HeldNow = how.StartsWith("held", StringComparison.Ordinal) ? new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]) : null,
+        };
+
+        var restarted = Answerer(from: seen);
+        await restarted.Swept;
+        seen.Announce(SessionChangeKind.Upserted, ClaudeId);
+        await restarted.Swept;
+
+        Assert.True(File.Exists(Words));
+        Fixture.Append(claude, Recorded());
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), await restarted.AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone"));
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // What does end a session's words: the source saying it was removed (after one last read of its
+    // record, so an answer recorded at the machine before it ended still settles delivered).
+    [Fact]
+    public async Task A_session_the_source_says_was_removed_has_its_answer_read_one_last_time_and_its_words_deleted()
+    {
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer(from: new Seen(source)).AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone")).Outcome);
+        var typed = injector.Plans.Count;
+        var seen = new Seen(source) { Hidden = true };
+        var restarted = Answerer(from: seen);
+        await restarted.Swept;
+        Assert.True(File.Exists(Words));
+
+        Fixture.Append(claude, Recorded());
+        seen.Announce(SessionChangeKind.Removed, ClaudeId);
+        await restarted.Swept;
+
+        Assert.False(File.Exists(Words));
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), await Answerer(from: seen).AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone"));
+        Assert.Equal(typed, injector.Plans.Count);
+    }
+
+    // However long a session goes unseen, the words' 24 hours still end them.
+    [Fact]
+    public async Task Words_kept_for_a_session_unseen_while_its_agent_is_held_still_go_when_their_24_hours_end()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        // Before the restart, no timer of its own: only the restarted host's may end the words.
+        Assert.Equal(AnswerOutcome.Unconfirmed, (await Answerer(attempts: new AttemptLedger(ledger, time, null, expire: false), from: new Seen(source)).AnswerAsync(Request(ClaudeId, "toolu_1", Chosen), sender: "phone")).Outcome);
+        var seen = new Seen(source) { Hidden = true, HeldNow = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]) };
+        var restarted = Answerer(attempts: new AttemptLedger(ledger, time), from: seen);
+        await restarted.Swept;
+        Assert.True(File.Exists(Words));
+
+        time.Advance(AttemptLedger.WordsFor + TimeSpan.FromSeconds(1));
+
+        Assert.False(File.Exists(Words));
     }
 
     // A delete that fails is the words gone as far as any answer is concerned (fail closed): a
@@ -1188,6 +1257,28 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         public Queue<string?>? Answers;
 
         public string? Active() => Answers is { Count: > 0 } queue ? queue.Dequeue() : null;
+    }
+
+    // The fixture's sessions as a host that has just started, or whose discovery is held, sees them:
+    // a session not listed (yet), discovery held for some agents, and a removal announced.
+    sealed class Seen(ISessionSource inner) : ISessionSource
+    {
+        public bool Hidden;
+        public DiscoveryHeld? HeldNow;
+        public long Revision => inner.Revision;
+        public event EventHandler<SessionChange>? Changed;
+        public void Announce(SessionChangeKind kind, string id) => Changed?.Invoke(this, new SessionChange(kind, id, null, Revision));
+        public IReadOnlyList<Session> Snapshot() => Hidden ? [] : inner.Snapshot();
+        public SessionList List(string? cursor = null) => inner.List(cursor);
+        public Session? Get(string id) => Hidden ? null : inner.Get(id);
+        public Session? GetForDelivery(string id) => Hidden ? null : inner.GetForDelivery(id);
+        public SessionFiles? Files(string id) => Hidden ? null : inner.Files(id);
+        public SessionProcess? ProcessOf(string id) => Hidden ? null : inner.ProcessOf(id);
+        public DiscoveryHeld? Held => HeldNow;
+        public SessionSubscription Subscribe() => inner.Subscribe();
+        public Task RefreshAsync(CancellationToken cancellationToken = default) => inner.RefreshAsync(cancellationToken);
+        public Task StartAsync(CancellationToken cancellationToken = default) => inner.StartAsync(cancellationToken);
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     sealed class Guard : ITargetGuard

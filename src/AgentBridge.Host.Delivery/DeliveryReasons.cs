@@ -16,8 +16,9 @@ public static class DeliveryReasons
 
     // An answer refused before any key because the host could not keep its words until the
     // session confirms it (#1159 slice 0): as many unconfirmed answers held as it keeps, words
-    // whose delete is still pending among them, or a private folder anyone else can read. Nothing
-    // is evicted to make room, so it says to answer at the machine.
+    // whose delete is still pending among them, or a private folder anyone else can read, or no
+    // key for the hash the ledger keeps. Nothing is evicted to make room, so it says to answer at
+    // the machine.
     public const string CannotHoldAnswer = "the machine can't keep this answer safely until it's confirmed, so nothing was typed; answer at the machine";
 
     // An injector's detail as a reply's or an answer's reason: a worker that did not start is

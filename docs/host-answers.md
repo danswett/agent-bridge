@@ -700,8 +700,15 @@ In order, for every answer:
    refusal reasons can name a question's label or field names (never answer text), and its folder's
    ACL lets the Codex sandbox group read it; the ledger holds no answer's words. Each claim and
    receipt keeps the sender, session and question it was admitted for (step 3), and a claim keeps
-   a SHA-256 hash of the answer (its fields and text) and the answer's first result (outcome and
-   stage), updated as a read settles it (step 9).
+   a hash of the answer (its fields and text) and the answer's first result (outcome and
+   stage), updated as a read settles it (step 9). The hash is HMAC-SHA-256 under this install's
+   key, `private\answer-key` (below; never in the ledger's folder, never logged), with the key's
+   id beside it, so nobody who can read the ledger can confirm a guess at a short answer (a
+   choice, a yes, a PIN) by hashing it. With no key to be had (it can't be made or read, or the
+   folder is readable by anyone else, when the key is deleted too), nothing may rely on a hash:
+   every answer is `refused` before any key as one the machine can't keep safely (below). A hash
+   made with a key since lost or replaced, or a plain one written by an earlier build, is never
+   taken for the same answer, and its entry is nobody's.
 
    While a Copilot form's or Claude answer is `unconfirmed`, the claim also keeps what reading
    it again needs (the agent, transcript path, call or tool-use id and read offset) and a key to
@@ -710,8 +717,12 @@ In order, for every answer:
    grants this user and SYSTEM alone (0700, and 0600 for the file, elsewhere), checked before
    every write; the text as sent and nothing else, written to a temporary file in that folder and
    renamed over the old one. The words go at the first of: any result but `unconfirmed`; the
-   claim released; its session or question gone (after one last read of its record, so an
-   answer recorded at the machine still settles); and 24 hours after they were typed. A host
+   claim released; its question gone (after one last read of its record, so an answer recorded at
+   the machine still settles); and 24 hours after they were typed. A question is gone on what is
+   known, never on what is missing: its session listed asking another question (unless discovery
+   is held for its agent, `ISessionSource.Held`), or its session removed, as the source announces.
+   A session merely not listed (not yet found after a restart, or unaccounted for while its agent
+   is held) keeps the words, for at most their 24 hours. A host
    that starts deletes leftover temporary files, words past those exits and words no claim
    refers to. A delete that fails fails closed: the claim no longer has words, so a retry is told
    only that nothing was typed again and is never read from them; the delete is tried again at

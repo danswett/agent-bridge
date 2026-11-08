@@ -17,11 +17,18 @@ namespace AgentBridge.Host.Delivery;
 //   * at most MaxEntries answers, MaxEntryBytes each and MaxTotalBytes in all, counting words whose
 //     delete has not reached the file yet: past them an answer is refused, nothing is evicted or cut;
 //   * nothing of them is ever logged: a failure is logged by its exception's type alone.
+// Beside them, this install's key for the hashes of answers the ledger keeps (Key), under the same
+// folder rules, so that a hash in the ledger can't be checked against a guess by anyone without it.
 // Used only under the AttemptLedger's lock.
 internal sealed class AnswerWords
 {
     public const string FolderName = "private";
     public const string FileName = "answer-words.json";
+    // This install's key for the hashes of answers the attempt ledger keeps (HMAC-SHA-256): beside
+    // the words, so the Codex sandbox group, which can read the ledger, can't test guesses at an
+    // answer against its hash.
+    public const string KeyName = "answer-key";
+    const int KeyBytes = 32;
     public const int MaxEntries = 32;
     public const int MaxEntryBytes = 16 * 1024;
     public const int MaxTotalBytes = 256 * 1024;
@@ -34,7 +41,9 @@ internal sealed class AnswerWords
 
     readonly string? folder;
     readonly string? file;
+    readonly string? keyFile;
     readonly Action<string> log;
+    byte[]? key;
     readonly Dictionary<string, (Words Words, int Size)> held = new(StringComparer.Ordinal);
     // Words no entry may use any more whose delete has not reached the file yet: never read again,
     // and counted against the bounds until a rewrite without them succeeds.
@@ -52,6 +61,72 @@ internal sealed class AnswerWords
         if (ledger is null) { return; }
         folder = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(ledger)) ?? ".", FolderName);
         file = Path.Combine(folder, FileName);
+        keyFile = Path.Combine(folder, KeyName);
+    }
+
+    // This install's key, made the first time it is needed: random, written whole to a temporary
+    // file in the private folder and renamed into place (never over a key already there), and read
+    // only from a folder and file private to this user. checkNow: the folder and file are checked
+    // again even with the key already read, as before a new hash is kept. Null when there is no
+    // such key: nothing new may then rely on a hash, and every hash kept is unusable. A key found
+    // readable by anyone else is deleted, so no later hash is made with it. In memory only, with no
+    // ledger file.
+    public byte[]? Key(bool checkNow)
+    {
+        if (keyFile is null) { return key ??= System.Security.Cryptography.RandomNumberGenerator.GetBytes(KeyBytes); }
+        if (key is not null && !checkNow) { return key; }
+        try
+        {
+            if (!EnsurePrivate())
+            {
+                DropAll();
+                return null;
+            }
+            if (!File.Exists(keyFile)) { MakeKey(); }
+            if (!IsPrivate(keyFile))
+            {
+                File.Delete(keyFile);
+                return Forget();
+            }
+            var read = File.ReadAllBytes(keyFile);
+            if (read.Length != KeyBytes)
+            {
+                log($"this install's key for the hashes of answers ({KeyName}) is not a key, so no hash is made or used");
+                return Forget();
+            }
+            return key = read;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log($"this install's key for the hashes of answers ({KeyName}) could not be made or read ({e.GetType().Name}), so no hash is made or used");
+            return Forget();
+        }
+    }
+
+    byte[]? Forget() => key = null;
+
+    void MakeKey()
+    {
+        var temp = keyFile + ".tmp";
+        try
+        {
+            if (File.Exists(temp)) { File.Delete(temp); }
+            var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, Options = FileOptions.WriteThrough };
+            if (!OperatingSystem.IsWindows()) { options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite; }
+            using (var stream = new FileStream(temp, options))
+            {
+                stream.Write(System.Security.Cryptography.RandomNumberGenerator.GetBytes(KeyBytes));
+                stream.Flush(flushToDisk: true);
+            }
+            // Never over a key already there: a hash made with it would no longer match.
+            File.Move(temp, keyFile!, overwrite: false);
+        }
+        catch (IOException) when (File.Exists(keyFile)) { }
+        finally
+        {
+            try { if (File.Exists(temp)) { File.Delete(temp); } }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
     }
 
     public int Count => held.Count + doomed.Count;
@@ -168,14 +243,17 @@ internal sealed class AnswerWords
         }
     }
 
-    // Anyone else can read the folder: no words are kept there, and those it has go.
+    // Anyone else can read the folder: no words are kept there, and those it has go, with the key,
+    // which may have been read: every hash made with it is unusable from then on.
     void DropAll()
     {
-        foreach (var (key, kept) in held) { doomed[key] = kept.Size; }
+        foreach (var (k, kept) in held) { doomed[k] = kept.Size; }
         held.Clear();
+        Forget();
         log($"the folder for the words of unconfirmed answers ({FolderName}) is not private to this user, so no words are kept");
         try
         {
+            if (keyFile is not null && File.Exists(keyFile)) { File.Delete(keyFile); }
             if (file is not null && File.Exists(file)) { File.Delete(file); }
             doomed.Clear();
             unknown = false;

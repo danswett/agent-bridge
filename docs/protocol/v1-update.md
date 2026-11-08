@@ -672,8 +672,14 @@ owns what the host keeps on disk; slice 0 lands only with all of Trust's conditi
    gets the plain refusal, as before the restart. The 3 s `LeaveAnyway` wait is unchanged.
    *As built:* words are kept only where a re-read exists (Copilot forms and Claude); Copilot
    permission prompts and Codex approvals keep the result, owner and hash but no words. A
-   question or session gone has its record read one last time before its words go, so an
-   answer recorded at the machine still settles `delivered`. The refusal over a bound has no
+   question gone has its record read one last time before its words go, so an answer recorded at
+   the machine still settles `delivered`; a session counts as gone only when the source removes
+   it, or lists it asking another question while discovery is not held for its agent, never for
+   being absent (not yet listed after a restart, or while held). "A hash of the answer" is
+   HMAC-SHA-256 under a per-install key kept in `private\` (#1184 review: a plain hash of a short
+   answer in a file the Codex sandbox group reads is a guess away from the answer); with no key,
+   answers are refused before any key, and a hash under a lost key, or a plain one, never matches.
+   The refusal over a bound has no
    answer-reason `code` (a new code would need every client and the protocol vectors); its
    sentence is in v1-sessions.md as a plain `reason`.
    Tests, one for every exit (Trust condition 7): "an answer delivered before a restart is told

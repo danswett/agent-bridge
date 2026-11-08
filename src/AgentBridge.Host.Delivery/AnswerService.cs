@@ -169,10 +169,20 @@ public sealed class AnswerService : ISessionAnswerer
         // The words of every answer whose session or question has gone go (after one last read of its
         // record): at start, as a session changes, and as an answer settles (its question may have
         // gone while it was typed, with no change to come).
-        _ = SweepAsync();
+        Swept = SweepAsync();
         // A service built only to show it does no delivery work has no source to hear.
-        if (source is not null) { source.Changed += (_, change) => _ = SweepAsync(change.Id); }
+        if (source is not null)
+        {
+            source.Changed += (_, change) =>
+            {
+                if (change.Kind == SessionChangeKind.Removed) { removed[change.Id] = 0; } else { removed.TryRemove(change.Id, out byte _); }
+                Swept = SweepAsync(change.Id);
+            };
+        }
     }
+
+    // The latest sweep of held words started (tests).
+    internal Task Swept { get; private set; }
 
     public bool Available => options.PlatformSupported && probe.Recent() is null;
 
@@ -204,7 +214,7 @@ public sealed class AnswerService : ISessionAnswerer
         // later identical call joins it, and its outcome is saved against the right record.
         lock (firstGate)
         {
-            var first = SameAnswerBefore(prompt, key, AnswerDigest.Of(request), sender, out var foreign);
+            var first = SameAnswerBefore(prompt, key, ledger.Keyed(AnswerDigest.Of(request)), sender, out var foreign);
             if (foreign) { return AsAnother(); }
             if (first is null) { AfterRegistered?.Invoke(); }
             if (first is not null)
@@ -219,7 +229,7 @@ public sealed class AnswerService : ISessionAnswerer
                 {
                     log($"answer {flow.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
                     Settled(prompt, flow, result);
-                    if (first is null && result.Outcome == AnswerOutcome.Unconfirmed) { _ = Task.Run(() => SweepAsync(request.Id)); }
+                    if (first is null && result.Outcome == AnswerOutcome.Unconfirmed) { Swept = Task.Run(() => SweepAsync(request.Id)); }
                 },
                 Recheck(flow), by, AsAnother, result => AsRetried(result, true));
             // Refused to start (the host is departing): nothing ran, so nothing is the first.
@@ -283,15 +293,17 @@ public sealed class AnswerService : ISessionAnswerer
 
     // What each prompt's first answer was, by session and question: kept as long as the ledger
     // keeps the prompt's claim. A host that restarts finds it again in the ledger, which since
-    // #1159 slice 0 keeps its sender, digest and outcome, and while it is unconfirmed what reading
+    // #1159 slice 0 keeps its sender, keyed digest and outcome, and while it is unconfirmed what reading
     // it again needs (Restore).
     readonly Dictionary<(string Session, string Question), FirstAnswer> firstAnswers = [];
     readonly Lock firstGate = new();
 
-    sealed class FirstAnswer(Guid request, byte[] digest, string? sender, DateTimeOffset at)
+    // digest: keyed with this install's key (AttemptLedger.Keyed), as the ledger keeps it; null with
+    // no key, when it is never taken for the same answer.
+    sealed class FirstAnswer(Guid request, byte[]? digest, string? sender, DateTimeOffset at)
     {
         public Guid Request { get; } = request;
-        public byte[] Digest { get; } = digest;
+        public byte[]? Digest { get; } = digest;
         // Who sent it (the channel's peer, or the connector): only that sender is given its
         // outcome for the same answer, so no other can learn what a first answer said by
         // guessing it under a new request.
@@ -356,10 +368,10 @@ public sealed class AnswerService : ISessionAnswerer
         }
     }
 
-    // The words of a held answer whose session, or the question they were typed into, has gone:
-    // its record is read one last time, so an answer the session recorded still settles (delivered,
-    // or recorded), and then the words go (Trust's condition 3). Not while this host is still
-    // typing or watching it: its question may be out of the listing for a moment then. A claim
+    // The words of a held answer whose session, or the question they were typed into, has gone
+    // (Gone): its record is read one last time, so an answer the session recorded still settles
+    // (delivered, or recorded), and then the words go (Trust's condition 3). Not while this host is
+    // still typing or watching it: its question may be out of the listing for a moment then. A claim
     // left from before a restart is never in flight here.
     async Task SweepAsync(string? only = null)
     {
@@ -367,8 +379,7 @@ public sealed class AnswerService : ISessionAnswerer
         {
             foreach (var (key, request, by, at) in ledger.Holding())
             {
-                if (typing.ContainsKey(request) || (only is not null && by.Session != only)) { continue; }
-                if (source.GetForDelivery(by.Session)?.Question?.Id is { } asked && (asked == at.Call || asked == by.Question)) { continue; }
+                if (typing.ContainsKey(request) || (only is not null && by.Session != only) || !Gone(by, at)) { continue; }
                 if (ledger.WordsOf(key) is { } words && Reader(by, at, words, request) is { } read)
                 {
                     AnswerResult? later = null;
@@ -385,9 +396,28 @@ public sealed class AnswerService : ISessionAnswerer
                 }
                 ledger.Cancel(key);
             }
+            // A removal heard is needed only while words of that session are kept.
+            if (only is not null && removed.ContainsKey(only) && !ledger.Holding().Any(h => h.By.Session == only)) { removed.TryRemove(only, out _); }
         }
         catch (Exception e) { log($"the words of unconfirmed answers could not be swept: {e.GetType().Name}"); }
     }
+
+    // Whether a held answer's question has gone, on what is known, never on what is missing: its
+    // session listed asking another question (or none), unless discovery is held for its agent; or
+    // its session removed, as the source says when it ends. A session merely not listed (not yet
+    // found after a restart, or not accounted for while its agent is held, when nothing may be
+    // decided from its absence: ISessionSource.Held) keeps its words, at most their 24 hours.
+    bool Gone(AttemptLedger.Owner by, AttemptLedger.Reread at)
+    {
+        if (source.GetForDelivery(by.Session) is not { } session) { return removed.ContainsKey(by.Session); }
+        if (session.Question?.Id is { } asked && (asked == at.Call || asked == by.Question)) { return false; }
+        AgentKind? agent = at.Agent switch { "copilot" => AgentKind.Copilot, "claude" => AgentKind.Claude, _ => null };
+        return agent is { } kind && source.Held?.Agents.Contains(kind) != true;
+    }
+
+    // The sessions the source has said were removed, from the change that said so until one says
+    // they are back, or no words of theirs are kept.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> removed = new(StringComparer.Ordinal);
 
     // The requests this host is delivering: typed, or being watched for their record.
     readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> typing = new();
@@ -405,7 +435,7 @@ public sealed class AnswerService : ISessionAnswerer
     // memory answers, or another sender or a different answer, which goes the usual way and is
     // refused by the ledger once anything was typed: the same refusal for both, so a guess
     // cannot be told from a miss. A request seen first is recorded as the prompt's first.
-    FirstAnswer? SameAnswerBefore((string Session, string Question) prompt, Guid key, byte[] digest, string? sender, out bool foreign)
+    FirstAnswer? SameAnswerBefore((string Session, string Question) prompt, Guid key, byte[]? digest, string? sender, out bool foreign)
     {
         foreign = false;
         lock (firstGate)
@@ -431,7 +461,7 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 // Both compared, whatever the first says, and the digests in constant time.
                 var sameSender = string.Equals(known.Sender, sender, StringComparison.Ordinal);
-                var same = CryptographicOperations.FixedTimeEquals(known.Digest, digest) & sameSender;
+                var same = known.Digest is { } kept && digest is { } said && CryptographicOperations.FixedTimeEquals(kept, said) & sameSender;
                 // The request's own receipt, still remembered after a restart, answers its resend
                 // itself, as it did before #1159 (OutcomeMemory reads it again if unconfirmed).
                 if (known.Request == key) { return known.Last is not null && !requests.Knows(key) && !(known.Restored && ledger.Outcome(key) is not null) ? known : null; }

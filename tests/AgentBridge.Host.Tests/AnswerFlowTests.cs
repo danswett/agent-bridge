@@ -1200,7 +1200,9 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         }, Log);
         var attempts = Ledger();
         Serve(Host(attempts));
-        var answer = new { one = Canary, two = "second words" };
+        var answer = new { one = Canary, two = "yes" };
+        // What an unkeyed hash of this answer would be, in every form a file could hold it.
+        var plain = AnswerDigest.Of(new AnswerRequest { Id = Id, Question = "q2", Request = Guid.NewGuid().ToString(), Fields = JsonSerializer.SerializeToElement(answer).EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone()) });
         await AskFieldsAsync(new { one = new { type = "string" }, two = new { type = "string" } }, 2, answer);
         // The session records nothing: the answer is left unconfirmed.
         injector.OnInject = null;
@@ -1215,12 +1217,18 @@ public sealed class AnswerFlowTests : IAsyncLifetime
             replies.Add((await ch.RequestAsync(Ops.SessionGet, new { id = Id })).GetRawText());
             return result.GetProperty("outcome").GetString()!;
         }
-        // Every file the host writes but the words file itself.
+        // Every file the host writes but the words file itself; and no file, that one included, with
+        // a plain hash of the answer anyone could check a guess against.
         void NowhereElse()
         {
-            foreach (var file in Directory.EnumerateFiles(profile, "*", SearchOption.AllDirectories).Where(p => p != words))
+            foreach (var file in Directory.EnumerateFiles(profile, "*", SearchOption.AllDirectories))
             {
-                Assert.DoesNotContain(Canary, File.ReadAllText(file));
+                var bytes = File.ReadAllBytes(file);
+                var text = System.Text.Encoding.UTF8.GetString(bytes);
+                if (file != words) { Assert.DoesNotContain(Canary, text); }
+                Assert.DoesNotContain(Convert.ToBase64String(plain), text);
+                Assert.DoesNotContain(Convert.ToHexString(plain), text, StringComparison.OrdinalIgnoreCase);
+                Assert.True(bytes.AsSpan().IndexOf(plain) < 0);
             }
         }
         var request = Guid.NewGuid().ToString();

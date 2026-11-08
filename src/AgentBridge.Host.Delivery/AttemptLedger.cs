@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
@@ -38,9 +39,11 @@ public sealed class AttemptLedger
     // the words may still be read again.
     internal sealed record First(Guid Request, Owner By, byte[] Digest, DateTimeOffset At, AnswerResult? Result, Reread? Reread, AnswerWords.Words? Words);
 
-    // Entries written before #1159 have none of By, Digest, Result, Reread or WordsKey; their owner is
+    // Entries written before #1159 have none of By, Hmac, Result, Reread or WordsKey; their owner is
     // not known, so a lookup of their UUID is nobody's (AnswerService treats it as a request of its own).
-    sealed record ClaimEntry(DateTimeOffset At, Guid? Request, Owner? By = null, string? Digest = null, AnswerResult? Result = null, Reread? Reread = null, string? WordsKey = null);
+    // Hmac is the answer's hash keyed with this install's key (Seal); a plain hash written by an
+    // earlier build is under another name, never read, and so never matches.
+    sealed record ClaimEntry(DateTimeOffset At, Guid? Request, Owner? By = null, string? Hmac = null, AnswerResult? Result = null, Reread? Reread = null, string? WordsKey = null);
     sealed record Receipt(DateTimeOffset At, AnswerResult Result, Owner? By = null);
     sealed record FileData(int Version, Dictionary<string, ClaimEntry> Attempts, Dictionary<Guid, Receipt> Outcomes);
 
@@ -94,6 +97,10 @@ public sealed class AttemptLedger
             if (Load() is { } problem) { return problem; }
             if (attempts!.ContainsKey(key)) { return AlreadyTyped; }
             var now = time.GetUtcNow();
+            // No key to hash it with: nothing may rely on its hash, so it is refused before any key
+            // as one the machine can't keep safely.
+            string? hash = null;
+            if (admission is not null && (hash = Seal(admission.Digest)) is null) { return DeliveryReasons.CannotHoldAnswer; }
             string? held = null;
             if (admission is { Reread: not null, Words: { } said })
             {
@@ -112,7 +119,7 @@ public sealed class AttemptLedger
                     attempts[k] = c with { Reread = null, WordsKey = null };
                 }
             }
-            attempts[key] = new(now, request, admission?.By, admission is null ? null : Convert.ToBase64String(admission.Digest),
+            attempts[key] = new(now, request, admission?.By, hash,
                 null, held is null ? null : admission!.Reread, held);
             if (Save() is { } failed)
             {
@@ -140,7 +147,8 @@ public sealed class AttemptLedger
     }
 
     // Whether the request's UUID is known here, by a receipt still remembered or by a claim, and
-    // who it was admitted for: null for an entry from before #1159, whose owner is not known.
+    // who it was admitted for: null for an entry from before #1159, whose owner is not known, and
+    // for one whose hash was made with a key this install no longer has (lost or replaced).
     internal bool Known(Guid request, out Owner? by)
     {
         lock (gate)
@@ -148,18 +156,19 @@ public sealed class AttemptLedger
             by = null;
             if (Load() is not null) { return false; }
             var claim = attempts!.Values.Where(a => a.Request == request).MaxBy(a => a.At);
+            var nobodys = claim is { Hmac: { } hash } && Opened(hash) is null;
             if (outcomes!.TryGetValue(request, out var receipt) && receipt.At >= time.GetUtcNow() - RememberFor)
             {
-                by = receipt.By ?? claim?.By;
+                by = nobodys ? null : receipt.By ?? claim?.By;
                 return true;
             }
-            by = claim?.By;
+            by = nobodys ? null : claim?.By;
             return claim is not null;
         }
     }
 
     // The prompt's first answer kept here, for a host that does not have it in memory: the latest
-    // claim admitted for that session and question.
+    // claim admitted for that session and question, whose hash this install's key still opens.
     internal First? FirstFor(string session, string question)
     {
         lock (gate)
@@ -167,16 +176,40 @@ public sealed class AttemptLedger
             if (Load() is not null) { return null; }
             var now = time.GetUtcNow();
             var found = attempts!.Values
-                .Where(c => c.Request is not null && c.Digest is not null && c.By is { } by && by.Session == session && by.Question == question)
+                .Where(c => c.Request is not null && c.Hmac is not null && c.By is { } by && by.Session == session && by.Question == question)
                 .MaxBy(c => c.At);
-            if (found is null) { return null; }
-            byte[] digest;
-            try { digest = Convert.FromBase64String(found.Digest!); }
-            catch (FormatException) { return null; }
+            if (found is null || Opened(found.Hmac!) is not { } digest) { return null; }
             var said = Words(found, now);
             return new First(found.Request!.Value, found.By!, digest, found.At, found.Result, said is null ? null : found.Reread, said);
         }
     }
+
+    // An answer's digest (AnswerDigest) keyed with this install's key, as the ledger keeps it and
+    // AnswerService compares it: HMAC-SHA-256, so the Codex sandbox group, which can read the
+    // ledger, can't confirm a guess at a short answer by hashing it. Null with no key.
+    internal byte[]? Keyed(byte[] digest)
+    {
+        lock (gate)
+        {
+            Load();
+            return words.Key(checkNow: false) is { } key ? HMACSHA256.HashData(key, digest) : null;
+        }
+    }
+
+    // The keyed hash as written: the key's id, then the hash, so one made with a key since lost or
+    // replaced is known for what it is and never matched. Made only with a key checked private now.
+    string? Seal(byte[] digest) =>
+        words.Key(checkNow: true) is { } key ? $"{KeyId(key)}.{Convert.ToBase64String(HMACSHA256.HashData(key, digest))}" : null;
+
+    byte[]? Opened(string hash)
+    {
+        var dot = hash.IndexOf('.', StringComparison.Ordinal);
+        if (dot <= 0 || words.Key(checkNow: false) is not { } key || hash[..dot] != KeyId(key)) { return null; }
+        try { return Convert.FromBase64String(hash[(dot + 1)..]); }
+        catch (FormatException) { return null; }
+    }
+
+    static string KeyId(byte[] key) => Convert.ToHexString(HMACSHA256.HashData(key, "agent-bridge answer key id"u8))[..16];
 
     // The latest result kept for the request's claim, as first settled or read again since.
     internal AnswerResult? ResultOf(Guid request)
