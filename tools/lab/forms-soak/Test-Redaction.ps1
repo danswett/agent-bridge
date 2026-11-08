@@ -12,6 +12,13 @@ $cases = @(
     @{ In = 'github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz'; Must = 'github_pat_11ABC' },
     @{ In = "password: $secret"; Must = $secret },
     @{ In = 'see C:\Users\someone\file.txt'; Must = 'someone' },
+    @{ In = "COPILOT_GITHUB_TOKEN=$secret"; Must = $secret },
+    @{ In = "access_token=$secret"; Must = $secret },
+    @{ In = "{`"token`":`"$secret`"}"; Must = $secret },
+    @{ In = 'Authorization: Basic dXNlcjpwYXNz'; Must = 'dXNlcjpwYXNz' },
+    @{ In = 'password: "my secret words"'; Must = 'words' },
+    @{ In = 'see C:/Users/someone/x.txt'; Must = 'someone' },
+    @{ In = 'see \\srv\share\someone'; Must = 'share' },
     @{ In = 'mail a.person@example.com now'; Must = 'a.person' }
 )
 $failed = 0

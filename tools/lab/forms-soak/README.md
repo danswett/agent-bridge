@@ -24,13 +24,14 @@ later full-path mode that goes through the local pipe; it needs a form the host 
 Read in the code (`AnswerService.TypeFieldsAsync`, `KeyPlan`, `KeySend`, `WorkerInjector`):
 
 - The injector worker types a plan's sends in order and re-checks the screen only for a send
-  that carries `Expect` or `Checks` (rows it must still read exactly so, taken in the same
-  attach); it checks nothing between sends that carry none.
+  that carries `Expect` (rows it must still read exactly so) or `Checks` (predicates on the
+  screen), taken in the same attach; it checks nothing between sends that carry neither.
 - `CopilotPlanner.Plan` builds sends with no `Expect` or `Checks`.
 - The host does not hand that plan to the injector whole. `AnswerService.TypeFieldsAsync` sends it
   field by field: it reads the screen, holds each write to the rows the form shows at that
-  field, sends the field's Enter alone once the screen has settled, and stops, leaving the form
-  part answered and saying so, if the screen changed.
+  field, sends the field's Enter alone (after a text field's words are visible on screen, or the
+  screen has settled), and stops, leaving the form part answered and saying so, if the screen
+  changed in a way it cannot recover; a recoverable change on the same field is re-read and retried.
 - This rig checks the screen once, with `Diagnose` at field 0, then gives the injector the
   whole plan to type blind. It does not run the host's per-field path (that method is private
   to the host).

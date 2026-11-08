@@ -133,11 +133,13 @@ function Invoke-OneRun {
         # state there, so a run never reads or writes the user's own, and it is pruned with the run.
         # The token, if any, comes from the environment the rig was started in.
         $previousHome = $env:COPILOT_HOME
-        $env:COPILOT_HOME = Join-Path $workDir 'home'
-        New-Item -ItemType Directory -Force $env:COPILOT_HOME | Out-Null
-        # The folder is trusted up front, or the CLI asks about it before it draws anything else.
-        @{ trustedFolders = @($workDir) } | ConvertTo-Json | Set-Content (Join-Path $env:COPILOT_HOME 'config.json') -Encoding utf8
-        try { $console = Start-Process -FilePath $env:ComSpec -ArgumentList '/d', '/c', "`"$line`"" -WorkingDirectory $workDir -WindowStyle Hidden -PassThru }
+        try {
+            $env:COPILOT_HOME = Join-Path $workDir 'home'
+            New-Item -ItemType Directory -Force $env:COPILOT_HOME | Out-Null
+            # The folder is trusted up front, or the CLI asks about it before it draws anything else.
+            @{ trustedFolders = @($workDir) } | ConvertTo-Json | Set-Content (Join-Path $env:COPILOT_HOME 'config.json') -Encoding utf8
+            $console = Start-Process -FilePath $env:ComSpec -ArgumentList '/d', '/c', "`"$line`"" -WorkingDirectory $workDir -WindowStyle Hidden -PassThru
+        }
         finally { $env:COPILOT_HOME = $previousHome }
         $consoleId = $console.Id
 
