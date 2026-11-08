@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -179,7 +180,12 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     }
 
     // FromStart: a question already pending when the host started, notified again as itself (sr-1020).
-    sealed record Due(NoticeKind Kind, DateTimeOffset At, string? Question, bool FromStart = false);
+    // Since: when what it says was first seen, for the push log's timeline (#1190); At when unset.
+    sealed record Due(NoticeKind Kind, DateTimeOffset At, string? Question, bool FromStart = false)
+    {
+        public DateTimeOffset? Since { get; init; }
+        public DateTimeOffset Queued => Since ?? At;
+    }
 
     sealed class Outgoing
     {
@@ -204,6 +210,10 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         public int Episode;
         // A machine notice's: set once it has been sent, or never will be (NotifyMachine).
         public TaskCompletionSource? Settled;
+        // For the push log's timeline (#1190): when what it says was first seen (Created when
+        // unset), and when its latest attempt was handed to the relay.
+        public DateTimeOffset? Queued;
+        public DateTimeOffset? SentAt;
     }
 
     // Whether a device has the app on screen now, subscribed to this host (SessionService.Watching).
@@ -232,7 +242,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
             {
                 if (sessions.ContainsKey(s.Id)) { continue; }
                 var t = sessions[s.Id] = new Tracked { Last = s, MainKey = MainKey(s), MainRunning = s.WaitingOn is null && s.Status is SessionStatus.Working or SessionStatus.Waiting };
-                if (s.Question is { } q) { t.Due = new Due(NoticeKind.Question, now + this.options.QuestionDelay, q.Id, FromStart: true); }
+                if (s.Question is { } q) { t.Due = new Due(NoticeKind.Question, now + this.options.QuestionDelay, q.Id, FromStart: true) { Since = now }; }
             }
         }
     }
@@ -540,7 +550,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
             }
             if (!t.Notified.Contains(q.Id) && !(t.Due is { Kind: NoticeKind.Question } d && d.Question == q.Id))
             {
-                t.Due = new Due(NoticeKind.Question, now + options.QuestionDelay, q.Id);
+                t.Due = new Due(NoticeKind.Question, now + options.QuestionDelay, q.Id) { Since = now };
             }
             // Still on devices (it flickered away and back, which ended the episode): reminded as if
             // notified now, unless it already was.
@@ -560,13 +570,13 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         if (!Failed(s) && s.Status == SessionStatus.Idle && turnRan
             && !string.IsNullOrWhiteSpace(OwnResponse(s)) && FinishedKey(s) != t.FinishedKey)
         {
-            t.Due = new Due(NoticeKind.Finished, now + options.FinishedDelay, null);
+            t.Due = new Due(NoticeKind.Finished, now + options.FinishedDelay, null) { Since = now };
         }
         // The turn carried on before the notice went: the person is at the machine.
         else if (s.Status != SessionStatus.Idle && t.Due is { Kind: NoticeKind.Finished }) { t.Due = null; }
         // A question on devices is no longer asked. Not at once: a turn that finishes soon
         // after replaces it with its own notice.
-        if ((t.Shown ?? grouped.GetValueOrDefault(s.Id)) is { } shown && t.Due is null) { t.Due = new Due(NoticeKind.Resolved, now + options.QuestionDelay, shown); }
+        if ((t.Shown ?? grouped.GetValueOrDefault(s.Id)) is { } shown && t.Due is null) { t.Due = new Due(NoticeKind.Resolved, now + options.QuestionDelay, shown) { Since = now }; }
     }
 
     static bool NeedsYou(Session s) => (s.Class ?? NotificationClasses.Of(s)) == NotificationClass.NeedsYou;
@@ -646,28 +656,30 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
             lock (gate)
             {
                 var now = time.GetUtcNow();
-                outbox.RemoveAll(o => o.Created + TimeSpan.FromSeconds(o.Ttl) < now);
+                outbox.RemoveAll(o => o.Created + TimeSpan.FromSeconds(o.Ttl) < now && Dropped(o, "expired", now));
                 var ready = outbox.FirstOrDefault(o => o.NotBefore <= now);
                 if (ready is null || sender is not { Connected: true } s || s == broken) { return NextWake(now); }
                 while (recent.Count > 0 && now - recent.Peek() >= TimeSpan.FromMinutes(1)) { recent.Dequeue(); }
                 if (recent.Count >= options.MaxPerMinute) { return NextWake(now); }
                 outbox.Remove(ready);
-                if (store.Get(ready.Device) is not { } found) { ready.Settled?.TrySetResult(); continue; }
-                if (ready.Reminder && !StillReminds(ready)) { continue; }
+                if (store.Get(ready.Device) is not { } found) { Dropped(ready, "unsubscribed", now); ready.Settled?.TrySetResult(); continue; }
+                if (ready.Reminder && !StillReminds(ready)) { Dropped(ready, "answered", now); continue; }
                 // A finished notice that waited (the relay down, the rate limit, a retry, or
                 // collapsed) is not sent to a device now on screen; a collapsed one only while
                 // still true.
                 // Nor while the session's turn ended in failure (#845), however it came back to
                 // the outbox: a retry, or a reconnect, after the attention began.
-                if (ready.Kind == NoticeKind.SignIn && !NeedSignIn().ContainsKey(ready.Session)) { continue; }
+                if (ready.Kind == NoticeKind.SignIn && !NeedSignIn().ContainsKey(ready.Session)) { Dropped(ready, "signed-in", now); continue; }
                 if (ready.Kind == NoticeKind.Finished && Failed(sessions.GetValueOrDefault(ready.Session)?.Last))
                 {
+                    Dropped(ready, "turn-failed", now);
                     Unreplaced(sessions[ready.Session], now);
                     continue;
                 }
-                if (ready.Kind == NoticeKind.Finished && (Sees(ready.Device, ready.Session)
-                    || ready.Collapsed && sessions.GetValueOrDefault(ready.Session) is not { Removed: false, Last: { Status: SessionStatus.Idle, Question: null } })) { continue; }
-                if (!MayNotify(found) || ready.Grant != found.Grant) { ready.Settled?.TrySetResult(); continue; }
+                if (ready.Kind == NoticeKind.Finished && Sees(ready.Device, ready.Session)) { Dropped(ready, "on-screen", now); continue; }
+                if (ready.Kind == NoticeKind.Finished && ready.Collapsed
+                    && sessions.GetValueOrDefault(ready.Session) is not { Removed: false, Last: { Status: SessionStatus.Idle, Question: null } }) { Dropped(ready, "collapse-moved-on", now); continue; }
+                if (!MayNotify(found) || ready.Grant != found.Grant) { Dropped(ready, "not-allowed", now); ready.Settled?.TrySetResult(); continue; }
                 (next, sub, via) = (ready, found, s);
             }
             PushResult result;
@@ -685,6 +697,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                         return NextWake(now);
                     }
                     recent.Enqueue(now);
+                    next.SentAt = now;
                 }
                 result = await via.PushAsync(sub.Endpoint, encrypted, next.Ttl, next.Urgency, next.Topic);
             }
@@ -704,6 +717,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     if (sender == via) { broken = via; }
                     if (MayNotify(sub) && store.Get(sub.Device)?.Grant == sub.Grant
                         && !outbox.Any(o => o.Device == next.Device && o.Session == next.Session)) { outbox.Insert(0, next); }
+                    log($"{Timeline(next)} sent={Ms((next.SentAt ?? time.GetUtcNow()) - QueuedAt(next))} outcome=relay-down");
                     log($"push to {sub.Name} not sent ({e.GetType().Name}); will send after reconnecting");
                     // Still wakes for notices coming due; sending waits for Attach.
                     return NextWake(time.GetUtcNow());
@@ -711,6 +725,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
             }
             catch (Exception e) when (e is CryptographicException or ArgumentException)
             {
+                lock (gate) { Dropped(next, "unencryptable", time.GetUtcNow()); }
                 log($"push to {sub.Name} could not be encrypted ({e.Message}); dropped");
                 next.Settled?.TrySetResult();
                 continue;
@@ -722,6 +737,12 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
     void Sent(Outgoing o, PushSubscriber sub, PushResult r)
     {
         var transient = r.Status is 429 or >= 500 || (r.Status == 0 && r.Error is "rate-limited" or "unreachable");
+        var allowed = MayNotify(sub) && store.Get(sub.Device)?.Grant == sub.Grant;
+        var outcome = r.Status is >= 200 and < 300 ? "delivered" : r.Status is 404 or 410 ? "gone" : !allowed ? "not-allowed"
+            : transient && o.Attempts + 1 < options.MaxAttempts ? "retrying" : "refused";
+        // The push service's status only: its error text stays on the lines below, as before.
+        var answered = time.GetUtcNow();
+        log($"{Timeline(o)} sent={Ms((o.SentAt ?? answered) - QueuedAt(o))} response={Ms(answered - QueuedAt(o))} status={r.Status} attempt={o.Attempts + 1} outcome={outcome}");
         // Settled unless it is tried again below.
         if (!transient || o.Attempts + 1 >= options.MaxAttempts || !MayNotify(sub) || store.Get(sub.Device)?.Grant != sub.Grant) { o.Settled?.TrySetResult(); }
         if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != sub.Grant) { return; }
@@ -823,7 +844,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                         t.Shown = due.Question;
                         // One of a burst's still counts in its group while pending, now with this question.
                         if (grouped.ContainsKey(id)) { grouped[id] = due.Question!; }
-                        Enqueue(s!, NoticeKind.Question, due.Question, store.All);
+                        Enqueue(s!, NoticeKind.Question, due.Question, store.All, queued: due.Queued);
                         if (!due.FromStart && !InBurst(now))
                         {
                             (burstUntil, burstLead, burstAlerted) = (now + options.BurstWindow, id, false);
@@ -848,11 +869,12 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                     foreach (var d in store.All)
                     {
                         if (!Sees(d.Device, id)) { unseen.Add(d); continue; }
+                        if (MayNotify(d)) { log($"{Timeline(NoticeKind.Finished, id, d.Device, due.Queued, now)} dropped=on-screen at={Ms(now - due.Queued)}"); }
                         // Not sent, but what was waiting for that device (a question not yet
                         // delivered, a collapsed finished) is stale all the same.
                         outbox.RemoveAll(o => o.Device == d.Device && o.Session == id);
                     }
-                    Enqueue(s, NoticeKind.Finished, null, unseen);
+                    Enqueue(s, NoticeKind.Finished, null, unseen, queued: due.Queued);
                     break;
                 // Checked again as it goes: a question asked once more is not resolved.
                 case NoticeKind.Resolved when s is not null && (t.Removed || s.Question?.Id != due.Question):
@@ -865,7 +887,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                         // A question notice that never left needs no follow-up: it just goes.
                         outbox.RemoveAll(o => o.Session == id && o.Kind == NoticeKind.Question && o.Question == q);
                         var to = store.All.Where(d => d.Device != answerer && shownOn.GetValueOrDefault((d.Device, id)) == q).ToList();
-                        Enqueue(s, NoticeKind.Resolved, q, to, ended: t.Removed);
+                        Enqueue(s, NoticeKind.Resolved, q, to, ended: t.Removed, queued: due.Queued);
                         break;
                     }
             }
@@ -1112,7 +1134,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
         while (t.NotifiedOrder.Count > 64) { t.Notified.Remove(t.NotifiedOrder.Dequeue()); }
     }
 
-    void Enqueue(Session s, NoticeKind kind, string? question, IReadOnlyList<PushSubscriber> to, bool ended = false, bool reminder = false)
+    void Enqueue(Session s, NoticeKind kind, string? question, IReadOnlyList<PushSubscriber> to, bool ended = false, bool reminder = false, DateTimeOffset? queued = null)
     {
         var now = time.GetUtcNow();
         foreach (var sub in to)
@@ -1127,7 +1149,7 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
             {
                 notBefore = last + options.FinishedCollapse;
             }
-            outbox.Add(new Outgoing
+            var item = new Outgoing
             {
                 Device = sub.Device,
                 Session = s.Id,
@@ -1143,9 +1165,37 @@ public sealed class PushNotifier : IAsyncDisposable, IManageNotices
                 Collapsed = notBefore > now,
                 Reminder = reminder,
                 Episode = reminder && sessions.TryGetValue(s.Id, out var tracked) ? tracked.Episode : 0,
-            });
+                Queued = queued,
+            };
+            outbox.Add(item);
+            if (item.Collapsed) { log($"{Timeline(item)} held=collapse until={Ms(item.NotBefore - QueuedAt(item))}"); }
         }
     }
+
+    // The push log's timeline of one notice (#1190): what and for whom, by the start of the ids only,
+    // when what it says was first seen (UTC) and how long after that the host made the notice
+    // (QuestionDelay, FinishedDelay). No text of the notice, no endpoint, no full id.
+    string Timeline(Outgoing o) => Timeline(o.Kind, o.Session, o.Device, QueuedAt(o), o.Created);
+
+    static string Timeline(NoticeKind kind, string session, string device, DateTimeOffset queued, DateTimeOffset decided) =>
+        $"push {kind.ToString().ToLowerInvariant()} session={ShortId(session)} device={ShortId(device)} queued={queued.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture)} decided={Ms(decided - queued)}";
+
+    static DateTimeOffset QueuedAt(Outgoing o) => o.Queued ?? o.Created;
+
+    static string Ms(TimeSpan t) =>
+        (t < TimeSpan.Zero ? "" : "+") + ((long)Math.Round(t.TotalMilliseconds)).ToString(CultureInfo.InvariantCulture) + "ms";
+
+    // A notice that will not go, said in the log with its timeline; true, to drop it from a RemoveAll.
+    bool Dropped(Outgoing o, string why, DateTimeOffset now)
+    {
+        log($"{Timeline(o)} dropped={why} at={Ms(now - QueuedAt(o))}");
+        return true;
+    }
+
+    // A session's or device's id cut to 8, as the rest of the log has them. The keys that stand in for
+    // a session (the grouped, machine and restore notices', a sign-in's, whose account part is
+    // already a hash) say what they are whole.
+    static string ShortId(string id) => id.StartsWith('~') || id.StartsWith("signin:", StringComparison.Ordinal) ? id : id[..Math.Min(8, id.Length)];
 
     // What a reboot or a crash took (#780), once per host start: to every device that may be told,
     // as soon as the host knows (RestoreRecorder.NoticeReady). It names no question and opens the

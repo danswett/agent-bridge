@@ -522,6 +522,94 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Equal("DEV · finished\nfour", LastBody());
     }
 
+    // #1190: where a push's time goes, in the host's log: when what it says was first seen, when the
+    // host made the notice, handed it to the relay and heard back, by the start of the ids only.
+    [Fact]
+    public async Task A_question_push_logs_when_it_was_queued_decided_sent_and_answered_by_the_push_service()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Respond = _ =>
+        {
+            time.Advance(TimeSpan.FromMilliseconds(250));
+            return new PushResult(201, null);
+        };
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+
+        await After(TimeSpan.FromSeconds(2));
+
+        var line = Assert.Single(logs, l => l.StartsWith("push question ", StringComparison.Ordinal));
+        Assert.Equal("push question session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+2000ms sent=+2000ms response=+2250ms status=201 attempt=1 outcome=delivered", line);
+        Assert.DoesNotContain(Phone, line);
+        Assert.DoesNotContain("Which database", line);
+    }
+
+    [Fact]
+    public async Task A_push_the_push_service_turns_away_for_now_logs_its_status_and_that_it_will_be_retried()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Respond = _ => new PushResult(503, "busy");
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Contains("push question session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+2000ms sent=+2000ms response=+2000ms status=503 attempt=1 outcome=retrying", logs);
+    }
+
+    [Fact]
+    public async Task A_finished_turn_not_pushed_to_a_device_on_screen_is_logged_as_dropped_there_and_sent_to_the_other()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        notifier.Watching = device => device == Phone;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=on-screen at=+3000ms", logs);
+        Assert.Contains("push finished session=s1 device=bbbbbbbb queued=2026-10-28T04:00:00.000Z decided=+3000ms sent=+3000ms response=+3000ms status=201 attempt=1 outcome=delivered", logs);
+    }
+
+    [Fact]
+    public async Task A_finished_push_that_waited_for_the_relay_is_logged_as_dropped_once_its_device_is_on_screen()
+    {
+        Start();
+        Subscribe(Phone);
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+
+        notifier.Watching = device => device == Phone;
+        notifier.Attach(new FakeSender(Account));
+        await After(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=on-screen at=+8000ms", logs);
+    }
+
+    [Fact]
+    public async Task A_finished_turn_held_by_the_ten_minute_collapse_logs_that_it_is_held_and_how_long_it_took_once_it_goes()
+    {
+        Start();
+        Subscribe(Phone);
+        async Task TurnAsync(string response, int turns)
+        {
+            source.Upsert(S("s1", SessionStatus.Working, turns: turns - 1));
+            source.Upsert(S("s1", SessionStatus.Idle, response: response, turns: turns));
+            await After(TimeSpan.FromSeconds(3));
+        }
+
+        await TurnAsync("one", 1);
+        await TurnAsync("two", 2);
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:03.000Z decided=+3000ms held=collapse until=+600000ms", logs);
+
+        await After(new PushOptions().FinishedCollapse);
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:03.000Z decided=+3000ms sent=+603000ms response=+603000ms status=201 attempt=1 outcome=delivered", logs);
+    }
+
     static readonly Attention SignedOut = new() { Kind = AttentionKind.SignInNeeded, Since = T, Agent = AgentKind.Copilot, Provider = "github" };
 
     // The pushes about sessions, without the machine's sign-in notices.
