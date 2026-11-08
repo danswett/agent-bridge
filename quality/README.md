@@ -324,7 +324,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    for reruns with `gh workflow run --ref`, fires only once the file has run or is on `main`), or
    listed in the catalog with `status: planned`. It also checks ci.yml's wiring to the plan, which
    only names hold together: every job whose `if:` reads the plan has exactly the one gate shape
-   (its own output, and it runs in the whole ring whatever the plan says); the plan
+   (its own output, and it runs in the whole ring whatever the plan says, except `app` on a pull
+   request, which runs only when its own output is true: the whole ring alone no longer brings
+   the packaging legs to a pull request, and a pull request's whole ring leaves the
+   `windows-11-arm` product leg to `main`, #1249); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
    delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, `sign`, each pinned to

@@ -469,7 +469,23 @@ suites:
     # What the app's build takes in from outside src/ (the protocol's example sessions, embedded
     # in App.Core for the demo the self-test runs) reaches it through builds (#487).
     builds: src/AgentBridge.App
-    triggers: [src/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, design/**]
+    # src/** is not a trigger (#1249): the app's folder and what it builds from (builds), the other
+    # projects pack-app.ps1 publishes, and the packaging inputs are. app-package-host adds the
+    # host's own closure.
+    triggers: [src/AgentBridge.App/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, LICENSE, design/**]
+    command: see ci.yml app job
+    where: ci.yml app
+    status: exists
+
+  - id: app-package-host
+    kind: packaging
+    ring: 1
+    select: affected
+    # The host and every project it builds from ship inside the app's package (pack-app.ps1
+    # publishes it), so a change to any of them packages the app too.
+    platforms: [win-x64, win-arm64]
+    runner: hosted
+    builds: src/AgentBridge.Host
     command: see ci.yml app job
     where: ci.yml app
     status: exists

@@ -1200,7 +1200,10 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   host through the in-process relay with the host's account), toast plans and activation handling, background updates (`AutoUpdaterTests`: a release downloaded and waiting for Restart to update, a device's Install waiting for the sessions however long that takes, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, the host never left down and never started by it, a lost link made again, "Needs you" past six hours, and the rate-limit hold), host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
-* CI (`app` jobs, one for x64 on `windows-latest` and one for Arm64 on `windows-11-arm`) runs
+* CI (`app` jobs, one for x64 on `windows-latest` and one for Arm64 on `windows-11-arm`) runs on
+  `main` always, and on a pull request only when it changes the app, its packaging inputs or the
+  projects `pack-app.ps1` publishes (`app-package` and `app-package-host` in the quality catalog).
+  Each runs
   `build/pack-app.ps1 -Runtime <win-x64|win-arm64>`: publishes the app, host, launcher, injector
   and hook into one folder for that architecture, checks for the app's `.pri`, the executables
   (each built for that machine) and the bundled Slipgates Sans
