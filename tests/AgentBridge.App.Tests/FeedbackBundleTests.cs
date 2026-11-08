@@ -311,6 +311,9 @@ public class FeedbackBundleTests
         Assert.True(FeedbackRedactor.BundleHasSecret("{\"password\":\"'hunter2\"}"));
         Assert.True(FeedbackRedactor.BundleHasSecret("{\"password\":\",x\"}"));
         Assert.True(FeedbackRedactor.BundleHasSecret("{\"token\":[\"abc\"]}"));
+        Assert.False(FeedbackRedactor.BundleHasSecret("{\"token\":[\"" + FeedbackRedactor.EscapedMark + "\"]}"));
+        // A bare word "token" followed by a value is prose, not a credential pattern, escaped or not.
+        Assert.False(FeedbackRedactor.ContainsSecret("token hunter2") || FeedbackRedactor.ContainsSecret("token\\u0020hunter2"));
     }
 
     [Fact]
@@ -354,6 +357,9 @@ public class FeedbackBundleTests
     [InlineData("{\"msg\":\"password\\u003Ahunter2\"}", "hunter2")]
     [InlineData("{\"msg\":\"--password\\u0020hunter2\"}", "hunter2")]
     [InlineData("{\"msg\":\"--token\\u0020hunter2zz\"}", "hunter2zz")]
+    [InlineData("\\u005cu0070assword=hunter2", "hunter2")]
+    [InlineData("\\u005cu005cu0070assword=hunter2", "hunter2")]
+    [InlineData("\\u005c\\u0075\\u0030\\u0030\\u0037\\u0030assword=hunter2", "hunter2")]
     [InlineData("{\"msg\":\"password\\u003D\\u0022hunter2 more\\u0022\"}", "hunter2")]
     public void An_escaped_quote_or_control_char_inside_a_value_does_not_end_it(string input, string gone)
     {

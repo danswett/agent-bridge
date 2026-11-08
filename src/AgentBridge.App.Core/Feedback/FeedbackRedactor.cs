@@ -45,7 +45,22 @@ public static partial class FeedbackRedactor
     static string RedactSecrets(string text)
     {
         var redacted = Pass(text);
-        return HasSecretIn(Normalize(redacted)) ? EscapedMark : redacted;
+        return HiddenSecret(redacted) ? EscapedMark : redacted;
+    }
+
+    // Decodes again and again (a key can be escaped twice: \u005cu0070assword) and checks each view.
+    // Escapes still left after the cap fail closed.
+    static bool HiddenSecret(string text)
+    {
+        var view = text;
+        for (var pass = 0; pass < 4; pass++)
+        {
+            var next = Normalize(view);
+            if (string.Equals(next, view, StringComparison.Ordinal)) { return false; }
+            if (HasSecretIn(next)) { return true; }
+            view = next;
+        }
+        return EscapeSequence().IsMatch(view);
     }
 
     public const string EscapedMark = "[redacted: escaped secret]";
@@ -88,7 +103,7 @@ public static partial class FeedbackRedactor
         if (string.IsNullOrEmpty(text)) { return false; }
         try
         {
-            return HasSecretIn(text) || HasSecretIn(Normalize(text));
+            return HasSecretIn(text) || HiddenSecret(text);
         }
         catch (RegexMatchTimeoutException) { return true; }
     }
@@ -128,7 +143,7 @@ public static partial class FeedbackRedactor
 
         // Any value under a credential name counts unless it is empty or already redacted, whatever
         // characters it starts with.
-        static bool HoldsValue(string? v) => !string.IsNullOrEmpty(v) && !v.Contains(Mark, StringComparison.Ordinal);
+        static bool HoldsValue(string? v) => !string.IsNullOrEmpty(v) && !v.Contains(Mark, StringComparison.Ordinal) && !v.Contains(EscapedMark, StringComparison.Ordinal);
     }
 
     static readonly string[] CredentialNames = ["password", "passwd", "pwd", "secret", "token", "apikey", "accesskey", "authorization", "privatekey", "credential", "credentials", "connectionstring"];
