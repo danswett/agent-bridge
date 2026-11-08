@@ -246,6 +246,16 @@ public class RelayDeploymentTests
         var body = await new HttpClient().GetStringAsync(new Uri(relay.Url, "/healthz"));
         Assert.Contains("\"sockets\"", body);
         foreach (var identity in new[] { "octo", "host-a", "app-b", host.Id[..8] }) { Assert.DoesNotContain(identity, body); }
+
+        // A hostname nobody is on is listed with 0, not missing, so it reads differently from a relay that is down.
+        Assert.Contains(sockets, s => s is { Kind: "host", Site: "relay.bad-duck.com", Count: 0 });
+        Assert.Contains(sockets, s => s is { Kind: "pwa", Site: "other", Count: 0 });
+
+        // Closing a socket takes it back out of the count.
+        await app.DisposeAsync();
+        for (var i = 0; i < 100 && hub.OnlineByKind().Any(s => s is { Kind: "app", Site: "other", Count: > 0 }); i++) { await Task.Delay(50); }
+        Assert.Contains(hub.OnlineByKind(), s => s is { Kind: "app", Site: "other", Count: 0 });
+        Assert.Contains(hub.OnlineByKind(), s => s is { Kind: "host", Site: "other", Count: 1 });
     }
 
     [Theory]

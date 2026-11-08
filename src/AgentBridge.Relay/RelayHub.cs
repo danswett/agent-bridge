@@ -20,8 +20,14 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
 
     public int Online => accounts.Values.Sum(a => a.Count);
     // Sockets by device kind, for the live-sockets gauge. Kinds only, never an account or device.
-    public IEnumerable<(string Kind, string Site, int Count)> OnlineByKind() =>
-        accounts.Values.SelectMany(a => a.Values).GroupBy(c => (c.Kind, c.Site)).Select(g => (g.Key.Kind, g.Key.Site, g.Count())).ToList();
+    // Every configured hostname (and other) x every kind is listed, zero included, so a hostname
+    // that has emptied reads 0 rather than vanishing like a relay that is down.
+    public IEnumerable<(string Kind, string Site, int Count)> OnlineByKind()
+    {
+        var live = accounts.Values.SelectMany(a => a.Values).GroupBy(c => (c.Kind, c.Site)).ToDictionary(g => g.Key, g => g.Count());
+        var sites = options.Hostnames.Select(h => h.ToLowerInvariant()).Append("other").Distinct();
+        return sites.SelectMany(s => Kinds.Select(k => (k, s, live.GetValueOrDefault((k, s))))).ToList();
+    }
 
     // The Host header reduced to a configured name or "other": never free text, so a client
     // cannot mint metric labels by sending its own.
@@ -29,7 +35,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     {
         if (string.IsNullOrEmpty(host)) { return "other"; }
         var name = host.Split(":")[0].TrimEnd(".".ToCharArray());
-        return options.KnownHostnames.FirstOrDefault(h => h.Equals(name, StringComparison.OrdinalIgnoreCase))?.ToLowerInvariant() ?? "other";
+        return options.Hostnames.FirstOrDefault(h => h.Equals(name, StringComparison.OrdinalIgnoreCase))?.ToLowerInvariant() ?? "other";
     }
 
     // Set when the process is told to stop. Readiness then fails and new sockets are refused,

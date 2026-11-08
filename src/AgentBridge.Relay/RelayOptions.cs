@@ -33,7 +33,10 @@ public sealed class RelayOptions
     // on if it is listed here, else under "other", so the label set stays small and fixed.
     // The relay cannot otherwise tell which name a device used; this is how the retirement of
     // relay.bad-duck.com is measured.
-    public string[] KnownHostnames { get; set; } = ["relay.slipgates.com", "relay.bad-duck.com"];
+    // Empty means the two production names; configuring any replaces them (the binder would
+    // otherwise append to a default array and never let one be dropped).
+    public string[] KnownHostnames { get; set; } = [];
+    public IReadOnlyList<string> Hostnames => KnownHostnames.Length > 0 ? KnownHostnames : ["relay.slipgates.com", "relay.bad-duck.com"];
     // Production serves no app code: a relay that could change the PWA it serves could
     // read what the PWA decrypts. A dev stack can serve one same-origin from wwwroot. Off
     // unless asked for, and the product image ships no wwwroot (the spike defaulted to on).
