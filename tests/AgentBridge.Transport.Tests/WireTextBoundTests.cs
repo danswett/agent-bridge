@@ -33,7 +33,7 @@ public class WireTextBoundTests
         var size = Wire.MaxFrame + 1000;
         var send = SendTextAsync(server, size, 'a');
 
-        var frame = await Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default);
+        var frame = await Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true);
         await send;
 
         Assert.Equal(size, frame!.Value.Data.Length);
@@ -49,8 +49,8 @@ public class WireTextBoundTests
             await SendTextAsync(server, 5, 'b');
         });
 
-        var dropped = await Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default);
-        var next = await Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default);
+        var dropped = await Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true);
+        var next = await Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true);
 
         await send;
         Assert.Empty(dropped!.Value.Data);
@@ -63,7 +63,17 @@ public class WireTextBoundTests
         var (server, client) = await PairAsync();
         var send = server.SendAsync(new byte[Wire.MaxFrame + 1], WebSocketMessageType.Binary, true, default);
 
-        await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default));
+        await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true));
+        _ = send;
+    }
+
+    [Fact]
+    public async Task The_plain_overload_still_refuses_a_text_frame_past_its_bound()
+    {
+        var (server, client) = await PairAsync();
+        var send = SendTextAsync(server, Wire.MaxFrame + 1, 'a');
+
+        await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, default));
         _ = send;
     }
 }

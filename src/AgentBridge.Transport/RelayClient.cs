@@ -360,7 +360,7 @@ public sealed class RelayClient : IAsyncDisposable
         {
             while (ws.State == WebSocketState.Open)
             {
-                var pending = Wire.ReceiveAsync(ws, Wire.MaxFrame, Wire.MaxRosterFrame, default);
+                var pending = Wire.ReceiveAsync(ws, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true);
                 if (!pending.IsCompleted) { receiving.TrySetResult(); }
                 var frame = await pending;
                 if (frame is null) { break; }

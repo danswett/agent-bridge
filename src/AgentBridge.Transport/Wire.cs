@@ -62,13 +62,13 @@ public static class Wire
 
     // Null when the peer closed. Throws FrameTooLargeException before buffering more than max.
     public static async Task<(WebSocketMessageType Type, byte[] Data)?> ReceiveAsync(WebSocket ws, int max, CancellationToken ct) =>
-        await ReceiveAsync(ws, max, max, ct);
+        await ReceiveAsync(ws, max, max, ct, discardOversizeText: false);
 
     // A text frame may run to maxText (the relay's signed device roster is one frame, up to 224 KiB
-    // stored and worst-case six times that as JSON); anything else is held to max. A text frame past
-    // maxText is read and thrown away without being buffered, and arrives empty, so the connection
-    // survives a reply this client cannot use.
-    public static async Task<(WebSocketMessageType Type, byte[] Data)?> ReceiveAsync(WebSocket ws, int max, int maxText, CancellationToken ct)
+    // stored and worst-case six times that as JSON); anything else is held to max. With
+    // discardOversizeText, a text frame past maxText is read and thrown away without being buffered
+    // and arrives empty; without it, as for every other caller, it throws like any oversized frame.
+    public static async Task<(WebSocketMessageType Type, byte[] Data)?> ReceiveAsync(WebSocket ws, int max, int maxText, CancellationToken ct, bool discardOversizeText)
     {
         var buffer = new byte[16 * 1024];
         using var ms = new MemoryStream();
@@ -82,7 +82,7 @@ public static class Wire
             var limit = r.MessageType == WebSocketMessageType.Text ? maxText : max;
             if (ms.Length + r.Count > limit)
             {
-                if (r.MessageType != WebSocketMessageType.Text) { throw new FrameTooLargeException(); }
+                if (r.MessageType != WebSocketMessageType.Text || !discardOversizeText) { throw new FrameTooLargeException(); }
                 discarding = true;
                 ms.SetLength(0);
                 continue;
