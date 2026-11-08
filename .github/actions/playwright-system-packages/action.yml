@@ -26,11 +26,14 @@ runs:
     # The .deb files from main's last run, keyed by runner image, Playwright and browsers, so a
     # mirror outage costs nothing once main has saved them. Only main writes it. apt checks every
     # package against the signed index whichever way it got there, and ignores a stale file.
+    - id: ubuntu
+      shell: bash
+      run: echo "version=$(lsb_release -rs)-${ImageVersion:-noimage}" >> "$GITHUB_OUTPUT"
     - id: debs
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/playwright-apt-debs
-        key: playwright-apt-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageVersion }}-${{ inputs.browsers }}-${{ hashFiles(format('{0}/package-lock.json', inputs.working-directory)) }}
+        key: playwright-apt-${{ runner.os }}-${{ runner.arch }}-${{ steps.ubuntu.outputs.version }}-${{ inputs.browsers }}-${{ hashFiles(format('{0}/package-lock.json', inputs.working-directory)) }}
     - shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:

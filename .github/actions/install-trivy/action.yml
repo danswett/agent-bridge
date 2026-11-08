@@ -126,6 +126,8 @@ runs:
               Write-Warning "$($_.Exception.Message); using main's cached vulnerability database"
               New-Item -ItemType Directory -Force (Join-Path $cache 'db') | Out-Null
               Copy-Item -Path (Join-Path $saved '*') -Destination (Join-Path $cache 'db') -Recurse -Force
+              # Save-TrivyDb's failed native calls left their exit code, which would end this step.
+              $global:LASTEXITCODE = 0
             } else {
               throw
             }
