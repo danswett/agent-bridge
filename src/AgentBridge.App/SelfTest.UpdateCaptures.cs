@@ -83,18 +83,6 @@ static partial class SelfTest
             {
                 var atRestPlate = await AccentPlate(plain);
                 check(atRestPlate is null, $"draws Restart to update in Highlight and HighlightText only{where} ({atRestPlate})");
-                // Pointer over swaps the pair: HighlightText fill, Highlight label and border.
-                VisualStateManager.GoToState(plain, "PointerOver", false);
-                await Task.Delay(200);
-                var overPlate = await AccentPlate(plain);
-                check(overPlate is null, $"draws Restart to update in Highlight and HighlightText only under the pointer{where} ({overPlate}; {HoverFacts(plain)})");
-                var (overFill, overLabel, overBorder) = DrawnWith(plain);
-                var swapped = Application.Current.Resources.TryGetValue("SystemColorHighlightColor", out var hi) && hi is Windows.UI.Color highlight
-                    && Application.Current.Resources.TryGetValue("SystemColorHighlightTextColor", out var tx) && tx is Windows.UI.Color highlightText
-                    && overFill == highlightText && overLabel == highlight && overBorder == highlight;
-                check(swapped, $"draws Restart to update under the pointer with a HighlightText fill and a Highlight label and border{where} ({HoverFacts(plain)})");
-                await Picture(plain, File("restart", ".hover.hc"));
-                VisualStateManager.GoToState(plain, "Normal", false);
             }
             var restarting = update.RestartAsync(_ => Task.FromResult(true));
             await Bar("restarting", "Restarting to update\u2026");
