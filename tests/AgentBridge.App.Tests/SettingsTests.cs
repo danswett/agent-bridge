@@ -1712,23 +1712,29 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(settings.CanSignIn);
     }
 
-    [Fact]
-    public async Task A_release_build_signs_in_to_its_own_relay_whatever_an_earlier_build_saved()
+    // Only a saved production name gives way to the build's relay; any other saved relay (staging, self-hosted, a
+    // lookalike host) stays, shown as such, so a release build never signs in to production silently.
+    [Theory]
+    [InlineData("https://relay.bad-duck.com", "https://relay.slipgates.com", "")]
+    [InlineData("https://RELAY.Bad-Duck.com/", "https://relay.slipgates.com", "")]
+    [InlineData("https://relay.slipgates.com", "https://relay.slipgates.com", "")]
+    [InlineData("https://staging.relay.example", "https://staging.relay.example", "This install uses staging.relay.example")]
+    [InlineData("https://relay.slipgates.com.evil.example", "https://relay.slipgates.com.evil.example", "This install uses relay.slipgates.com.evil.example")]
+    public async Task A_release_build_replaces_a_saved_production_relay_and_keeps_any_other(string saved, string signedInTo, string note)
     {
         host.On(HostOps.SignIn, _ => new SignInStatus(SignInState.Pending));
-        prefs = prefs with { Relay = "https://relay.saved" };
-        var release = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default", relayEditable: false);
+        prefs = prefs with { Relay = saved };
+        var release = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.slipgates.com", relayEditable: false);
         await Connected();
 
-        Assert.Equal("https://relay.default", release.RelayUrl);
         release.RelayUrl = "https://relay.typed";
-        Assert.Equal("Sign in with GitHub to relay.default", release.SignInLabel);
         await release.SignInAsync();
 
-        Assert.Equal("https://relay.default", Assert.Single(host.Sent(HostOps.SignIn)).GetProperty("relay").GetString());
-        Assert.Equal("https://relay.saved", prefs.Relay);
+        Assert.False(release.RelayEditable);
+        Assert.Equal(note, release.RelayNote);
+        Assert.Equal(signedInTo, Assert.Single(host.Sent(HostOps.SignIn)).GetProperty("relay").GetString());
+        Assert.Equal(saved, prefs.Relay);
     }
-
     // Home Assistant refusing this machine is shown in the host's words, a rejected token and a ban
     // alike, and goes when the host says it has; each change is announced, so the page redraws.
     [Fact]

@@ -94,8 +94,11 @@ public sealed partial class SettingsViewModel : Observable
         AppVersion = appVersion;
         this.defaultRelay = defaultRelay;
         RelayEditable = relayEditable;
-        // A release build signs in to its own build's relay: an address saved by an earlier build or a dev copy is not used.
-        relayUrl = relayEditable ? prefs().Relay ?? defaultRelay : defaultRelay;
+        // A release build signs in to its own build's relay. A saved production name (bad-duck, before the move to slipgates)
+        // gives way to it; any other saved relay (staging, self-hosted) is kept and shown, never swapped for production.
+        var saved = prefs().Relay;
+        relayUrl = relayEditable ? saved ?? defaultRelay : KeptRelay(saved) ?? defaultRelay;
+        RelayKept = !relayEditable && KeptRelay(saved) is not null;
         trust = TrustEditor.For(host);
         trust.Changed += Refresh;
         host.Changed += Refresh;
@@ -235,6 +238,15 @@ public sealed partial class SettingsViewModel : Observable
     // False in an installed release build, where the relay is the build's and shown as text; a development copy can still type one.
     public bool RelayEditable { get; }
     public bool RelayFixed => !RelayEditable;
+    public bool RelayKept { get; }
+    public string RelayNote => RelayKept && Uri.TryCreate(relayUrl, UriKind.Absolute, out var u) ? $"This install uses {u.Host}" : "";
+
+    static readonly string[] ProductionRelayHosts = ["relay.bad-duck.com", "relay.slipgates.com"];
+
+    // The saved relay when it is a valid address that is not one of the two production names (compared by parsed host, never by prefix).
+    static string? KeptRelay(string? saved) =>
+        Uri.TryCreate(saved?.Trim(), UriKind.Absolute, out var u) && u.Scheme is "https" or "http"
+        && !ProductionRelayHosts.Contains(u.Host, StringComparer.OrdinalIgnoreCase) ? saved!.Trim() : null;
     public string RelayUrl { get => relayUrl; set { if (RelayEditable && Set(ref relayUrl, value)) { Raise(nameof(SignInLabel)); } } }
     public string SignInLabel => Uri.TryCreate(relayUrl.Trim(), UriKind.Absolute, out var u) ? $"Sign in with GitHub to {u.Host}" : "Sign in with GitHub";
 
@@ -782,7 +794,7 @@ public sealed partial class SettingsViewModel : Observable
 
     public Task SignInAsync() => RunAsync(async () =>
     {
-        var url = RelayEditable ? RelayUrl.Trim() : defaultRelay;
+        var url = RelayUrl.Trim();
         if (RelayEditable) { savePrefs(prefs() with { Relay = url }); }
         await host.CallAsync<SignInStatus>(HostOps.SignIn, new SignInRequest(url.Length > 0 ? url : null), TimeSpan.FromSeconds(40));
     });
