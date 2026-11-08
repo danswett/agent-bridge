@@ -264,15 +264,6 @@ remain unresolved. This website does not make a blanket assurance that its hosti
 providers collect no visitor information, set no cookies, use no analytics or involve no other
 services.
 
-### Your choices and rights
-
-Your choices and rights depend on the law that applies. Use the private privacy contact above to
-request access, correction, deletion, restriction or portability, or to object where those rights
-apply. You may complain to the relevant data-protection authority. If optional diagnostics become
-available and you consent, you can withdraw that consent without affecting processing already
-lawfully carried out. A request to delete data we already received is separate from turning
-diagnostics off.
-
 ## Beta conditions
 
 Slipgates is an experimental beta operated by the organisation or person identified in the
