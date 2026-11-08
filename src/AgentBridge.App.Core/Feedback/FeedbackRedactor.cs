@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace AgentBridge.App.Core.Feedback;
@@ -32,6 +34,17 @@ public static partial class FeedbackRedactor
         }
         // A pattern that cannot finish on hostile text must not let the text through unredacted.
         catch (RegexMatchTimeoutException) { return Mark; }
+        catch (ArgumentException) { return Mark; }
+    }
+
+    internal static string RedactLogLines(string text, IReadOnlyList<string>? privateNames = null)
+    {
+        try
+        {
+            text = PrivateKey().Replace(text, Mark);
+            return string.Join('\n', text.Split('\n').Select(line => Redact(line.TrimEnd('\r'), privateNames)));
+        }
+        catch (RegexMatchTimeoutException) { return Mark; }
     }
 
     const int TimeoutMs = 2000;
@@ -44,8 +57,56 @@ public static partial class FeedbackRedactor
     // is replaced.
     static string RedactSecrets(string text)
     {
+        if (UnsafeCredentialMention(text) || HiddenSecret(text)) { return EscapedMark; }
         var redacted = Pass(text);
         return HiddenSecret(redacted) ? EscapedMark : redacted;
+    }
+
+    static bool UnsafeCredentialMention(string text)
+    {
+        foreach (var line in text.Split('\n'))
+        {
+            if (string.Equals(line.TrimEnd('\r'), EscapedMark, StringComparison.Ordinal)) { continue; }
+            if (CredentialMention().IsMatch(line)) { return true; }
+            if (line.Any(c => c > 127) && CredentialMention().IsMatch(NormalizeUnicode(line))) { return true; }
+        }
+        return false;
+    }
+
+    static string NormalizeUnicode(string text)
+    {
+        var wellFormed = Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(text));
+        var normalized = wellFormed.Normalize(NormalizationForm.FormKC).Normalize(NormalizationForm.FormD);
+        var view = new StringBuilder(normalized.Length);
+        foreach (var rune in normalized.EnumerateRunes())
+        {
+            var category = Rune.GetUnicodeCategory(rune);
+            if (category is not (UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark
+                or UnicodeCategory.EnclosingMark or UnicodeCategory.Format))
+            {
+                view.Append(rune);
+            }
+        }
+        return view.ToString();
+    }
+
+    internal static bool MentionsSensitiveField(string text)
+    {
+        try
+        {
+            var view = text;
+            for (var pass = 0; pass <= 4; pass++)
+            {
+                if (SensitiveFieldMention().IsMatch(view)
+                    || (view.Any(c => c > 127) && SensitiveFieldMention().IsMatch(NormalizeUnicode(view)))) { return true; }
+                var next = Normalize(view);
+                if (string.Equals(next, view, StringComparison.Ordinal)) { return false; }
+                view = next;
+            }
+            return EscapeSequence().IsMatch(view);
+        }
+        catch (RegexMatchTimeoutException) { return true; }
+        catch (ArgumentException) { return true; }
     }
 
     // Decodes again and again (a key can be escaped twice: \u005cu0070assword) and checks each view.
@@ -57,7 +118,7 @@ public static partial class FeedbackRedactor
         {
             var next = Normalize(view);
             if (string.Equals(next, view, StringComparison.Ordinal)) { return false; }
-            if (HasSecretIn(next)) { return true; }
+            if (UnsafeCredentialMention(next) || HasSecretIn(next)) { return true; }
             view = next;
         }
         return EscapeSequence().IsMatch(view);
@@ -75,7 +136,9 @@ public static partial class FeedbackRedactor
     static string Normalize(string text) => text.Contains('\\')
         ? EscapeSequence().Replace(text, m => m.Groups[1].Success
             ? ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString()
-            : m.Groups[2].Value switch { "n" => "\n", "r" => "\r", "t" => "\t", var c => c })
+            : m.Groups[2].Success
+                ? ((char)Convert.ToInt32(m.Groups[2].Value, 16)).ToString()
+                : m.Groups[3].Value switch { "n" => "\n", "r" => "\r", "t" => "\t", var c => c })
         : text;
 
     static string RedactDecoded(string text)
@@ -103,9 +166,10 @@ public static partial class FeedbackRedactor
         if (string.IsNullOrEmpty(text)) { return false; }
         try
         {
-            return HasSecretIn(text) || HiddenSecret(text);
+            return UnsafeCredentialMention(text) || HasSecretIn(text) || HiddenSecret(text);
         }
         catch (RegexMatchTimeoutException) { return true; }
+        catch (ArgumentException) { return true; }
     }
 
     // Checks every string in a bundle's JSON for a credential. The screenshot is skipped: its base64
@@ -119,14 +183,19 @@ public static partial class FeedbackRedactor
         // members. Booleans and numbers under such a key are refused too: they are odd and safe to refuse.
         static bool Scan(System.Text.Json.JsonElement e, bool underCredentialKey)
         {
+            if (underCredentialKey)
+            {
+                return e.ValueKind != System.Text.Json.JsonValueKind.String ||
+                    e.GetString() is not (Mark or EscapedMark);
+            }
             switch (e.ValueKind)
             {
                 case System.Text.Json.JsonValueKind.String:
-                    return (underCredentialKey && HoldsValue(e.GetString())) || ContainsSecret(e.GetString()!);
+                    return ContainsSecret(e.GetString()!);
                 case System.Text.Json.JsonValueKind.Number:
                 case System.Text.Json.JsonValueKind.True:
                 case System.Text.Json.JsonValueKind.False:
-                    return underCredentialKey;
+                    return false;
                 case System.Text.Json.JsonValueKind.Array:
                     foreach (var item in e.EnumerateArray()) { if (Scan(item, underCredentialKey)) { return true; } }
                     return false;
@@ -134,16 +203,13 @@ public static partial class FeedbackRedactor
                     foreach (var p in e.EnumerateObject())
                     {
                         if (p.NameEquals("screenshotPng")) { continue; }
-                        if (ContainsSecret(p.Name) || Scan(p.Value, underCredentialKey || IsCredentialName(p.Name))) { return true; }
+                        var credentialKey = IsCredentialName(p.Name);
+                        if (WouldRedact(p.Name) || Scan(p.Value, credentialKey)) { return true; }
                     }
                     return false;
                 default: return false;
             }
         }
-
-        // Any value under a credential name counts unless it is empty or already redacted, whatever
-        // characters it starts with.
-        static bool HoldsValue(string? v) => !string.IsNullOrEmpty(v) && !v.Contains(Mark, StringComparison.Ordinal) && !v.Contains(EscapedMark, StringComparison.Ordinal);
     }
 
     static readonly string[] CredentialNames = ["password", "passwd", "pwd", "secret", "token", "apikey", "accesskey", "authorization", "privatekey", "credential", "credentials", "connectionstring"];
@@ -186,7 +252,15 @@ public static partial class FeedbackRedactor
     [GeneratedRegex(@"((?<![\w.-])[\w.-]{0,64}(?:password|passwd|pwd|secret|token|api[_ -]?key|authorization|private[_ -]?key|credential|connection[_ -]?string)[\w.-]{0,64}(?:\\*[""'])?\s*[:=]\s*)(?!\s*\[redacted\])(?:\\*""[^""\r\n]*""|'[^'\r\n]*'|(?:\\*[""'])?(?:[^\s""',;}&\\]|\\(?![""']))+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
     private static partial Regex Assignment();
 
-    [GeneratedRegex(@"\\(?:u([0-9a-fA-F]{4})|([""\\/nrt]))", RegexOptions.None, TimeoutMs)]
+    const string SensitiveFieldPattern = @"(?:password|passwd|pwd|secret|token|api[_ -]?key|access[_ -]?key|authorization|private[_ -]?key|credentials?|connection[_ -]?string)";
+
+    [GeneratedRegex(SensitiveFieldPattern + @"(?![\p{L}\p{N}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
+    private static partial Regex CredentialMention();
+
+    [GeneratedRegex(SensitiveFieldPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
+    private static partial Regex SensitiveFieldMention();
+
+    [GeneratedRegex(@"\\(?:u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([""'\\/nrt]))", RegexOptions.None, TimeoutMs)]
     private static partial Regex EscapeSequence();
 
     [GeneratedRegex(@"(?<![\w-])(--?(?:[a-z0-9]{1,20}[-_]){0,3}(?:password|passwd|pwd|token|secret|api-?key)\s+)(?!\s*\[redacted\])(?!-)\S+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]

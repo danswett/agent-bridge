@@ -84,15 +84,60 @@ public class FeedbackSenderTests
         Assert.Equal(bundle.BundleId, header.BundleId.ToArray());
     }
 
+    [Fact]
+    public async Task A_valid_structural_bundle_id_with_a_sensitive_substring_is_not_scanned_as_text()
+    {
+        const string encodedId = "19HpwdMB_T_WyTO7KipOLA";
+        var id = BlobFormat.FromBase64Url(encodedId)!;
+        var bundle = Bundle("{\"bundleId\":\"" + encodedId + "\",\"note\":\"safe\"}", id);
+        var (recipient, privateKey) = NewRecipient();
+        var fake = new Fake();
+
+        Assert.IsType<FeedbackSendResult.Sent>(await Send(fake, recipient, bundle));
+        Assert.Equal(bundle.CanonicalBytes.ToArray(), FeedbackEnvelopeV1.Open(Assert.Single(fake.Uploaded), privateKey));
+    }
+
+    [Fact]
+    public async Task Invalid_mismatched_and_nested_bundle_ids_cannot_hide_text_from_the_scan()
+    {
+        const string encodedId = "19HpwdMB_T_WyTO7KipOLA";
+        var id = BlobFormat.FromBase64Url(encodedId)!;
+        var (recipient, _) = NewRecipient();
+        var bad = new[]
+        {
+            "{\"bundleId\":\"bad\"}",
+            "{\"bundleId\":123}",
+            "{\"bundleId\":\"" + encodedId + "\",\"bundleId\":\"bad\"}",
+            "{\"bundleId\":\"" + encodedId + "\",\"nested\":{\"bundleId\":\"password=hidden\"}}",
+            "{\"bundleId\":\"" + encodedId + "\",\"note\":\"password=hidden\"}",
+        };
+        foreach (var json in bad)
+        {
+            var fake = new Fake();
+            Assert.Equal(new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never), await Send(fake, recipient, Bundle(json, id)));
+            Assert.Equal(0, fake.Slots);
+        }
+        var mismatch = new Fake();
+        Assert.Equal(new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never),
+            await Send(mismatch, recipient, Bundle("{\"bundleId\":\"" + encodedId + "\"}", new byte[16])));
+        Assert.Equal(0, mismatch.Slots);
+    }
+
     sealed class Sources : IFeedbackSources
     {
-        public FeedbackEnvironment Environment() => new("1.2.3", "beta", "Windows 11", "x64", 1, ["host 1.0.0"]);
-        public Task<IReadOnlyList<FeedbackAgent>> DetectAgentsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<FeedbackAgent>>([new("copilot", "1.0")]);
+        public IReadOnlyList<string> Journal = ["relay connected", "token refreshed ok"];
+        public IReadOnlyList<string> Crashes = [];
+        public FeedbackEnvironment Env = new("1.2.3", "beta", "Windows 11", "x64", 1, ["host 1.0.0"]);
+        public IReadOnlyList<FeedbackAgent> Agents = [new("copilot", "1.0")];
+        public IReadOnlyDictionary<string, string> Config = new Dictionary<string, string> { ["channel"] = "beta", ["theme"] = "dark", ["autoUpdate"] = "true" };
+        public IReadOnlyList<FeedbackSessionTurn>? Turns;
+        public FeedbackEnvironment Environment() => Env;
+        public Task<IReadOnlyList<FeedbackAgent>> DetectAgentsAsync(CancellationToken ct) => Task.FromResult(Agents);
         public Task<IReadOnlyDictionary<string, string>> ConfigAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string> { ["channel"] = "beta", ["theme"] = "dark", ["autoUpdate"] = "true" });
-        public Task<IReadOnlyList<string>> JournalTailAsync(int n, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(["relay connected", "token refreshed ok"]);
-        public Task<IReadOnlyList<string>> CrashRecordsAsync(int n, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
-        public Task<IReadOnlyList<FeedbackSessionTurn>?> SessionTurnsAsync(string id, int n, CancellationToken ct) => Task.FromResult<IReadOnlyList<FeedbackSessionTurn>?>(null);
+            Task.FromResult(Config);
+        public Task<IReadOnlyList<string>> JournalTailAsync(int n, CancellationToken ct) => Task.FromResult(Journal);
+        public Task<IReadOnlyList<string>> CrashRecordsAsync(int n, CancellationToken ct) => Task.FromResult(Crashes);
+        public Task<IReadOnlyList<FeedbackSessionTurn>?> SessionTurnsAsync(string id, int n, CancellationToken ct) => Task.FromResult(Turns);
     }
 
     [Fact]
@@ -108,6 +153,131 @@ public class FeedbackSenderTests
 
         Assert.IsType<FeedbackSendResult.Sent>(result);
         Assert.Equal(bundle.CanonicalBytes.ToArray(), FeedbackEnvelopeV1.Open(Assert.Single(fake.Uploaded), priv));
+    }
+
+    [Theory]
+    [InlineData("password=\nMapleBoat7!")]
+    [InlineData("password:\r\n  MapleBoat7!")]
+    [InlineData("password: |\n  MapleBoat7!")]
+    [InlineData("Authorization:\n  Basic dXNlcjpwYXNz")]
+    [InlineData("connection string:\nServer=db;Password=\nMapleBoat7!")]
+    [InlineData("passwordValue=maple canoe seven")]
+    [InlineData("passwordValue -> MapleBoat7!")]
+    [InlineData("\\u0070asswordValue -> MapleBoat7!")]
+    [InlineData("ｐａｓｓｗｏｒｄValue -> MapleBoat7!")]
+    public async Task Sender_refuses_sensitive_names_in_journal_or_crash_items_before_requesting_a_slot(string text)
+    {
+        var (recipient, _) = NewRecipient();
+        foreach (var json in new[]
+        {
+            System.Text.Json.JsonSerializer.Serialize(new { journal = new[] { "safe", text, "continuation" } }),
+            System.Text.Json.JsonSerializer.Serialize(new { crashes = new[] { "safe", text } }),
+        })
+        {
+            var fake = new Fake();
+            var result = await Send(fake, recipient, Bundle(json));
+            Assert.Equal(new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never), result);
+            Assert.Equal(0, fake.Slots);
+            Assert.Empty(fake.Uploaded);
+        }
+    }
+
+    [Fact]
+    public async Task Sender_refuses_names_split_across_adjacent_class_items()
+    {
+        var (recipient, _) = NewRecipient();
+        foreach (var json in new[]
+        {
+            "{\"journal\":[\"pass\",\"word=hidden\"]}",
+            "{\"crashes\":[\"pass\",\"word=hidden\"]}",
+            "{\"sessionTurns\":{\"turns\":[{\"text\":\"pass\"},{\"text\":\"word=hidden\"}]}}",
+        })
+        {
+            var fake = new Fake();
+            var result = await Send(fake, recipient, Bundle(json));
+            Assert.Equal(new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never), result);
+            Assert.Equal(0, fake.Slots);
+        }
+    }
+
+    [Fact]
+    public async Task Omitted_log_items_are_shown_in_the_preview_and_sealed_as_reviewed()
+    {
+        var (recipient, privateKey) = NewRecipient();
+        var fake = new Fake();
+        var sources = new Sources
+        {
+            Journal = ["connected", "password:", "  value-on-next-line"],
+            Crashes = ["failure\npasswordValue -> hidden", "safe crash"],
+        };
+        var gathered = await new FeedbackBundleSource(sources).GatherAsync(new FeedbackRequest(), null, default);
+        var bundle = Assert.IsType<FeedbackGatherResult.Ready>(gathered).Bundle;
+        using var doc = System.Text.Json.JsonDocument.Parse(bundle.Text);
+        Assert.Equal(FeedbackBundleSource.JournalOmitted, doc.RootElement.GetProperty("journal").GetString());
+        Assert.Equal(FeedbackBundleSource.CrashOmitted, doc.RootElement.GetProperty("crashes").GetString());
+        Assert.DoesNotContain("safe crash", bundle.Text);
+        Assert.DoesNotContain("value-on-next-line", bundle.Text);
+        Assert.DoesNotContain("hidden", bundle.Text);
+
+        var result = await Send(fake, recipient, bundle);
+
+        Assert.IsType<FeedbackSendResult.Sent>(result);
+        Assert.Equal(bundle.CanonicalBytes.ToArray(), FeedbackEnvelopeV1.Open(Assert.Single(fake.Uploaded), privateKey));
+    }
+
+    [Fact]
+    public async Task The_log_item_guard_cannot_be_bypassed_by_a_custom_bundle_scan()
+    {
+        var (recipient, _) = NewRecipient();
+        var fake = new Fake();
+        var text = System.Text.Json.JsonSerializer.Serialize(new { journal = new[] { "passwordValue -> MapleBoat7!" } });
+        var result = await new FeedbackSender(fake, recipient, bundleScan: _ => false).SendAsync(Bundle(text), default);
+
+        Assert.Equal(new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never), result);
+        Assert.Equal(0, fake.Slots);
+        Assert.Empty(fake.Uploaded);
+    }
+
+    [Fact]
+    public async Task Sender_refuses_sensitive_names_in_every_text_item_even_with_a_custom_scan()
+    {
+        var (recipient, _) = NewRecipient();
+        foreach (var json in new[]
+        {
+            "{\"note\":\"passwordValue -> MapleBoat7!\"}",
+            "{\"sessionTurns\":{\"turns\":[{\"text\":\"passwordValue -> MapleBoat7!\"}]}}",
+            "{\"config\":{\"theme\":\"passwordValue -> MapleBoat7!\"}}",
+            "{\"agents\":[{\"version\":\"passwordValue -> MapleBoat7!\"}]}",
+            "{\"versions\":{\"os\":\"passwordValue -> MapleBoat7!\"}}",
+        })
+        {
+            var fake = new Fake();
+            var result = await new FeedbackSender(fake, recipient, bundleScan: _ => false).SendAsync(Bundle(json), default);
+            Assert.Equal(new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never), result);
+            Assert.Equal(0, fake.Slots);
+        }
+    }
+
+    [Fact]
+    public async Task Omission_messages_and_safe_items_are_sealed_as_previewed()
+    {
+        var (recipient, privateKey) = NewRecipient();
+        var fake = new Fake();
+        var sources = new Sources
+        {
+            Env = new("passwordValue -> MapleBoat7!", "beta", "Windows 11", "x64", 1, []),
+            Agents = [new("copilot", "tokenEmail -> MapleBoat7!")],
+            Config = new Dictionary<string, string> { ["theme"] = "emailToken -> MapleBoat7!" },
+            Turns = [new("user", "passwordValue -> MapleBoat7!", DateTimeOffset.UnixEpoch)],
+        };
+        var gathered = await new FeedbackBundleSource(sources).GatherAsync(new FeedbackRequest { Note = "token expired", SessionTurnsFor = "s" }, null, default);
+        var bundle = Assert.IsType<FeedbackGatherResult.Ready>(gathered).Bundle;
+        Assert.Contains(FeedbackBundleSource.NoteOmitted, bundle.Text);
+        Assert.Contains(FeedbackBundleSource.TurnsOmitted, bundle.Text);
+        Assert.Contains(FeedbackBundleSource.TextOmitted, bundle.Text);
+        Assert.DoesNotContain("MapleBoat7!", bundle.Text);
+        Assert.IsType<FeedbackSendResult.Sent>(await Send(fake, recipient, bundle));
+        Assert.Equal(bundle.CanonicalBytes.ToArray(), FeedbackEnvelopeV1.Open(Assert.Single(fake.Uploaded), privateKey));
     }
 
     [Fact]
@@ -204,6 +374,58 @@ public class FeedbackSenderTests
         Assert.Equal(0, fake.Slots);
     }
 
+    [Theory]
+    [InlineData("{\"pass\\u0077ord\":\"\\nTAIL\"}")]
+    [InlineData("password=first'TAIL")]
+    [InlineData("password reset failed")]
+    [InlineData("password=[redacted]'TAIL")]
+    public async Task Sensitive_key_mentions_are_refused_before_requesting_a_slot(string text)
+    {
+        var (recipient, _) = NewRecipient();
+        var fake = new Fake();
+        var bundle = Bundle(System.Text.Json.JsonSerializer.Serialize(new { note = text }));
+
+        var result = await Send(fake, recipient, bundle);
+
+        Assert.Equal(new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never), result);
+        Assert.Empty(fake.Uploaded);
+        Assert.Equal(0, fake.Slots);
+    }
+
+    [Fact]
+    public async Task Sensitive_property_names_are_refused_even_when_their_values_are_redacted()
+    {
+        var (recipient, _) = NewRecipient();
+        foreach (var name in new[] { Pat + "password", "person@example.com_password", "pass\u200Bword", "ｐａｓｓｗｏｒｄ" })
+        {
+            var fake = new Fake();
+            var json = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string> { [name] = FeedbackRedactor.Mark });
+            Assert.True(FeedbackRedactor.BundleHasSecret(json));
+            var result = await Send(fake, recipient, Bundle(json));
+            Assert.Equal(new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never), result);
+            Assert.Empty(fake.Uploaded);
+            Assert.Equal(0, fake.Slots);
+        }
+    }
+
+    [Fact]
+    public async Task Redacted_multiline_records_are_sealed_as_the_reviewed_bytes()
+    {
+        var (recipient, privateKey) = NewRecipient();
+        var fake = new Fake();
+        var text = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            journal = new[] { "connected", FeedbackRedactor.EscapedMark },
+            crashes = new[] { "failure\n" + FeedbackRedactor.EscapedMark + "\nstack frame" },
+        });
+        var bundle = Bundle(text);
+
+        var result = await Send(fake, recipient, bundle);
+
+        Assert.IsType<FeedbackSendResult.Sent>(result);
+        Assert.Equal(bundle.CanonicalBytes.ToArray(), FeedbackEnvelopeV1.Open(Assert.Single(fake.Uploaded), privateKey));
+    }
+
     static string FakePng() => Convert.ToBase64String([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, .. new byte[300]]);
 
     [Theory]
@@ -261,7 +483,7 @@ public class FeedbackSenderTests
     public async Task Redaction_markers_and_the_attached_screenshot_are_not_mistaken_for_secrets()
     {
         var (recipient, _) = NewRecipient();
-        var text = "{\"password\":\"[redacted]\",\"token\":\"[redacted]\",\"path\":\"C:\\\\Users\\\\<user>\\\\x\",\"note\":\"mail [redacted] Bearer [redacted]\",\"screenshotPng\":\"" + FakePng() + "\"}";
+        var text = "{\"detail\":\"[redacted]\",\"path\":\"C:\\\\Users\\\\<user>\\\\x\",\"note\":\"mail [redacted] Bearer [redacted]\",\"screenshotPng\":\"" + FakePng() + "\"}";
 
         var result = await Send(new Fake(), recipient, Bundle(text));
 

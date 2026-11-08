@@ -12,8 +12,8 @@ namespace AgentBridge.App.Core.Feedback;
 // missing, locked or malformed file leaves that source empty rather than failing the bundle.
 public sealed partial class AppFeedbackSources : IFeedbackSources
 {
-    // A log can be a megabyte (AppLog rotates at 1,000,000); the newest lines are all that is wanted.
-    const int TailBytes = 256 * 1024;
+    // Fail closed rather than take an unchecked tail of a log that exceeds this bound.
+    const int MaxLogFileChars = 4 * 1024 * 1024;
 
     readonly Func<FeedbackEnvironment> environment;
     readonly string appFolder;
@@ -96,27 +96,38 @@ public sealed partial class AppFeedbackSources : IFeedbackSources
         foreach (var name in new[] { "app.log.1", "app.log" })
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var text = ReadTail(Path.Combine(appFolder, name));
+            var (text, tooLarge) = ReadBoundedLog(Path.Combine(appFolder, name));
+            if (tooLarge || (text is not null && (IncompleteLine(text) || FeedbackRedactor.MentionsSensitiveField(text))))
+            {
+                return Task.FromResult<IReadOnlyList<string>>([FeedbackBundleSource.JournalOmitted]);
+            }
             if (text is not null) { lines.AddRange(text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r'))); }
         }
-        return Task.FromResult<IReadOnlyList<string>>([.. lines.Skip(Math.Max(0, lines.Count - maxLines))]);
+        return Task.FromResult<IReadOnlyList<string>>(lines.Count > maxLines ? [FeedbackBundleSource.JournalOmitted] : lines);
     }
 
     public Task<IReadOnlyList<string>> CrashRecordsAsync(int max, CancellationToken cancellationToken)
     {
         if (max <= 0) { return Task.FromResult<IReadOnlyList<string>>([]); }
-        var text = ReadTail(Path.Combine(appFolder, "crash.log"));
+        var (text, tooLarge) = ReadBoundedLog(Path.Combine(appFolder, "crash.log"));
+        if (tooLarge || (text is not null && (IncompleteLine(text) || FeedbackRedactor.MentionsSensitiveField(text))))
+        {
+            return Task.FromResult<IReadOnlyList<string>>([FeedbackBundleSource.CrashOmitted]);
+        }
         if (text is null) { return Task.FromResult<IReadOnlyList<string>>([]); }
         // CrashLog writes "<ISO time> <exception text>\n"; the text spans lines, so a record
-        // begins at a line that starts with a timestamp. A cut at the start of the tail is not one.
+        // begins at a line that starts with a timestamp.
         var records = new List<StringBuilder>();
         foreach (var line in text.Split('\n'))
         {
             var l = line.TrimEnd('\r');
             if (RecordStart().IsMatch(l)) { records.Add(new StringBuilder(l)); }
             else if (records.Count > 0) { records[^1].Append('\n').Append(l); }
+            else if (!string.IsNullOrWhiteSpace(l)) { return Task.FromResult<IReadOnlyList<string>>([FeedbackBundleSource.CrashOmitted]); }
         }
-        return Task.FromResult<IReadOnlyList<string>>([.. records.Select(r => r.ToString().TrimEnd()).Reverse().Take(max)]);
+        return Task.FromResult<IReadOnlyList<string>>(records.Count > max
+            ? [FeedbackBundleSource.CrashOmitted]
+            : [.. records.Select(r => r.ToString().TrimEnd()).Reverse()]);
     }
 
     public async Task<IReadOnlyList<FeedbackSessionTurn>?> SessionTurnsAsync(string sessionId, int max, CancellationToken cancellationToken)
@@ -128,17 +139,46 @@ public sealed partial class AppFeedbackSources : IFeedbackSources
         if (page.Missing == true) { return null; }
         if (page.Unavailable is not null || page.Stale == true || page.Turns is null) { throw new InvalidOperationException("The host has no history for this session."); }
 
+        if (page.Partial == true || page.Before is not null || page.Start is null || page.Start.Limited == true || page.Turns.Count > max
+            || page.Turns.Any(t => t.Unreadable == true || t.Truncated == true || t.PartsMore is > 0
+                || t.Prompt?.Truncated == true || t.Parts.Any(p => p.Truncated == true || p.Kind == HistoryPartKind.Unknown
+                    || (p.Kind == HistoryPartKind.Response && p.Text is null)))
+            || FeedbackRedactor.MentionsSensitiveField(JsonSerializer.Serialize(page, ProtocolJson.Options)))
+        {
+            return [new FeedbackSessionTurn("user", FeedbackBundleSource.TurnsOmitted, DateTimeOffset.UnixEpoch)];
+        }
+
         var turns = new List<FeedbackSessionTurn>();
         foreach (var t in page.Turns)
         {
-            if (t.Unreadable == true) { continue; }
             if (t.Prompt is { } p) { turns.Add(new FeedbackSessionTurn(p.From is null or UserMessageFrom.Person ? "user" : "other", p.Text, t.At)); }
             foreach (var part in t.Parts)
             {
                 if (part.Kind == HistoryPartKind.Response && part.Text is { } text) { turns.Add(new FeedbackSessionTurn("assistant", text, part.At)); }
             }
         }
-        return [.. turns.Skip(Math.Max(0, turns.Count - max))];
+        if (turns.Count > max)
+        {
+            return [new FeedbackSessionTurn("user", FeedbackBundleSource.TurnsOmitted, DateTimeOffset.UnixEpoch)];
+        }
+        return turns;
+    }
+
+    static bool IncompleteLine(string text) => text.Length > 0 && !text.EndsWith('\n');
+
+    static (string? Text, bool TooLarge) ReadBoundedLog(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, new UTF8Encoding(false, true), true);
+            var chars = new char[MaxLogFileChars + 1];
+            var count = reader.ReadBlock(chars, 0, chars.Length);
+            return count > MaxLogFileChars ? (null, true) : (new string(chars, 0, count), false);
+        }
+        catch (FileNotFoundException) { return (null, false); }
+        catch (DirectoryNotFoundException) { return (null, false); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or DecoderFallbackException) { return (null, true); }
     }
 
     // Shared with the app, which appends while this reads.
@@ -150,34 +190,6 @@ public sealed partial class AppFeedbackSources : IFeedbackSources
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(stream, new UTF8Encoding(false), true);
             return reader.ReadToEnd();
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
-    }
-
-    // The last TailBytes of a file, from a line start. Invalid bytes read as replacement characters.
-    static string? ReadTail(string path)
-    {
-        try
-        {
-            if (!File.Exists(path)) { return null; }
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            var start = Math.Max(0, stream.Length - TailBytes);
-            stream.Seek(start, SeekOrigin.Begin);
-            var buffer = new byte[stream.Length - start];
-            var read = 0;
-            while (read < buffer.Length)
-            {
-                var n = stream.Read(buffer, read, buffer.Length - read);
-                if (n == 0) { break; }
-                read += n;
-            }
-            var text = Encoding.UTF8.GetString(buffer, 0, read);
-            if (start > 0)
-            {
-                var nl = text.IndexOf('\n');
-                text = nl < 0 ? "" : text[(nl + 1)..];
-            }
-            return text;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }

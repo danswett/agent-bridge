@@ -22,10 +22,15 @@ public class FeedbackBundleTests
         public bool Junk;
         public bool IgnoreCancel;
         public bool FailTurns;
+        public IReadOnlyList<string>? Journal;
+        public IReadOnlyList<string>? Crashes;
         public IReadOnlyList<FeedbackSessionTurn>? Turns;
-        public FeedbackEnvironment Environment() => new("0.1.42", "beta", "Windows 11", "x64", 1, ["0.1.42", "0.1.41"]);
-        public Task<IReadOnlyList<FeedbackAgent>> DetectAgentsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<FeedbackAgent>>([new("Copilot", "1.0.107"), new("Claude", null)]);
-        public Task<IReadOnlyDictionary<string, string>> ConfigAsync(CancellationToken ct) => Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>
+        public FeedbackEnvironment? Env;
+        public IReadOnlyList<FeedbackAgent>? Agents;
+        public IReadOnlyDictionary<string, string>? Config;
+        public FeedbackEnvironment Environment() => Env ?? new("0.1.42", "beta", "Windows 11", "x64", 1, ["0.1.42", "0.1.41"]);
+        public Task<IReadOnlyList<FeedbackAgent>> DetectAgentsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<FeedbackAgent>>(Agents ?? [new("Copilot", "1.0.107"), new("Claude", null)]);
+        public Task<IReadOnlyDictionary<string, string>> ConfigAsync(CancellationToken ct) => Task.FromResult<IReadOnlyDictionary<string, string>>(Config ?? new Dictionary<string, string>
         {
             ["theme"] = "dark",
             ["relayToken"] = Secret,
@@ -38,9 +43,10 @@ public class FeedbackBundleTests
             if (IgnoreCancel) { await Task.Delay(Timeout.Infinite); }
             if (Junk) { return Enumerable.Repeat(new string((char)1, 400), 200).ToList(); }
             if (FailJournal) { throw new IOException(@"C:\Users\alice\secret.log"); }
+            if (Journal is not null) { return Journal; }
             return ["connected", $"Authorization: Bearer {Secret}", @"opened C:\Users\alice\repos\x", "mail bob@example.com"];
         }
-        public Task<IReadOnlyList<string>> CrashRecordsAsync(int max, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(Junk ? Enumerable.Repeat(new string((char)1, 8000), 5).ToList() : [$"System.Exception: boom token={Secret} at C:\\Users\\alice\\a.cs"]);
+        public Task<IReadOnlyList<string>> CrashRecordsAsync(int max, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(Crashes ?? (Junk ? Enumerable.Repeat(new string((char)1, 8000), 5).ToList() : [$"System.Exception: boom token={Secret} at C:\\Users\\alice\\a.cs"]));
         public Task<IReadOnlyList<FeedbackSessionTurn>?> SessionTurnsAsync(string id, int max, CancellationToken ct) => FailTurns ? throw new IOException("x") : Task.FromResult(Turns);
     }
 
@@ -110,13 +116,180 @@ public class FeedbackBundleTests
     }
 
     [Fact]
+    public async Task Sensitive_journal_and_crash_classes_are_omitted_whole()
+    {
+        var source = new Fake
+        {
+            Journal = ["connected", "token expired\nstill connected"],
+            Crashes = ["failure\npassword=TAIL\nstack frame", "before\n-----BEGIN PRIVATE KEY-----\nq7R2\n-----END PRIVATE KEY-----\nafter", "failure\nsafe stack frame"],
+        };
+        var bundle = Ready(await Gather(source));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        Assert.Equal(FeedbackBundleSource.JournalOmitted, doc.RootElement.GetProperty("journal").GetString());
+        Assert.Equal(FeedbackBundleSource.CrashOmitted, doc.RootElement.GetProperty("crashes").GetString());
+        Assert.DoesNotContain("safe stack frame", bundle.Text);
+        Assert.Contains("left out", bundle.Items.Single(i => i.Id == "journal").Summary);
+        Assert.Contains("left out", bundle.Items.Single(i => i.Id == "crashes").Summary);
+        Assert.DoesNotContain("TAIL", bundle.Text);
+        Assert.DoesNotContain("q7R2", bundle.Text);
+        Assert.False(FeedbackRedactor.BundleHasSecret(bundle.Text));
+    }
+
+    [Fact]
+    public async Task A_sensitive_name_before_the_journal_tail_omits_the_whole_journal()
+    {
+        var source = new Fake { Journal = ["password=", "MapleBoat7!", .. Enumerable.Repeat("connected", 199)] };
+        var bundle = Ready(await Gather(source));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        Assert.Equal(FeedbackBundleSource.JournalOmitted, doc.RootElement.GetProperty("journal").GetString());
+        Assert.DoesNotContain("MapleBoat7!", bundle.Text);
+    }
+
+    [Fact]
+    public async Task A_sensitive_name_in_dropped_crash_context_omits_the_retained_records()
+    {
+        var source = new Fake { Journal = [], Crashes = ["MapleBoat7!", "safe", "safe", "safe", "safe", "password="] };
+        var bundle = Ready(await Gather(source));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        Assert.Equal(FeedbackBundleSource.CrashOmitted, doc.RootElement.GetProperty("crashes").GetString());
+        Assert.DoesNotContain("MapleBoat7!", bundle.Text);
+    }
+
+    [Fact]
+    public async Task A_credential_continuation_in_a_separate_crash_record_is_not_sent()
+    {
+        var source = new Fake { Journal = [], Crashes = ["failure\npassword=", "MapleBoat7!", "safe"] };
+        var bundle = Ready(await Gather(source));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        Assert.Equal(FeedbackBundleSource.CrashOmitted, doc.RootElement.GetProperty("crashes").GetString());
+        Assert.Equal(FeedbackBundleSource.CrashOmitted, bundle.Items.Single(i => i.Id == "crashes").Summary);
+        Assert.DoesNotContain("MapleBoat7!", bundle.Text);
+    }
+
+    [Fact]
+    public async Task Sensitive_names_split_across_adjacent_items_omit_each_whole_class()
+    {
+        var source = new Fake
+        {
+            Journal = ["connected", "pass", "word=journal-value"],
+            Crashes = ["failure\npass", "word=crash-value"],
+            Turns = [new("user", "pass", DateTimeOffset.UnixEpoch),
+                new("assistant", "word=turn-value", DateTimeOffset.UnixEpoch)],
+        };
+        var bundle = Ready(await Gather(source, new FeedbackRequest { SessionTurnsFor = "s" }));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        Assert.Equal(FeedbackBundleSource.JournalOmitted, doc.RootElement.GetProperty("journal").GetString());
+        Assert.Equal(FeedbackBundleSource.CrashOmitted, doc.RootElement.GetProperty("crashes").GetString());
+        Assert.Equal(FeedbackBundleSource.TurnsOmitted, doc.RootElement.GetProperty("sessionTurns").GetString());
+        Assert.DoesNotContain("journal-value", bundle.Text);
+        Assert.DoesNotContain("crash-value", bundle.Text);
+        Assert.DoesNotContain("turn-value", bundle.Text);
+    }
+
+    [Fact]
+    public async Task Each_class_is_omitted_if_any_item_exceeds_its_bound()
+    {
+        var source = new Fake
+        {
+            Journal = ["connected", new string('a', 401)],
+            Crashes = ["safe", new string('b', 8001)],
+            Turns = [new("user", new string('c', FeedbackLimits.MaxTurnChars + 1), DateTimeOffset.UnixEpoch)],
+        };
+        var bundle = Ready(await Gather(source, new FeedbackRequest { SessionTurnsFor = "s" }));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        Assert.Equal(FeedbackBundleSource.JournalOmitted, doc.RootElement.GetProperty("journal").GetString());
+        Assert.Equal(FeedbackBundleSource.CrashOmitted, doc.RootElement.GetProperty("crashes").GetString());
+        Assert.Equal(FeedbackBundleSource.TurnsOmitted, doc.RootElement.GetProperty("sessionTurns").GetString());
+        Assert.All(bundle.Items.Where(i => i.Id is "journal" or "crashes" or "sessionTurns"), i => Assert.Contains("left out", i.Summary));
+    }
+
+    [Fact]
+    public async Task Sensitive_notes_and_turns_are_left_out_with_plain_rewording_guidance()
+    {
+        var turns = new[] { new FeedbackSessionTurn("user", "password=", DateTimeOffset.UnixEpoch),
+            new FeedbackSessionTurn("assistant", "MapleBoat7!", DateTimeOffset.UnixEpoch) }
+            .Concat(Enumerable.Repeat(new FeedbackSessionTurn("user", "connected", DateTimeOffset.UnixEpoch), 19)).ToArray();
+        var bundle = Ready(await Gather(new Fake { Turns = turns }, new FeedbackRequest { Note = "passwordValue -> MapleBoat7!", SessionTurnsFor = "s" }));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        Assert.Equal(FeedbackBundleSource.NoteOmitted, doc.RootElement.GetProperty("note").GetString());
+        Assert.Equal(FeedbackBundleSource.TurnsOmitted, doc.RootElement.GetProperty("sessionTurns").GetString());
+        Assert.Equal(FeedbackBundleSource.NoteOmitted, bundle.Items.Single(i => i.Id == "note").Summary);
+        Assert.Equal(FeedbackBundleSource.TurnsOmitted, bundle.Items.Single(i => i.Id == "sessionTurns").Summary);
+        Assert.DoesNotContain("MapleBoat7!", bundle.Text);
+    }
+
+    [Fact]
+    public async Task Every_metadata_value_uses_the_same_suffix_aware_detector_before_truncation()
+    {
+        var unsafeText = "passwordValue -> MapleBoat7!";
+        var source = new Fake
+        {
+            Env = new(unsafeText, "beta", unsafeText, "x64", 1, [unsafeText]),
+            Agents = [new(unsafeText, unsafeText)],
+            Config = new Dictionary<string, string> { ["theme"] = unsafeText },
+            Journal = ["connected"],
+            Crashes = [],
+        };
+        var bundle = Ready(await Gather(source));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        Assert.Equal(FeedbackBundleSource.TextOmitted, doc.RootElement.GetProperty("versions").GetProperty("app").GetString());
+        Assert.Equal(FeedbackBundleSource.TextOmitted, doc.RootElement.GetProperty("agents")[0].GetProperty("version").GetString());
+        Assert.Equal(FeedbackBundleSource.TextOmitted, doc.RootElement.GetProperty("config").GetProperty("theme").GetString());
+        Assert.All(bundle.Items.Where(i => i.Id is "versions" or "agents" or "config"), item => Assert.Contains("left out", item.Summary));
+        Assert.DoesNotContain("MapleBoat7!", bundle.Text);
+    }
+
+    [Theory]
+    [InlineData("password=")]
+    [InlineData("password:   ")]
+    [InlineData("password: |")]
+    [InlineData("\"password\":")]
+    [InlineData("passwordValue ->")]
+    [InlineData("passwordValue=")]
+    [InlineData("Authorization:")]
+    [InlineData("connection string:")]
+    [InlineData("ｐａｓｓｗｏｒｄ：")]
+    [InlineData("pass\u200bword=")]
+    [InlineData("\\u0070assword\\u003d")]
+    public async Task Sensitive_names_omit_the_entire_journal_and_crash_class(string key)
+    {
+        var source = new Fake
+        {
+            Journal = ["connected", key, "", "  ", "journal-value", "still connected"],
+            Crashes = ["failure\r\n" + key + "\r\n\r\n  crash-value\r\nstack frame"],
+        };
+        var bundle = Ready(await Gather(source));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        Assert.Equal(FeedbackBundleSource.JournalOmitted, doc.RootElement.GetProperty("journal").GetString());
+        Assert.Equal(FeedbackBundleSource.CrashOmitted, doc.RootElement.GetProperty("crashes").GetString());
+        Assert.DoesNotContain("journal-value", bundle.Text);
+        Assert.DoesNotContain("crash-value", bundle.Text);
+        Assert.False(FeedbackRedactor.BundleHasSecret(bundle.Text));
+    }
+
+    [Fact]
+    public async Task Items_without_sensitive_names_keep_line_redaction()
+    {
+        var source = new Fake { Journal = ["connected", "mail person@example.com"], Crashes = ["failure\nmail person@example.com\nstack frame"] };
+        var bundle = Ready(await Gather(source));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        var journal = doc.RootElement.GetProperty("journal");
+        Assert.Equal("connected", journal[0].GetString());
+        Assert.Equal("mail [redacted]", journal[1].GetString());
+        Assert.Equal("failure\nmail [redacted]\nstack frame", doc.RootElement.GetProperty("crashes")[0].GetString());
+    }
+
+    [Fact]
     public async Task Refusals_cover_a_long_note_a_bad_or_huge_screenshot_an_unknown_session_and_an_oversize_bundle()
     {
         Assert.Equal(FeedbackRefusalReason.NoteTooLong, Assert.IsType<FeedbackGatherResult.Refused>(await Gather(new Fake(), new FeedbackRequest { Note = new string('x', 1001) })).Reason);
         Assert.Equal(FeedbackRefusalReason.ScreenshotNotPng, Assert.IsType<FeedbackGatherResult.Refused>(await Gather(new Fake(), new FeedbackRequest { ScreenshotPng = [1, 2, 3, 4, 5, 6, 7, 8, 9] })).Reason);
         Assert.Equal(FeedbackRefusalReason.ScreenshotTooLarge, Assert.IsType<FeedbackGatherResult.Refused>(await Gather(new Fake(), new FeedbackRequest { ScreenshotPng = new byte[FeedbackLimits.MaxScreenshotBytes + 1] })).Reason);
         Assert.Equal(FeedbackRefusalReason.SessionNotFound, Assert.IsType<FeedbackGatherResult.Refused>(await Gather(new Fake { Turns = null }, new FeedbackRequest { SessionTurnsFor = "nope" })).Reason);
-        Assert.Equal(FeedbackRefusalReason.SessionUnavailable, Assert.IsType<FeedbackGatherResult.Refused>(await Gather(new Fake { FailTurns = true }, new FeedbackRequest { SessionTurnsFor = "s" })).Reason);
+        var unavailable = Ready(await Gather(new Fake { FailTurns = true }, new FeedbackRequest { SessionTurnsFor = "s" }));
+        using var doc = JsonDocument.Parse(unavailable.Text);
+        Assert.Equal(FeedbackBundleSource.TurnsOmitted, doc.RootElement.GetProperty("sessionTurns").GetString());
+        Assert.Equal(FeedbackBundleSource.TurnsOmitted, unavailable.Items.Single(i => i.Id == "sessionTurns").Summary);
     }
 
     [Fact]
@@ -130,7 +303,7 @@ public class FeedbackBundleTests
         Assert.Equal(FeedbackRefusalReason.BundleTooLarge, Assert.IsType<FeedbackGatherResult.Refused>(result).Reason);
     }
     [Fact]
-    public async Task Text_cut_mid_emoji_or_holding_a_lone_surrogate_still_gathers()
+    public async Task Oversize_turn_is_omitted_and_a_lone_surrogate_in_the_note_is_sanitized()
     {
         // "ab " filler matches no redaction rule, so the 2000-char cut really lands inside the emoji.
         var filler = string.Concat(Enumerable.Repeat("ab ", 666)) + "a";
@@ -139,8 +312,7 @@ public class FeedbackBundleTests
         var bundle = Ready(await Gather(f, new FeedbackRequest { Note = "bad \ud83d half", SessionTurnsFor = "s" }));
         using var doc = JsonDocument.Parse(bundle.Text);
         Assert.Contains("\uFFFD", doc.RootElement.GetProperty("note").GetString());
-        var text = doc.RootElement.GetProperty("sessionTurns").GetProperty("turns")[0].GetProperty("text").GetString()!;
-        Assert.Equal(filler + "…", text);
+        Assert.Equal(FeedbackBundleSource.TurnsOmitted, doc.RootElement.GetProperty("sessionTurns").GetString());
     }
 
     [Fact]
@@ -173,8 +345,8 @@ public class FeedbackBundleTests
     [InlineData("{\"password\":\"hunter2\"}", true)]
     [InlineData("{\"x\":{\"api_key\":\"abc def ghi\"}}", true)]
     [InlineData("{\"token\":12345678}", true)]
-    [InlineData("{\"password\":\"[redacted]\"}", false)]
-    [InlineData("{\"password\":\"\"}", false)]
+    [InlineData("{\"password\":\"[redacted]\"}", true)]
+    [InlineData("{\"password\":\"\"}", true)]
     [InlineData("{\"name\":\"hunter2\"}", false)]
     public void BundleHasSecret_sees_name_value_pairs_split_across_json_tokens(string json, bool expected)
         => Assert.Equal(expected, FeedbackRedactor.BundleHasSecret(json));
@@ -235,12 +407,12 @@ public class FeedbackBundleTests
     }
 
     [Fact]
-    public void A_secret_in_a_query_string_does_not_swallow_the_next_parameter()
+    public void A_secret_in_a_query_string_is_redacted_fail_closed()
     {
         var r = FeedbackRedactor.Redact("https://h/x?token=abc123def&page=2&password=zzz999");
         Assert.DoesNotContain("abc123def", r);
         Assert.DoesNotContain("zzz999", r);
-        Assert.Contains("page=2", r);
+        Assert.Equal(FeedbackRedactor.EscapedMark, r);
     }
 
     [Fact]
@@ -311,25 +483,44 @@ public class FeedbackBundleTests
         Assert.False(FeedbackRedactor.BundleHasSecret(System.Text.Json.JsonSerializer.Serialize(new { text = once })), once);
     }
 
-    [Fact]
-    public void BundleHasSecret_only_flags_exact_credential_names_and_unredacted_values()
+    [Theory]
+    [InlineData("pass\u200Bword=TAIL")]
+    [InlineData("p\u0301assword=TAIL")]
+    [InlineData("ｐａｓｓｗｏｒｄ=TAIL")]
+    [InlineData("pass\\u200Bword=TAIL")]
+    [InlineData("ｐａｓｓｗｏｒｄ reset failed")]
+    public void Normalized_sensitive_key_mentions_fail_closed_in_every_view(string input)
     {
-        Assert.False(FeedbackRedactor.BundleHasSecret("{\"tokenCount\":5,\"max_tokens\":100,\"secretsEnabled\":\"yes\",\"password\":\"see [redacted]\",\"apiKey\":\"[redacted]\"}"));
+        var redacted = FeedbackRedactor.Redact(input);
+        Assert.Equal(FeedbackRedactor.EscapedMark, redacted);
+        Assert.DoesNotContain("TAIL", redacted);
+        Assert.True(FeedbackRedactor.ContainsSecret(input));
+        Assert.True(FeedbackRedactor.BundleHasSecret(JsonSerializer.Serialize(new { note = input })));
+        Assert.False(FeedbackRedactor.ContainsSecret(redacted));
+        Assert.Equal(redacted, FeedbackRedactor.Redact(redacted));
+    }
+
+    [Fact]
+    public void BundleHasSecret_inspects_credential_names_and_values()
+    {
+        Assert.False(FeedbackRedactor.BundleHasSecret("{\"tokenCount\":5,\"max_tokens\":100,\"secretsEnabled\":\"yes\"}"));
+        Assert.True(FeedbackRedactor.BundleHasSecret("{\"password\":\"[redacted]\",\"apiKey\":\"[redacted]\"}"));
+        Assert.True(FeedbackRedactor.BundleHasSecret("{\"password\":\"see [redacted]\"}"));
         Assert.True(FeedbackRedactor.BundleHasSecret("{\"apiKey\":\"abc\"}"));
         Assert.True(FeedbackRedactor.BundleHasSecret("{\"password\":\"'hunter2\"}"));
         Assert.True(FeedbackRedactor.BundleHasSecret("{\"password\":\",x\"}"));
         Assert.True(FeedbackRedactor.BundleHasSecret("{\"token\":[\"abc\"]}"));
-        Assert.False(FeedbackRedactor.BundleHasSecret("{\"token\":[\"" + FeedbackRedactor.EscapedMark + "\"]}"));
-        // A bare word "token" followed by a value is prose, not a credential pattern, escaped or not.
-        Assert.False(FeedbackRedactor.ContainsSecret("token hunter2") || FeedbackRedactor.ContainsSecret("token\\u0020hunter2"));
+        Assert.True(FeedbackRedactor.BundleHasSecret("{\"token\":[\"" + FeedbackRedactor.EscapedMark + "\"]}"));
+        Assert.True(FeedbackRedactor.ContainsSecret("token hunter2"));
+        Assert.True(FeedbackRedactor.ContainsSecret("token\\u0020hunter2"));
     }
 
     [Fact]
-    public void A_clean_bundle_with_credential_named_keys_and_partly_redacted_values_round_trips()
+    public void A_clean_bundle_with_redacted_values_round_trips()
     {
         var json = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
         {
-            ["password"] = FeedbackRedactor.Mark,
+            ["detail"] = FeedbackRedactor.Mark,
             ["tokenCount"] = 3,
             ["note"] = FeedbackRedactor.Redact("password=hunter2 and tokenCount=3 see Authorization: Basic dXNlcjpwYXNz"),
         });
@@ -356,6 +547,7 @@ public class FeedbackBundleTests
     }
 
     [Theory]
+    [InlineData("{\"password\":\"first\\\"second\"}", "second")]
     [InlineData("{\"password\":\"hun\\u0022ter2\"}", "ter2")]
     [InlineData("{\"password\":\"abc\\u0022tail-secret\"}", "tail-secret")]
     [InlineData("'password':'x\\u0027y-secret'", "y-secret")]
@@ -377,6 +569,116 @@ public class FeedbackBundleTests
         Assert.False(FeedbackRedactor.ContainsSecret(r));
         Assert.Equal(r, FeedbackRedactor.Redact(r));
         Assert.True(FeedbackRedactor.ContainsSecret(input));
+    }
+
+    public static IEnumerable<object[]> AmbiguousQuotedValues()
+    {
+        string[] keys = ["password", "secret", "token", "api_key"];
+        string[] values =
+        [
+            "'first\\'TAIL'",
+            "'first\\x22TAIL'",
+            "'first\\u0027TAIL'",
+            "'first'TAIL'",
+            "'first' TAIL'",
+            "\"first'TAIL",
+            "'first\\qTAIL'",
+            "'first TAIL",
+        ];
+        foreach (var key in keys)
+        foreach (var value in values)
+        foreach (var (before, after) in new[] { ("", " suffix"), ("prefix ", " suffix"), ("prefix ", "") })
+        {
+            yield return [before + key + "=" + value + after];
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(AmbiguousQuotedValues))]
+    public void Ambiguous_quoted_credentials_never_leave_the_tail(string input)
+    {
+        var result = FeedbackRedactor.Redact(input);
+        Assert.DoesNotContain("TAIL", result);
+        Assert.True(FeedbackRedactor.ContainsSecret(input));
+        Assert.True(FeedbackRedactor.BundleHasSecret(System.Text.Json.JsonSerializer.Serialize(new { text = input })));
+        Assert.False(FeedbackRedactor.ContainsSecret(result));
+        Assert.Equal(result, FeedbackRedactor.Redact(result));
+    }
+
+    [Theory]
+    [InlineData("prefix password='ordinary' suffix")]
+    [InlineData("prefix token=\"ordinary\" suffix")]
+    public void Quoted_credentials_fail_closed_for_the_whole_text(string input)
+        => Assert.Equal(FeedbackRedactor.EscapedMark, FeedbackRedactor.Redact(input));
+
+    [Theory]
+    [InlineData("pass\\x77ord=hunter2")]
+    [InlineData("secret=\\x27hunter2\\x27")]
+    [InlineData("secret=\\'hunter2\\'")]
+    public void Hex_and_single_quote_escapes_are_checked_in_the_decoded_view(string input)
+    {
+        Assert.Equal(FeedbackRedactor.EscapedMark, FeedbackRedactor.Redact(input));
+        Assert.True(FeedbackRedactor.ContainsSecret(input));
+    }
+
+    [Theory]
+    [InlineData("{\"pass\\u0077ord\":\"\\nTAIL\"}")]
+    [InlineData("password=first'TAIL")]
+    public void Sensitive_key_variants_never_leave_the_credential_tail(string input)
+    {
+        var result = FeedbackRedactor.Redact(input);
+        Assert.DoesNotContain("TAIL", result);
+        Assert.True(FeedbackRedactor.ContainsSecret(input));
+        Assert.True(FeedbackRedactor.WouldRedact(input));
+        Assert.True(FeedbackRedactor.BundleHasSecret(JsonSerializer.Serialize(new { text = input })));
+        Assert.False(FeedbackRedactor.ContainsSecret(result));
+        Assert.Equal(result, FeedbackRedactor.Redact(result));
+    }
+
+    public static IEnumerable<object[]> CredentialTailMatrix()
+    {
+        string[] keys = ["password", "secret", "token", "authorization", "api_key", "apiKey", "pwd", "connectionString"];
+        string[] values =
+        [
+            "TAIL", "first'TAIL", "first\"TAIL", "'TAIL'", "\"TAIL\"",
+            "'first\\'TAIL'", "\"first\\\"TAIL\"", "'first\\x22TAIL'", "'first\\x27TAIL'",
+            "'first\\u0027TAIL'", "\"first\\u0022TAIL\"", "'first'TAIL'", "'first' TAIL'",
+            "\"first'TAIL", "'first\"TAIL", "'first\\qTAIL'", "\"first\\qTAIL\"",
+            "'first TAIL", "\"first TAIL", "\\nTAIL", "\"\\nTAIL\"", "'\\rTAIL'",
+            "'\\tTAIL'", "\\u0022TAIL", "\\x27TAIL", "[redacted]TAIL",
+        ];
+        (string Before, string After)[] positions =
+        [
+            ("", ""), ("", " suffix"), ("prefix ", ""), ("prefix ", " suffix"),
+            ("prefix\n", "\nsuffix"), ("{", "}"),
+        ];
+        foreach (var key in keys)
+        {
+            string[] forms =
+            [
+                key, key.ToUpperInvariant(), "'" + key + "'", "\"" + key + "\"",
+                $"\\u{(int)key[0]:x4}" + key[1..], $"\\x{(int)key[0]:x2}" + key[1..],
+            ];
+            foreach (var form in forms)
+            foreach (var value in values)
+            foreach (var (before, after) in positions)
+            {
+                yield return [before + form + "=" + value + after];
+            }
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(CredentialTailMatrix))]
+    public void Credential_key_matrix_redacts_and_refuses_every_tail(string input)
+    {
+        var result = FeedbackRedactor.Redact(input);
+        Assert.DoesNotContain("TAIL", result);
+        Assert.True(FeedbackRedactor.ContainsSecret(input));
+        Assert.True(FeedbackRedactor.WouldRedact(input));
+        Assert.True(FeedbackRedactor.BundleHasSecret(JsonSerializer.Serialize(new { text = input })));
+        Assert.False(FeedbackRedactor.ContainsSecret(result));
+        Assert.Equal(result, FeedbackRedactor.Redact(result));
     }
 
     [Fact]

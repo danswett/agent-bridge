@@ -20,6 +20,12 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
     const int MaxCrashChars = 8000;
     const int MaxConfigValueChars = 100;
 
+    internal const string JournalOmitted = "Recent activity log left out: it may contain passwords or tokens, or could not be checked completely.";
+    internal const string CrashOmitted = "Crash records left out: they may contain passwords or tokens, or could not be checked completely.";
+    internal const string TextOmitted = "Text left out: it may contain passwords or tokens.";
+    internal const string NoteOmitted = "Your note was left out: it may contain passwords or tokens. Reword it and preview again.";
+    internal const string TurnsOmitted = "Session turns left out: they may contain passwords or tokens, or could not be checked completely. Deselect them, or choose another session.";
+
     static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     readonly IFeedbackSources sources;
@@ -81,10 +87,19 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
             progress?.Report(FeedbackGatherStage.SessionTurns);
             try { turns = await sources.SessionTurnsAsync(session, FeedbackLimits.MaxSessionTurns, ct).WaitAsync(ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception) { return new FeedbackGatherResult.Refused(FeedbackRefusalReason.SessionUnavailable); }
+            catch (Exception) { turns = [new FeedbackSessionTurn("user", TurnsOmitted, DateTimeOffset.UnixEpoch)]; }
             if (turns is null) { return new FeedbackGatherResult.Refused(FeedbackRefusalReason.SessionNotFound); }
         }
         if (request.ScreenshotPng is not null) { progress?.Report(FeedbackGatherStage.Screenshot); }
+
+        var metadataOmitted = false;
+        string CleanMetadata(string? value, int max)
+        {
+            var cleaned = Clean(value, max);
+            metadataOmitted |= cleaned == TextOmitted;
+            return cleaned;
+        }
+        string MetadataSummary(string summary) => metadataOmitted ? summary + " Some values were left out; check the preview." : summary;
 
         var buffer = new MemoryStream();
         using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, NewLine = "\n", Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -97,17 +112,21 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
 
             long mark = Mark(w, buffer);
             w.WriteStartObject("versions");
-            w.WriteString("app", Clean(env.AppVersion, 128));
-            w.WriteString("channel", Clean(env.Channel, 64));
-            w.WriteString("os", Clean(env.OsDescription, 128));
-            w.WriteString("architecture", Clean(env.Architecture, 32));
+            var appVersion = CleanMetadata(env.AppVersion, 128);
+            var channel = CleanMetadata(env.Channel, 64);
+            var os = CleanMetadata(env.OsDescription, 128);
+            w.WriteString("app", appVersion);
+            w.WriteString("channel", channel);
+            w.WriteString("os", os);
+            w.WriteString("architecture", CleanMetadata(env.Architecture, 32));
             w.WriteNumber("protocol", env.ProtocolVersion);
             w.WriteStartArray("hosts");
-            foreach (var v in env.HostVersions.Select(h => Clean(h, 64)).Distinct().Order(StringComparer.Ordinal).Take(20)) { w.WriteStringValue(v); }
+            foreach (var v in env.HostVersions.Select(h => CleanMetadata(h, 64)).Distinct().Order(StringComparer.Ordinal).Take(20)) { w.WriteStringValue(v); }
             w.WriteEndArray();
             w.WriteEndObject();
-            items.Add(Item("versions", "App and host versions", $"App {Clean(env.AppVersion, 128)}, {Clean(env.Channel, 64)} channel, {Clean(env.OsDescription, 128)}", w, buffer, ref mark, false));
+            items.Add(Item("versions", "App and host versions", MetadataSummary($"App {appVersion}, {channel} channel, {os}"), w, buffer, ref mark, false));
 
+            metadataOmitted = false;
             w.WritePropertyName("agents");
             if (agents is null) { w.WriteStringValue("unavailable"); }
             else
@@ -116,51 +135,65 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
                 foreach (var a in agents.OrderBy(a => a.Name, StringComparer.Ordinal).Take(20))
                 {
                     w.WriteStartObject();
-                    w.WriteString("name", Clean(a.Name, 64));
-                    if (a.Version is not null) { w.WriteString("version", Clean(a.Version, 64)); }
+                    w.WriteString("name", CleanMetadata(a.Name, 64));
+                    if (a.Version is not null) { w.WriteString("version", CleanMetadata(a.Version, 64)); }
                     w.WriteEndObject();
                 }
                 w.WriteEndArray();
             }
-            items.Add(Item("agents", "Agents detected", agents is null ? "Unavailable" : $"{Math.Min(agents.Count, 20)} found, with versions", w, buffer, ref mark, false));
+            items.Add(Item("agents", "Agents detected", MetadataSummary(agents is null ? "Unavailable" : $"{Math.Min(agents.Count, 20)} found, with versions"), w, buffer, ref mark, false));
 
+            metadataOmitted = false;
             w.WritePropertyName("config");
             if (config is null) { w.WriteStringValue("unavailable"); }
             else
             {
                 var shown = config.Where(kv => ConfigAllowList.Contains(kv.Key)).OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList();
                 w.WriteStartObject();
-                foreach (var (key, value) in shown) { w.WriteString(key, Clean(value, MaxConfigValueChars)); }
+                foreach (var (key, value) in shown) { w.WriteString(key, CleanMetadata(value, MaxConfigValueChars)); }
                 w.WriteNumber("otherSettingsNotIncluded", config.Count - shown.Count);
                 w.WriteEndObject();
             }
-            items.Add(Item("config", "Settings summary", config is null ? "Unavailable" : "A short list of safe settings; the rest are not sent", w, buffer, ref mark, false));
+            items.Add(Item("config", "Settings summary", MetadataSummary(config is null ? "Unavailable" : "A short list of safe settings; the rest are not sent"), w, buffer, ref mark, false));
 
             w.WritePropertyName("journal");
+            var journalLines = journal?.TakeLast(FeedbackLimits.MaxJournalLines).ToArray();
+            var journalOmitted = journal is not null && (journal.Count > FeedbackLimits.MaxJournalLines
+                || journal.Any(line => line == JournalOmitted || line.Length > MaxLineChars || FeedbackRedactor.MentionsSensitiveField(line))
+                || FeedbackRedactor.MentionsSensitiveField(string.Concat(journal)));
             if (journal is null) { w.WriteStringValue("unavailable"); }
+            else if (journalOmitted) { w.WriteStringValue(JournalOmitted); }
             else
             {
                 w.WriteStartArray();
-                foreach (var line in journal.TakeLast(FeedbackLimits.MaxJournalLines)) { w.WriteStringValue(Clean(line, MaxLineChars)); }
+                foreach (var line in journalLines!) { w.WriteStringValue(CleanLog(line, MaxLineChars)); }
                 w.WriteEndArray();
             }
-            items.Add(Item("journal", "Recent activity log", journal is null ? "Unavailable" : $"The last {Math.Min(journal.Count, FeedbackLimits.MaxJournalLines)} lines, redacted", w, buffer, ref mark, false));
+            items.Add(Item("journal", "Recent activity log", journal is null ? "Unavailable" : journalOmitted ? JournalOmitted : $"The last {journalLines!.Length} lines, redacted", w, buffer, ref mark, false));
 
             w.WritePropertyName("crashes");
+            var crashRecords = crashes?.Take(FeedbackLimits.MaxCrashRecords).ToArray();
+            var crashesOmitted = crashes is not null && (crashes.Count > FeedbackLimits.MaxCrashRecords
+                || crashes.Any(crash => crash == CrashOmitted || crash.Length > MaxCrashChars || FeedbackRedactor.MentionsSensitiveField(crash))
+                || FeedbackRedactor.MentionsSensitiveField(string.Concat(crashes)));
             if (crashes is null) { w.WriteStringValue("unavailable"); }
+            else if (crashesOmitted) { w.WriteStringValue(CrashOmitted); }
             else
             {
                 w.WriteStartArray();
-                foreach (var crash in crashes.Take(FeedbackLimits.MaxCrashRecords)) { w.WriteStringValue(Clean(crash, MaxCrashChars)); }
+                foreach (var crash in crashRecords!) { w.WriteStringValue(CleanLog(crash, MaxCrashChars)); }
                 w.WriteEndArray();
             }
-            items.Add(Item("crashes", "Crash records", crashes is null ? "Unavailable" : $"{Math.Min(crashes.Count, FeedbackLimits.MaxCrashRecords)} recent, redacted", w, buffer, ref mark, false));
+            items.Add(Item("crashes", "Crash records", crashes is null ? "Unavailable" : crashesOmitted
+                ? CrashOmitted
+                : $"{crashRecords!.Length} recent, redacted", w, buffer, ref mark, false));
 
             if (note.Trim().Length > 0)
             {
-                var cleaned = Sanitize(FeedbackRedactor.Redact(note, privateNames));
+                var noteOmitted = FeedbackRedactor.MentionsSensitiveField(note);
+                var cleaned = noteOmitted ? NoteOmitted : Sanitize(FeedbackRedactor.Redact(note, privateNames));
                 w.WriteString("note", cleaned);
-                items.Add(Item("note", "Your note", cleaned == note ? "Exactly what you typed" : "What you typed, with secrets removed", w, buffer, ref mark, true));
+                items.Add(Item("note", "Your note", noteOmitted ? NoteOmitted : cleaned == note ? "Exactly what you typed" : "What you typed, with redactions; check the preview", w, buffer, ref mark, true));
             }
 
             if (request.ScreenshotPng is { } png)
@@ -171,19 +204,27 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
 
             if (turns is not null)
             {
-                w.WriteStartObject("sessionTurns");
-                w.WriteStartArray("turns");
-                foreach (var t in turns.TakeLast(FeedbackLimits.MaxSessionTurns))
+                var turnsOmitted = turns.Count > FeedbackLimits.MaxSessionTurns || turns.Any(t =>
+                    t.Text == TurnsOmitted || t.Text.Length > FeedbackLimits.MaxTurnChars || t.Role.Length > 32
+                    || FeedbackRedactor.MentionsSensitiveField(t.Text) || FeedbackRedactor.MentionsSensitiveField(t.Role))
+                    || FeedbackRedactor.MentionsSensitiveField(string.Concat(turns.Select(t => t.Text)));
+                if (turnsOmitted) { w.WriteString("sessionTurns", TurnsOmitted); }
+                else
                 {
-                    w.WriteStartObject();
-                    w.WriteString("role", Clean(t.Role, 32));
-                    w.WriteString("at", t.At.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"));
-                    w.WriteString("text", Clean(t.Text, FeedbackLimits.MaxTurnChars));
+                    w.WriteStartObject("sessionTurns");
+                    w.WriteStartArray("turns");
+                    foreach (var t in turns.TakeLast(FeedbackLimits.MaxSessionTurns))
+                    {
+                        w.WriteStartObject();
+                        w.WriteString("role", Clean(t.Role, 32));
+                        w.WriteString("at", t.At.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"));
+                        w.WriteString("text", Clean(t.Text, FeedbackLimits.MaxTurnChars));
+                        w.WriteEndObject();
+                    }
+                    w.WriteEndArray();
                     w.WriteEndObject();
                 }
-                w.WriteEndArray();
-                w.WriteEndObject();
-                items.Add(Item("sessionTurns", "Session turns", $"The last {Math.Min(turns.Count, FeedbackLimits.MaxSessionTurns)} turns of the session you chose, redacted", w, buffer, ref mark, true));
+                items.Add(Item("sessionTurns", "Session turns", turnsOmitted ? TurnsOmitted : $"The last {Math.Min(turns.Count, FeedbackLimits.MaxSessionTurns)} turns of the session you chose, redacted", w, buffer, ref mark, true));
             }
 
             w.WriteEndObject();
@@ -202,8 +243,11 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
         catch (Exception) { return fallback; }
     }
 
+    string CleanLog(string text, int max) => Clean(FeedbackRedactor.RedactLogLines(text, privateNames), max);
+
     internal string Clean(string? text, int max)
     {
+        if (FeedbackRedactor.MentionsSensitiveField((text ?? "").Replace(FeedbackRedactor.EscapedMark, "", StringComparison.Ordinal))) { return TextOmitted; }
         var redacted = Sanitize(FeedbackRedactor.Redact(text ?? "", privateNames));
         if (redacted.Length <= max) { return redacted; }
         // Don't cut between the halves of a surrogate pair; the JSON writer rejects a lone half.

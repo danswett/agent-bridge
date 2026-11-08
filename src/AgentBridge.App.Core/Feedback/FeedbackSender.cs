@@ -73,7 +73,7 @@ public sealed class FeedbackSender(IFeedbackUplink uplink, FeedbackRecipient? re
         if (bundle.Length >= HardCap) { return new FeedbackSendResult.TooLarge(bundle.Length, uplink.MaxBytes); }
         if (cancellationToken.IsCancellationRequested) { return Cancelled(); }
 
-        if (LooksSensitive(bundle.CanonicalBytes.Span)) { return new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never); }
+        if (LooksSensitive(bundle.CanonicalBytes.Span, bundle.BundleId)) { return new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never); }
 
         byte[] stored;
         try { stored = FeedbackEnvelopeV1.Seal(bundle.CanonicalBytes.Span, recipient.KeyId, recipient.PublicKey, bundle.BundleId); }
@@ -100,7 +100,7 @@ public sealed class FeedbackSender(IFeedbackUplink uplink, FeedbackRecipient? re
 
     // Defence in depth behind the gatherer: the redactor's own bundle scan (one source of truth) on what is about to be sealed; non-JSON is scanned as raw text.
     // Fails closed: any redactor error or timeout counts as a hit, and nothing about the content is kept.
-    bool LooksSensitive(ReadOnlySpan<byte> bytes)
+    bool LooksSensitive(ReadOnlySpan<byte> bytes, byte[] bundleId)
     {
         string text;
         try { text = StrictUtf8.GetString(bytes); }
@@ -111,19 +111,74 @@ public sealed class FeedbackSender(IFeedbackUplink uplink, FeedbackRecipient? re
             using var doc = JsonDocument.Parse(text);
             // An S1 bundle is always an object; anything else could hide a screenshotPng the redactor skips.
             if (doc.RootElement.ValueKind != JsonValueKind.Object) { return true; }
-            var scanned = WithoutRealScreenshot(doc.RootElement, text);
-            if ((bundleScan ?? FeedbackRedactor.BundleHasSecret)(scanned)) { return true; }
+            var scanned = WithoutStructuralIdAndRealScreenshot(doc.RootElement, text, bundleId);
             using var scannedDoc = JsonDocument.Parse(scanned);
+            if (HasSensitiveJoinedClasses(scannedDoc.RootElement)) { return true; }
+            if (HasSensitiveText(scannedDoc.RootElement)) { return true; }
+            if ((bundleScan ?? FeedbackRedactor.BundleHasSecret)(scanned)) { return true; }
             return HasUnsanitizedString(scannedDoc.RootElement);
         }
         catch (Exception) { return true; }
     }
 
+    static bool HasSensitiveJoinedClasses(JsonElement root)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.Name is "journal" or "crashes" && property.Value.ValueKind == JsonValueKind.Array)
+            {
+                var joined = new StringBuilder();
+                foreach (var item in property.Value.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String) { return true; }
+                    joined.Append(item.GetString());
+                }
+                if (FeedbackRedactor.MentionsSensitiveField(joined.ToString().Replace(FeedbackRedactor.EscapedMark, "", StringComparison.Ordinal))) { return true; }
+            }
+            else if (property.NameEquals("sessionTurns") && property.Value.ValueKind == JsonValueKind.Object
+                && property.Value.TryGetProperty("turns", out var turns) && turns.ValueKind == JsonValueKind.Array)
+            {
+                var joined = new StringBuilder();
+                foreach (var turn in turns.EnumerateArray())
+                {
+                    if (turn.ValueKind != JsonValueKind.Object || !turn.TryGetProperty("text", out var text)
+                        || text.ValueKind != JsonValueKind.String) { return true; }
+                    joined.Append(text.GetString());
+                }
+                if (FeedbackRedactor.MentionsSensitiveField(joined.ToString().Replace(FeedbackRedactor.EscapedMark, "", StringComparison.Ordinal))) { return true; }
+            }
+        }
+        return false;
+    }
+
+    static bool HasSensitiveText(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var text = element.GetString()!;
+            if (text is FeedbackBundleSource.JournalOmitted or FeedbackBundleSource.CrashOmitted
+                or FeedbackBundleSource.TextOmitted or FeedbackBundleSource.NoteOmitted or FeedbackBundleSource.TurnsOmitted) { return false; }
+            return FeedbackRedactor.MentionsSensitiveField(text.Replace(FeedbackRedactor.EscapedMark, "", StringComparison.Ordinal));
+        }
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray()) { if (HasSensitiveText(item)) { return true; } }
+        }
+        else if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (FeedbackRedactor.MentionsSensitiveField(property.Name) || HasSensitiveText(property.Value)) { return true; }
+            }
+        }
+        return false;
+    }
+
     // The redactor skips any property named screenshotPng, at any depth. Only the top-level one holding valid base64 PNG data may
     // be skipped: it is dropped here, and every other property with that name is renamed so it is scanned like any other value.
-    static string WithoutRealScreenshot(JsonElement root, string original)
+    static string WithoutStructuralIdAndRealScreenshot(JsonElement root, string original, byte[] bundleId)
     {
-        if (root.ValueKind != JsonValueKind.Object || !ContainsName(root)) { return original; }
+        if (!root.TryGetProperty("bundleId", out _) && !ContainsName(root)) { return original; }
         using var ms = new MemoryStream();
         using (var w = new Utf8JsonWriter(ms))
         {
@@ -131,6 +186,17 @@ public sealed class FeedbackSender(IFeedbackUplink uplink, FeedbackRecipient? re
             foreach (var p in root.EnumerateObject())
             {
                 if (p.NameEquals(ScreenshotName) && IsPng(p.Value)) { continue; }
+                if (p.NameEquals("bundleId"))
+                {
+                    if (p.Value.ValueKind != JsonValueKind.String) { throw new JsonException("Invalid bundle id."); }
+                    var value = p.Value.GetString();
+                    var decoded = BlobFormat.FromBase64Url(value);
+                    if (decoded is not { Length: 16 } || BlobFormat.Base64Url(decoded) != value || !decoded.AsSpan().SequenceEqual(bundleId))
+                    {
+                        throw new JsonException("Invalid bundle id.");
+                    }
+                    continue;
+                }
                 w.WritePropertyName(p.Name == ScreenshotName ? "screenshotPng_" : p.Name);
                 Write(p.Value, w);
             }
