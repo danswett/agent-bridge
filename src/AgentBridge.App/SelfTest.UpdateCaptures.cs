@@ -26,24 +26,6 @@ static partial class SelfTest
         public void ApplyAndRestart(string version, Action? handedOver = null) => throw new InvalidOperationException("the self-test never updates");
     }
 
-    // High contrast's rule (#1202): nothing inside a control sets its own background. An accent
-    // button is the system pair, HighlightText on Highlight, with no plate of another fill under
-    // its label. Returns what breaks it, or null.
-    static string? PlateInside(Button button)
-    {
-        Windows.UI.Color? System(string key) => Application.Current.Resources.TryGetValue(key, out var c) && c is Windows.UI.Color colour ? colour : null;
-        if (System("SystemColorHighlightColor") is not { } fill || System("SystemColorHighlightTextColor") is not { } ink) { return "the system colours are missing"; }
-        static string Colour(object? b) => b is SolidColorBrush s ? s.Color.ToString() : b?.GetType().Name ?? "none";
-        if (button.Background is not SolidColorBrush { Color: var own } || own != fill) { return $"the button's own fill is {Colour(button.Background)}, not {fill}"; }
-        foreach (var inner in Find<FrameworkElement>(button))
-        {
-            var plate = inner switch { Panel p => p.Background, Border b => b.Background, ContentPresenter c => c.Background, _ => null };
-            if (plate is SolidColorBrush { Color.A: > 0 } s && s.Color != fill) { return $"a {inner.GetType().Name} inside draws {s.Color} under the label"; }
-            if (inner is TextBlock { Foreground: var text } && !(text is SolidColorBrush t && t.Color == ink)) { return $"the label is drawn in {Colour(text)}, not {ink}"; }
-        }
-        return null;
-    }
-
     static async Task CaptureUpdate(MainWindow window, MainViewModel main, Action<bool, string> check, string outFile, bool contrast = false)
     {
         var where = contrast ? " in high contrast" : "";
@@ -97,7 +79,18 @@ static partial class SelfTest
             var accent = (Style)Application.Current.Resources["AccentButtonStyle"];
             await Bar("ready", "Version 0.1.999 is ready. Restart to update.");
             check(Action() is { } atRest && atRest.Style == accent && AutomationProperties.GetName(atRest) == "Restart to update", $"draws the update bar's Restart to update as the accent action at rest{where}");
-            if (contrast) { check(Action() is { } plain && PlateInside(plain) is null, $"draws Restart to update as Highlight with HighlightText and no plate inside{where} ({(Action() is { } p ? PlateInside(p) : "no button")})"); }
+            if (contrast && Action() is { } plain)
+            {
+                var atRestPlate = await AccentPlate(plain);
+                check(atRestPlate is null, $"draws Restart to update in Highlight and HighlightText only{where} ({atRestPlate})");
+                // Pointer over swaps the pair; still nothing but the two.
+                VisualStateManager.GoToState(plain, "PointerOver", false);
+                await Task.Delay(200);
+                var overPlate = await AccentPlate(plain);
+                check(overPlate is null, $"draws Restart to update in Highlight and HighlightText only under the pointer{where} ({overPlate})");
+                await Picture(plain, File("restart", ".hover.hc"));
+                VisualStateManager.GoToState(plain, "Normal", false);
+            }
             var restarting = update.RestartAsync(_ => Task.FromResult(true));
             await Bar("restarting", "Restarting to update\u2026");
             // Creative on #719 (6675195544): the button that started it shows its progress ring,
@@ -111,7 +104,11 @@ static partial class SelfTest
             await Bar("failed", "The update didn't install because another bridge profile is running from this installation.");
             check(bar is { Severity: InfoBarSeverity.Warning } && !bar.Message.Any(char.IsDigit) && Action() is { } retry && AutomationProperties.GetName(retry) == "Try again" && retry.Style == accent,
                 $"draws a failed install as a warning with Try again and no machine detail{where}");
-            if (contrast) { check(Action() is { } again && PlateInside(again) is null, $"draws Try again as Highlight with HighlightText and no plate inside{where} ({(Action() is { } q ? PlateInside(q) : "no button")})"); }
+            if (contrast && Action() is { } again)
+            {
+                var againPlate = await AccentPlate(again);
+                check(againPlate is null, $"draws Try again in Highlight and HighlightText only{where} ({againPlate})");
+            }
 
             // #1167: the Updating screen, the open window's while the release is handed to
             // Velopack, and the new version's Updated bar, and an install that didn't take.

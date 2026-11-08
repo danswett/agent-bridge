@@ -30,6 +30,38 @@ static partial class SelfTest
         return ((await bitmap.GetPixelsAsync()).ToArray(), (uint)bitmap.PixelWidth, (uint)bitmap.PixelHeight, BitmapAlphaMode.Premultiplied);
     }
 
+    // High contrast's rule (#1202): nothing inside a control sets its own background. An accent
+    // button is drawn from the system pair only, Highlight and HighlightText, whichever way round,
+    // with antialiasing between them. Samples the drawn pixels inside the button, clear of its
+    // border and corners; returns the button's name and the first other colour, or null.
+    static async Task<string?> AccentPlate(Button button)
+    {
+        Windows.UI.Color? System(string key) => Application.Current.Resources.TryGetValue(key, out var c) && c is Windows.UI.Color colour ? colour : null;
+        var name = AutomationProperties.GetName(button) is { Length: > 0 } n ? n : AutomationProperties.GetAutomationId(button) is { Length: > 0 } id ? id : button.Content?.ToString() ?? "a button";
+        if (System("SystemColorHighlightColor") is not { } fill || System("SystemColorHighlightTextColor") is not { } ink) { return $"{name}: the system colours are missing"; }
+        if (button.ActualWidth <= 0 || button.ActualHeight <= 0) { return $"{name}: not drawn"; }
+        var picture = await PicturePixels(button);
+        var scale = picture.Width / button.ActualWidth;
+        var inset = (int)Math.Ceiling(4 * scale);
+        double fr = fill.R, fg = fill.G, fb = fill.B;
+        var (dr, dg, db) = (ink.R - fr, ink.G - fg, ink.B - fb);
+        var length = dr * dr + dg * dg + db * db;
+        for (var y = inset; y < picture.Height - inset; y++)
+        {
+            for (var x = inset; x < picture.Width - inset; x++)
+            {
+                var i = (int)((y * picture.Width + x) * 4);
+                if (picture.Pixels[i + 3] != 255) { continue; }
+                double b = picture.Pixels[i], g = picture.Pixels[i + 1], r = picture.Pixels[i + 2];
+                // How far the pixel is from the line between the two colours: on it is a blend.
+                var t = length == 0 ? 0 : Math.Clamp(((r - fr) * dr + (g - fg) * dg + (b - fb) * db) / length, 0, 1);
+                var off = Math.Sqrt(Math.Pow(r - (fr + t * dr), 2) + Math.Pow(g - (fg + t * dg), 2) + Math.Pow(b - (fb + t * db), 2));
+                if (off > 24) { return $"{name}: a pixel at {x},{y} is #{(int)r:X2}{(int)g:X2}{(int)b:X2}, neither Highlight nor HighlightText"; }
+            }
+        }
+        return null;
+    }
+
     static async Task CaptureFrame(FrameworkElement root)
     {
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

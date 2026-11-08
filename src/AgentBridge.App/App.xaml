@@ -35,6 +35,13 @@
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
+            <!-- #1202: the framework's own high-contrast adjustment (Auto) draws a backplate under
+                 text; the system pair above needs none. Same key as the built-in style, based on it,
+                 so every accent button follows. -->
+            <Style x:Key="AccentButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+                <Setter Property="HighContrastAdjustment" Value="None" />
+            </Style>
+
             <!-- A keyed style replaces the implicit TextBlock style, so each one here names the text face. -->
             <Style x:Key="AbSecondaryText" TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource SansFontFamily}" />
