@@ -60,7 +60,7 @@ public sealed class RosterStateVectorTests
                 w.Add("+C", "A", "C", "+A");
                 return w;
             },
-            w => [.. All(w), new Step(Hours: 71), new Step(Hours: 72), new Step(Hours: 73)]);
+            w => [.. All(w), new Step(Hours: 71), new Step(Hours: 72 - 1 / 36e9), new Step(Hours: 72), new Step(Hours: 73)]);
         yield return new("held-rename", "a rename by a device on probation, or a held one, is pending until the hold ends",
             () =>
             {
