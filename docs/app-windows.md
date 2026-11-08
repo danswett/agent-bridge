@@ -501,7 +501,7 @@ into one folder with one version. An app update is a host update, so they never 
     device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
     effect at once (the app looks again). Setting it from the phone is #801's.
   * **Update now, from another device** (#1159; design in
-    [v1-update.md](protocol/v1-update.md#update-now-1159-design-not-built-yet), not built): the
+    [v1-update.md](protocol/v1-update.md#update-now-1159), its host half built, the app's not yet): the
     person's phone, or this app on another machine, asks for the release ready here to go now,
     accepting about a minute of downtime. The app then skips its two-minute wait, the backstop
     and its own "Restart to update now?" dialog (the phone's confirmation stands in), but nothing

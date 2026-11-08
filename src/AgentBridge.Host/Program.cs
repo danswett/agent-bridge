@@ -522,10 +522,6 @@ async Task<int> ServeAsync(HostHandover handover)
     // holds one (SessionService.G5), so it never says read-only beside actions offered, or offers
     // none without saying why.
     string? OfferedReadOnly() => ReadOnlyReason() ?? g5.Recent();
-    // Updates asked for from the account's other devices, which the app beside this host installs
-    // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
-    // Assistant's Install there.
-    var updates = new UpdateService(HostVersion(), Log) { ReadOnly = ServeReadOnly, OfferedReadOnly = OfferedReadOnly };
     // Signing an agent in again from a person's pinned device (#972, sessions.signin): only where
     // permissions.phoneSignIn is on, and only for an agent with an adapter here. Never read-only.
     // The pin is a device the person-device roster pins (RosterSignInAuthority); a #402 trusted-peer
@@ -555,16 +551,28 @@ async Task<int> ServeAsync(HostHandover handover)
     using var departureWatchdog = new DepartureWatchdog(new RestartingDepartureStuckHandler(Log, RestartHost, () => stop.IsCancellationRequested));
     // Restart from a person's device through the relay (#801, docs/protocol/v1-sessions.md, "Managing
     // a machine"), every planned departure through one quiet lease (#805). ServeReadOnly is the
-    // acting answer (G5's Active).
-    var (manage, lifecycle, _) = ManageComposition.For(settings, identity.Key, identity.Folder, deliveryGate, ServeReadOnly, OfferedReadOnly,
+    // acting answer (G5's Active). Update now (#1159) leaves through the same lease, its Update
+    // conditions registered there, another profile's host among them where the host is packaged.
+    var composed = ManageComposition.For(settings, identity.Key, identity.Folder, deliveryGate, ServeReadOnly, OfferedReadOnly,
         () =>
         {
             Log("restarting: asked by a person's device through the relay");
             RestartHost();
         },
-        push, name, Log, watchdog: departureWatchdog);
+        push, name, Log, watchdog: departureWatchdog, otherHosts: OperatingSystem.IsWindows() ? HostUpdateGate.OtherHosts : null);
+    var (manage, lifecycle) = (composed.Manage, composed.Lifecycle);
     handingOver = manage.HandingOver;
     manage.Start();
+    // Updates asked for from the account's other devices, which the app beside this host installs
+    // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
+    // Assistant's Install there. Update now (#1159) passes remote management's signed-command gate
+    // and counts its restarts with it; busy is read from this host's own sessions.
+    var updates = new UpdateService(HostVersion(), Log)
+    {
+        ReadOnly = ServeReadOnly,
+        OfferedReadOnly = OfferedReadOnly,
+        Now = composed.UpdateNow(source, identity.Folder),
+    };
     // The content-free journal (#737), one per host, and "Diagnose this machine" (#802,
     // docs/protocol/v1-diagnostics.md): only a device pinned here as a person's reads it, with a
     // closed snapshot of this host's health, through the relay. The journal names only Host.Core's
