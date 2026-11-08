@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 export const MAX_MESSAGE = 65519;
+export const REQUEST_TIMEOUT_MS = 15000;
 
 /** What went wrong, in words an agent can act on. */
 export class PipeError extends Error {
@@ -122,16 +123,24 @@ export class PipeClient {
     this.pending.clear();
   }
 
-  request(op, data = {}) {
+  request(op, data = {}, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
     if (this.closed || !this.socket) {
       return Promise.reject(new PipeError('The connection to the Slipgates host is closed.', 'unavailable'));
     }
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new PipeError(`The Slipgates host did not answer ${op} in time.`, 'unavailable'));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
       try {
         this.socket.write(encodeFrame({ id, op, data }));
       } catch (error) {
+        clearTimeout(timer);
         this.pending.delete(id);
         reject(error);
       }
@@ -147,13 +156,13 @@ export class PipeClient {
  * Connects, says hello, and, with a credential, proves which session this is. Without a token
  * the connection stays unattributed: reads work, and the host decides what else.
  */
-export async function openHost({ endpoint, token }) {
+export async function openHost({ endpoint, token, timeoutMs = REQUEST_TIMEOUT_MS }) {
   const client = await new PipeClient(endpoint).connect();
   try {
-    const hello = await client.request('hello', {});
+    const hello = await client.request('hello', {}, { timeoutMs });
     let principal = null;
     if (token) {
-      principal = (await client.request('agent.hello', { token }))?.principal ?? null;
+      principal = (await client.request('agent.hello', { token }, { timeoutMs }))?.principal ?? null;
     }
     return { client, hello, principal };
   } catch (error) {

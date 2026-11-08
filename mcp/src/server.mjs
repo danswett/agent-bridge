@@ -67,6 +67,44 @@ const DESCRIPTIONS = {
   get_launch_options: 'What launch_agent_session can name on this machine.',
 };
 
+const MAX_TEXT = 16 * 1024;
+// Without an accepted agent principal the connection is unattributed: only reads are offered.
+const UNATTRIBUTED_OK = new Set(['list_agent_sessions', 'read_agent_session']);
+
+const allowed = (conn, name) => new Set(conn.hello?.capabilities ?? []).has(NEEDS[name]) && (Boolean(conn.principal) || UNATTRIBUTED_OK.has(name));
+
+function validate(name, args) {
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) throw new PipeError('Arguments must be an object.');
+  const requireString = (key, { max = 512, optional = false } = {}) => {
+    const value = args[key];
+    if (value === undefined && optional) return;
+    if (typeof value !== 'string' || (!optional && value.length === 0)) throw new PipeError(`${key} must be a${optional ? '' : ' non-empty'} string.`);
+    if (Buffer.byteLength(value, 'utf8') > max) throw new PipeError(`${key} is too large (max ${max} bytes).`);
+  };
+  switch (name) {
+    case 'list_agent_sessions':
+      if (args.include !== undefined && args.include !== 'content') throw new PipeError('include must be "content".');
+      break;
+    case 'read_agent_session':
+      requireString('session_id');
+      requireString('since', { optional: true });
+      if (args.wait_seconds !== undefined && !Number.isFinite(args.wait_seconds)) throw new PipeError('wait_seconds must be a number.');
+      break;
+    case 'reply_to_agent_session':
+      requireString('session_id');
+      requireString('text', { max: MAX_TEXT });
+      break;
+    case 'launch_agent_session':
+      requireString('prompt', { max: MAX_TEXT, optional: true });
+      for (const key of ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions']) requireString(key, { optional: true });
+      break;
+    case 'read_launch_result':
+      requireString('request');
+      break;
+    default:
+  }
+}
+
 /** A lazily (re)connected host. Returns null from `ensure` when there is none. */
 export function createConnection({ env = process.env, open = openHost, endpoint = () => resolveEndpoint(env) } = {}) {
   let current = null;
@@ -91,9 +129,8 @@ export function createServer(connection) {
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const conn = await connection.ensure();
     if (!conn) return { tools: [] }; // no host: stay quiet so the agent falls back
-    const have = new Set(conn.hello?.capabilities ?? []);
     const tools = Object.keys(SCHEMAS)
-      .filter((name) => have.has(NEEDS[name]))
+      .filter((name) => allowed(conn, name))
       .map((name) => ({ name, description: DESCRIPTIONS[name], inputSchema: SCHEMAS[name] }));
     return { tools };
   });
@@ -102,9 +139,11 @@ export function createServer(connection) {
     const { name, arguments: args = {} } = request.params;
     const json = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }], structuredContent: value });
     try {
-      if (!SCHEMAS[name]) throw new PipeError(`Unknown tool ${name}.`);
+      if (!Object.hasOwn(SCHEMAS, name)) throw new PipeError(`Unknown tool ${name}.`);
       const conn = await connection.ensure();
       if (!conn) throw new PipeError('Slipgates is not running on this machine.', 'unavailable');
+      if (!allowed(conn, name)) throw new PipeError(`${name} is not available on this connection.`, 'refused');
+      validate(name, args);
       const host = conn.client;
       switch (name) {
         case 'list_agent_sessions': return json(await listSessions(host, args));

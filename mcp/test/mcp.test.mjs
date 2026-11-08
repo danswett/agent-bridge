@@ -168,3 +168,33 @@ test('launch maps permissions, remembers the outcome, and read_launch_result ret
   assert.equal((await call(client, 'read_launch_result', { request: 'nope' })).status, 'unknown');
   connection.close(); host.close();
 });
+
+test('without a credential only read tools are listed and dispatched', async () => {
+  const host = await fakeHost({ hello: () => ({ capabilities: CAPS }), 'session.reply': () => ({ outcome: 'delivered' }), 'sessions.list': () => ({ sessions: [] }) });
+  const { client, connection } = await clientFor(host, { AGENT_BRIDGE_TOKEN: '' });
+  assert.deepEqual((await client.listTools()).tools.map((t) => t.name).sort(), ['list_agent_sessions', 'read_agent_session']);
+  const r = await client.callTool({ name: 'reply_to_agent_session', arguments: { session_id: 's1', text: 'hi' } });
+  assert.equal(r.isError, true);
+  assert.equal(host.seen.some((q) => q.op === 'session.reply' || q.op === 'session.get'), false);
+  connection.close(); host.close();
+});
+
+test('unknown or inherited tool names and bad arguments are rejected before any pipe call', async () => {
+  const host = await fakeHost({ hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }), 'session.get': () => session(), 'session.reply': () => ({ outcome: 'delivered' }) });
+  const { client, connection } = await clientFor(host);
+  for (const [name, args] of [['constructor', {}], ['__proto__', {}], ['reply_to_agent_session', { session_id: 's1' }], ['reply_to_agent_session', { session_id: 's1', text: 'x'.repeat(16 * 1024 + 1) }]]) {
+    assert.equal((await client.callTool({ name, arguments: args })).isError, true, name);
+  }
+  assert.equal(host.seen.some((q) => q.op === 'session.reply' || q.op === 'session.get'), false);
+  connection.close(); host.close();
+});
+
+test('a host that stops answering fails the request instead of hanging', async () => {
+  const name = process.platform === 'win32' ? `\\\\.\\pipe\\ap2-mute-${process.pid}` : path.join(os.tmpdir(), `ap2-mute-${process.pid}.sock`);
+  const sockets = [];
+  const server = net.createServer((s) => sockets.push(s));
+  await new Promise((r) => server.listen(name, r));
+  await assert.rejects(openHost({ endpoint: name, token: 'x', timeoutMs: 200 }), (e) => e instanceof PipeError && e.kind === 'unavailable');
+  sockets.forEach((s) => s.destroy());
+  server.close();
+});
