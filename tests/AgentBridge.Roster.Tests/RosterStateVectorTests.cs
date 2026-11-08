@@ -69,8 +69,12 @@ public sealed class RosterStateVectorTests
                 var w = new World();
                 w.Genesis();
                 w.Add("+A", "G", "A", "G");
+                w.Add("+C", "A", "C", "+A");
+                w.Rename("nA", "A", "+A", "+C", "G");
+                w.Rename("nC", "C", "+C", "nA", "Kitchen laptop");
                 return w;
-            });
+            },
+            w => [.. All(w), new Step(Hours: 0), new Step(Hours: 73)]);
         // A host's hostSign key (agent-principals.md §8.10, V1) is a verifier's choice to accept, and
         // never another device's key.
         World HostBase()
@@ -92,6 +96,10 @@ public sealed class RosterStateVectorTests
             () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.AddHostV2("+I", "G", "I", "+H", hostSignOf: "H"); return w; }, AcceptHostSign: true);
         yield return new("later-key-is-a-host-sign", "a person's add whose sign key is an active host's hostSign is refused",
             () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.Add("+P", "G", "P", "+H", signWith: "H"); return w; }, AcceptHostSign: true);
+        yield return new("sibling-key-is-a-host-sign", "sibling adds, a host and a person sharing its hostSign as a sign key, are each accepted but cannot be merged",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.Add("+P", "G", "P", "+A", signWith: "H"); w.Merge("m", "G", ["+H", "+P"]); return w; }, AcceptHostSign: true);
+        yield return new("readded-and-host-key", "an add that is both a re-add and shares a hostSign is refused as readded",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.Add("+A2", "G", "A", "+H", signWith: "H"); return w; }, AcceptHostSign: true);
         yield return new("ninth-rename", "the ninth rename of one add is refused",
             () =>
             {

@@ -308,6 +308,8 @@ export class RosterVerifier {
         if (body.version === 2 && !this.acceptHostSign) return INVALID.version;
         for (const a of ancestors.members()) {
           if (g.at(a).isAdd && g.at(a).deviceId === body.device.id) return INVALID.readded;
+        }
+        for (const a of ancestors.members()) {
           if (g.at(a).isAdd && hostKeyCollides(body.device, g.at(a).body.device)) return INVALID.hostKey;
         }
         if (p.activeCount >= MAX_ACTIVE) return INVALID.activeCap;
@@ -366,6 +368,13 @@ export class RosterVerifier {
           if (parents.some((b) => g.isAncestor(a, b))) return INVALID.merge;
         }
         if (this.#nonRemovals >= MAX_ENTRIES) return INVALID.cap;
+        // Branches that each admitted a key the other holds as a hostSign cannot join.
+        const adds = [...ancestors.members()].filter((a) => g.at(a).isAdd);
+        for (let i = 0; i < adds.length; i++) {
+          for (let j = i + 1; j < adds.length; j++) {
+            if (hostKeyCollides(g.at(adds[i]).body.device, g.at(adds[j]).body.device)) return INVALID.hostKey;
+          }
+        }
         return this.#overBudget(signer, 'merge');
       }
       default:

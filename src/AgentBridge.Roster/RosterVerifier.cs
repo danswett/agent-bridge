@@ -419,6 +419,15 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
                         if (parents.Any(b => _g.IsAncestor(a, b))) { return Invalid.Merge; }
                     }
                     if (_nonRemovals >= EntryCap) { return Invalid.Cap; }
+                    // Branches that each admitted a key the other holds as a hostSign cannot join.
+                    var adds = ancestors.Members().Where(a => _g[a].IsAdd).ToList();
+                    for (var i = 0; i < adds.Count; i++)
+                    {
+                        for (var j = i + 1; j < adds.Count; j++)
+                        {
+                            if (HostKeyCollides(_g[adds[i]].Body.Device!, _g[adds[j]].Body.Device!)) { return Invalid.HostKey; }
+                        }
+                    }
                     return OverBudget(signer, EntryOp.Merge);
                 }
         }
