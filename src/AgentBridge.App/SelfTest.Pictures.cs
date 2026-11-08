@@ -41,7 +41,9 @@ static partial class SelfTest
         var name = AutomationProperties.GetName(button) is { Length: > 0 } n ? n : AutomationProperties.GetAutomationId(button) is { Length: > 0 } id ? id : button.Content?.ToString() ?? "a button";
         if (System("SystemColorHighlightColor") is not { } fill || System("SystemColorHighlightTextColor") is not { } ink) { return $"{name}: the system colours are missing"; }
         if (button.ActualWidth <= 0 || button.ActualHeight <= 0) { return $"{name}: not drawn"; }
-        var picture = await PicturePixels(button);
+        (byte[] Pixels, uint Width, uint Height, BitmapAlphaMode Alpha) picture;
+        try { picture = await PicturePixels(button); }
+        catch (ArgumentException e) { return $"{name}: could not be drawn for the check ({e.Message})"; }
         var scale = picture.Width / button.ActualWidth;
         var inset = (int)Math.Ceiling(4 * scale);
         double fr = fill.R, fg = fill.G, fb = fill.B;

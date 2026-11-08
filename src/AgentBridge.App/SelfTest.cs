@@ -1001,7 +1001,7 @@ static partial class SelfTest
             {
                 // Every accent button this page draws: the system pair only, no plate under a label.
                 var accent = (Style)Application.Current.Resources["AccentButtonStyle"];
-                foreach (var button in Find<Button>(page).Where(b => b.Style == accent && b.IsEnabled && b.ActualWidth > 0 && b.ActualHeight > 0).ToList())
+                foreach (var button in Find<Button>(page).Where(b => b.Style == accent && b.IsEnabled && b.IsLoaded && Shown(b, page)).ToList())
                 {
                     var plate = await AccentPlate(button);
                     check(plate is null, $"draws the {tag} page's accent button in Highlight and HighlightText only ({plate})");
