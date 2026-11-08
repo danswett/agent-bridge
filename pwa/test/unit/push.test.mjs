@@ -221,7 +221,7 @@ test('question notifications this app sees answered are closed; others stay', as
 
 // ---- the session being read (#1190) ----
 
-function readingPage({ visible = true, keepaliveMs = 30 } = {}) {
+function readingPage({ visible = true, keepaliveMs = 30, laterMs = [], close = null } = {}) {
   const doc = { visibilityState: visible ? 'visible' : 'hidden', fire: [], addEventListener(type, fn) { if (type === 'visibilitychange') { this.fire.push(fn); } }, removeEventListener(type, fn) { this.fire = this.fire.filter((f) => f !== fn); } };
   const inputs = [];
   const listening = new Set();
@@ -239,7 +239,7 @@ function readingPage({ visible = true, keepaliveMs = 30 } = {}) {
     refreshFocus: () => { said.refreshes += 1; },
     sessions: { onChange: (fn) => { changes.push(fn); return () => { changes.splice(changes.indexOf(fn), 1); }; } },
   };
-  const reading = new Reading({ hosts, doc, win, delayMs: 20, keepaliveMs, now: () => clock.t, close: async (h, s, q) => { closed.push(q ? `${h}/${s}/${q}` : `${h}/${s}`); } });
+  const reading = new Reading({ hosts, doc, win, delayMs: 20, laterMs, keepaliveMs, now: () => clock.t, close: close ?? (async (h, s, q) => { closed.push(q ? `${h}/${s}/${q}` : `${h}/${s}`); }) });
   const initial = focus.splice(0);
   const flip = (state) => { doc.visibilityState = state; for (const fn of doc.fire) { fn(); } };
   const input = (advanceMs = 300) => { clock.t += advanceMs; for (const fn of inputs) { fn(); } };
@@ -387,6 +387,85 @@ test('a Reading made for a later sign-in is the only one listening once the earl
   assert.equal(first.changes.length, 1);
   again.stop();
   assert.equal(first.listening.size, 0);
+});
+
+// The notices the page has shown, found by their tag as the registration finds them.
+function noticeWorld() {
+  const shown = [];
+  const registration = { getNotifications: async ({ tag }) => shown.filter((n) => n.tag === tag) };
+  const appear = (hostId, sessionId, data = {}) => {
+    const n = { ...notification({ kind: 'finished', ...data }), tag: noticeTag(hostId, sessionId) };
+    shown.push(n);
+    return n;
+  };
+  return { appear, close: (hostId, sessionId, question) => closeReadNotices(registration, hostId, sessionId, question) };
+}
+const wait = (ms) => new Promise((r) => { setTimeout(r, ms); });
+const changeOf = (page, hostId, id) => { for (const fn of page.changes) { fn({ type: 'upsert', hostId, id }); } };
+
+test("a notice shown after the first look at a change, as the host's delayed push is, is closed by a later pass", async () => {
+  const w = noticeWorld();
+  const page = readingPage({ laterMs: [80, 160], close: w.close });
+  page.reading.open({ hostId: 'm1', id: 's1' });
+  changeOf(page, 'm1', 's1');
+  await wait(50);
+  const late = w.appear('m1', 's1');
+  const other = w.appear('m1', 's2');
+  assert.equal(late.closed, false);
+  await wait(80);
+  assert.equal(late.closed, true, 'by the pass after 80 ms');
+  const later = w.appear('m1', 's1');
+  await wait(80);
+  assert.equal(later.closed, true, 'by the pass after 160 ms');
+  assert.equal(other.closed, false, 'a notice of another session is left');
+  page.reading.stop();
+});
+
+test('the later passes are cancelled when the page hides, the session shown changes, or the Reading stops', async () => {
+  const hidden = noticeWorld();
+  const a = readingPage({ laterMs: [80, 160], close: hidden.close });
+  a.reading.open({ hostId: 'm1', id: 's1' });
+  changeOf(a, 'm1', 's1');
+  await wait(40);
+  a.flip('hidden');
+  const unread = hidden.appear('m1', 's1');
+  await wait(220);
+  assert.equal(unread.closed, false, 'a hidden page reads nothing');
+
+  const moved = noticeWorld();
+  const b = readingPage({ laterMs: [80, 160], close: moved.close });
+  b.reading.open({ hostId: 'm1', id: 's1' });
+  changeOf(b, 'm1', 's1');
+  await wait(40);
+  b.reading.open({ hostId: 'm1', id: 's2' });
+  const first = moved.appear('m1', 's1');
+  const second = moved.appear('m1', 's2');
+  await wait(220);
+  assert.equal(first.closed, false, 'the session no longer shown is not read');
+  assert.equal(second.closed, true, 'the one shown now has passes of its own');
+  b.reading.stop();
+
+  const stopped = noticeWorld();
+  const c = readingPage({ laterMs: [80, 160], close: stopped.close });
+  c.reading.open({ hostId: 'm1', id: 's1' });
+  changeOf(c, 'm1', 's1');
+  await wait(40);
+  c.reading.stop();
+  const left = stopped.appear('m1', 's1');
+  await wait(220);
+  assert.equal(left.closed, false);
+});
+
+test('a stream of changes leaves one first pass and one of each later pass, however many there are', async () => {
+  const calls = [];
+  const page = readingPage({ laterMs: [60, 120], close: async (h, s) => { calls.push(`${h}/${s}`); } });
+  page.reading.open({ hostId: 'm1', id: 's1' });
+  await Promise.resolve();
+  calls.length = 0;
+  for (let i = 0; i < 50; i++) { changeOf(page, 'm1', 's1'); }
+  await wait(300);
+  assert.equal(calls.length, 3);
+  page.reading.stop();
 });
 
 test("a change to the open session closes its notices a moment later; another session's change, or one while hidden, closes nothing", async () => {

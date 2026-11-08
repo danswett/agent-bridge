@@ -13,28 +13,33 @@
 //
 // hosts: HostSession (setFocus, refreshFocus, sessions.onChange). close(hostId, sessionId,
 // question): takes down that session's shown notices that are read: all but those of questions
-// other than `question`. delayMs: how long after a change to the open session its
-// notices are looked at again; a push that lands during reading is shown a moment after the
-// change that caused it, so closing at once would miss it.
+// other than `question`. A change to the open session is followed by a close pass after delayMs,
+// and by later passes (laterMs, after the last change): the host sends a question's push 2 s
+// after the question and a finished turn's 3 s after the turn, and the push service adds a
+// little more, so one look a moment after the change would find nothing to close and leave the
+// notice shown while it is read. At most one timer for each pass; the later ones restart with each
+// change, the first does not, so a session that goes on changing is still looked at.
 export class Reading {
   #hosts;
   #close;
   #doc;
   #delayMs;
+  #laterMs;
   #keepaliveMs;
   #now;
   #open = null;
-  #timer = null;
+  #passes = [];
   #alive = null;
   #lastInput = null;
   #stopped = false;
   #off = [];
 
-  constructor({ hosts, close, doc = globalThis.document ?? null, win = globalThis, delayMs = 1000, keepaliveMs = 60000, now = () => Date.now() }) {
+  constructor({ hosts, close, doc = globalThis.document ?? null, win = globalThis, delayMs = 1000, laterMs = [4000, 10000], keepaliveMs = 60000, now = () => Date.now() }) {
     this.#hosts = hosts;
     this.#close = close;
     this.#doc = doc;
     this.#delayMs = delayMs;
+    this.#laterMs = laterMs;
     this.#keepaliveMs = keepaliveMs;
     this.#now = now;
     this.#listen(doc, 'visibilitychange', () => this.#apply());
@@ -44,11 +49,7 @@ export class Reading {
       this.#listen(win, type, () => this.#input(), { passive: true, capture: true });
     }
     this.#off.push(hosts.sessions.onChange((c) => {
-      if (c?.type !== 'upsert' || !this.#reading(c.hostId, c.id) || this.#timer !== null) { return; }
-      this.#timer = setTimeout(() => {
-        this.#timer = null;
-        this.#closeOpen();
-      }, this.#delayMs);
+      if (c?.type === 'upsert' && this.#reading(c.hostId, c.id)) { this.#watch(); }
     }));
     this.#apply();
   }
@@ -72,20 +73,44 @@ export class Reading {
   open(target) {
     const next = target?.id ? { hostId: target.hostId ?? null, id: target.id, question: typeof target.question === 'string' && target.question ? target.question : null } : null;
     if (this.#stopped || (next?.hostId === this.#open?.hostId && next?.id === this.#open?.id && next?.question === this.#open?.question)) { return; }
+    // What was waiting was for the session or question shown before. The one shown now has its
+    // own passes (a question that has just come is exactly what a push is on its way for).
+    this.#cancel();
     this.#open = next;
     this.#apply();
+    if (next && this.visible) { this.#watch(); }
   }
 
   // Everything it listened to is let go, and nothing more is said.
   stop() {
     this.#stopped = true;
-    clearTimeout(this.#timer);
+    this.#cancel();
     clearTimeout(this.#alive);
-    this.#timer = this.#alive = null;
+    this.#alive = null;
     for (const off of this.#off.splice(0)) { off(); }
   }
 
   #reading(hostId, id) { return this.visible && this.#open?.hostId === hostId && this.#open?.id === id; }
+
+  // The close passes after a change: the first once in delayMs, the later ones each laterMs after
+  // the last change. Never more timers than passes.
+  #watch() {
+    if (this.#stopped) { return; }
+    const pass = (i) => () => {
+      this.#passes[i] = null;
+      this.#closeOpen();
+    };
+    [this.#delayMs, ...this.#laterMs].forEach((ms, i) => {
+      if (i === 0 && this.#passes[0]) { return; }
+      clearTimeout(this.#passes[i]);
+      this.#passes[i] = setTimeout(pass(i), ms);
+    });
+  }
+
+  #cancel() {
+    for (const t of this.#passes) { clearTimeout(t); }
+    this.#passes = [];
+  }
 
   #input() {
     const now = this.#now();
@@ -123,6 +148,7 @@ export class Reading {
       });
     } catch (e) { console.error(e); }
     if (!this.visible) {
+      this.#cancel();
       clearTimeout(this.#alive);
       this.#alive = null;
     } else if (this.#alive === null && this.#lastInput !== null && this.idleMs() < this.#keepaliveMs) {
