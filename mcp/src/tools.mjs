@@ -1,6 +1,6 @@
 // The tools, with agent-ha-bridge's names, over one host's pipe. `host` is { request(op, data) }.
 import { createHash, randomUUID } from 'node:crypto';
-import { PipeError, REQUEST_TIMEOUT_MS } from './pipe.mjs';
+import { PipeError } from './pipe.mjs';
 
 export const LAUNCH_SETTINGS = ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions'];
 const PERMISSIONS = { 'Ask permission': 'ask', 'Allow all': 'allowAll' };
@@ -51,8 +51,7 @@ export async function listSessions(host, { include } = {}) {
 export async function readSession(host, id, { since = '', waitSeconds = 0, sleep = defaultSleep } = {}) {
   const deadline = Date.now() + Math.max(0, waitSeconds) * 1000;
   for (;;) {
-    const remaining = deadline - Date.now();
-    const session = await host.request('session.get', { id }, { timeoutMs: Math.min(REQUEST_TIMEOUT_MS, Math.max(1000, remaining)) });
+    const session = await host.request('session.get', { id });
     if (!session || session.missing) return { id, found: false, done: false };
     const moved = !since || turnMarker(session) !== since;
     const done = moved && session.status !== 'working';

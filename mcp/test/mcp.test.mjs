@@ -32,7 +32,7 @@ async function fakeHost(handlers) {
         const body = Buffer.from(JSON.stringify(reply));
         const head = Buffer.alloc(4);
         head.writeUInt32LE(body.length);
-        socket.write(Buffer.concat([head, body]));
+        setTimeout(() => socket.write(Buffer.concat([head, body])), handlers.delayMs?.[req.op] ?? 0);
       }
     });
   });
@@ -197,4 +197,16 @@ test('a host that stops answering fails the request instead of hanging', async (
   await assert.rejects(openHost({ endpoint: name, token: 'x', timeoutMs: 200 }), (e) => e instanceof PipeError && e.kind === 'unavailable');
   sockets.forEach((s) => s.destroy());
   server.close();
+});
+
+test('a read answered after more than a second still succeeds with no wait', async () => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'session.get': () => session(), delayMs: { 'session.get': 1300 },
+  });
+  const { client, connection } = await clientFor(host);
+  const out = await call(client, 'read_agent_session', { session_id: 's1' });
+  assert.equal(out.done, true);
+  assert.equal(out.response, 'hello');
+  connection.close(); host.close();
 });
