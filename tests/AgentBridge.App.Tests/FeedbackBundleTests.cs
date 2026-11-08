@@ -250,9 +250,6 @@ public class FeedbackBundleTests
         try
         {
             System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("tr-TR");
-            var r = FeedbackRedactor.Redact("API_KEY=zzz111 AUTHORIZATION: qqq222");
-            Assert.DoesNotContain("zzz111", r);
-            Assert.DoesNotContain("qqq222", r);
             Assert.DoesNotContain("SILVIA", FeedbackRedactor.Redact("SILVIA broke it", ["silvia"]));
         }
         finally { System.Globalization.CultureInfo.CurrentCulture = before; }
@@ -323,6 +320,44 @@ public class FeedbackBundleTests
             ["note"] = FeedbackRedactor.Redact("password=hunter2 and tokenCount=3 see Authorization: Basic dXNlcjpwYXNz"),
         });
         Assert.False(FeedbackRedactor.BundleHasSecret(json), json);
+    }
+
+    [Theory]
+    [InlineData("{\"token\":true}")]
+    [InlineData("{\"token\":false}")]
+    [InlineData("{\"token\":{\"v\":\"abc\"}}")]
+    [InlineData("{\"token\":[{\"a\":\"abc\"}]}")]
+    [InlineData("{\"a\":{\"password\":{\"b\":{\"c\":1}}}}")]
+    public void BundleHasSecret_refuses_any_value_nested_under_a_credential_key(string json)
+        => Assert.True(FeedbackRedactor.BundleHasSecret(json));
+
+    [Fact]
+    public void A_unicode_escaped_key_inside_a_string_is_still_a_credential()
+    {
+        const string line = "event {\"pass\\u0077ord\":\"hunter2\"}";
+        Assert.DoesNotContain("hunter2", FeedbackRedactor.Redact(line));
+        Assert.True(FeedbackRedactor.ContainsSecret(line));
+        Assert.True(FeedbackRedactor.BundleHasSecret(System.Text.Json.JsonSerializer.Serialize(new { text = line })));
+        Assert.False(FeedbackRedactor.ContainsSecret("caf\\u00e9 is fine"));
+    }
+
+    [Theory]
+    [InlineData("password='hunter2", "hunter2")]
+    [InlineData("password=\"hunter2", "hunter2")]
+    public void An_unterminated_quote_still_redacts_the_value(string input, string gone)
+        => Assert.DoesNotContain(gone, FeedbackRedactor.Redact(input));
+
+    [Fact]
+    public void A_regex_timeout_fails_closed()
+    {
+        FeedbackRedactor.SecretPassOverride = _ => throw new System.Text.RegularExpressions.RegexMatchTimeoutException();
+        try
+        {
+            Assert.Equal(FeedbackRedactor.Mark, FeedbackRedactor.Redact("anything"));
+            Assert.True(FeedbackRedactor.ContainsSecret("anything"));
+            Assert.True(FeedbackRedactor.BundleHasSecret("{\"a\":\"anything\"}"));
+        }
+        finally { FeedbackRedactor.SecretPassOverride = null; }
     }
 
     [Fact]

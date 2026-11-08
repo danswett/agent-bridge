@@ -39,7 +39,20 @@ public static partial class FeedbackRedactor
 
     // Credentials only, the patterns that must never be sent. S2's pre-send refusal uses these same
     // patterns through ContainsSecret, so there is one list.
-    static string RedactSecrets(string text)
+    static string RedactSecrets(string text) => Pass(DecodeEscapes(text));
+
+    // Test seam: lets a test force the timeout path, which real patterns only reach on hostile text.
+    [ThreadStatic] internal static Func<string, string>? SecretPassOverride;
+
+    static string Pass(string text) => SecretPassOverride?.Invoke(text) ?? RedactDecoded(text);
+
+    // A journal line can hold JSON with its keys written as \uXXXX, which the patterns would not
+    // see as a word; matching runs on the decoded text.
+    static string DecodeEscapes(string text) => text.Contains("\\u", StringComparison.Ordinal)
+        ? UnicodeEscape().Replace(text, m => ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString())
+        : text;
+
+    static string RedactDecoded(string text)
     {
         text = PrivateKey().Replace(text, Mark);
         text = Jwt().Replace(text, Mark);
@@ -62,7 +75,11 @@ public static partial class FeedbackRedactor
     public static bool ContainsSecret(string text)
     {
         if (string.IsNullOrEmpty(text)) { return false; }
-        try { return !string.Equals(RedactSecrets(text), text, StringComparison.Ordinal); }
+        try
+        {
+            var decoded = DecodeEscapes(text);
+            return !string.Equals(Pass(decoded), decoded, StringComparison.Ordinal);
+        }
         catch (RegexMatchTimeoutException) { return true; }
     }
 
@@ -73,7 +90,8 @@ public static partial class FeedbackRedactor
         using var doc = System.Text.Json.JsonDocument.Parse(bundleJson);
         return Scan(doc.RootElement, false);
 
-        // underCredentialKey carries a credential-named key down into the elements of an array.
+        // underCredentialKey carries a credential-named key down into array elements and object
+        // members. Booleans and numbers under such a key are refused too: they are odd and safe to refuse.
         static bool Scan(System.Text.Json.JsonElement e, bool underCredentialKey)
         {
             switch (e.ValueKind)
@@ -81,6 +99,8 @@ public static partial class FeedbackRedactor
                 case System.Text.Json.JsonValueKind.String:
                     return (underCredentialKey && HoldsValue(e.GetString())) || ContainsSecret(e.GetString()!);
                 case System.Text.Json.JsonValueKind.Number:
+                case System.Text.Json.JsonValueKind.True:
+                case System.Text.Json.JsonValueKind.False:
                     return underCredentialKey;
                 case System.Text.Json.JsonValueKind.Array:
                     foreach (var item in e.EnumerateArray()) { if (Scan(item, underCredentialKey)) { return true; } }
@@ -89,7 +109,7 @@ public static partial class FeedbackRedactor
                     foreach (var p in e.EnumerateObject())
                     {
                         if (p.NameEquals("screenshotPng")) { continue; }
-                        if (ContainsSecret(p.Name) || Scan(p.Value, IsCredentialName(p.Name))) { return true; }
+                        if (ContainsSecret(p.Name) || Scan(p.Value, underCredentialKey || IsCredentialName(p.Name))) { return true; }
                     }
                     return false;
                 default: return false;
@@ -138,8 +158,11 @@ public static partial class FeedbackRedactor
 
     // The value is a quoted string to its closing quote (also when the JSON is escaped inside a log
     // line) or one bare token.
-    [GeneratedRegex(@"((?<![\w.-])[\w.-]{0,64}(?:password|passwd|pwd|secret|token|api[_ -]?key|authorization|private[_ -]?key|credential|connection[_ -]?string)[\w.-]{0,64}(?:\\*[""'])?\s*[:=]\s*)(?!\s*\[redacted\])(?:\\*""[^""\r\n]*""|'[^'\r\n]*'|(?:[^\s""',;}&\\]|\\(?![""']))+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
+    [GeneratedRegex(@"((?<![\w.-])[\w.-]{0,64}(?:password|passwd|pwd|secret|token|api[_ -]?key|authorization|private[_ -]?key|credential|connection[_ -]?string)[\w.-]{0,64}(?:\\*[""'])?\s*[:=]\s*)(?!\s*\[redacted\])(?:\\*""[^""\r\n]*""|'[^'\r\n]*'|(?:\\*[""'])?(?:[^\s""',;}&\\]|\\(?![""']))+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
     private static partial Regex Assignment();
+
+        [GeneratedRegex(@"\\u([0-9a-fA-F]{4})", RegexOptions.None, TimeoutMs)]
+        private static partial Regex UnicodeEscape();
 
     [GeneratedRegex(@"(?<![\w-])(--?(?:[a-z0-9]{1,20}[-_]){0,3}(?:password|passwd|pwd|token|secret|api-?key)\s+)(?!\s*\[redacted\])(?!-)\S+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
     private static partial Regex CliFlag();
