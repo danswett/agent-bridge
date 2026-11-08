@@ -7,7 +7,7 @@ import { glyph } from './glyph.js';
 import { needsYou, AppBadge } from '../needs-you.js';
 import { tapState, prepareAnswer } from '../answers.js';
 import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer } from './question-view.js';
-import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
+import { ReceiptClock, ReceiptTiming, LINGER_READ_MS, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import { duration, localTime } from './time.js';
 import { holdOf, UPDATING } from './hold.js';
 import { whileVisible } from './ticker.js';
@@ -19,7 +19,7 @@ import { renderMarkdown } from '../markdown.js';
 // answer service's 9 minutes). Dropped with its question, the ring went and the outcome never came.
 // The outcome can also come first, the machine's update clearing the question after it: the entry
 // then stays for what is left of that same time, as it would the other way round (outcomeUntil).
-const LINGER_READ_MS = 5000;
+// LINGER_READ_MS (receipt.js) is the time a closed line stays everywhere (ui.md §7).
 const LINGER_MAX_MS = 9 * 60 * 1000;
 const inFlight = (entry) => entry?.state === 'sending' || entry?.state === 'waiting';
 

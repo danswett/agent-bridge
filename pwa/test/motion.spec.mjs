@@ -881,7 +881,7 @@ const typedAsItChanged = (page, change) => page.evaluate(async (change) => {
     }
   });
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  const question = slot.querySelector('.question');
+  const question = slot.querySelector('.question:not(.resolved)');
   return { moved: question.querySelector('button.send').getBoundingClientRect().top - top > 1, armed: question.hasAttribute('data-arriving') };
 }, change);
 const notes = (id) => ({ id, kind: 'form', message: 'Notes?', askedAt: new Date().toISOString(), fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
@@ -1198,17 +1198,20 @@ test('a receipt that goes from above a question that stays moves it up, and a cl
   await openDemo(page);
   await askCodex(page, choices('q-first'));
   const v = await open(page, CODEX);
-  // The first answered, its response held back; a second question comes while it is on its way,
-  // under the first's receipt.
-  await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+  // The first answered, its outcome held back after the host typed it; a second question comes
+  // while it is on its way, under the first's receipt.
+  await page.evaluate(() => window.agentBridgeDemo.host.holdBefore('result'));
   await v.locator('.question-slot .choice').first().click();
+  // Typed by the host (delivered, as its outcome will say), so the receipt's last word is not one
+  // that stays: a stale one would stay in the conversation as a closed question (#1193), not go.
+  await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.host.typed.length)).toBe(1);
   await askCodex(page, choices('q-second'), {}, 62_000);
   const receipt = v.locator('.answer-receipt');
   await expect(receipt).toHaveCount(1);
   await expect(v.locator('.question-slot .question[data-question="q-second"]')).toHaveCount(1);
-  // The first's answer comes back: the receipt has said its last word.
-  await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
-  await expect(receipt).not.toHaveAttribute('data-answer', /sending|waiting|progress/);
+  // The first's answer comes back delivered: the receipt has said its last word.
+  await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('result'));
+  await expect(receipt).toHaveAttribute('data-answer', 'delivered');
   await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
   const before = await answered(page);
   // The second, drawn again as it stays (reworded): the receipt goes and the question moves up
