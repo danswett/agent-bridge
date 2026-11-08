@@ -68,6 +68,7 @@ const DESCRIPTIONS = {
 };
 
 const MAX_TEXT = 16 * 1024;
+const REQUEST_KEY = /^[A-Za-z0-9._:-]{1,128}$/;
 // Without an accepted agent principal the connection is unattributed: only reads are offered.
 const UNATTRIBUTED_OK = new Set(['list_agent_sessions', 'read_agent_session']);
 
@@ -80,6 +81,11 @@ function validate(name, args) {
     if (value === undefined && optional) return;
     if (typeof value !== 'string' || (!optional && value.length === 0)) throw new PipeError(`${key} must be a${optional ? '' : ' non-empty'} string.`);
     if (Buffer.byteLength(value, 'utf8') > max) throw new PipeError(`${key} is too large (max ${max} bytes).`);
+  };
+  const requireRequestKey = ({ optional = false } = {}) => {
+    const value = args.request;
+    if (value === undefined && optional) return;
+    if (typeof value !== 'string' || !REQUEST_KEY.test(value)) throw new PipeError('request must be 1 to 128 characters: letters, digits, "-", "_", "." or ":".');
   };
   switch (name) {
     case 'list_agent_sessions':
@@ -96,11 +102,11 @@ function validate(name, args) {
       break;
     case 'launch_agent_session':
       requireString('prompt', { max: MAX_TEXT, optional: true });
-      requireString('request', { max: 128, optional: true });
+      requireRequestKey({ optional: true });
       for (const key of ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions']) requireString(key, { optional: true });
       break;
     case 'read_launch_result':
-      requireString('request');
+      requireRequestKey();
       break;
     default:
   }

@@ -176,6 +176,12 @@ test('launch rejects a request id that is not a short string', async () => {
   const { client, connection } = await clientFor(host);
   const res = await client.callTool({ name: 'launch_agent_session', arguments: { request: 'r'.repeat(500) } });
   assert.equal(res.isError, true);
+  for (const request of ['', 'has space', 'new\nline', 'a/b']) {
+    const bad = await client.callTool({ name: 'launch_agent_session', arguments: { request } });
+    assert.equal(bad.isError, true, JSON.stringify(request));
+    assert.match(bad.content[0].text, /request must be/);
+  }
+  assert.equal((await client.callTool({ name: 'read_launch_result', arguments: { request: 'x y' } })).isError, true);
   assert.equal(host.seen.some((r) => r.op === 'session.launch'), false);
   connection.close(); host.close();
 });
