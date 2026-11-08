@@ -312,6 +312,17 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     // The history state an entry was judged in.
     public RosterState HistoryState(byte[] hash) => _g.Find(hash) is { } i ? ClosureState(i) : RosterState.Empty;
 
+    // Whether the device of this add holds a key that collides with another add the verifier holds,
+    // in any branch: such a key confers no authority (entries, person commands and vetoes alike).
+    public bool SignerKeyCollides(int add)
+    {
+        for (var i = 0; i < _g.Count; i++)
+        {
+            if (i != add && _g[i].IsAdd && !_candidate[i] && HostKeyCollides(_g[add].Body.Device!, _g[i].Body.Device!)) { return true; }
+        }
+        return false;
+    }
+
     // ---- validity (§3.3) ----
 
     record struct Facts(int Signer, int Cosigner, int Target, int[] Keep, int Rank);
@@ -347,10 +358,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         // A key held by a host and by a person confers no authority while both adds are known.
         foreach (var s in cosigner >= 0 ? new[] { signer, cosigner } : [signer])
         {
-            for (var i = 0; i < _g.Count; i++)
-            {
-                if (i != s && _g[i].IsAdd && !_candidate[i] && HostKeyCollides(_g[s].Body.Device!, _g[i].Body.Device!)) { return Invalid.HostKey; }
-            }
+            if (SignerKeyCollides(s)) { return Invalid.HostKey; }
         }
 
         switch (body.Op)

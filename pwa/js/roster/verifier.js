@@ -97,6 +97,16 @@ export class RosterVerifier {
     return i !== null && !this.#candidate.has(i);
   }
 
+  // Whether the device of this add holds a key that collides with another add held, in any
+  // branch: such a key confers no authority (entries, person commands and vetoes alike).
+  signerKeyCollides(add) {
+    const g = this.#g;
+    for (let i = 0; i < g.count; i++) {
+      if (i !== add && g.at(i).isAdd && !this.#candidate.has(i) && hostKeyCollides(g.at(add).body.device, g.at(i).body.device)) return true;
+    }
+    return false;
+  }
+
   // Parsed entries (js/roster/entry.js parseEntry) in an order where each comes after its
   // parents, as one offer: a removal in it may bring ancestors over a cap or budget as evidence.
   // Offers run one at a time: signature checks yield, so two overlapping offers would both pass
@@ -304,11 +314,7 @@ export class RosterVerifier {
     facts.cosigner = cosigner;
     // A key held by a host and by a person confers no authority while both adds are known.
     for (const s of cosigner >= 0 ? [signer, cosigner] : [signer]) {
-      for (let i = 0; i < g.count; i++) {
-        if (i !== s && g.at(i).isAdd && !this.#candidate.has(i) && hostKeyCollides(g.at(s).body.device, g.at(i).body.device)) {
-          return INVALID.hostKey;
-        }
-      }
+      if (this.signerKeyCollides(s)) return INVALID.hostKey;
     }
 
     switch (body.op) {

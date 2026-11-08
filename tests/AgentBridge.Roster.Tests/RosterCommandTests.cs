@@ -263,14 +263,71 @@ public sealed class RosterCommandTests
         Assert.NotEqual(a.Mac, a.CommandMac);
     }
 
+    // ---- a key shared by a host and a person ----
+
+    // G, confirmed A, and siblings from there: a host H with its own hostSign, and Q, a person whose
+    // sign key is that hostSign; in either arrival order. Checked after probation, so only the
+    // shared key stands between Q and authority.
+    static (World W, RosterVerifier V) Colliding(bool hostFirst)
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+A", "G", "A", "G");
+        w.Confirm("cA", "G", "+A", "+A");
+        if (hostFirst)
+        {
+            w.AddHostV2("+H", "G", "H", "cA");
+            w.Add("+Q", "G", "Q", "cA", signWith: "H");
+        }
+        else
+        {
+            w.Add("+Q", "G", "Q", "cA", signWith: "H");
+            w.AddHostV2("+H", "G", "H", "cA");
+        }
+        var v = new RosterVerifier(Account, Generation, () => w.Now) { AcceptHostSign = true };
+        Assert.All(w.Feed(v, [.. w.Labels]), o => Assert.Equal(Verdict.Accepted, o.Verdict));
+        w.Now = TimeSpan.FromHours(CollisionHours);
+        return (w, v);
+    }
+
+    const int CollisionHours = 80;
+
+    static IEnumerable<VetoCase> CollisionVetoCases() =>
+    [
+        new("by-a-key-shared-with-a-host", "a person's veto signed with the key a sibling host holds as its hostSign", w => SignVeto(w, VetoBody(w, "Q"), "Q", signAs: "H"), Invalid.HostKey),
+        new("by-a-key-of-its-own", "another person's veto, in the same roster", w => SignVeto(w, VetoBody(w, "A"), "A")),
+    ];
+
+    static IEnumerable<CommandCase> CollisionCommandCases() =>
+    [
+        Case("update-by-a-key-shared-with-a-host", "a person's update command signed with the key a sibling host holds as its hostSign, after probation", CommandAction.Update, "Q", Invalid.HostKey, signAs: "H", head: "cA"),
+        Case("update-by-a-key-of-its-own", "another person's update command, in the same roster", CommandAction.Update, "A", head: "cA"),
+    ];
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_key_shared_with_a_host_signs_no_veto_or_command_in_either_arrival_order(bool hostFirst)
+    {
+        var (w, v) = Colliding(hostFirst);
+        foreach (var c in CollisionVetoCases())
+        {
+            var code = VetoOutcome(w, v, c.Wrapper(w), out var refusal);
+            Assert.True((c.Code, c.Refusal) == (code, refusal), $"{c.Name}: expected ({c.Code}, {c.Refusal}), got ({code}, {refusal})");
+        }
+        foreach (var c in CollisionCommandCases())
+        {
+            var code = CommandOutcome(v, c.Wrapper(w), c.Context(w), out var refusal);
+            Assert.True((c.Code, c.Refusal) == (code, refusal), $"{c.Name}: expected ({c.Code}, {c.Refusal}), got ({code}, {refusal})");
+        }
+    }
+
     // ---- the vectors ----
 
-    static JsonObject Generate()
+    static JsonArray VetoVectors(World w, RosterVerifier v, IEnumerable<VetoCase> cases)
     {
-        var (w, v) = Held();
-        var entries = new JsonArray([.. w.Labels.Select(l => (JsonNode)new JsonObject { ["label"] = l, ["hash"] = Codec.Base64Url(w[l].Hash), ["wrapper"] = w[l].Wire })]);
         var vetoes = new JsonArray();
-        foreach (var c in VetoCases())
+        foreach (var c in cases)
         {
             var wrapper = c.Wrapper(w);
             var code = VetoOutcome(w, v, wrapper, out var refusal);
@@ -279,8 +336,13 @@ public sealed class RosterCommandTests
             else { o["code"] = code; }
             vetoes.Add(o);
         }
+        return vetoes;
+    }
+
+    static JsonArray CommandVectors(World w, RosterVerifier v, IEnumerable<CommandCase> cases)
+    {
         var commands = new JsonArray();
-        foreach (var c in CommandCases())
+        foreach (var c in cases)
         {
             var wrapper = c.Wrapper(w);
             var context = c.Context(w);
@@ -293,6 +355,37 @@ public sealed class RosterCommandTests
             if (refusal is not null) { o["refusal"] = refusal; }
             else { o["code"] = code; }
             commands.Add(o);
+        }
+        return commands;
+    }
+
+    static JsonArray EntryVectors(World w) =>
+        new([.. w.Labels.Select(l => (JsonNode)new JsonObject { ["label"] = l, ["hash"] = Codec.Base64Url(w[l].Hash), ["wrapper"] = w[l].Wire })]);
+
+    static JsonObject Generate()
+    {
+        var (w, v) = Held();
+        var entries = EntryVectors(w);
+        var vetoes = VetoVectors(w, v, VetoCases());
+        var commands = CommandVectors(w, v, CommandCases());
+        var collisions = new JsonArray();
+        foreach (var (name, about, hostFirst) in new[]
+        {
+            ("host-first", "the host's add arrives before the person's, which shares its hostSign as a sign key", true),
+            ("person-first", "the person's add arrives before the host's", false),
+        })
+        {
+            var (cw, cv) = Colliding(hostFirst);
+            collisions.Add(new JsonObject
+            {
+                ["name"] = name,
+                ["about"] = about,
+                ["checkedAfterHours"] = CollisionHours,
+                ["devices"] = new JsonObject([.. new[] { "G", "A", "H", "Q" }.Select(n => KeyValuePair.Create(n, (JsonNode?)cw.Id(n)))]),
+                ["entries"] = EntryVectors(cw),
+                ["vetoes"] = VetoVectors(cw, cv, CollisionVetoCases()),
+                ["commands"] = CommandVectors(cw, cv, CollisionCommandCases()),
+            });
         }
         var a = Attest();
         var attesterKey = World.Keys("A").Dh;
@@ -325,6 +418,7 @@ public sealed class RosterCommandTests
             ["heldReset"] = Codec.Base64Url(HeldReset),
             ["vetoes"] = vetoes,
             ["commands"] = commands,
+            ["collisions"] = collisions,
             ["attestation"] = attestation,
         };
     }
