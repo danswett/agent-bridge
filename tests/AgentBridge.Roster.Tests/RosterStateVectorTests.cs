@@ -100,6 +100,36 @@ public sealed class RosterStateVectorTests
             () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.Add("+P", "G", "P", "+A", signWith: "H"); w.Merge("m", "G", ["+H", "+P"]); return w; }, AcceptHostSign: true);
         yield return new("readded-and-host-key", "an add that is both a re-add and shares a hostSign is refused as readded",
             () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.Add("+A2", "G", "A", "+H", signWith: "H"); return w; }, AcceptHostSign: true);
+        yield return new("readded-and-host-key-host-first", "a re-add that shares a hostSign is refused as readded even when the host's add comes before the re-added device's",
+            () =>
+            {
+                var w = new World();
+                w.Genesis();
+                w.AddHostV2("+H", "G", "H", "G");
+                w.Add("+A", "G", "A", "+H");
+                w.Add("+A2", "G", "A", "+A", signWith: "H");
+                return w;
+            }, AcceptHostSign: true);
+        yield return new("sibling-person-signs-after-host", "once both siblings have arrived, the person holding a host's hostSign key can sign nothing; the roster's other devices still can",
+            () =>
+            {
+                var w = HostBase();
+                w.AddHostV2("+H", "G", "H", "+A");
+                w.Add("+P", "G", "P", "+A", signWith: "H");
+                w.Rename("nP", "P", "+P", "+P", "Laptop", signAs: "H");
+                w.Rename("nA", "G", "+A", "+A", "Desk");
+                return w;
+            }, AcceptHostSign: true);
+        yield return new("sibling-person-signs-after-host-reversed", "the same, with the person's add delivered before the host's",
+            () =>
+            {
+                var w = HostBase();
+                w.Add("+P", "G", "P", "+A", signWith: "H");
+                w.AddHostV2("+H", "G", "H", "+A");
+                w.Rename("nP", "P", "+P", "+P", "Laptop", signAs: "H");
+                w.Rename("nA", "G", "+A", "+A", "Desk");
+                return w;
+            }, AcceptHostSign: true);
         yield return new("ninth-rename", "the ninth rename of one add is refused",
             () =>
             {

@@ -302,6 +302,14 @@ export class RosterVerifier {
     }
     facts.signer = signer;
     facts.cosigner = cosigner;
+    // A key held by a host and by a person confers no authority while both adds are known.
+    for (const s of cosigner >= 0 ? [signer, cosigner] : [signer]) {
+      for (let i = 0; i < g.count; i++) {
+        if (i !== s && g.at(i).isAdd && !this.#candidate.has(i) && hostKeyCollides(g.at(s).body.device, g.at(i).body.device)) {
+          return INVALID.hostKey;
+        }
+      }
+    }
 
     switch (body.op) {
       case 'add': {
