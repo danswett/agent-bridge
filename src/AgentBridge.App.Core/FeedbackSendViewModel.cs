@@ -1,43 +1,79 @@
 using System.Globalization;
+using AgentBridge.App.Core.Feedback;
 
 namespace AgentBridge.App.Core;
 
-public enum FeedbackSendState { Ready, Sending, Sent, Failed, TooLarge, Refused }
+public enum FeedbackSendState { Gathering, Ready, Sending, Sent, Failed, TooLarge, Refused }
 
-// The send half of the feedback review screen (#738 S4): sending, sent, and the ways it fails, each
-// in plain words with Try again only where trying again can help. Nothing here ever carries report
-// content or an exception message; a failure is a code the words are chosen from.
+// The send half of the feedback review screen (#738 S4): gathering, sending, sent, and the ways it
+// fails, each in plain words with Try again only where the sender says trying again can help. Nothing
+// here carries report content or an exception message; a failure is a reason the words are chosen from.
+// The view model holds the gathered bundle and passes it on every send and retry.
 public sealed class FeedbackSendViewModel : Observable
 {
+    // Product's words (#738): no beta queue, so offline and every upload failure read the same.
+    public const string FailedText = "Couldn't send. Try again when you're online.";
+    public const string GatheringText = "Gathering what's included…";
+    public const string SendingText = "Sending…";
+
     readonly IFeedbackSender sender;
     readonly IUiDispatcher ui;
+    readonly Func<DateTimeOffset> now;
+    readonly Action<string, bool>? announce;
+    readonly object gate = new();
     CancellationTokenSource? running;
-    FeedbackSendState state = FeedbackSendState.Ready;
-    string message = "";
-    Tone tone = Tone.None;
-    bool canRetry;
+    FeedbackBundle? bundle;
+    FeedbackSendState state = FeedbackSendState.Gathering;
+    string message = GatheringText;
+    Tone tone = Tone.Progress;
+    FeedbackRetry? retry;
+    DateTimeOffset? retryAt;
+    bool closed;
+    // Bumped on every send, edit and close, so a result that arrives late is recognised and dropped.
+    int generation;
     int attempts;
 
-    public FeedbackSendViewModel(IFeedbackSender sender, IUiDispatcher? ui = null)
+    // announce(speech, urgent) is the live-region hook, like Receipt's: urgent for a failure or refusal
+    // (said assertively), polite otherwise. It is called on the UI for each change of the line.
+    public FeedbackSendViewModel(IFeedbackSender sender, IUiDispatcher? ui = null, Func<DateTimeOffset>? now = null, Action<string, bool>? announce = null)
     {
         this.sender = sender;
         this.ui = ui ?? InlineDispatcher.Instance;
+        this.now = now ?? (() => DateTimeOffset.UtcNow);
+        this.announce = announce;
     }
 
     public FeedbackSendState State { get => state; private set => Set(ref state, value); }
     public string Message { get => message; private set => Set(ref message, value); }
     public Tone Tone { get => tone; private set => Set(ref tone, value); }
-    public bool CanRetry { get => canRetry; private set => Set(ref canRetry, value); }
     public int Attempts => attempts;
     public bool IsSending => state == FeedbackSendState.Sending;
-    // First send only; after a failure the person uses Try again, which sends the same bundle.
-    public bool CanSend => state is FeedbackSendState.Ready;
-    // Product's words (#738): no beta queue, so offline and every upload failure read the same.
-    public const string FailedText = "Couldn't send. Try again when you're online.";
+    public bool IsGathering => state == FeedbackSendState.Gathering;
+    public bool IsClosed => closed;
     public string RetryLabel => "Try again";
+
+    // First send only, once a bundle is gathered; after a failure the person uses Try again, and after
+    // too large or refused they change the report, which gathers again (BeginGathering, then Ready).
+    public bool CanSend => !closed && bundle is not null && state == FeedbackSendState.Ready;
+
+    // What the sender said Try again does: Never hides it; Now and WhenOnline allow it; AfterDelay allows
+    // it once RetryAt has passed. Nothing retries by itself; call RefreshRetry from a timer to update it.
+    public bool CanRetry => !closed && bundle is not null && state == FeedbackSendState.Failed && retry switch
+    {
+        FeedbackRetry.Now or FeedbackRetry.WhenOnline => true,
+        FeedbackRetry.AfterDelay => retryAt is null || now() >= retryAt,
+        _ => false,
+    };
+
+    // Set for AfterDelay only; the screen shows "You can try again at {time}" from RetryHint.
+    public DateTimeOffset? RetryAt => retryAt;
+    public string RetryHint => state == FeedbackSendState.Failed && retry == FeedbackRetry.AfterDelay && retryAt is { } at && now() < at
+        ? $"You can try again at {at.ToLocalTime().ToString("t", CultureInfo.CurrentCulture)}."
+        : "";
+
     // The failure line is the one thing the "Report this" link sits beside.
     public bool Failed => state is FeedbackSendState.Failed or FeedbackSendState.TooLarge or FeedbackSendState.Refused;
-    public FeedbackFailureCode? FailureCode { get; private set; }
+    public FeedbackFailureReason? FailureReason { get; private set; }
 
     // What a screen reader says when the line changes.
     public string Speech => Message;
@@ -46,70 +82,141 @@ public sealed class FeedbackSendViewModel : Observable
     // report; there is no beta queue (#738), so nothing is written to disk and Close clears it.
     public FeedbackDraft Draft { get; } = new();
 
-    public void Close()
+    public void RefreshRetry() { Raise(nameof(CanRetry)); Raise(nameof(RetryHint)); }
+
+    // The screen is gathering (first open, or after the person changed the report).
+    public void BeginGathering()
     {
-        Cancel();
-        Draft.Clear();
+        lock (gate)
+        {
+            if (closed || state is FeedbackSendState.Sending or FeedbackSendState.Sent) { return; }
+            generation++;
+            bundle = null;
+        }
+        Apply(FeedbackSendState.Gathering, GatheringText, Tone.Progress, null, null, null, false);
     }
 
-    public Task SendAsync() => Run();
+    // Gathering finished: the bundle the person reviewed is what every send and retry passes on.
+    public void Ready(FeedbackBundle gathered)
+    {
+        lock (gate)
+        {
+            if (closed || state is FeedbackSendState.Sending or FeedbackSendState.Sent) { return; }
+            generation++;
+            bundle = gathered;
+        }
+        Apply(FeedbackSendState.Ready, "", Tone.None, null, null, null, false);
+    }
+
+    public void Close()
+    {
+        CancellationTokenSource? cancel;
+        lock (gate)
+        {
+            if (closed) { return; }
+            closed = true;
+            generation++;
+            bundle = null;
+            cancel = running;
+            running = null;
+        }
+        Cancel(cancel);
+        Draft.Clear();
+        Apply(FeedbackSendState.Ready, "", Tone.None, null, null, null, false);
+    }
+
+    public Task SendAsync() => CanSend ? Run() : Task.CompletedTask;
 
     public Task RetryAsync() => CanRetry ? Run() : Task.CompletedTask;
 
-    public void Cancel() => running?.Cancel();
+    public void Cancel()
+    {
+        CancellationTokenSource? cancel;
+        lock (gate) { cancel = running; }
+        Cancel(cancel);
+    }
+
+    static void Cancel(CancellationTokenSource? cancel)
+    {
+        try { cancel?.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
 
     async Task Run()
     {
-        if (state == FeedbackSendState.Sending || state == FeedbackSendState.Sent) { return; }
-        var cancel = new CancellationTokenSource();
-        running = cancel;
-        attempts++;
-        Apply(FeedbackSendState.Sending, "Sending…", Tone.Progress, false, null);
-        FeedbackSendResult result;
-        try { result = await sender.SendAsync(cancel.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        FeedbackBundle send;
+        CancellationTokenSource cancel;
+        int mine;
+        lock (gate)
         {
-            ui.Post(() => Apply(FeedbackSendState.Ready, "", Tone.None, false, null));
-            return;
+            if (closed || bundle is null || state == FeedbackSendState.Sending) { return; }
+            send = bundle;
+            cancel = running = new CancellationTokenSource();
+            mine = ++generation;
+            attempts++;
         }
-        catch
+        Apply(FeedbackSendState.Sending, SendingText, Tone.Progress, null, null, null, false);
+        FeedbackSendResult? result;
+        try { result = await sender.SendAsync(send, cancel.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested) { result = null; }
+        catch { result = new FeedbackSendResult.Failed(FeedbackFailureReason.UploadRejected, FeedbackRetry.WhenOnline); }
+        bool current;
+        lock (gate)
         {
-            result = new FeedbackFailed(FeedbackFailureCode.Unexpected);
+            current = !closed && generation == mine;
+            if (ReferenceEquals(running, cancel)) { running = null; }
         }
-        finally { if (ReferenceEquals(running, cancel)) { running = null; } cancel.Dispose(); }
-        ui.Post(() => Settle(result));
+        if (!current) { return; }
+        ui.Post(() => { if (Still(mine)) { Settle(result, cancel.IsCancellationRequested); } });
     }
 
-    void Settle(FeedbackSendResult result)
+    bool Still(int mine)
+    {
+        lock (gate) { return !closed && generation == mine; }
+    }
+
+    // A person's cancel returns to Ready without an error, unless the report had already been sent.
+    void Settle(FeedbackSendResult? result, bool cancelled)
     {
         switch (result)
         {
-            case FeedbackSent s:
-                Apply(FeedbackSendState.Sent, $"Thanks. Sent at {s.At.ToLocalTime().ToString("t", CultureInfo.CurrentCulture)}.", Tone.Ok, false, null);
+            case FeedbackSendResult.Sent s:
+                Apply(FeedbackSendState.Sent, $"Thanks. Sent at {s.At.ToLocalTime().ToString("t", CultureInfo.CurrentCulture)}.", Tone.Ok, null, null, null, false);
                 break;
-            case FeedbackFailed f:
-                Apply(FeedbackSendState.Failed, FailedText, Tone.Bad, true, f.Code);
+            case null:
+            case FeedbackSendResult.Failed { Reason: FeedbackFailureReason.Cancelled }:
+                Apply(FeedbackSendState.Ready, "", Tone.None, null, null, null, false);
                 break;
-            case FeedbackTooLarge t:
-                Apply(FeedbackSendState.TooLarge, $"Not sent: the report is {Words.Size(t.Bytes)}, over the {Words.Size(t.LimitBytes)} limit. Turn off the screenshot or the session turns and send again.", Tone.Bad, false, null);
+            case var _ when cancelled:
+                Apply(FeedbackSendState.Ready, "", Tone.None, null, null, null, false);
                 break;
-            case FeedbackRefused:
-                Apply(FeedbackSendState.Refused, "Not sent: the feedback service declined this report. Nothing was kept.", Tone.Bad, false, null);
+            case FeedbackSendResult.Failed f:
+                Apply(FeedbackSendState.Failed, FailedText, Tone.Bad, f.Retry, f.Reason, f.After is { } after ? now() + after : null, true);
+                break;
+            case FeedbackSendResult.TooLarge t:
+                Apply(FeedbackSendState.TooLarge, $"Not sent: the report is {Words.Size(t.Bytes)}, over the {Words.Size(t.Max)} limit. Turn off the screenshot or the session turns and send again.", Tone.Bad, null, null, null, true);
+                break;
+            case FeedbackSendResult.Refused:
+                Apply(FeedbackSendState.Refused, "Not sent: the feedback service declined this report. Nothing was kept.", Tone.Bad, null, null, null, true);
                 break;
             default:
-                Apply(FeedbackSendState.Failed, FailedText, Tone.Bad, true, FeedbackFailureCode.Unexpected);
+                Apply(FeedbackSendState.Failed, FailedText, Tone.Bad, FeedbackRetry.WhenOnline, FeedbackFailureReason.UploadRejected, null, true);
                 break;
         }
     }
 
-    void Apply(FeedbackSendState s, string text, Tone t, bool retry, FeedbackFailureCode? code)
+    void Apply(FeedbackSendState s, string text, Tone t, FeedbackRetry? retryKind, FeedbackFailureReason? reason, DateTimeOffset? at, bool urgent)
     {
-        FailureCode = code;
+        retry = retryKind;
+        retryAt = at;
+        FailureReason = reason;
         Message = text;
         Tone = t;
-        CanRetry = retry;
         State = s;
-        Raise(nameof(CanSend)); Raise(nameof(IsSending)); Raise(nameof(Failed)); Raise(nameof(Speech)); Raise(nameof(FailureCode)); Raise(nameof(Attempts));
+        Raise(nameof(CanSend)); Raise(nameof(CanRetry)); Raise(nameof(RetryAt)); Raise(nameof(RetryHint));
+        Raise(nameof(IsSending)); Raise(nameof(IsGathering)); Raise(nameof(IsClosed));
+        Raise(nameof(Failed)); Raise(nameof(Speech)); Raise(nameof(FailureReason)); Raise(nameof(Attempts));
+        if (text.Length > 0 && !closed) { announce?.Invoke(text, urgent); }
     }
 }
 
