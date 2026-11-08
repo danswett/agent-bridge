@@ -30,7 +30,7 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/trivy-archive
-        key: trivy-archive-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles(format('{0}/action.yml', github.action_path)) }}
+        key: trivy-archive-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/actions/install-trivy/action.yml') }}
     - id: db-cache
       if: inputs.vulnerability-db == 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
