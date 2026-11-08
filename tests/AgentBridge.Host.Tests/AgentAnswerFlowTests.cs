@@ -264,6 +264,21 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_refusal_keeps_its_own_reason_when_the_ledger_cannot_record_it()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        using var held = new FileStream(claude, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        File.Delete(claude);
+        Directory.CreateDirectory(ledger + ".tmp");
+
+        var refused = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+
+        Assert.Equal(AnswerOutcome.Refused, refused.Outcome);
+        Assert.Contains("could not be read", refused.Reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
     public async Task A_different_answer_recorded_by_Claude_is_unconfirmed_never_delivered()
     {
         injector.OnInject = _ => Fixture.Append(claude, Recorded(database: "DuckDB"));
