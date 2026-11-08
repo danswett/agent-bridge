@@ -1,0 +1,99 @@
+using System.Security.Cryptography;
+using AgentBridge.Host.Delivery.Staging;
+
+namespace AgentBridge.Host;
+
+// The per-host P-256 ECDSA key an AP5-lite envelope is signed with (#728, slice L2). It is made
+// only when a caller asks and the mode is on: never at install, never while the mode is off. The
+// private half stays inside this class: it lives in the host's private folder, DPAPI-protected
+// (CurrentUser) on Windows and a 0600 file elsewhere, and is never logged or returned. A key file
+// that is present but cannot be read or does not match its own recorded public point is refused,
+// not replaced: a new key would be an identity no peer has pinned, made silently.
+public sealed class AgentSignKey : IDisposable
+{
+    public const string FolderName = "agent-sign";
+    public const string FileName = "agent-sign.key";
+    static readonly byte[] Entropy = "agent-bridge-agent-sign-key-v1"u8.ToArray();
+
+    readonly ECDsa key;
+
+    AgentSignKey(ECDsa key, byte[] point)
+    {
+        this.key = key;
+        PublicPoint = point;
+    }
+
+    // The uncompressed point: 0x04, X, Y.
+    public byte[] PublicPoint { get; }
+
+    // P-256 ECDSA/SHA-256 as DER: the shape of the envelope library's IEnvelopeSigner.
+    public byte[] Sign(ReadOnlySpan<byte> message) => key.SignData(message, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
+
+    public static string PathOf(string profileFolder) => Path.Combine(profileFolder, FolderName, FileName);
+
+    // The existing key, or null when none was ever made. Never makes one.
+    public static AgentSignKey? Open(string profileFolder)
+    {
+        var path = PathOf(profileFolder);
+        if (!File.Exists(path)) { return null; }
+        return Read(path);
+    }
+
+    // The existing key, or a new one. Refused while the mode is off.
+    public static AgentSignKey OpenOrCreate(string profileFolder, bool modeOn)
+    {
+        if (!modeOn) { throw new InvalidOperationException("own-account messaging is off, so no agent signing key is made"); }
+        if (Open(profileFolder) is { } existing) { return existing; }
+        var folder = PrivateFolder.Ensure(Path.Combine(profileFolder, FolderName), "the agent signing key folder", "no agent signing key is made");
+        using var fresh = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var point = Point(fresh);
+        var pkcs8 = fresh.ExportPkcs8PrivateKey();
+        try
+        {
+            byte[] content = [.. point, .. pkcs8];
+            PrivateFolder.WriteNew(Path.Combine(folder, FileName), OperatingSystem.IsWindows() ? Protect(content) : content);
+            CryptographicOperations.ZeroMemory(content);
+        }
+        finally { CryptographicOperations.ZeroMemory(pkcs8); }
+        return Read(PathOf(profileFolder));
+    }
+
+    static AgentSignKey Read(string path)
+    {
+        byte[]? content = null;
+        try
+        {
+            content = File.ReadAllBytes(path);
+            if (OperatingSystem.IsWindows()) { content = Unprotect(content); }
+            if (content.Length < 66 || content[0] != 0x04) { throw new InvalidDataException("short"); }
+            var ecdsa = ECDsa.Create();
+            try
+            {
+                ecdsa.ImportPkcs8PrivateKey(content.AsSpan(65), out _);
+                var point = Point(ecdsa);
+                if (ecdsa.KeySize != 256 || !point.AsSpan().SequenceEqual(content.AsSpan(0, 65))) { throw new InvalidDataException("mismatch"); }
+                return new AgentSignKey(ecdsa, point);
+            }
+            catch { ecdsa.Dispose(); throw; }
+        }
+        catch (Exception e) when (e is CryptographicException or InvalidDataException or ArgumentException)
+        {
+            throw new InvalidDataException("the agent signing key file is damaged or was changed; it is left as it is and no new key is made");
+        }
+        finally { if (content is not null) { CryptographicOperations.ZeroMemory(content); } }
+    }
+
+    static byte[] Point(ECDsa e)
+    {
+        var q = e.ExportParameters(false).Q;
+        return [0x04, .. q.X!, .. q.Y!];
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    static byte[] Protect(byte[] b) => ProtectedData.Protect(b, Entropy, DataProtectionScope.CurrentUser);
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    static byte[] Unprotect(byte[] b) => ProtectedData.Unprotect(b, Entropy, DataProtectionScope.CurrentUser);
+
+    public void Dispose() => key.Dispose();
+}
