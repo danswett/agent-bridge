@@ -45,7 +45,7 @@ final class BridgeStore {
     private(set) var activeOrigin: String?
     private(set) var activeAccountID: String?
     var profile = UserDefaults.standard.string(forKey: "bridgeProfile") ?? "default"
-    var relayAddress = UserDefaults.standard.string(forKey: "bridgeRelay") ?? "https://relay.bad-duck.com"
+    var relayAddress = UserDefaults.standard.string(forKey: "bridgeRelay") ?? "https://relay.slipgates.com"
     var deviceName = UserDefaults.standard.string(forKey: "bridgeDeviceName") ?? "Apple client"
     var selectedMachine: String?
     var selectedSessionID: String?

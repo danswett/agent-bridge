@@ -263,7 +263,7 @@ Rollback: first set `RELAY_SLIPGATES_LIVE` to `false` (otherwise every promotion
 DNS records in place (they are harmless unbound). To delete the leftover certificate:
 `az containerapp env certificate delete -n <environment> -g <resource group> --certificate mc-relay-slipgates-com`.
 
-New pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) moved to `relay.slipgates.com` in #1112, with both names live. Retiring `relay.bad-duck.com` is the owner's later decision.
+New pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) moved to `relay.slipgates.com` in #1112, and the Apple app's default (`BridgeStore.swift`) with it, with both names live. Retiring `relay.bad-duck.com` is the owner's later decision.
 
 The first name's steps work as follows. `deploy.ps1` steps it forward
 as DNS allows: it prints both records while they are missing; once they resolve it puts the
