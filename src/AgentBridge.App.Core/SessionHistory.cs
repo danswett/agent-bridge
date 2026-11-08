@@ -49,8 +49,9 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     // yet, so a later call, e.g. on the connection's Changed, asks), nor without the capability once hello is read.
     public async Task LoadNewestAsync(CancellationToken ct = default)
     {
-        if (!Begin()) { return; }
-        await RunAsync(newest: true, ct);
+        var atStart = State == HistoryLoad.StartReached;
+        if (!Begin(newest: true)) { return; }
+        await RunAsync(newest: true, ct, refresh: atStart);
     }
 
     // The page before the oldest turn held, the same call that retries a failed one: the first
@@ -59,7 +60,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     {
         if (!loadedNewest) { await LoadNewestAsync(ct); return; }
         if (!HasOlder && State != HistoryLoad.Failed) { return; }
-        if (!Begin()) { return; }
+        if (!Begin(newest: false)) { return; }
         await RunAsync(newest: false, ct);
     }
 
@@ -78,12 +79,13 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
         return true;
     }
 
-    bool Begin()
+    // StartReached only rules out older pages: the newest page can still be read again for what the session has grown.
+    bool Begin(bool newest)
     {
         var noCapability = false;
         lock (gate)
         {
-            if (State is HistoryLoad.Loading or HistoryLoad.Gone or HistoryLoad.StartReached || (State == HistoryLoad.NoHistory && unavailable)) { return false; }
+            if (State is HistoryLoad.Loading or HistoryLoad.Gone || (State == HistoryLoad.StartReached && !newest) || (State == HistoryLoad.NoHistory && unavailable)) { return false; }
             if (host.Hello is null) { return false; }
             if (host.Can(HistoryProtocol.Capability)) { State = HistoryLoad.Loading; Reason = null; return true; }
             noCapability = State != HistoryLoad.NoHistory;
@@ -115,7 +117,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
         OldestDropped = true;
     }
 
-    async Task RunAsync(bool newest, CancellationToken ct)
+    async Task RunAsync(bool newest, CancellationToken ct, bool refresh = false)
     {
         Changed?.Invoke();
         try
@@ -143,9 +145,11 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 lock (gate)
                 {
                     loadedNewest = true;
-                    if (!OldestDropped) { before = result.Before; }
-                    if (result.Before is null) { Start = result.Start; }
+                    if (!refresh && !OldestDropped) { before = result.Before; }
+                    if (!refresh && result.Before is null) { Start = result.Start; }
                 }
+                // A refresh from StartReached read only the newest end: the oldest turn is still held unless it was let go.
+                if (refresh) { Settle(OldestDropped ? HistoryLoad.Idle : HistoryLoad.StartReached); return; }
                 if (result.Before is null) { Settle(HistoryLoad.StartReached); return; }
                 // After a restart the newest page's cursor leads back over turns already held: keep
                 // reading until a page brings one that is not, so the call shows something older.
@@ -171,8 +175,8 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     }
 
     // Puts the page's turns among those held, each id once: a turn held is replaced where it is;
-    // the rest go in by time (v1-history.md
-    // Live turns and history 3 to 6). An older page that overfills the cap lets the newest go (H6).
+    // the rest go in the page's order, next to the turns of the page already held (v1-history.md
+    // Live turns and history 3 to 6); time only places a run with no neighbour held. An older page that overfills the cap lets the newest go (H6).
     // Returns how many turns were new.
     int Merge(HistoryResult page, bool atNewestEnd)
     {
@@ -187,12 +191,28 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 else if (fresh.All(t => t.Id != turn.Id)) { fresh.Add(turn); }
             }
             added = fresh.Count;
-            // By time, not at an end: a live turn already held is newer than the newest page's older turns, and a
-            // newest page that skipped a gap leaves held turns above the older page that comes next.
+            // Timestamps can tie or run backwards, so a new turn goes beside its page neighbour that is held, not by time.
+            var order = page.Turns!.Select(t => t.Id).ToList();
             foreach (var turn in fresh)
             {
-                var after = held.FindIndex(t => t.At > turn.At);
-                if (after < 0) { held.Add(turn); } else { held.Insert(after, turn); }
+                var pos = order.IndexOf(turn.Id);
+                var index = -1;
+                for (var i = pos - 1; i >= 0 && index < 0; i--)
+                {
+                    var found = held.FindIndex(t => t.Id == order[i]);
+                    if (found >= 0) { index = found + 1; }
+                }
+                for (var i = pos + 1; i < order.Count && index < 0; i++)
+                {
+                    index = held.FindIndex(t => t.Id == order[i]);
+                }
+                if (index < 0)
+                {
+                    // No turn of this page is held: by time, an older page above a tie and the newest page below it.
+                    index = held.FindIndex(t => atNewestEnd ? t.At > turn.At : t.At >= turn.At);
+                    if (index < 0) { index = held.Count; }
+                }
+                held.Insert(index, turn);
             }
             if (atNewestEnd) { TrimOldest(); }
             else

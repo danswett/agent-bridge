@@ -185,6 +185,38 @@ public sealed class SessionHistoryTests
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task The_newest_page_can_be_read_again_once_the_start_is_reached()
+    {
+        var count = 3;
+        await using var host = new FakeHost();
+        host.Capabilities.Add(HistoryProtocol.Capability);
+        host.On(HistoryProtocol.Op, d => Page(d, count));
+        var history = await OpenAsync(host);
+        await history.LoadNewestAsync();
+        Assert.Equal(HistoryLoad.StartReached, history.State);
+
+        count = 4;
+        await history.LoadNewestAsync();
+
+        Assert.Equal([1, 2, 3, 4], Numbers(history));
+        Assert.Equal(HistoryLoad.StartReached, history.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Turns_with_equal_times_keep_the_pages_order()
+    {
+        await using var host = Serving(45, n => Turn(n) with { At = T0 });
+        var history = await OpenAsync(host);
+
+        await history.LoadNewestAsync();
+        await history.LoadOlderAsync();
+
+        Assert.Equal(Enumerable.Range(6, 40), Numbers(history));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_session_with_no_prompt_yet_has_no_turns_and_its_start_reached()
     {
         await using var host = Serving(0);
