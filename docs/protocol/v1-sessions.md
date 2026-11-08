@@ -1484,6 +1484,26 @@ replaces it at once, as always. Answering or replying to the session from a devi
 `session.answer` or `session.reply`) ends this wait for that device: the person is waiting for the
 turn they started. Agents that finish turn after turn on their own sent 88% of all pushes (#610).
 
+**While the person uses a device (#1190).** A device is in use while a channel of it subscribed
+to the host last said in [`sessions.focus`](#sessionsfocus) that it is `visible`, with an `idleMs`
+that puts its last input (the host's clock when it was received, less `idleMs`) under 2 minutes
+before the push would go. Then:
+
+- a `finished` goes to none of the person's devices, the one in use or any other, unless it
+  replaces a question notice still on that device;
+- a `question` (its reminder too) still goes, since the person may be in another session, unless
+  a device in use shows its very card (`open` is its session and `openQuestion` its id): then it
+  goes to none of them but a device still showing an earlier question's notice of that session,
+  which it replaces. Its reminder still comes due 15 minutes on and is judged the same way;
+- `resolved`, `group`, `signIn` and `restored` go as before.
+
+This is judged as each push goes, not when it was made, and no delay is added to wait for a
+`sessions.focus`: one that reaches the host first wins. A device that never said, gave no
+`idleMs`, or is hidden, is not in use, and is sent what it was before. Nothing already shown is
+withdrawn for this. The host's log names each push held back so: `dropped=in-use`,
+`dropped=card-on-screen`, or with `-elsewhere by=<device>` when another device was the one in use
+([Notifications in the log](../host-config.md#notifications-in-the-log)).
+
 A question answered before its 2 s are up is never notified. A notice that cannot be sent
 because the host's relay connection is down is sent when it is back; a newer notice about
 the same session replaces it first, so a device gets only the latest. A host sends at

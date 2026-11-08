@@ -569,6 +569,30 @@ public sealed class ServeTests : IAsyncLifetime
         Assert.Equal(1, service.Subscribers);
     }
 
+    // #1190: idleMs is an age, so the host keeps its own clock minus it; without it, or with an
+    // openQuestion but no open session, the host knows nothing it could hold a push back for.
+    [Fact]
+    public async Task A_focus_with_idleMs_gives_the_host_the_last_input_by_its_own_clock_and_one_without_it_leaves_it_unknown()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Time = time };
+        host.Hub.Handler = service.HandleAsync;
+        var ch = await OpenAsync();
+        Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true }));
+        await SnapshotAsync(ch);
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id, openQuestion = "q1", idleMs = 1500 }));
+        var said = Assert.Single(service.Presences());
+        Assert.Equal((true, Id, "q1", (DateTimeOffset?)(time.GetUtcNow() - TimeSpan.FromMilliseconds(1500))), (said.Visible, said.Open, said.OpenQuestion, said.LastInput));
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, openQuestion = "q1", idleMs = -5 }));
+        said = Assert.Single(service.Presences());
+        Assert.Equal((true, (string?)null, (string?)null, (DateTimeOffset?)null), (said.Visible, said.Open, said.OpenQuestion, said.LastInput));
+
+        Result(await ch.RequestAsync(Ops.SessionsFocus, new { visible = true, open = Id }));
+        Assert.Null(Assert.Single(service.Presences()).LastInput);
+    }
+
     [Fact]
     public async Task A_session_the_client_opens_has_its_held_change_sent_at_once()
     {

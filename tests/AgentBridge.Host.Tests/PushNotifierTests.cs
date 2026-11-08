@@ -610,6 +610,156 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:03.000Z decided=+3000ms sent=+603000ms response=+603000ms status=201 attempt=1 outcome=delivered", logs);
     }
 
+    // #1190: what a device says it shows (sessions.focus), as SessionService.Presences gives it; input
+    // so many seconds before now, or null for a device that gave no idleMs.
+    DevicePresence Said(string device, bool visible = true, string? open = null, string? question = null, int? inputSecondsAgo = 10) =>
+        new(device, visible, open, question, inputSecondsAgo is { } s ? time.GetUtcNow() - TimeSpan.FromSeconds(s) : null);
+
+    // The owner's rule (#1190): no finished push while the person uses the app, on that device or any other.
+    [Fact]
+    public async Task A_finished_turn_is_pushed_to_none_of_the_persons_devices_while_one_of_them_is_in_use()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var said = new List<DevicePresence> { Said(Phone) };
+        notifier.Presences = () => said;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Empty(sender.Sent);
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=in-use at=+3000ms", logs);
+        Assert.Contains("push finished session=s1 device=bbbbbbbb queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=in-use-elsewhere by=aaaaaaaa at=+3000ms", logs);
+    }
+
+    // Presence that is stale, unknown (no idleMs) or out of sight is no sign of use: send as before.
+    [Theory]
+    [InlineData(true, 123)]
+    [InlineData(true, null)]
+    [InlineData(false, 10)]
+    public async Task A_finished_turn_still_goes_when_the_persons_presence_is_stale_unknown_or_out_of_sight(bool visible, int? inputSecondsAgo)
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var said = new List<DevicePresence> { Said(Phone, visible, inputSecondsAgo: inputSecondsAgo) };
+        notifier.Presences = () => said;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal([Phone, Laptop], Received().Select(r => r.Device).Order());
+    }
+
+    // A question needs the person, who may be in another session: it goes, at its usual time, to a
+    // device in use, unless that device shows its very card, or the device is not in use at all.
+    [Theory]
+    [InlineData("s2", "q1", 10)]
+    [InlineData("s1", "q0", 10)]
+    [InlineData("s1", null, 10)]
+    [InlineData(null, null, 10)]
+    [InlineData("s1", "q1", null)]
+    [InlineData("s1", "q1", 150)]
+    public async Task A_question_still_goes_to_a_device_in_use_unless_it_shows_that_questions_card(string? open, string? question, int? inputSecondsAgo)
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var said = new List<DevicePresence> { Said(Phone, open: open, question: question, inputSecondsAgo: inputSecondsAgo) };
+        notifier.Presences = () => said;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Equal([Phone, Laptop], Received().Select(r => r.Device).Order());
+    }
+
+    // Seen on a device in use counts for every device (Creative's ruling on #1190).
+    [Fact]
+    public async Task A_question_whose_card_a_device_in_use_shows_is_pushed_to_none_of_the_persons_devices()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var said = new List<DevicePresence> { Said(Phone, open: "s1", question: "q1") };
+        notifier.Presences = () => said;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Empty(sender.Sent);
+        Assert.Contains("push question session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+2000ms dropped=card-on-screen at=+2000ms", logs);
+        Assert.Contains("push question session=s1 device=bbbbbbbb queued=2026-10-28T04:00:00.000Z decided=+2000ms dropped=card-on-screen-elsewhere by=aaaaaaaa at=+2000ms", logs);
+    }
+
+    // Held back, it would leave the earlier question, answered, on a device that shows its notice:
+    // there the new one goes, and replaces it.
+    [Fact]
+    public async Task A_question_whose_card_a_device_in_use_shows_still_replaces_an_earlier_questions_notice_on_any_device()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        var said = new List<DevicePresence>();
+        notifier.Presences = () => said;
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q0")));
+        await After(TimeSpan.FromSeconds(2));
+
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        said.Add(Said(Phone, open: "s1", question: "q1"));
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Equal([Phone, Laptop], Received().Where(r => r.Notification.GetProperty("data").GetProperty("question").GetString() == "q1").Select(r => r.Device).Order());
+    }
+
+    // Checked as it goes, not as it is made: a device that came into use while the notice waited for
+    // the relay holds it back, and one that went idle meanwhile no longer does.
+    [Fact]
+    public async Task A_device_that_comes_into_use_before_a_waiting_finished_push_goes_holds_it_back()
+    {
+        Start();
+        Subscribe(Phone);
+        var said = new List<DevicePresence>();
+        notifier.Presences = () => said;
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        said.Add(Said(Phone));
+        var next = new FakeSender(Account);
+        notifier.Attach(next);
+        await notifier.PumpAsync();
+
+        Assert.Empty(next.Sent);
+        Assert.Equal(0, notifier.Pending);
+    }
+
+    [Fact]
+    public async Task A_device_in_use_when_a_finished_push_was_made_but_idle_before_it_goes_is_sent_it()
+    {
+        Start();
+        Subscribe(Phone);
+        var said = new List<DevicePresence> { Said(Phone) };
+        notifier.Presences = () => said;
+        sender.Connected = false;
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+        await After(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, notifier.Pending);
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        var next = new FakeSender(Account);
+        notifier.Attach(next);
+        await notifier.PumpAsync();
+
+        Assert.Single(next.Sent);
+    }
+
     static readonly Attention SignedOut = new() { Kind = AttentionKind.SignInNeeded, Since = T, Agent = AgentKind.Copilot, Provider = "github" };
 
     // The pushes about sessions, without the machine's sign-in notices.
