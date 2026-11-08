@@ -109,3 +109,21 @@ test('an attestation never verifies as a signed command, nor a signed command as
   assert.equal(base64Url(await macOf(key, b64(a.command.body))), a.command.mac);
   assert.ok(!(await verifyAttestation(key, message, b64(a.command.mac))));
 });
+test('two offers of the same genesis at once commit it once', async () => {
+  const genesis = await parseEntry(utf8(vectors.entries[0].wrapper));
+  const v = new RosterVerifier(vectors.account, vectors.generation, () => 0);
+  const [first, second] = await Promise.all([v.offer([genesis]), v.offer([genesis])]);
+  assert.equal(first[0].verdict, 'accepted');
+  assert.equal(second[0].verdict, 'duplicate');
+  assert.equal(v.graph.count, 1);
+  assert.equal(v.state.active.size, 1);
+  assert.equal(v.state.conflicted.size, 0);
+});
+
+test('a first entry and the rest offered at once are all accepted, in order', async () => {
+  const parsed = await Promise.all(vectors.entries.map((e) => parseEntry(utf8(e.wrapper))));
+  const v = new RosterVerifier(vectors.account, vectors.generation, () => 0);
+  const [head, ...rest] = parsed;
+  const [a, b] = await Promise.all([v.offer([head]), v.offer(rest)]);
+  assert.deepEqual([...a, ...b].map((o) => o.verdict), vectors.entries.map(() => 'accepted'));
+});

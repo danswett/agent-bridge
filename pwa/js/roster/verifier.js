@@ -88,10 +88,18 @@ export class RosterVerifier {
 
   // Parsed entries (js/roster/entry.js parseEntry) in an order where each comes after its
   // parents, as one offer: a removal in it may bring ancestors over a cap or budget as evidence.
-  async offer(entries) {
-    const results = [];
-    for (const e of entries) results.push(await this.#offerOne(e));
-    return results;
+  // Offers run one at a time: signature checks yield, so two overlapping offers would both pass
+  // the duplicate check before either committed (the same genesis twice, a conflicted device).
+  #queue = Promise.resolve();
+
+  offer(entries) {
+    const run = this.#queue.then(async () => {
+      const results = [];
+      for (const e of entries) results.push(await this.#offerOne(e));
+      return results;
+    });
+    this.#queue = run.catch(() => {});
+    return run;
   }
 
   async #offerOne(e) {
