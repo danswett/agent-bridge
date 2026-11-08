@@ -961,6 +961,28 @@ public class MergeRuleTests
         Assert.Equal("agent-bridge-merge-rule", MergeRuleConfig.Load(Path.Combine(root, "quality", "merge-rule.yml")).StatusPoster);
     }
 
+    // FLEET_MERGERULE=off must put back the wait, the build and the one shared group; the fast path
+    // (cached evaluator, scoped judging) is only for when it isn't off.
+    [Fact]
+    public void The_merge_rule_workflows_kill_switch_restores_the_wait_the_build_and_the_single_group()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml"))));
+        var job = (YamlMappingNode)((YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode)
+            .Children[new YamlScalarNode("jobs")]).Children[new YamlScalarNode("evaluate")];
+        string Scalar(YamlMappingNode node, string key) => ((YamlScalarNode)node.Children[new YamlScalarNode(key)]).Value!;
+        var steps = ((YamlSequenceNode)job.Children[new YamlScalarNode("steps")]).Cast<YamlMappingNode>().ToList();
+        YamlMappingNode Step(string name) => steps.Single(s => s.Children.ContainsKey(new YamlScalarNode("name")) && Scalar(s, "name") == name);
+        var concurrency = (YamlMappingNode)job.Children[new YamlScalarNode("concurrency")];
+
+        Assert.StartsWith("${{ vars.FLEET_MERGERULE == 'off' && 'merge-rule' ||", Scalar(concurrency, "group"), StringComparison.Ordinal);
+        Assert.Contains("vars.FLEET_MERGERULE == 'off'", Scalar(Step("Let a burst of events settle"), "if"), StringComparison.Ordinal);
+        Assert.Contains("vars.FLEET_MERGERULE != 'off'", Scalar(Step("Restore main's built evaluator"), "if"), StringComparison.Ordinal);
+        Assert.Contains("vars.FLEET_MERGERULE == 'off'", Scalar(Step("Build main's evaluator"), "if"), StringComparison.Ordinal);
+        Assert.Contains("FAST: ${{ vars.FLEET_MERGERULE != 'off' }}", File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml")), StringComparison.Ordinal);
+    }
+
     // Auto-merge doesn't pause while main is red, so the merge rule must: judged by main's CI
     // push run that finished last, at its latest attempt.
     [Fact]

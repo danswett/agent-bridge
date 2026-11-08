@@ -546,10 +546,23 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      failing (15 points and 13 REST calls with 25 open on 2026-11-03), plus one REST call for
      main's CI, and prints what it spent. While main is red, every pull request but a
      `fixes-main` one is already failing, so a run costs less.
-     Runs go one at a time, and an event-driven run waits 45 seconds first so a push's burst of
-     events folds into the one run queued behind it: at about 2.5 minutes a run, at most 24 an hour,
-     so under 400 points an hour at worst and nearer 150 usually (the schedule's 6 plus events).
      Below 200 points left, a run warns in its log.
+   - Fast path (#1251): an event about one pull request or head judges only that head
+     (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
+     with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
+     its source, and built (then saved) only when main changed it. Runs go one at a time per head
+     (a sweep, from the schedule, dispatch or main's CI finishing, has a group of its own), and a
+     burst folds into the one run queued behind the running one. A scoped run costs about 3 points
+     (the open list, the head's pull request, a re-read before a post); at 15 merges an hour,
+     about 3 pushes each, 45 bursts of at most 6 runs is 810 points at the very worst and about
+     400 at the 3 runs a burst usually folds to, plus the sweeps (6 scheduled and 15 after main's
+     CI, up to 15 points each with 25 pull requests open, 315). Kill switch: set the repository
+     variable `FLEET_MERGERULE` to `off` (`gh variable set FLEET_MERGERULE --body off`); the next
+     run, which reads it, goes back to the earlier path: wait 45 seconds, build main's evaluator,
+     judge every pull request, in one group. Delete the variable to turn the fast path back on.
+   - Before the fast path, runs went one at a time and an event-driven run waited 45 seconds so a
+     push's burst of events folded into the one run queued behind it: at about 2 minutes a run,
+     at most 24 an hour, so under 400 points an hour at worst and nearer 150 usually.
    - The receipts and the status are honest-mistake guards for sessions sharing the owner's
      account, not a defence against that account: it can post any status. A workflow added by a
      same-repo pull request could, with `statuses: write`, post its own `merge-rule` from GitHub

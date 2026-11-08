@@ -27,8 +27,12 @@ name: Merge rule
 #  - schedule and workflow_dispatch: a backstop for anything the events missed. That includes
 #    Dependabot's: runs it triggers may get a read-only token, so their posts can fail (allowed
 #    below), and the next scheduled run posts instead.
-# Whatever the trigger, a run judges every open pull request into main (one GraphQL query): the
-# event only says when, and a run that queued behind another loses nothing.
+# An event about one pull request or head judges only that head (--pr or --sha); the schedule,
+# dispatch and main's own CI finishing sweep every open pull request into main. The run uses a
+# built evaluator cached per its source and doesn't wait for a burst to settle. Setting the
+# repository variable FLEET_MERGERULE to `off` (read on every run) puts back the earlier path:
+# the 45 s wait, a build of main's evaluator, and every run judging every pull request.
+# Verdicts are the evaluator's, the same on both paths (quality/README.md §4.9, #1251).
 
 on:
   # Safe as a pull_request_target and workflow_run workflow because it never checks out, builds or
@@ -79,22 +83,33 @@ jobs:
     # A Dependabot-triggered run gets neither the environment's secret nor a writable token, so it
     # can't mint the App's token; that mustn't turn the run red when the schedule posts in its place.
     continue-on-error: ${{ github.actor == 'dependabot[bot]' }}
-    # One evaluation at a time, all triggers together, so no two read and post on the same head at
-    # once, and an older read can't land after a newer one. A newer one waits rather than
-    # cancelling; GitHub keeps one waiting and cancels any older waiting one, which is safe because
-    # every evaluation judges every pull request. On the job, not the workflow: a run whose `if`
-    # skips the job (main's own runs) then never enters the group, so it can't displace a waiting
-    # evaluation and leave nothing to run.
+    # Fast path (repo variable FLEET_MERGERULE not "off"): one evaluation at a time per head, so no
+    # two read and post on the same head at once and an older read can't land after a newer one;
+    # a newer one waits rather than cancelling, and GitHub keeps one waiting per group, which is
+    # safe because a run judges its whole head whatever event started it. Heads are independent,
+    # so a pull request's events can't displace another's. A sweep (schedule, dispatch, main's CI
+    # finishing, a run from a fork's "main") shares one group and judges every pull request. Kill
+    # switch ("off"): the single group of old, where every run judges every pull request. On the
+    # job, not the workflow: a run whose `if` skips the job (main's own runs) then never enters a
+    # group, so it can't displace a waiting evaluation and leave nothing to run.
     concurrency:
-      group: merge-rule
+      group: >-
+        ${{ vars.FLEET_MERGERULE == 'off' && 'merge-rule'
+        || (github.event_name == 'pull_request_target' && format('merge-rule-{0}', github.event.pull_request.head.sha))
+        || (github.event_name == 'status' && format('merge-rule-{0}', github.event.sha))
+        || (github.event_name == 'check_suite' && github.event.check_suite.head_branch != 'main' && format('merge-rule-{0}', github.event.check_suite.head_sha))
+        || (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch != 'main' && format('merge-rule-{0}', github.event.workflow_run.head_sha))
+        || 'merge-rule-sweep' }}
       cancel-in-progress: false
     steps:
-      # A push sets off a burst of events (each workflow requested, then finished). Waiting a
-      # little lets the rest of the burst fold into the one run that waits behind this one, which
-      # keeps the GraphQL budget (GITHUB_TOKEN: 1,000 points an hour for the repository) well
-      # clear: quality/README.md §4.9 has the numbers.
+      # Kill switch: FLEET_MERGERULE=off (repository variable, read on every run) restores the
+      # earlier path in full: wait, build main's evaluator, judge every pull request.
+      # A push sets off a burst of events (each workflow requested, then finished). On that path,
+      # waiting a little lets the rest of the burst fold into the one run that waits behind this
+      # one, which keeps the GraphQL budget (GITHUB_TOKEN: 1,000 points an hour for the
+      # repository) well clear: quality/README.md §4.9 has the numbers.
       - name: Let a burst of events settle
-        if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+        if: vars.FLEET_MERGERULE == 'off' && github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
         run: sleep 45
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -104,7 +119,19 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
+      # The built evaluator, kept per its own source: the key hashes everything the build reads
+      # from main's checkout, so a hit is exactly what building would produce. Only main's
+      # workflow runs here, in main's cache scope, so no pull request can plant a binary. A miss
+      # (main changed the evaluator) builds below, and the job saves it for the next run.
+      - name: Restore main's built evaluator
+        id: evaluator
+        if: vars.FLEET_MERGERULE != 'off'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: tools/AgentBridge.Quality/bin/Release/net10.0
+          key: merge-rule-evaluator-${{ runner.os }}-${{ hashFiles('tools/AgentBridge.Quality/**/*.cs', 'tools/AgentBridge.Quality/*.csproj', 'nuget.config', 'global.json') }}
       - name: Build main's evaluator
+        if: vars.FLEET_MERGERULE == 'off' || steps.evaluator.outputs.cache-hit != 'true'
         run: dotnet build tools/AgentBridge.Quality -c Release --nologo -v q
       # Minted after the build, so nothing the build runs holds it, and limited to posting statuses.
       - name: Mint the merge-rule App's token
@@ -119,6 +146,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_RULE_POST_TOKEN: ${{ steps.app.outputs.token }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAST: ${{ vars.FLEET_MERGERULE != 'off' }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          STATUS_SHA: ${{ github.event.sha }}
+          SUITE_SHA: ${{ github.event.check_suite.head_sha }}
+          SUITE_BRANCH: ${{ github.event.check_suite.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll merge-rule --all \
+          # Fast path: an event about one pull request or head judges only that (the evaluator
+          # reads every open pull request on the head, so a shared head is still judged whole);
+          # everything else sweeps. A kill-switched run always sweeps, as before.
+          scope=(--all)
+          if [ "$FAST" = true ]; then
+            case "$EVENT" in
+              pull_request_target) [ -n "$PR_NUMBER" ] && scope=(--pr "$PR_NUMBER") ;;
+              status) [ -n "$STATUS_SHA" ] && scope=(--sha "$STATUS_SHA") ;;
+              check_suite) [ -n "$SUITE_SHA" ] && [ "$SUITE_BRANCH" != main ] && scope=(--sha "$SUITE_SHA") ;;
+              workflow_run) [ -n "$RUN_SHA" ] && [ "$RUN_BRANCH" != main ] && scope=(--sha "$RUN_SHA") ;;
+            esac
+          fi
+          echo "Judging: ${scope[*]}"
+          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll merge-rule "${scope[@]}" \
             --slug "$GITHUB_REPOSITORY" --post --target-url "$TARGET_URL" --summary "$GITHUB_STEP_SUMMARY"
