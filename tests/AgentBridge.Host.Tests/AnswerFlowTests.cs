@@ -497,6 +497,105 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         return [" ──────────────", .. rows.Select((r, i) => i == 0 ? $" ❯ {r}" : $"   {r}"), " ──────────────"];
     }
 
+    // The same input with Copilot CLI 1.0.107's prompt frame on, which it was with no setting at
+    // all for the account #1123 was reported from (`Ud`, `PROMPT_FRAME`): a row of "▄" above and
+    // of "▀" below, as wide, no sides, the caret one column in. Drawn as the CLI drew its own
+    // framed rows on a screen read on Copilot CLI 1.0.107 (` ▄▄▄…`, `  ❯ text`, `    more`,
+    // ` ▀▀▀…`), 66 columns of edge as in a window 68 wide.
+    static IEnumerable<string> FramedInput(string words)
+    {
+        var edge = new string('\u2584', 66);
+        return [$" {edge}", $"  ❯ {words}", $" {new string('\u2580', 66)}"];
+    }
+
+    static readonly string[] FormLabels = ["pick", "Feedback (optional)"];
+
+    // The form at its text field with the prompt frame on, `words` in its box.
+    static List<string> FramedField(string words) => Framed("Approve the mark?", FormLabels, 1, [.. FramedInput(words)], colon: false);
+
+    static global::AgentBridge.Host.Delivery.Copilot.CopilotForm FormOfTwo() => global::AgentBridge.Host.Delivery.Copilot.CopilotForm.Read(JsonSerializer.SerializeToElement(new
+    {
+        message = "Approve the mark?",
+        requestedSchema = new
+        {
+            properties = new { pick = new { type = "string", @enum = new[] { "a", "b", "c" } }, feedback = new { type = "string", title = "Feedback (optional)" } },
+            required = new[] { "pick" },
+        },
+    })).Form!;
+
+    [Fact]
+    public void A_text_box_in_the_prompt_frame_with_nothing_in_it_is_untouched_and_holds_the_words_once_they_are_drawn()
+    {
+        var form = FormOfTwo();
+
+        Assert.True(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Untouched(FramedField(""), form, 1));
+        Assert.False(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Untouched(FramedField("9"), form, 1));
+        Assert.True(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Holds(FramedField(Feedback), form, 1, Feedback));
+        Assert.False(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Holds(FramedField($"9{Feedback}"), form, 1, Feedback));
+    }
+
+    [Theory]
+    // Edges of both kinds, a frame edge left over from another box, edges of different widths
+    // or a caret not one column in: none is the one box the field draws, so the field is not
+    // read as untouched and no key goes into it.
+    [InlineData(" ──────────────", "  ❯", " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀")]
+    [InlineData(" ▄▄▄▄▄▄▄▄▄▄▄▄▄▄", "  ❯", " ▀▀▀▀▀▀▀▀▀▀▀▀▀")]
+    [InlineData(" ▄▄▄▄▄▄▄▄▄▄▄▄▄▄", " ❯", " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀")]
+    [InlineData(" ▄▄▄▄▄▄▄▄▄▄▄▄▄▄", "  ❯", " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄")]
+    public void A_text_box_drawn_with_edges_that_do_not_make_one_frame_is_not_read_as_untouched(string top, string caret, string bottom)
+    {
+        var rows = Framed("Approve the mark?", FormLabels, 1, [top, caret, bottom], colon: false);
+
+        Assert.False(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Untouched(rows, FormOfTwo(), 1));
+    }
+
+    [Fact]
+    public async Task A_two_field_form_whose_text_box_the_CLI_draws_in_its_prompt_frame_is_answered_whole()
+    {
+        // The owner's two-field forms on Copilot CLI 1.0.107 (#1123): the box drawn in the
+        // prompt frame was read as no box, so the text field as already typed into; the choice
+        // went, the words never did, and the reset's Esc cancelled the form.
+        Serve(Answerer(resume: true));
+        await AskFormAsync();
+        injector.Screen = () => Picked() ? FramedField(WordsTyped() ? Feedback : "") : FormScreen(false, false, moved: Moved());
+        injector.OnInject = () => { if (Submits(injector.Plans[^1].Plan)) { Fixture.Append(events, Recorded("q2", FormAnswer)); } };
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.Equal(2, Enters());
+        Assert.Single(injector.Plans, p => p.Plan.Sends.Any(s => s.Text == Feedback));
+        Assert.True(HasEnterOnly(injector.Plans[^1].Plan));
+        Assert.False(Escaped());
+    }
+
+    [Fact]
+    public async Task A_text_field_refused_before_any_key_went_into_it_gets_no_key_at_all_not_even_an_Esc()
+    {
+        // As on the owner's machine, but the box really does show something typed at the machine:
+        // the choice goes, the text field is refused, and the whole wait for a resume passes.
+        // Nothing of the answer is in the box, so there is nothing to take back: an Esc would
+        // only cancel the form, the choice the session took with it (#1123).
+        Serve(Answerer(resume: true));
+        await AskFormAsync();
+        injector.Screen = () => Picked() ? FramedField("9") : FormScreen(false, false, moved: Moved());
+        var ch = await OpenAsync();
+
+        var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
+
+        Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        var reason = result.GetProperty("reason").GetString()!;
+        Assert.Contains("entered \"pick\" but typed nothing into \"Feedback (optional)\", and cancelled nothing", reason);
+        Assert.Contains("finish it there", reason);
+        Assert.False(result.TryGetProperty("code", out _));
+        // The list's keys and its Enter, and nothing after them: no words, no Enter, no Esc.
+        Assert.Equal(2, injector.Plans.Count);
+        Assert.Equal(1, Enters());
+        Assert.Equal(0, injector.Plans.Count(p => IsEscape(p.Plan)));
+        Assert.Contains("resume=left resumes=0", await AttemptLineAsync());
+    }
+
     // Copilot CLI 1.0.105's ask_user form (cli-main.js `MIo`, `Uxn`, `Ft`) at field `at`: its
     // heading and question between two rules, a tab bar naming every field when there is more
     // than one, the field's own heading over its body, and the key hints. The heading is
@@ -3091,7 +3190,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_form_resumed_between_fields_types_nothing_into_a_next_field_typed_into_at_the_machine_meanwhile()
+    public async Task A_form_resumed_between_fields_types_nothing_into_a_next_field_typed_into_at_the_machine_meanwhile_and_presses_no_Esc()
     {
         Serve(Answerer(resume: true));
         await AskFormAsync();
@@ -3106,43 +3205,48 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
 
-        // The list's keys and Enter, then never the words (which would make "9..."): the form is
-        // reset with an Esc instead, which the session is not seen to take.
+        // The list's keys and Enter, then never the words (which would make "9..."), and no Esc:
+        // none of the answer is in the box, and an Esc would cancel the choice with the form.
         Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
+        Assert.Contains("cancelled nothing", result.GetProperty("reason").GetString());
         Assert.Equal(1, Enters());
         Assert.DoesNotContain(injector.Attempts, p => p.Sends.Any(s => s.Text == Feedback));
-        Assert.True(Escaped());
-        Assert.Empty(AfterEscape());
-        Assert.Contains("resume=uncancelled resumes=0", await AttemptLineAsync());
+        Assert.False(Escaped());
+        Assert.Contains("resume=left resumes=0", await AttemptLineAsync());
     }
 
     [Fact]
     public async Task A_part_answered_form_is_not_reset_by_an_Esc_where_its_hints_say_esc_clear()
     {
-        // As above, on Copilot CLI 1.0.106: the text field holding the "9" says "esc clear", and
-        // Esc there would only empty the field, not cancel the form. No Esc goes (#1123).
+        // On Copilot CLI 1.0.106 a text field holding words says "esc clear", and Esc there
+        // would only empty the field, not cancel the form. The answer's words were typed and
+        // then edited at the machine, so their Enter never goes; no Esc goes either (#1123).
         Serve(Answerer(resume: true));
         await AskFormAsync();
-        DateTime? back = null;
-        injector.OnInject = () => { if (Enters() == 1) { back ??= DateTime.UtcNow.AddMilliseconds(800); } };
-        injector.Screen = () => !Picked() ? FormScreen(false, false, moved: Moved())
-            : back is { } b && DateTime.UtcNow < b ? PermissionPrompt
-            : [.. Framed("Approve the mark?", ["pick", "Feedback (optional)"], 1, [.. Input("9")], colon: false)
-                .Select(r => r.Replace("esc cancel", "esc clear", StringComparison.Ordinal))];
+        const string edited = "The middle bar does not connect all the way";
+        var drawAt = DateTime.MaxValue;
+        injector.OnInject = () =>
+        {
+            if (injector.Plans[^1].Plan.Sends.Any(s => s.Text == Feedback)) { drawAt = DateTime.UtcNow.AddMilliseconds(1000); }
+        };
+        injector.Screen = () => WordsTyped() && DateTime.UtcNow >= drawAt
+            ? [.. Framed("Approve the mark?", ["pick", "Feedback (optional)"], 1, [.. Input(edited)], colon: false)
+                .Select(r => r.Replace("esc cancel", "esc clear", StringComparison.Ordinal))]
+            : FormScreen(Picked(), false, moved: Moved());
         var ch = await OpenAsync();
 
         var result = await AnswerResultAsync(ch, FormAnswer, Guid.NewGuid().ToString());
 
         Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
         Assert.Equal(1, Enters());
-        Assert.DoesNotContain(injector.Attempts, p => p.Sends.Any(s => s.Text == Feedback));
+        Assert.Single(injector.Plans, p => p.Plan.Sends.Any(s => s.Text == Feedback));
         Assert.False(Escaped());
         Assert.Contains("resume=held resumes=0", await AttemptLineAsync());
         lock (logged) { Assert.Contains(logged, m => m.Contains("esc would only clear a field", StringComparison.Ordinal)); }
     }
 
     [Fact]
-    public async Task A_form_stopped_after_every_field_is_resumed_at_most_three_times_and_then_reset()
+    public async Task A_form_stopped_after_every_field_is_resumed_at_most_three_times_and_then_left_with_no_Esc()
     {
         // Each field's Enter brings a permission prompt that stays until the host gives up on the
         // screen: every pass types one field and stops.
@@ -3156,12 +3260,14 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var result = await AnswerResultAsync(ch, answer, Guid.NewGuid().ToString());
 
-        // The first pass and three resumes, a field each; then the Esc, never the fifth field.
+        // The first pass and three resumes, a field each; never the fifth field, and no Esc: the
+        // form shows the fifth with nothing of the answer in it, and an Esc would cancel all four
+        // the session took (#1123).
         Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
-        Assert.True(Escaped());
-        lock (injector.Plans) { Assert.Equal(4, injector.Plans.TakeWhile(p => !IsEscape(p.Plan)).Sum(p => p.Plan.Sends.Count(s => s.Enter))); }
-        Assert.Empty(AfterEscape());
-        Assert.Contains("resume=uncancelled resumes=3", await AttemptLineAsync());
+        Assert.Contains("entered \"f1\", \"f2\", \"f3\", \"f4\" but typed nothing into \"f5\"", result.GetProperty("reason").GetString());
+        Assert.False(Escaped());
+        Assert.Equal(4, Enters());
+        Assert.Contains("resume=left resumes=3", await AttemptLineAsync());
     }
 
     [Fact]

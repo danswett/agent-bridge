@@ -720,6 +720,18 @@ public sealed class AnswerService : ISessionAnswerer
                     return new(went, why, null, false);
                 }
                 var rows = await ReadRowsAsync(pid);
+                // No Esc for a form showing the field after its whole ones with no key of the
+                // answer in it (#1123): the keys stopped before it (refused there, typing nothing),
+                // so there is nothing in it to take back, and the Esc would cancel the whole form,
+                // the fields the session took with it. It is left as it is, for the person. A form
+                // still showing a field whose Enter went (it never moved on) is reset as below.
+                if (rows is not null && went.Status == InjectionStatus.Typed && !progress.Partway && !progress.Unknown
+                    && progress.Taken < form.Fields.Count && CopilotFormScreen.Showing(rows, form, progress.Taken) is null)
+                {
+                    log($"the part-answered form in {Short(session.Id)} (pid {pid}) shows field {progress.Taken + 1} of {form.Fields.Count} with no key of the answer in it; nothing is pressed, not even esc, and it is left for the person");
+                    trace.Resume(CopilotAnswerTrace.ResumeLeft);
+                    return new(went, null, Unconfirmed(Left()), false);
+                }
                 // Esc only where the hints say it cancels: on Copilot CLI 1.0.106 a text or number
                 // field holding words says "esc clear", and Esc there empties the field instead.
                 if (rows is null || !Enumerable.Range(0, form.Fields.Count).Any(i => CopilotFormScreen.Cancels(rows, form, i)))
@@ -792,6 +804,14 @@ public sealed class AnswerService : ISessionAnswerer
                 log($"the check of {Short(session.Id)} for a prompt over its form failed: {e.GetType().Name}: {e.Message}");
             }
             return StillAsked();
+        }
+
+        // What a form left with only whole fields entered says (no Esc pressed): which fields the
+        // session took, the one nothing went into, and that nothing was cancelled.
+        string Left()
+        {
+            static string Name(CopilotField f) => $"\"{f.Label ?? f.Name}\"";
+            return $"{Product.Name} entered {string.Join(", ", form.Fields.Take(progress.Taken).Select(Name))} but typed nothing into {Name(form.Fields[progress.Taken])}, and cancelled nothing; the question is still open at the machine: finish it there";
         }
 
         // Whether the transcript positively says this question's call is over: answered, the
