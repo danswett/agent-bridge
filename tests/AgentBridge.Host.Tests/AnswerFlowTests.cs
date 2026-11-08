@@ -1673,9 +1673,11 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var (outcome, reason) = await AnswerAsync(ch, SixAnswer, question: "q2");
 
+        var needed = AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(SixTitles);
         Assert.Equal("refused", outcome);
-        Assert.Contains("too narrow for phone answers to this question", reason);
-        Assert.Contains("widen it and answer again, or answer it at the machine", reason);
+        Assert.Contains($"too narrow for {Product.Name} to check which field this question's form is at (its titles need a window at least {needed} columns wide)", reason);
+        Assert.Contains("widen it or make its font smaller, then answer again, or answer it at the machine", reason);
+        Assert.DoesNotContain("phone", reason);
         Assert.Empty(injector.Attempts);
         Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
     }
@@ -1765,24 +1767,47 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task A_form_whose_tab_bar_wraps_one_long_title_over_rows_gets_no_keys_and_says_the_window_is_too_narrow(bool marked)
+    public async Task A_form_whose_tab_bar_wraps_one_long_title_over_rows_gets_no_keys_and_says_its_titles_are_too_long_to_check(bool marked)
     {
         // The bar shows the first title alone, over two rows: the other two titles are hidden,
         // so the form cannot be told from one differing only in them. Read as one row, this was
-        // refused as a form gone (check=bar@29 live); it is the bar's window, named so.
+        // refused as a form gone (check=bar@29 live); it is the bar's window, named so. The three
+        // titles need more columns than the widest console the host launches, so widening is
+        // not offered: a maximized window did not help (#1123).
         var answer = new { licence = "Ship", signing = "Hold", support = "Ship" };
         var names = await AskLongAsync(answer);
         injector.Screen = () => LongScreen(names, marked);
         Assert.Equal(2, Wrapped(LongTitles[0], 100).Count());
+        Assert.True(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(LongTitles) > AgentBridge.Host.Delivery.Launch.LaunchService.ConsoleColumns);
         var ch = await OpenAsync();
 
         var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
 
         Assert.Equal("refused", outcome);
-        Assert.Contains("too narrow for phone answers to this question", reason);
+        Assert.Equal($"this question's titles are too long for {Product.Name} to check which field is open; answer it at the machine, or ask with shorter titles", reason);
         Assert.DoesNotContain("no longer showed", reason);
         Assert.Empty(injector.Attempts);
         Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
+    }
+
+    [Fact]
+    public void Titles_that_fit_the_widest_launched_console_say_widen_it_and_one_column_more_says_they_are_too_long()
+    {
+        // Two titles and a short one, as the owner's form: the bar needs each title, two columns
+        // around it, one between and four beside the bar (`$fn`).
+        var columns = AgentBridge.Host.Delivery.Launch.LaunchService.ConsoleColumns;
+        var room = columns - 4 - 2 - 3 * 2 - 5;
+        string[] fits = [new string('a', room / 2), new string('b', room - room / 2), "Notes"];
+        string[] over = [fits[0] + "a", fits[1], fits[2]];
+        Assert.Equal(columns, global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(fits));
+
+        var widen = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(fits);
+        var tooLong = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(over);
+
+        Assert.Contains($"at least {columns} columns wide); widen it or make its font smaller", widen);
+        Assert.Contains($"too long for {Product.Name}", tooLong);
+        Assert.DoesNotContain("widen", tooLong);
+        Assert.All(new[] { widen, tooLong }, r => Assert.DoesNotContain("phone", r));
     }
 
     [Fact]

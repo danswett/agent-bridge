@@ -619,7 +619,7 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
         // own app has no key the other machine knows.
         if (request.Transfer is not null && (channel is not SecureChannel || transfers is null))
         {
-            return new LaunchResult(LaunchOutcome.Refused, "a session from another machine is brought in through the relay, from the phone or browser app");
+            return new LaunchResult(LaunchOutcome.Refused, $"a session from another machine is brought in through the relay, from {Product.Name}");
         }
         var result = await launcher!.LaunchAsync(request, channel.PeerId);
         return result.Trust is null ? result : result with { Trust = ForPeer(channel, result.Trust) };
