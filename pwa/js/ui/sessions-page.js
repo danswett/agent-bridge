@@ -176,8 +176,8 @@ export class SessionsPage {
   // diagnose: a DiagnoseControl for each machine's Diagnose (#802), or null.
   // shell: the pages and app bar (./shell.js), or null: where a session shown goes, and where
   // machines online and a waiting folder-trust question are said.
-  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, diagnose = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
-    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, diagnose, storage, onRendered });
+  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, diagnose = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {}, opened = () => {} }) {
+    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, diagnose, storage, onRendered, opened });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     // One gate for every send (#269): nothing new is given for a machine with no route now (its
@@ -307,6 +307,8 @@ export class SessionsPage {
         this.launchPanel.setOpen(route === 'launch');
         const back = route === 'sessions' && was !== 'sessions';
         was = route;
+        // Sessions reports once its selection is settled, below; another page shows no session.
+        if (route !== 'sessions') { this.#reportOpen(); }
         // Back on Sessions, what it shows is seen now.
         if (route === 'sessions') {
           this.#navigate(() => this.#route(rest));
@@ -697,9 +699,19 @@ export class SessionsPage {
     raf(() => raf(() => { if (this.#frame === frame) { this.#painted = true; } }));
   }
 
+  // The session shown now, if any, said to `opened` (main.js: sessions.focus and the notices of
+  // that session, #1190): the one selected on the Sessions page, which on a phone shows only once
+  // pushed over the list. Another page, or the list, is none.
+  #reportOpen() {
+    const card = this.view?.selected;
+    const showing = card && (!this.shell || this.shell.route === 'sessions') && (!this.phone.matches || this.#open);
+    try { this.opened(showing ? { hostId: card.hostId, id: card.id } : null); } catch (e) { console.error(e); }
+  }
+
   // Which panes show: on a phone, the list or the session pushed over it; the inspector, as its
   // own pane at the three-pane width unless hidden.
   #drawPanes() {
+    this.#reportOpen();
     const body = globalThis.document?.body;
     if (!body) { return; }
     const was = body.dataset.sessionOpen;

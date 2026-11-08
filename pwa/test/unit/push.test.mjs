@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PushRegistrar, base64UrlToBytes, closeNotices, closeStaleNotices, fetchVapidKey, noticeTag, pushSupport } from '../../js/push.js';
 import { SessionsStore } from '../../js/sessions-store.js';
+import { Reading } from '../../js/reading.js';
 import { deviceName } from '../../js/identity.js';
 import { BRAND } from '../../js/brand.js';
 
@@ -217,6 +218,132 @@ test('question notifications this app sees answered are closed; others stay', as
   assert.equal(noticeTag('m1', 's1'), 'm1:s1');
   assert.ok(tagged.every((n) => n.closed));
 });
+
+// ---- the session being read (#1190) ----
+
+function readingPage({ visible = true, keepaliveMs = 30 } = {}) {
+  const doc = { visibilityState: visible ? 'visible' : 'hidden', fire: [], addEventListener(type, fn) { if (type === 'visibilitychange') { this.fire.push(fn); } } };
+  const inputs = [];
+  const win = { addEventListener(type, fn, options) { if (options?.passive === true) { inputs.push(fn); } } };
+  const changes = [];
+  const focus = [];
+  const closed = [];
+  const clock = { t: 1_000_000 };
+  const said = { refreshes: 0, idle: null };
+  const hosts = {
+    setFocus: ({ idle, ...f }) => { said.idle = idle; focus.push(f); },
+    refreshFocus: () => { said.refreshes += 1; },
+    sessions: { onChange: (fn) => { changes.push(fn); return () => {}; } },
+  };
+  const reading = new Reading({ hosts, doc, win, delayMs: 20, keepaliveMs, now: () => clock.t, close: async (h, s) => { closed.push(`${h}/${s}`); } });
+  const initial = focus.splice(0);
+  const flip = (state) => { doc.visibilityState = state; for (const fn of doc.fire) { fn(); } };
+  const input = (advanceMs = 300) => { clock.t += advanceMs; for (const fn of inputs) { fn(); } };
+  const settle = () => new Promise((r) => { setTimeout(r, 60); });
+  return { reading, focus, initial, said, clock, input, closed, changes, flip, settle };
+}
+
+test('the page says what it shows as soon as it starts, even with no session open', () => {
+  assert.deepEqual(readingPage().initial, [{ visible: true, hostId: null, id: null }]);
+  assert.deepEqual(readingPage({ visible: false }).initial, [{ visible: false, hostId: null, id: null }]);
+});
+
+test('the age of the last input is read as it is sent, and is unknown, not 0, until there has been input', () => {
+  const { reading, said, clock, input } = readingPage();
+  assert.equal(reading.idleMs(), null);
+  assert.equal(said.idle(), null);
+  input();
+  clock.t += 5000;
+  assert.equal(said.idle(), 5000);
+  clock.t += 2500;
+  assert.equal(said.idle(), 7500);
+});
+
+test('the first input says the person is active at once, a burst of input says nothing more, and a keepalive follows only while input continues', async () => {
+  const { said, clock, input, settle } = readingPage();
+  input();
+  assert.equal(said.refreshes, 1);
+  for (let i = 0; i < 40; i++) { input(300); }
+  assert.equal(said.refreshes, 1, 'a burst of input is not said again');
+  await settle();
+  assert.ok(said.refreshes >= 2, 'kept alive while input goes on');
+  // Input stops: the next tick finds the person idle, and nothing goes after it.
+  clock.t += 120_000;
+  await settle();
+  const before = said.refreshes;
+  await settle();
+  await settle();
+  assert.equal(said.refreshes, before, 'nothing while idle');
+  input();
+  assert.equal(said.refreshes, before + 1, 'input after being idle says so at once');
+  clock.t += 120_000;
+});
+
+test('nothing about input is said while the page is hidden, and the keepalive stops', async () => {
+  const { focus, said, input, flip, settle } = readingPage();
+  input();
+  flip('hidden');
+  assert.deepEqual(focus, [{ visible: false, hostId: null, id: null }]);
+  const before = said.refreshes;
+  input();
+  await settle();
+  await settle();
+  assert.equal(said.refreshes, before);
+  assert.equal(focus.length, 1, 'hidden is said once');
+});
+
+test("opening a session while the page is in sight tells the machines and closes that session's notices, no other's", async () => {
+  const { reading, focus, closed } = readingPage();
+  reading.open({ hostId: 'm1', id: 's1' });
+  reading.open({ hostId: 'm1', id: 's1' });
+  await Promise.resolve();
+  assert.deepEqual(focus, [{ visible: true, hostId: 'm1', id: 's1' }]);
+  assert.deepEqual(closed, ['m1/s1']);
+  reading.open(null);
+  await Promise.resolve();
+  assert.deepEqual(focus.at(-1), { visible: true, hostId: null, id: null });
+  assert.deepEqual(closed, ['m1/s1'], 'the list has no session to close notices of');
+});
+
+
+test('a hidden page closes no notices and says it is hidden; coming back to the open session closes them', async () => {
+  const { reading, focus, closed, flip } = readingPage({ visible: false });
+  reading.open({ hostId: 'm1', id: 's1' });
+  await Promise.resolve();
+  assert.deepEqual(focus, [{ visible: false, hostId: 'm1', id: 's1' }]);
+  assert.deepEqual(closed, []);
+  flip('visible');
+  await Promise.resolve();
+  assert.deepEqual(focus.at(-1), { visible: true, hostId: 'm1', id: 's1' });
+  assert.deepEqual(closed, ['m1/s1']);
+  flip('hidden');
+  await Promise.resolve();
+  assert.deepEqual(focus.at(-1), { visible: false, hostId: 'm1', id: 's1' });
+  assert.deepEqual(closed, ['m1/s1']);
+});
+
+test("a change to the open session closes its notices a moment later; another session's change, or one while hidden, closes nothing", async () => {
+  const { reading, closed, changes, flip, settle } = readingPage();
+  reading.open({ hostId: 'm1', id: 's1' });
+  await settle();
+  closed.length = 0;
+  const change = (hostId, id) => { for (const fn of changes) { fn({ type: 'upsert', hostId, id }); } };
+  change('m1', 's2');
+  change('m2', 's1');
+  await settle();
+  assert.deepEqual(closed, []);
+  for (let i = 0; i < 5; i++) { change('m1', 's1'); }
+  await Promise.resolve();
+  assert.deepEqual(closed, [], 'not before the push that came with it has been shown');
+  await settle();
+  assert.deepEqual(closed, ['m1/s1'], 'once, however many changes came');
+  flip('hidden');
+  closed.length = 0;
+  change('m1', 's1');
+  await settle();
+  assert.deepEqual(closed, []);
+});
+
 test('turning notifications off while a registration waits for the relay key leaves this device unsubscribed', async () => {
   const win = browser({ permission: 'granted' });
   const pm = pushManager();

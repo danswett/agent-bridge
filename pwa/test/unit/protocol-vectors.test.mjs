@@ -338,6 +338,17 @@ const BUILDS = {
       return sentBy(LaunchService, 'launch', j.request, (s) => s.submit({ hostId: 'h', launch }));
     },
   },
+  FocusRequest: {
+    build: async (j) => {
+      const t = fakeTransport();
+      const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0 });
+      client.capabilities = ['sessions.focus'];
+      client.setFocus({ visible: j.visible, open: j.open ?? null });
+      await flush();
+      client.close();
+      return t.lastRequest('sessions.focus').data;
+    },
+  },
   ListRequest: {
     build: async (j) => {
       const t = fakeTransport();
@@ -398,7 +409,6 @@ const BUILDS = {
 const NOT_REPLAYED = {
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
-  FocusRequest: 'the PWA does not send sessions.focus yet (#610)',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',

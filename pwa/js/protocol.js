@@ -17,6 +17,7 @@ export const Ops = Object.freeze({
   sessionsList: 'sessions.list',
   sessionGet: 'session.get',
   sessionsSubscribe: 'sessions.subscribe',
+  sessionsFocus: 'sessions.focus',
   sessionAnswer: 'session.answer',
   sessionReply: 'session.reply',
   sessionStop: 'session.stop',
@@ -37,7 +38,7 @@ export const Events = Object.freeze({
   helloChanged: 'hello.changed',
 });
 
-export const Capabilities = Object.freeze({ helloChanged: 'hello.changed', sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', push: 'push' });
+export const Capabilities = Object.freeze({ helloChanged: 'hello.changed', sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', sessionsFocus: 'sessions.focus', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
