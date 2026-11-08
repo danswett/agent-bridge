@@ -38,6 +38,17 @@ public sealed class RosterSigningKeyTests : IDisposable
 
     [WindowsFact("DPAPI exists only on Windows")]
     [SupportedOSPlatform("windows")]
+    public void Concurrent_first_uses_all_get_the_one_key_the_first_made()
+    {
+        var folder = Path.Combine(root, "race");
+        var keys = Enumerable.Range(0, 8).Select(_ => Task.Run(() => { using var k = RosterSigningKeys.LoadOrCreate(folder, KeyStorage.Dpapi); return k.Public; })).ToArray();
+        Task.WaitAll(keys);
+        using var after = RosterSigningKeys.LoadOrCreate(folder);
+        Assert.All(keys, k => Assert.Equal(after.Public, k.Result));
+    }
+
+    [WindowsFact("DPAPI exists only on Windows")]
+    [SupportedOSPlatform("windows")]
     public void A_DPAPI_signing_key_is_encrypted_on_disk_signs_as_the_roster_requires_and_reloads_as_itself()
     {
         var folder = Path.Combine(root, "dpapi");

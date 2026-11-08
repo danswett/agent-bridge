@@ -18,6 +18,14 @@ function memoryStore() {
   };
 }
 
+test('concurrent first uses share the one key, and the stored key is not replaced', async () => {
+  const store = memoryStore();
+  const keys = await Promise.all([loadSigningKey(store), loadSigningKey(store), loadSigningKey(store)]);
+  assert.deepEqual(keys[1].public, keys[0].public);
+  assert.deepEqual(keys[2].public, keys[0].public);
+  assert.deepEqual(new Uint8Array((await store.get(SIGNING_RECORD)).public), keys[0].public);
+});
+
 test('a signing key is made once, kept, and comes back as the same key', async () => {
   const store = memoryStore();
   const made = await loadSigningKey(store);
