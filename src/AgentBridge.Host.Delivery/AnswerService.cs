@@ -164,8 +164,11 @@ public sealed class AnswerService : ISessionAnswerer
         ledger = options.AttemptLedger ?? new AttemptLedger(options.AttemptLedgerPath, options.Time, this.log, expire: false);
         requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor, this.gate, Busy,
             key => ledger.Outcome(key) is { } result ? (true, result) : (false, default!),
+            // A refusal with no claim typed nothing, so failing to write it down (a scanner holding the
+            // ledger's temp file) must not replace its specific reason with the generic one.
             (key, result, owner) => ledger.RecordOutcome(key, result, owner as AttemptLedger.Owner) is null ? result
-                : ledger.HasClaim(key) ? Unconfirmed(DeliveryReasons.CouldNotDeliver) : Refused(DeliveryReasons.CouldNotDeliver));
+                : ledger.HasClaim(key) ? Unconfirmed(DeliveryReasons.CouldNotDeliver)
+                : result is { Outcome: AnswerOutcome.Refused } ? result : Refused(DeliveryReasons.CouldNotDeliver));
         // The words of every answer whose session or question has gone go (after one last read of its
         // record): at start, as a session changes, and as an answer settles (its question may have
         // gone while it was typed, with no change to come).
