@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.HomeAssistant;
 
@@ -107,6 +108,56 @@ public static partial class HaContract
         result["json_attributes_topic"] = LaunchOutcomeTopic(slug);
         configs.Add((DiscoveryTopic("sensor", node, "new_session_result"), result));
         return configs;
+    }
+
+    // Beyond agent-ha-bridge's card (#1142), so it is not in MachineTopics, which is that parity:
+    // a read-only sensor whose attributes list, for every agent this machine has, the models,
+    // efforts and contexts it supports now, whichever agent the card has selected.
+    public static string LaunchOptionsTopic(string slug) => NewSessionTopic(slug, "options");
+
+    public static (string Topic, JsonObject Config) LaunchOptionsConfig(string slug, string machineName)
+    {
+        var node = MachineNode(slug);
+        var config = new JsonObject
+        {
+            ["name"] = "Launch options",
+            ["unique_id"] = $"agent_bridge_{slug}_launch_options",
+            ["object_id"] = $"agent_bridge_{slug}_launch_options",
+            ["icon"] = "mdi:format-list-checks",
+            ["device"] = MachineDevice(slug, machineName),
+            ["state_topic"] = LaunchOptionsTopic(slug),
+            ["value_template"] = "{{ value_json.version }}",
+            ["json_attributes_topic"] = LaunchOptionsTopic(slug),
+        };
+        return (DiscoveryTopic("sensor", node, "launch_options"), config);
+    }
+
+    // The sensor's payload: `agents` by agent id, each with its label and, per axis, the values
+    // that agent accepts (without the "Agent default" placeholder; omit an axis to take its own
+    // default) and the machine's default. `version` is a short hash of `default_agent` and `agents`, so the state
+    // changes exactly when an answer does.
+    public static JsonObject LaunchOptionsPayload(LaunchOptions offered)
+    {
+        static JsonArray Strings(IEnumerable<string> values) => new([.. values.Select(v => (JsonNode)v)]);
+        var agents = new JsonObject();
+        foreach (var a in offered.Agents)
+        {
+            agents[a.Id] = new JsonObject
+            {
+                ["label"] = a.Label,
+                ["models"] = Strings(a.Models),
+                ["efforts"] = Strings(a.Efforts),
+                ["contexts"] = Strings(a.Contexts),
+                ["defaults"] = new JsonObject
+                {
+                    ["model"] = a.Defaults?.Model,
+                    ["effort"] = a.Defaults?.Effort,
+                    ["context"] = a.Defaults?.Context,
+                },
+            };
+        }
+        var version = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(offered.Defaults.Agent + "\n" + Serialize(agents))))[..12].ToLowerInvariant();
+        return new JsonObject { ["version"] = version, ["default_agent"] = offered.Defaults.Agent, ["agents"] = agents };
     }
 
     // Set-CopilotMqttNewSessionResult: the note, cut to what a state holds.
