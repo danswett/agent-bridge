@@ -57,6 +57,16 @@ namespace AgentBridge.App.Core;
 // the host has been idle for IdleFor. Being asked stands in for "Download updates automatically"
 // being on, for that release. How it ended (State.Last) is kept in the preferences, so an update
 // that restarts the app is still reported, by the new version, with the press it answers.
+//
+// Update now (#1159, docs/protocol/v1-update.md, Going): an Install whose press the host verified
+// as signed by the person, carrying what they confirmed it may go over. It is refused at once as an
+// Install is, then found, downloaded and checked; it waits for a Codex usage check to end
+// (usage-check, at most UsageCheckAtMost), but never for IdleFor or the backstop; then the host is
+// asked to leave (host.update.depart), which takes #805's quiet lease and compares what is busy with
+// the confirmation. Sent back by it, the download is kept and the press waits for the next quiet
+// moment (SettleFor). It lives 15 minutes from its signature, then is dropped expired, the release
+// still offered. How it ended carries a code (UpdateResult.Code), and why it waits one too
+// (UpdateState.WaitingCode). UpdateReporter tells the host this app carries it.
 public sealed class AutoUpdater
 {
     public static readonly TimeSpan CheckEvery = TimeSpan.FromMinutes(30);
@@ -186,6 +196,33 @@ public sealed class AutoUpdater
     volatile bool checkNow;
     // From stopping the host for an install until it fails (success ends the app).
     volatile bool installing;
+    // Update now (#1159, docs/protocol/v1-update.md): the install press is one, with its terms (the
+    // release shown, what was confirmed, the end of its life) and who pressed it; null for a plain
+    // Install. Why it waits (UpdateWaitingCode); since when its usage-check hold has run, kept when a
+    // new press replaces it there so the 11 minutes don't start again; and whether the host sent it
+    // back to wait for the next quiet moment.
+    UpdateNowAsk? installNow;
+    string? installBy;
+    string? nowWaiting;
+    DateTimeOffset? usageHoldSince;
+    bool nowWaitsForQuiet;
+    // The host's waiting code while an Update now waits for a quiet moment, which a usage-check
+    // hold under it gives way to and returns to.
+    string? quietCode;
+    ITimer? expiry;
+    // The Update now the host is being asked to leave for, or has left for: it ends by the host's
+    // answer and the install, never dropped expired meanwhile (the host reads its life itself, and
+    // one it committed within it is carried out).
+    string? departing;
+
+    // How long an Update now waits for a Codex usage check on the host to end (#238, settled Q5):
+    // HostManager.ProbeWait, the wait every install gives one.
+    public TimeSpan UsageCheckAtMost { get; init; } = TimeSpan.FromMinutes(11);
+    // How long the host may take to answer host.update.depart: its lease is tried for about a
+    // minute (6 x 10 s), then it announces and commits.
+    public static readonly TimeSpan DepartWait = TimeSpan.FromMinutes(3);
+
+    bool NowPress => installNow is not null && installRequest is not null;
 
     // othersInPackage(this host's pid): another profile's app or host running from this
     // installation, which an update would stop; null when there is none. updater: the app's
@@ -283,7 +320,14 @@ public sealed class AutoUpdater
         {
             var installed = updater.InstalledVersion;
             string? request;
-            lock (asks) { request = installRequest ?? checkRequest; }
+            bool requestNow;
+            string? nowCode;
+            lock (asks)
+            {
+                request = installRequest ?? checkRequest;
+                requestNow = installRequest is not null && installNow is not null;
+                nowCode = requestNow ? nowWaiting : null;
+            }
             var now = installing ? UpdatePhase.Installing : updater.Phase;
             // A release downloaded that will install because a device asked, once the host is idle,
             // or because this machine installs between turns. One downloaded and waiting for
@@ -307,8 +351,12 @@ public sealed class AutoUpdater
                 Progress = now == UpdatePhase.Downloading ? updater.Progress : null,
                 // "Needs you" once the update has waited past WaitAtMost (#800), here too while the
                 // phase stays Idle: Waiting would hide the devices' Install, and say it installs.
-                Waiting = waiting ? WaitingFor() : NeedsYou(time.GetUtcNow()),
+                Waiting = waiting ? (nowCode is not null ? NowWaits(nowCode) : WaitingFor()) : NeedsYou(time.GetUtcNow()),
                 Request = request,
+                // An Update now (#1159): the press in request is one, and, while it waits, why, as
+                // a code the devices word themselves (Waiting stays for the log and older clients).
+                RequestNow = requestNow,
+                WaitingCode = waiting ? nowCode : null,
                 // Installs without being asked only when set to Install between turns (#689): the
                 // devices see which this machine does without a field of its own. The switch only
                 // downloads (#516).
@@ -317,6 +365,15 @@ public sealed class AutoUpdater
             });
         }
     }
+
+    // An Update now waiting, for the log and older clients (newer ones word WaitingCode themselves).
+    string NowWaits(string code) => code switch
+    {
+        UpdateWaitingCode.UsageCheck => $"{lastProbe ?? "a Codex usage check is running"}; Update now goes once that is done",
+        UpdateWaitingCode.TurnRunning => "Update now waits for the current turn to finish",
+        UpdateWaitingCode.QuestionWaiting => "Update now waits for a question to be answered",
+        _ => "Update now waits until the host can tell the sessions are quiet",
+    };
 
     string WaitingFor()
     {
@@ -430,8 +487,11 @@ public sealed class AutoUpdater
     // The tick it starts, which is already done if one was running (that one runs again for it).
     // at: when the device pressed it, as the host says; one older than UpdateProtocol.Lapses has
     // lapsed at the host, and is refused rather than carried out late.
-    public Task Ask(UpdateAskKind kind, string request, DateTimeOffset? at = null)
+    // now: an Update now (#1159), with its terms; by: the device that pressed it, for the log.
+    public Task Ask(UpdateAskKind kind, string request, DateTimeOffset? at = null, UpdateNowAsk? now = null, string? by = null)
     {
+        // Only an Install is ever an Update now.
+        if (kind != UpdateAskKind.Install) { now = null; }
         // Taken before, by this app or the one before a restart: carried out once.
         var taken = prefs().UpdateTaken ?? [];
         if (taken.Contains(request)) { return Task.CompletedTask; }
@@ -439,45 +499,115 @@ public sealed class AutoUpdater
         if (at is { } pressed && time.GetUtcNow() - pressed > UpdateProtocol.Lapses)
         {
             log("update: a press that had lapsed was not carried out");
-            Remember(UpdateOutcome.Refused, Lapsed, null, request);
+            Remember(UpdateOutcome.Refused, Lapsed, null, request, now is null ? null : ManageReason.Expired);
+            return Task.CompletedTask;
+        }
+        if (now is { } terms && time.GetUtcNow() >= terms.Until)
+        {
+            log("update: an Update now past its 15 minutes was not carried out");
+            Remember(UpdateOutcome.Refused, Expired, null, request, ManageReason.Expired);
             return Task.CompletedTask;
         }
         lock (asks)
         {
-            if (kind == UpdateAskKind.Install) { installRequest = request; installVetted = null; }
+            if (kind == UpdateAskKind.Install)
+            {
+                // An Update now replacing one held for a usage check keeps the hold's start (set only
+                // while a hold runs), so its 11 minutes don't start again (Going, step 2), however
+                // many presses replace it; anything else starts afresh, and a press replacing one
+                // that waits for a quiet moment is tried at once (its own confirmation is fresh).
+                var hold = now is not null && installNow is not null ? usageHoldSince : null;
+                installRequest = request;
+                installVetted = null;
+                (installNow, installBy, usageHoldSince, nowWaitsForQuiet, quietCode) = (now, now is null ? null : by, hold, false, null);
+                nowWaiting = hold is not null ? UpdateWaitingCode.UsageCheck : null;
+            }
             else { checkRequest = request; }
         }
+        // Dropped expired at the end of its life wherever it is, a download under way included.
+        if (now is not null) { Expire(now.Until); }
         Keep();
-        log($"update: {(kind == UpdateAskKind.Install ? "install" : "check")} asked for");
+        log($"update: {(now is not null ? "update now" : kind == UpdateAskKind.Install ? "install" : "check")} asked for");
         checkNow = true;
         Changed();
         return TickAsync();
     }
 
+    // How an Update now ends that passed its life (15 minutes from its signature), its download
+    // kept and offered as before; and one a Codex usage check held past UsageCheckAtMost.
+    public const string Expired = "this Update now was not carried out within 15 minutes of the press; press it again";
+    public const string UsageCheckHeld = "a Codex usage check on this machine was still running after 11 minutes, and installing would cut it off; press it again";
+
     void Changed() => StateChanged?.Invoke();
 
     // Ends a press, the one that was being carried out (a newer one that came meanwhile is left
     // for the next tick): how it went, kept for the devices, and across the restart an update makes.
-    void Finish(ref string? field, string? request, UpdateOutcome outcome, string? reason, string? to = null)
+    // code: for an Update now, why, as a code the devices word themselves (UpdateResult.Code); a
+    // plain Install or Check carries none.
+    void Finish(ref string? field, string? request, UpdateOutcome outcome, string? reason, string? to = null, string? code = null)
     {
         if (request is null) { return; }
+        var now = false;
         lock (asks)
         {
             if (field != request) { return; }
+            if (request == installRequest)
+            {
+                now = installNow is not null;
+                (installNow, installBy, nowWaiting, usageHoldSince, nowWaitsForQuiet, quietCode) = (null, null, null, null, false, null);
+            }
             field = null;
         }
         Keep();
-        log($"update: asked {outcome.ToString().ToLowerInvariant()}{(reason is null ? "" : $": {reason}")}");
-        Remember(outcome, reason, to, request);
+        log($"update: asked {outcome.ToString().ToLowerInvariant()}{(reason is null ? "" : $": {reason}")}{(now && code is not null ? $" ({code})" : "")}");
+        Remember(outcome, reason, to, request, now ? code : null);
     }
 
-    void Remember(UpdateOutcome outcome, string? reason, string? to, string? request)
+    void Remember(UpdateOutcome outcome, string? reason, string? to, string? request, string? code = null)
     {
         save(prefs() with
         {
-            LastUpdate = new UpdateResult { Outcome = outcome, From = updater.InstalledVersion, To = to, Reason = reason, Request = request, At = time.GetUtcNow() },
+            LastUpdate = new UpdateResult { Outcome = outcome, From = updater.InstalledVersion, To = to, Reason = reason, Request = request, Code = code, At = time.GetUtcNow() },
         });
         Changed();
+    }
+
+    // The Update now being carried out, past its 15 minutes: dropped expired, wherever it is
+    // (downloading, held for a usage check, waiting for a quiet moment), its download kept.
+    bool DropExpired()
+    {
+        UpdateNowAsk? terms;
+        string? request;
+        bool leaving;
+        lock (asks) { (terms, request, leaving) = (installNow, installRequest, installRequest is not null && installRequest == departing); }
+        if (terms is null || request is null || leaving || time.GetUtcNow() < terms.Until) { return false; }
+        Finish(ref installRequest, request, UpdateOutcome.Refused, Expired, code: ManageReason.Expired);
+        return true;
+    }
+
+    // At an Update now's end of life: dropped then, on the UI thread, even while a tick is held by a
+    // download (the download goes on, and is kept); the tick drops it too, whichever comes first.
+    void Expire(DateTimeOffset until)
+    {
+        var left = until - time.GetUtcNow();
+        lock (settleGate)
+        {
+            expiry?.Dispose();
+            expiry = time.CreateTimer(_ => ui.Post(() => DropExpired()), null,
+                left > TimeSpan.Zero ? left : TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    // A waiting Update now no longer held by a usage check (the check over, or the machine busy
+    // again before it was asked): why it waits is the host's again, and the next hold starts afresh.
+    void HoldOver()
+    {
+        lock (asks)
+        {
+            if (installNow is null) { return; }
+            usageHoldSince = null;
+            if (nowWaiting == UpdateWaitingCode.UsageCheck) { nowWaiting = quietCode; }
+        }
     }
 
     // Why nothing may be checked for or installed here, as the host last said, or null when it may.
@@ -509,12 +639,24 @@ public sealed class AutoUpdater
         return host.Sessions.Complete && idleSince is { } since && now - since >= span;
     }
 
-    // Why the update goes ahead now, or null while it waits: an Install a device pressed, once the
+    // Why the update goes ahead now, or null while it waits: an Update now at once, or at the next
+    // quiet moment once the host sent it back; an Install a device pressed, once the
     // host has been idle for IdleFor; or, unasked and set to Install between turns, a gap settled
     // for SettleFor, else the backstop at ForcedAt with no question waiting (BackstopHeld).
     string? GoAhead(bool asked, DateTimeOffset now)
     {
         if (Pending is null) { return null; }
+        // An Update now goes at once, skipping IdleFor and the backstop: the person confirmed what
+        // it goes over, and the host compares that with what is busy when it acts. Sent back to
+        // wait by the host, it goes at the next quiet moment: no turn running and no question
+        // waiting over a whole snapshot, settled for SettleFor, never IdleFor or a backstop.
+        if (NowPress)
+        {
+            if (!nowWaitsForQuiet) { return "Update now was pressed on another device"; }
+            if (IdleSince(now, SettleFor)) { return "Update now was pressed on another device, and no session here has a turn running or a question waiting"; }
+            if (idleSince is not null) { Arm(now); }
+            return null;
+        }
         // A device's Install keeps its own rule whatever the mode: nobody at the machine was warned,
         // so the host idle for IdleFor, never a settled gap or the backstop (Copilot, r4488279902).
         // Install between turns governs only what installs unasked.
@@ -539,10 +681,11 @@ public sealed class AutoUpdater
     }
 
     // A session went idle, or the snapshot was read again: set to Install between turns with a
-    // release ready, a gap starts, and the tick is due once it has settled.
+    // release ready, or with an Update now waiting for a quiet moment, a gap starts, and the tick
+    // is due once it has settled.
     void Gap()
     {
-        if (Pending is null || !BetweenTurns || !Idle) { return; }
+        if (Pending is null || !(BetweenTurns || (NowPress && nowWaitsForQuiet)) || !Idle) { return; }
         var now = time.GetUtcNow();
         idleSince ??= now;
         Arm(now);
@@ -598,15 +741,16 @@ public sealed class AutoUpdater
             HoldOverIfCheckedSince();
             if (updater.InstalledVersion is null)
             {
-                Finish(ref installRequest, Asked(UpdateAskKind.Install), UpdateOutcome.Refused, NotInstalled);
+                Finish(ref installRequest, Asked(UpdateAskKind.Install), UpdateOutcome.Refused, NotInstalled, code: ManageReason.Unavailable);
                 Finish(ref checkRequest, Asked(UpdateAskKind.Check), UpdateOutcome.Refused, NotInstalled);
             }
+            DropExpired();
             // An install asked for is refused now, rather than after the download and the wait,
             // if it could never go ahead: the host gone, or another profile running from here.
             if (Asked(UpdateAskKind.Install) is { } install && installVetted != install)
             {
                 installVetted = install;
-                if (await WhyNotNowAsync(asked: true) is { } refused) { Finish(ref installRequest, install, UpdateOutcome.Refused, refused); }
+                if (await VetAsync(asked: true) is ({ } refused, var code)) { Finish(ref installRequest, install, UpdateOutcome.Refused, refused, code: code); }
                 // Another press came while this one was looked at: it is looked at first, by the
                 // tick queued for it, before anything is downloaded for it.
                 if (Asked(UpdateAskKind.Install) is { } replaced && replaced != install) { return; }
@@ -658,7 +802,11 @@ public sealed class AutoUpdater
             }
             // A connected host whose sessions are still not read in full holds a device's Install
             // (Due) as the machine's refusal, told as one, though the press stays queued (#800).
-            if (why is null && asked && Pending is not null && !host.Sessions.Complete) { why = SessionsUnread; }
+            // Not an Update now: the host compares what is busy with the confirmation when it acts,
+            // and a machine it can't read sends the press back to wait (unknown).
+            if (why is null && asked && !NowPress && Pending is not null && !host.Sessions.Complete) { why = SessionsUnread; }
+            // A download can take minutes: an Update now past its life by then goes no further.
+            if (DropExpired()) { asked = Asked(UpdateAskKind.Install) is not null; }
             now = time.GetUtcNow();
             if (Held is null) { foundAt = null; }
             else { foundAt ??= now; }
@@ -679,21 +827,23 @@ public sealed class AutoUpdater
             // Set to Install between turns, a gap does, or the backstop (GoAhead).
             // No longer going ahead (a session busy again): what holds it is that, not a probe from
             // before (#238).
-            if (GoAhead(asked, time.GetUtcNow()) is null) { lastProbe = null; Changed(); return; }
+            if (GoAhead(asked, time.GetUtcNow()) is null) { lastProbe = null; HoldOver(); Changed(); return; }
             // Settings shares the updater: a check there, or a change of feed, may have replaced
             // the release downloaded here. Then it is found and downloaded again first.
             if (Stale()) { return; }
             // Asked again now: the host still there (its own status, not the last report) and no
             // other profile's app or host running from the package.
             var pressed = Asked(UpdateAskKind.Install);
-            if (Refused(await WhyNotNowAsync(pressed is not null)))
+            var (whyNow, codeNow) = await VetAsync(pressed is not null);
+            if (Refused(whyNow))
             {
-                Finish(ref installRequest, pressed, UpdateOutcome.Refused, lastWhyNot);
+                Finish(ref installRequest, pressed, UpdateOutcome.Refused, lastWhyNot, code: codeNow);
                 return;
             }
             // Those took time: the press replaced or ended, or the host gone, meanwhile, counts too.
             asked = Asked(UpdateAskKind.Install) is not null;
-            if (Refused(WhyNot(asked)) || GoAhead(asked, time.GetUtcNow()) is not { } because) { return; }
+            if (Refused(WhyNot(asked))) { return; }
+            if (GoAhead(asked, time.GetUtcNow()) is not { } because) { HoldOver(); Changed(); return; }
             // And Settings may have checked, or changed the feed, meanwhile (WhyNot itself reads the
             // feed): still the release downloaded, or nothing is stopped. Should it change even
             // while the host stops, ApplyAndRestart refuses it and the host is started again.
@@ -705,18 +855,49 @@ public sealed class AutoUpdater
             {
                 if (probe != lastProbe) { log($"auto-update: waiting to install {Pending}: {probe}"); }
                 lastProbe = probe;
+                // An Update now waits in usage-check, a hold of its own that spends no restart slot
+                // and touches no lease, for at most UsageCheckAtMost from when it began (a new press
+                // replacing it there keeps that start), then ends refused usage-check; or expired,
+                // should its own life end first.
+                if (NowPress && !DropExpired())
+                {
+                    var at = time.GetUtcNow();
+                    string? request;
+                    DateTimeOffset since;
+                    lock (asks)
+                    {
+                        request = installRequest;
+                        since = usageHoldSince ??= at;
+                        nowWaiting = UpdateWaitingCode.UsageCheck;
+                    }
+                    if (at - since >= UsageCheckAtMost) { Finish(ref installRequest, request, UpdateOutcome.Refused, UsageCheckHeld, code: UpdateCode.UsageCheck); }
+                }
                 Changed();
                 return;
             }
             lastProbe = null;
-            // Asking took time too (up to its call timeout): the same checks again, as of now.
-            asked = Asked(UpdateAskKind.Install) is not null;
+            // The hold over: what is busy is compared with the confirmation again, by the host when
+            // it is asked to leave (below), before the lease.
+            HoldOver();
+            // Asking took time too (up to its call timeout): the same checks again, as of now. The
+            // press they are made for is the one carried out: should another replace it while they
+            // are made, the tick queued for it looks again, so an Install never goes at once as an
+            // Update now does, nor an Update now without its departure.
+            string? go;
+            UpdateNowAsk? goNow;
+            lock (asks) { (go, goNow) = (installRequest, installNow); }
+            asked = go is not null;
             if (Refused(WhyNot(asked)) || GoAhead(asked, time.GetUtcNow()) is not { } still || Stale()) { return; }
+            lock (asks) { if (installRequest != go || installNow != goNow) { return; } }
             because = still;
             // The person's Restart to update may have begun while those were asked: one install at
             // a time, claimed as Restart to update claims it.
             if (installing || manager.UpdateUnderWay || Interlocked.Exchange(ref claimed, 1) == 1) { return; }
-            try { await InstallAsync(because); }
+            try
+            {
+                if (goNow is not null) { await DepartAsync(because); }
+                else { await InstallAsync(because, (go, false)); }
+            }
             finally { Volatile.Write(ref claimed, 0); }
         }
         // A check that cannot reach the network, a download cut off: tried again at the next check.
@@ -811,20 +992,25 @@ public sealed class AutoUpdater
         }
     }
 
-    async Task<string?> WhyNotNowAsync(bool asked = false)
+    async Task<string?> WhyNotNowAsync(bool asked = false) => (await VetAsync(asked)).Why;
+
+    // Why not now, with it as an Update now's code (UpdateResult.Code): another profile running from
+    // this installation other-profile, a machine read-only for other devices now read-only, and
+    // anything else (a development copy, the host gone or its status unreadable) unavailable.
+    async Task<(string? Why, string? Code)> VetAsync(bool asked = false)
     {
-        if (WhyNot(asked) is { } why) { return why; }
+        if (WhyNot(asked) is { } why) { return (why, ManageReason.Unavailable); }
         HostStatus fresh;
         try { fresh = await host.CallAsync<HostStatus>(HostOps.Status, timeout: TimeSpan.FromSeconds(10)); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            return $"the host's status could not be read: {e.Message}";
+            return ($"the host's status could not be read: {e.Message}", ManageReason.Unavailable);
         }
         // A press from another device is not carried out on a machine that has become read-only
         // for other devices since (an automatic update still is: the rule guards other devices).
-        if (asked && fresh.ReadOnly is { } readOnly) { return $"this machine is read-only for other devices now: {readOnly}"; }
-        if (await Task.Run(() => othersInPackage(fresh.ProcessId)) is { } others) { return others; }
-        return null;
+        if (asked && fresh.ReadOnly is { } readOnly) { return ($"this machine is read-only for other devices now: {readOnly}", ManageReason.ReadOnly); }
+        if (await Task.Run(() => othersInPackage(fresh.ProcessId)) is { } others) { return (others, UpdateCode.OtherProfile); }
+        return (null, null);
     }
 
     // The source changed since this last looked (Include pre-releases, or feed.txt): what was
@@ -1078,17 +1264,106 @@ public sealed class AutoUpdater
 
     sealed class PackageReplacedException() : Exception("the package ready changed while the host stopped");
 
+    // An Update now, its download checked and its probe hold over (Going, step 3): the release it
+    // goes to must be the one the person was shown (else release-changed), and nothing may keep it
+    // from replacing the installation (asked before the host is asked to leave, so a departure is
+    // never spent on an update that can't finish); then the host is asked to leave
+    // (host.update.depart), which takes #805's lease, compares what is busy with the confirmation,
+    // announces and commits. Committed, the host is stopped and the release installed, as every
+    // install is. Waiting, the download is kept and the press waits for the next quiet moment.
+    // Refused, it ends refused with the host's code (or expired, its life having ended meanwhile),
+    // the release still offered. A host that can't be asked, or doesn't answer, ends it refused
+    // unavailable and nothing is installed: one that committed unseen is restarted by its own
+    // watchdog (departure-stuck).
+    async Task DepartAsync(string because)
+    {
+        UpdateNowAsk? terms;
+        string? request, by;
+        lock (asks) { (terms, request, by) = (installNow, installRequest, installBy); }
+        if (terms is null || request is null || DropExpired()) { return; }
+        if (Pending != terms.Release)
+        {
+            Finish(ref installRequest, request, UpdateOutcome.Refused, $"the release ready here ({Pending}) is not the one the person was shown ({terms.Release})",
+                code: UpdateCode.ReleaseChanged);
+            return;
+        }
+        string? blockers;
+        try { blockers = preflight is null ? null : await Task.Run(preflight); }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { blockers = e.Message; }
+        if (blockers is not null)
+        {
+            Finish(ref installRequest, request, UpdateOutcome.Refused, $"{UpdateBlockedException.Prefix}{blockers}", code: ManageReason.Unavailable);
+            return;
+        }
+        // Replaced, or dropped expired, while that was asked: the press the person made last is
+        // the one carried out, by the tick queued for it. Otherwise it is departing from here on,
+        // and only the host's answer, then the install, ends it.
+        lock (asks)
+        {
+            if (installRequest != request || installNow != terms) { return; }
+            departing = request;
+        }
+        UpdateDepartResult left;
+        try { left = await host.CallAsync<UpdateDepartResult>(HostOps.UpdateDepart, new UpdateDepartRequest(request), timeout: DepartWait); }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            Undepart();
+            if (DropExpired()) { return; }
+            Finish(ref installRequest, request, UpdateOutcome.Refused, $"the host could not be asked to leave for the update: {e.Message}", code: ManageReason.Unavailable);
+            return;
+        }
+        if (left.Outcome != UpdateDepartOutcome.Committed) { Undepart(); }
+        switch (left.Outcome)
+        {
+            case UpdateDepartOutcome.Committed:
+                var accept = terms.Accept;
+                log($"update now: pressed on {by ?? "another device"}, going over {(accept is null ? "nothing busy" : $"{accept.Working} with a turn running and {accept.Waiting} with a question or approval waiting{(accept.Unknown == true ? ", with sessions not yet reported" : "")}")}");
+                // The host left for this press: it is the one installed and answered, even should
+                // another have replaced it while the host was asked.
+                await InstallAsync(because, (request, true));
+                return;
+            case UpdateDepartOutcome.Waiting:
+                var code = UpdateProtocol.IsCode(left.Code) ? left.Code : UpdateWaitingCode.Unknown;
+                lock (asks)
+                {
+                    if (installRequest != request) { return; }
+                    (nowWaiting, quietCode, nowWaitsForQuiet) = (code, code, true);
+                }
+                // What the app saw idle before the host found it busy is no evidence about the
+                // moment after: a quiet moment is one seen from now, and one that has already
+                // begun is settled from now rather than missed until the next session change.
+                idleSince = null;
+                Gap();
+                log($"update now: the host found the machine busier than confirmed ({code}); it installs at the next quiet moment");
+                Changed();
+                // Its life may have ended while the host was asked.
+                DropExpired();
+                return;
+            default:
+                // Its life ended while the host was asked: that is how it ended, wherever it was.
+                if (DropExpired()) { return; }
+                var refused = UpdateProtocol.IsCode(left.Code) ? left.Code! : ManageReason.Unavailable;
+                Finish(ref installRequest, request, UpdateOutcome.Refused, refused == ManageReason.Expired ? Expired : $"the host did not leave for the update: {refused}", code: refused);
+                return;
+        }
+
+        void Undepart() { lock (asks) { if (departing == request) { departing = null; } } }
+    }
+
     // The person, warned what a restart would interrupt, chose not to: nothing to report.
     public const string NotNow = "not now";
     int claimed;
 
     // Null once the release has been applied (which, for real, ends this process); otherwise why
-    // not, still on this version with the host back.
-    async Task<string?> InstallAsync(string because)
+    // not, still on this version with the host back. answers: the press this install answers, as
+    // the tick decided it, and whether the host departed for it (an Update now), which it then
+    // answers whatever press has come since; else the one being carried out now.
+    async Task<string?> InstallAsync(string because, (string? Request, bool Departed)? answers = null)
     {
         var to = Pending!;
         var source = updater.Source;
-        var request = Asked(UpdateAskKind.Install);
+        var request = answers is { } pinned ? pinned.Request : Asked(UpdateAskKind.Install);
+        var departed = answers is { Departed: true } ? request : null;
         log($"auto-update: installing {to}, as {because}");
         bool open;
         try { open = WindowOpen(); }
@@ -1119,6 +1394,8 @@ public sealed class AutoUpdater
             checkedAt = null;
             if (seenSource == updater.Source && updater.Ready is { } now) { Downloaded(now); }
             log($"auto-update: not installing {to}: the package ready changed while the host stopped; {(Pending is { } next ? $"{next} is offered instead" : "checking again")}");
+            // The host left for an Update now's press, which can't leave again: it ends here.
+            if (departed is not null) { End(UpdateOutcome.Refused, "the release ready changed while the host stopped", UpdateCode.ReleaseChanged); }
             Changed();
             return $"the update downloaded changed while the host stopped ({to} is no longer the one ready): "
                 + (Pending is { } offered ? $"{offered} is ready now, so choose Restart to update again" : "it is being checked for again");
@@ -1130,7 +1407,7 @@ public sealed class AutoUpdater
             const string already = "an update is already being installed on this machine";
             log($"auto-update: not installing {to}: {e.Message}");
             installing = false;
-            Finish(ref installRequest, request, UpdateOutcome.Refused, already, to);
+            End(UpdateOutcome.Refused, already, ManageReason.Busy);
             Changed();
             return already;
         }
@@ -1148,8 +1425,21 @@ public sealed class AutoUpdater
             // Kept for the devices whether a device asked for it or the person here did: the old
             // release still runs, and no later start would say so.
             if (request is null) { Remember(UpdateOutcome.Failed, e.Message, to, null); }
-            else { Finish(ref installRequest, request, UpdateOutcome.Failed, e.Message, to); }
+            else { End(UpdateOutcome.Failed, e.Message); }
             return $"installing {to} failed: {e.Message}";
+        }
+
+        // How the press this answered ended: the one being carried out, or the Update now the host
+        // left for, kept for its device even should a newer press have replaced it since.
+        void End(UpdateOutcome outcome, string reason, string? code = null)
+        {
+            if (departed is not null && Asked(UpdateAskKind.Install) != departed)
+            {
+                log($"update: asked {outcome.ToString().ToLowerInvariant()}: {reason} ({code ?? "no code"})");
+                Remember(outcome, reason, to, departed, code);
+                return;
+            }
+            Finish(ref installRequest, request, outcome, reason, to, code);
         }
     }
 

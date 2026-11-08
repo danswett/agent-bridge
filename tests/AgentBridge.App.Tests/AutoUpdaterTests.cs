@@ -2554,6 +2554,545 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Empty(host.Sent(HostOps.Stop));
     }
 
+    // Update now (#1159, docs/protocol/v1-update.md, Going): an Install the host verified as the
+    // person's signed press, carrying what they confirmed and its 15 minutes. The host's half (the
+    // lease, the comparison with the confirmation, the commit) answers host.update.depart here.
+    const string Again = "9b8c7d6e-5f40-4321-8abc-def012345678";
+    const string Phone = "pwa 1a2b3c4d";
+
+    // Pressed now, signed now unless life says how long it has left.
+    Task NowAsync(string request = Press, UpdateBusy? accept = null, TimeSpan? life = null) =>
+        auto.Ask(UpdateAskKind.Install, request, time.GetUtcNow(), new UpdateNowAsk("0.2.0", accept, time.GetUtcNow() + (life ?? UpdateProtocol.NowLife)), Phone);
+
+    // How the host answers host.update.depart, one answer for each ask, the last kept.
+    void Departs(params UpdateDepartResult[] answers)
+    {
+        var n = -1;
+        host.On(HostOps.UpdateDepart, _ => answers[Math.Min(Interlocked.Increment(ref n), answers.Length - 1)]);
+    }
+
+    static readonly UpdateDepartResult Committed = new(UpdateDepartOutcome.Committed, Transition: "t-1");
+    static UpdateDepartResult WaitingWith(string code) => new(UpdateDepartOutcome.Waiting, code);
+
+    List<string> Departed() => [.. host.Sent(HostOps.UpdateDepart).Select(d => d.Deserialize<UpdateDepartRequest>(ProtocolJson.Options)!.Request)];
+
+    static readonly UpdateBusy OneTurn = new() { Working = 1, Sessions = [new UpdateBusySession("s1", UpdateBusyState.Working)] };
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_ask_installs_without_waiting_for_the_machine_to_be_idle()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        Departs(Committed);
+
+        await NowAsync(accept: OneTurn);
+
+        // No IdleFor, no settled gap: the host was asked to leave at once, then stopped.
+        Assert.True(updater.Applied);
+        Assert.Equal([Press], Departed());
+        Assert.Single(host.Sent(HostOps.Stop));
+        Assert.Equal(("0.1.0", Press), (prefs.UpdatedFrom, prefs.UpdateRequest));
+        Assert.Single(log, l => l == $"update now: pressed on {Phone}, going over 1 with a turn running and 0 with a question or approval waiting");
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_ask_with_another_profile_running_is_refused_before_anything_is_downloaded()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        await StartAsync();
+        Departs(Committed);
+        others = "another profile's host (pid 77) runs from this installation";
+
+        await NowAsync();
+
+        Assert.Equal((0, 0), (updater.Checks, updater.Downloads));
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, UpdateCode.OtherProfile, Press), (last.Outcome, last.Code, last.Request));
+        Assert.Empty(Departed());
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_ask_on_a_copy_the_updater_did_not_install_is_refused_unavailable()
+    {
+        updater.InstalledVersion = null;
+        await StartAsync();
+        Departs(Committed);
+
+        await NowAsync();
+
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, ManageReason.Unavailable, AutoUpdater.NotInstalled), (last.Outcome, last.Code, last.Reason));
+        Assert.Equal((0, 0), (updater.Checks, updater.Downloads));
+        Assert.Empty(Departed());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_refused_departure_starts_nothing_and_keeps_the_release_offered()
+    {
+        await StartAsync();
+        Departs(new UpdateDepartResult(UpdateDepartOutcome.Refused, UpdateCode.RestartCap));
+
+        await NowAsync();
+        await TwoIdleTicksAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal([Press], Departed());
+        var state = auto.State;
+        Assert.Equal((UpdateOutcome.Refused, UpdateCode.RestartCap, Press), (state.Last!.Outcome, state.Last.Code, state.Last.Request));
+        Assert.Equal(("0.2.0", "0.2.0", (string?)null, false), (auto.Ready, state.Available, state.Request, state.RequestNow));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_quiet_press_that_finds_a_turn_running_after_the_download_keeps_the_download_installs_nothing_and_waits_with_turn_running()
+    {
+        await StartAsync(null, Make.Session("s1"));
+        // The turn starts while the release downloads: the host, comparing at the lease, sends it back.
+        updater.OnDownload = () => _ = host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Working));
+        Departs(WaitingWith(UpdateWaitingCode.TurnRunning));
+
+        await NowAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Equal(1, updater.Downloads);
+        var state = auto.State;
+        Assert.Equal((UpdatePhase.Waiting, UpdateWaitingCode.TurnRunning, true, Press), (state.Phase, state.WaitingCode, state.RequestNow, state.Request));
+        Assert.Equal("0.2.0", auto.Ready);
+        Assert.Null(state.Last);
+        // Still busy: nothing more is asked of the host however long it stays so.
+        await Wait.UntilAsync(() => connection.Sessions.Get("s1")?.Status == SessionStatus.Working, "the turn seen");
+        await TwoIdleTicksAsync();
+        Assert.Equal([Press], Departed());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_waiting_Update_now_installs_at_the_next_quiet_moment()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        Departs(WaitingWith(UpdateWaitingCode.TurnRunning), Committed);
+        await NowAsync();
+        Assert.Equal(UpdateWaitingCode.TurnRunning, auto.State.WaitingCode);
+
+        await GoIdleAsync("s1");
+        // Install between turns' settled gap, never IdleFor.
+        time.Advance(AutoUpdater.SettleFor);
+
+        await Wait.UntilAsync(() => updater.Applied, "the install at the quiet moment", TimeSpan.FromSeconds(5));
+        Assert.Equal([Press, Press], Departed());
+        Assert.Equal(Press, prefs.UpdateRequest);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_pressed_again_while_one_waits_replaces_it_without_downloading_again()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        Departs(WaitingWith(UpdateWaitingCode.TurnRunning), Committed);
+        await NowAsync();
+        Assert.Equal(UpdatePhase.Waiting, auto.State.Phase);
+
+        // The person saw the confirmation again, and pressed: it goes at once, still busy.
+        await NowAsync(Again, OneTurn);
+
+        Assert.True(updater.Applied);
+        Assert.Equal(1, updater.Downloads);
+        Assert.Equal([Press, Again], Departed());
+        Assert.Equal(Again, prefs.UpdateRequest);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_waiting_Update_now_15_minutes_past_its_signature_is_dropped_expired_and_keeps_the_download_offered()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        Departs(WaitingWith(UpdateWaitingCode.TurnRunning));
+        await NowAsync();
+
+        time.Advance(UpdateProtocol.NowLife);
+        await auto.TickAsync();
+
+        var state = auto.State;
+        Assert.Equal((UpdateOutcome.Refused, ManageReason.Expired, Press), (state.Last!.Outcome, state.Last.Code, state.Last.Request));
+        Assert.Equal(AutoUpdater.Expired, state.Last.Reason);
+        Assert.Equal(("0.2.0", (string?)null, false, (string?)null), (auto.Ready, state.Request, state.RequestNow, state.WaitingCode));
+        Assert.Equal(1, updater.Downloads);
+        // Gone quiet afterwards, nothing goes: a fresh press is needed.
+        await GoIdleAsync("s1");
+        time.Advance(AutoUpdater.SettleFor);
+        await TwoIdleTicksAsync();
+        Assert.False(updater.Applied);
+        Assert.Equal([Press], Departed());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_waits_in_usage_check_while_a_Codex_usage_check_runs_spending_no_restart_slot()
+    {
+        await StartAsync();
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        Departs(Committed);
+
+        await NowAsync();
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+
+        var state = auto.State;
+        Assert.Equal((UpdatePhase.Waiting, UpdateWaitingCode.UsageCheck, true, Press), (state.Phase, state.WaitingCode, state.RequestNow, state.Request));
+        // Restart slots are spent only at the host's commit, which nothing asked for.
+        Assert.Empty(Departed());
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task When_the_usage_check_ends_busy_is_compared_with_the_confirmation_again_before_the_lease()
+    {
+        await StartAsync();
+        var finishing = true;
+        var departedWhileHeld = false;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(finishing, finishing ? "Codex's app-server is still finishing" : null));
+        // The host compares what is busy then with the confirmation (none: the machine was quiet)
+        // before it takes the lease: a turn started during the hold sends it back to wait.
+        host.On(HostOps.UpdateDepart, _ =>
+        {
+            departedWhileHeld |= finishing;
+            return WaitingWith(UpdateWaitingCode.TurnRunning);
+        });
+
+        await NowAsync();
+        Assert.Equal(UpdateWaitingCode.UsageCheck, auto.State.WaitingCode);
+        finishing = false;
+        time.Advance(TimeSpan.FromMinutes(1));
+        await auto.TickAsync();
+
+        Assert.False(departedWhileHeld);
+        Assert.Equal([Press], Departed());
+        Assert.Equal((UpdatePhase.Waiting, UpdateWaitingCode.TurnRunning), (auto.State.Phase, auto.State.WaitingCode));
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_still_held_by_a_usage_check_after_11_minutes_ends_refused_usage_check()
+    {
+        await StartAsync();
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        Departs(Committed);
+
+        await NowAsync();
+        time.Advance(auto.UsageCheckAtMost - TimeSpan.FromSeconds(1));
+        await auto.TickAsync();
+        Assert.Equal(UpdateWaitingCode.UsageCheck, auto.State.WaitingCode);
+        time.Advance(TimeSpan.FromSeconds(1));
+        await auto.TickAsync();
+
+        var state = auto.State;
+        Assert.Equal((UpdateOutcome.Refused, UpdateCode.UsageCheck, Press), (state.Last!.Outcome, state.Last.Code, state.Last.Request));
+        Assert.Equal(("0.2.0", (string?)null), (auto.Ready, state.Request));
+        Assert.Empty(Departed());
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_whose_15_minutes_run_out_during_the_usage_check_wait_ends_expired_not_usage_check()
+    {
+        await StartAsync();
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        Departs(Committed);
+
+        // Signed 5 minutes before the app had it downloaded: 10 minutes left, under the hold's 11.
+        await NowAsync(life: UpdateProtocol.NowLife - TimeSpan.FromMinutes(5));
+        time.Advance(UpdateProtocol.NowLife - TimeSpan.FromMinutes(5));
+        await auto.TickAsync();
+
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, ManageReason.Expired, Press), (last.Outcome, last.Code, last.Request));
+        Assert.Empty(Departed());
+        Assert.Equal("0.2.0", auto.Ready);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_new_press_during_the_usage_check_hold_replaces_the_first_without_restarting_the_11_minutes()
+    {
+        await StartAsync();
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        Departs(Committed);
+
+        await NowAsync();
+        time.Advance(TimeSpan.FromMinutes(6));
+        await auto.TickAsync();
+        await NowAsync(Again);
+        Assert.Equal((Again, UpdateWaitingCode.UsageCheck), (auto.State.Request, auto.State.WaitingCode));
+        // 11 minutes from the first press's hold, though the second has 10 of its own left.
+        time.Advance(auto.UsageCheckAtMost - TimeSpan.FromMinutes(6));
+        await auto.TickAsync();
+
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, UpdateCode.UsageCheck, Again), (last.Outcome, last.Code, last.Request));
+        Assert.Equal(1, updater.Downloads);
+        Assert.Empty(Departed());
+    }
+
+    const string Third = "c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b";
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Presses_that_replace_one_another_during_the_usage_check_hold_before_it_is_looked_at_again_keep_its_11_minutes()
+    {
+        await StartAsync();
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        Departs(Committed);
+        await NowAsync();
+        time.Advance(TimeSpan.FromMinutes(6));
+        await auto.TickAsync();
+
+        // The second press's tick is held in its check; a third replaces it before the probe is
+        // asked about again.
+        updater.CheckGate = new TaskCompletionSource();
+        var second = NowAsync(Again);
+        await Wait.UntilAsync(() => updater.Checks == 2, "the second press's check");
+        await NowAsync(Third);
+        updater.CheckGate.SetResult();
+        await second;
+        Assert.Equal((Third, UpdateWaitingCode.UsageCheck), (auto.State.Request, auto.State.WaitingCode));
+        time.Advance(auto.UsageCheckAtMost - TimeSpan.FromMinutes(6));
+        await auto.TickAsync();
+
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, UpdateCode.UsageCheck, Third), (last.Outcome, last.Code, last.Request));
+        Assert.Empty(Departed());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_whose_15_minutes_end_while_its_release_is_still_being_found_is_dropped_expired_then_and_the_download_still_kept()
+    {
+        await StartAsync();
+        Departs(Committed);
+        updater.CheckGate = new TaskCompletionSource();
+        var asked = NowAsync();
+        await Wait.UntilAsync(() => updater.Checks == 1, "the check under way");
+
+        time.Advance(UpdateProtocol.NowLife);
+
+        // Dropped at once, not once the check and download are done.
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, ManageReason.Expired, Press), (last.Outcome, last.Code, last.Request));
+        updater.CheckGate.SetResult();
+        await asked;
+        Assert.Equal("0.2.0", auto.Ready);
+        Assert.Equal((UpdateOutcome.Refused, ManageReason.Expired), (auto.State.Last!.Outcome, auto.State.Last.Code));
+        Assert.Empty(Departed());
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_sent_back_to_wait_while_this_machine_already_looks_quiet_goes_again_once_that_has_settled_not_at_the_next_minute()
+    {
+        await StartAsync();
+        Departs(WaitingWith(UpdateWaitingCode.Unknown), Committed);
+
+        await NowAsync();
+        Assert.Equal(UpdateWaitingCode.Unknown, auto.State.WaitingCode);
+        time.Advance(AutoUpdater.SettleFor);
+
+        await Wait.UntilAsync(() => updater.Applied, "the install once the quiet moment settled", TimeSpan.FromSeconds(5));
+        Assert.Equal([Press, Press], Departed());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_waiting_Update_now_held_by_a_usage_check_at_its_quiet_moment_says_it_waits_for_the_turn_again_once_a_turn_starts()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        var finishing = false;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(finishing, finishing ? "Codex's app-server is still finishing" : null));
+        Departs(WaitingWith(UpdateWaitingCode.TurnRunning), Committed);
+        await NowAsync();
+        Assert.Equal(UpdateWaitingCode.TurnRunning, auto.State.WaitingCode);
+
+        finishing = true;
+        await GoIdleAsync("s1");
+        time.Advance(AutoUpdater.SettleFor);
+        await Wait.UntilAsync(() => auto.State.WaitingCode == UpdateWaitingCode.UsageCheck, "the hold at the quiet moment", TimeSpan.FromSeconds(5));
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Working));
+        await Wait.UntilAsync(() => connection.Sessions.Get("s1")?.Status == SessionStatus.Working, "the turn seen");
+        await auto.TickAsync();
+
+        Assert.Equal((UpdatePhase.Waiting, UpdateWaitingCode.TurnRunning), (auto.State.Phase, auto.State.WaitingCode));
+        Assert.Equal([Press], Departed());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_the_host_left_for_just_before_its_15_minutes_ended_is_installed_not_reported_expired()
+    {
+        await StartAsync();
+        // The host commits within the press's life; its end passes while the answer comes back.
+        host.On(HostOps.UpdateDepart, d =>
+        {
+            time.Advance(UpdateProtocol.NowLife);
+            return Committed;
+        });
+
+        await NowAsync();
+
+        Assert.True(updater.Applied);
+        Assert.Equal(Press, prefs.UpdateRequest);
+        Assert.Null(prefs.LastUpdate);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_whose_15_minutes_end_while_the_host_tries_its_lease_ends_expired_whatever_the_host_refuses_it_with()
+    {
+        await StartAsync();
+        host.On(HostOps.UpdateDepart, d =>
+        {
+            time.Advance(UpdateProtocol.NowLife);
+            return new UpdateDepartResult(UpdateDepartOutcome.Refused, ManageReason.NotQuiet);
+        });
+
+        await NowAsync();
+
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, ManageReason.Expired, Press), (last.Outcome, last.Code, last.Request));
+        Assert.Equal("0.2.0", auto.Ready);
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_waiting_Update_now_that_finds_a_turn_started_while_it_was_looked_at_again_says_it_waits_for_the_turn_not_the_usage_check()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        var finishing = false;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(finishing, finishing ? "Codex's app-server is still finishing" : null));
+        Departs(WaitingWith(UpdateWaitingCode.TurnRunning), Committed);
+        await NowAsync();
+        finishing = true;
+        await GoIdleAsync("s1");
+        time.Advance(AutoUpdater.SettleFor);
+        await Wait.UntilAsync(() => auto.State.WaitingCode == UpdateWaitingCode.UsageCheck, "the hold at the quiet moment", TimeSpan.FromSeconds(5));
+
+        // The next look finds it quiet, then a turn starts while the machine is asked about.
+        var turned = false;
+        othersProbe = () =>
+        {
+            if (!turned)
+            {
+                turned = true;
+                host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Working)).GetAwaiter().GetResult();
+                SpinWait.SpinUntil(() => connection.Sessions.Get("s1")?.Status == SessionStatus.Working, TimeSpan.FromSeconds(5));
+            }
+            return null;
+        };
+        await auto.TickAsync();
+
+        Assert.True(turned);
+        Assert.Equal((UpdatePhase.Waiting, UpdateWaitingCode.TurnRunning), (auto.State.Phase, auto.State.WaitingCode));
+        Assert.Equal([Press], Departed());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_press_that_replaces_an_Update_now_while_the_host_leaves_for_it_doesnt_take_its_place_in_the_install()
+    {
+        await StartAsync();
+        // A plain Install from another device arrives while the host is asked to leave; the host
+        // left for the Update now.
+        host.On(HostOps.UpdateDepart, d =>
+        {
+            _ = auto.Ask(UpdateAskKind.Install, Again);
+            return Committed;
+        });
+
+        await NowAsync();
+
+        Assert.True(updater.Applied);
+        Assert.Equal(Press, prefs.UpdateRequest);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_for_a_release_other_than_the_one_shown_is_refused_release_changed_and_nothing_departs()
+    {
+        await StartAsync();
+        updater.Found = "0.3.0";
+        Departs(Committed);
+
+        await NowAsync();
+
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, UpdateCode.ReleaseChanged), (last.Outcome, last.Code));
+        Assert.Empty(Departed());
+        Assert.Equal("0.3.0", auto.Ready);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_whose_installation_files_are_held_is_refused_before_the_host_is_asked_to_leave()
+    {
+        await StartAsync();
+        preflight = () => "the Windows Search indexer (pid 9)";
+        Departs(Committed);
+
+        await NowAsync();
+
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, ManageReason.Unavailable), (last.Outcome, last.Code));
+        Assert.Equal($"{UpdateBlockedException.Prefix}the Windows Search indexer (pid 9)", last.Reason);
+        Assert.Empty(Departed());
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_Update_now_a_host_cant_be_asked_to_leave_for_ends_refused_unavailable_and_installs_nothing()
+    {
+        // No handler: the host answers it as an op it doesn't know.
+        await StartAsync();
+
+        await NowAsync();
+
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, ManageReason.Unavailable, Press), (last.Outcome, last.Code, last.Request));
+        Assert.Single(Departed());
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.False(updater.Applied);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_plain_Install_carries_no_code_and_is_never_asked_to_depart()
+    {
+        await StartAsync();
+        Departs(Committed);
+        others = "another profile's host (pid 77) runs from this installation";
+
+        await AskedAsync(UpdateAskKind.Install);
+
+        var state = auto.State;
+        Assert.Equal((UpdateOutcome.Refused, (string?)null, false), (state.Last!.Outcome, state.Last.Code, state.RequestNow));
+        others = null;
+        await AskedAsync(UpdateAskKind.Install, Again);
+        await TwoIdleTicksAsync();
+        Assert.True(updater.Applied);
+        Assert.Empty(Departed());
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Check_asked_for_finds_the_release_without_installing_it_when_automatic_updates_are_off()
@@ -2681,6 +3220,25 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         var report = Reports()[0];
         Assert.Equal((false, AutoUpdater.NotInstalled), (report.State.Installer, report.State.Unavailable));
         Assert.Null(report.Taken);
+        // Nor says it carries Update now: the devices are told old-app.
+        Assert.False(report.CarriesUpdateNow);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task The_app_tells_the_host_it_carries_Update_now_and_carries_one_the_host_hands_it_to_the_departure()
+    {
+        host.On(HostOps.UpdateReport, _ => new { ok = true });
+        Departs(Committed);
+        var ask = new UpdateAsk(Press, UpdateAskKind.Install, Phone, Make.T0, new UpdateNowAsk("0.2.0", null, Make.T0 + UpdateProtocol.NowLife));
+        await StartAsync(FakeHost.StatusOf() with { UpdateAsks = [ask] });
+
+        using var reporter = new UpdateReporter(connection, auto, log.Add);
+
+        await Wait.UntilAsync(() => updater.Applied && Reports().Count >= 1, "the Update now carried out");
+        Assert.All(Reports(), r => Assert.True(r.CarriesUpdateNow));
+        Assert.Equal([Press], Departed());
+        Assert.Single(log, l => l == $"update now: pressed on {Phone}, going over nothing busy");
     }
 
     [Fact]
