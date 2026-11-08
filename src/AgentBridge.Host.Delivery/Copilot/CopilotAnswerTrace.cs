@@ -40,6 +40,8 @@ public sealed partial class CopilotAnswerTrace(TimeProvider time, string request
     public const string ResumeReplaced = "replaced";
     public const string ResumeStale = "stale";
     public const string ResumeUncancelled = "uncancelled";
+    // Stopped before any key went into the field it stopped at: no Esc, the form left as it is.
+    public const string ResumeLeft = "left";
 
     // The Copilot CLI the session started under, as its transcript's first event says.
     public void Cli(string? version) { lock (gate) { cli = version; } }

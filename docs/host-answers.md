@@ -266,7 +266,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     its default typed in, exactly that default. Keys typed into a box add to what is there,
     so a "9" typed at the machine and an answer's "0" would be submitted as "90"; a field
     showing anything else gets no keys (`refused` on a first pass with nothing typed; on a
-    resume nothing is typed, and the form is reset as below). An option list or a Yes/No
+    resume nothing is typed, and the form is left as below, never reset). An option list or a Yes/No
     needs no such check: its keys walk from the top whatever row the pointer was left on,
     and nothing typed stays in it. A checkbox list's ticks are not read (see "What no plan
     can see"). Spaces typed at the machine into an empty box are the one thing this check
@@ -279,7 +279,27 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     form is reset). This holds for a number box as well, although the CLI records one as
     `Number(text)`, which would ignore the spaces and record the same number. Only spaces
     after the words stay unseen (above).
-  * Not resumed within `ResumeWait` (or after three resumes that each stopped again), the form
+  * The input box is drawn one of two ways (`Ud`, `iVn` in Copilot CLI 1.0.106 and 1.0.107):
+    between two rules ("─"), the "❯ " at the rule's first column; or, with the CLI's prompt
+    frame on (`PROMPT_FRAME`), between a row of "▄" and a row of "▀" as wide, no sides, the
+    "❯ " one column in. The frame is on with no setting of the person's at all on the
+    account #1123 was reported from (1.0.107; `COPILOT_PROMPT_FRAME=0` turns it off, `=1`
+    on): the main prompt shows it as "▄"/"▀" rows too. Read only as two rules, an empty
+    framed box was no box, so the field read as already typed into and was refused after the
+    choice before it had gone (#1123). Exactly one such pair is a box: rules and frame edges
+    together, two of either edge, edges of different widths, or a caret not where the frame
+    puts it, are none, and the field gets no keys.
+  * Not resumed within `ResumeWait` (or after three resumes that each stopped again), a form
+    showing the field after its whole ones with no key of the answer in it is left as it is,
+    with nothing pressed, not even Esc (#1123): the keys stopped before that field (refused
+    there, typing nothing), so there is nothing in it to take back, and an Esc would only
+    cancel the whole form, the fields the session took with it; on the owner's machine it did
+    so, and the answer was lost. The answer is `unconfirmed` (`resume=left`), with no `code`,
+    its reason naming what went and saying nothing was cancelled: "Slipgates entered
+    "<field>", ... but typed nothing into "<field>", and cancelled nothing; the question is
+    still open at the machine: finish it there" (the product's name from `Product.Name`).
+    Otherwise (the keys or words of a field went but not its Enter, or its Enter went and the
+    form never moved on) the form
     is reset: one Esc (the form's own `esc cancel`), held to rows that show this very form at
     one of its fields with that hint; a screen showing anything else gets nothing, not even
     the Esc, nor does a field whose hints say `esc clear` (1.0.106: the Esc would only empty
@@ -304,7 +324,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     request=<8> session=<8> cli=<version> fields=<n> shape=<kind[options]+...>
     reads=<n> rereads=<n> steady=yes|no retries=<n> check=<name@row|none> taken=<k>/<n>
     stages=slot:<ms>,typed:<ms>,confirmed:<ms> total=<ms> outcome=<outcome>
-    resume=<-|resumed|held|gone|redone|redone-<outcome>|replaced|stale|uncancelled> resumes=<n>`, the last two
+    resume=<-|resumed|held|gone|redone|redone-<outcome>|replaced|stale|uncancelled|left> resumes=<n>`, the last two
     saying what became of a form left part answered and how many resumes typed into it (a
     form answered afresh that stopped again keeps what became of that, `redone-held` say,
     never plain `redone`). Its
