@@ -65,6 +65,7 @@ public class DisconnectCauseTests
     [InlineData("https://relay.slipgates.com.", false)]
     [InlineData("https://agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io.", false)]
     [InlineData("https://user@relay.bad-duck.com", false)]
+    [InlineData("https://agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io", false)]
     public void The_host_probe_refuses_cleartext_and_production_relays(string url, bool allowProduction)
     {
         Assert.NotNull(HostProbe.CheckRelay(new Uri(url), allowProduction));

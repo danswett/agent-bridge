@@ -32,6 +32,8 @@ public static class HostProbe
         "relay.bad-duck.com",
         "agent-bridge-relay.icyflower-4f71155d.westus2.azurecontainerapps.io",
         "relay.slipgates.com",
+        // The old production stamp is still running as the rollback target (docs/relay-deploy.md).
+        "agent-bridge-relay.agreeablepebble-329880d4.westus2.azurecontainerapps.io",
     ];
 
     public static string? CheckRelay(Uri relay, bool allowProduction)
