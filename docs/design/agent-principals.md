@@ -4047,3 +4047,10 @@ Decisions the reviews of `f3559996` asked to make explicit:
     **Decided: (a).** (b) stays a possible later design, to be reconsidered only if O proves
     unusable after updates.
     Members of a standing coordination group (§5.7 C) pause on the same restart, and resume only with the person's **Resume them** (H1).
+
+## AP5-lite, slice L2: the lite envelope profile and agent signing key (#728, #1350)
+
+A temporary, off-by-default mode for a person's own agents on their own account, with no roster. Library only: nothing sends or receives yet.
+
+- `LiteProfile` (AgentBridge.AgentEnvelope) seals and checks a `session.reply` envelope. It carries all-zero generation and head markers, provenance origins "unknown", `oEligible` false, the sender's account, and a lifetime of at most 120 seconds. `Check` refuses a missing marker, an account or target account that is not the receiver's, any other action, a non-false `oEligible`, an expired or future-issued envelope, a bad signature and a `dataSha256` that does not bind the text, each with its own code. `RequireRoster` refuses the markers, so a lite envelope can never pass the roster path.
+- `AgentSignKey` (AgentBridge.Host) is a per-host P-256 key made only when asked and only with the mode on. It lives in the host's private folder, DPAPI-protected on Windows, is never logged or returned, and a damaged or tampered file is refused rather than replaced. The roster path (#55) replaces it with `hostSign` (V1).
