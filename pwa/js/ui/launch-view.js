@@ -189,6 +189,11 @@ export class LaunchPanel {
   clear() {
     clearTimeout(this.#busyTimer);
     clearTimeout(this.#trustGoneTimer);
+    this.#busyTimer = null;
+    this.#busyFor = null;
+    this.#busyEnded = null;
+    this.#trustGoneTimer = null;
+    this.#trustGoneDue = 0;
     this.#trustGoneAt.clear();
     this.#localLine = null;
     this.#follow.clear();

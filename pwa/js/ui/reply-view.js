@@ -542,8 +542,9 @@ export class ReplyBox {
       drawReceipt(e.status, 'answer-status reply-status', { key: 'reading', text: 'Reading the attachment…', more: null, tone: 'progress', line: true });
       // Its words are drawn, not said (the line isn't live): the live line says it once, as it starts.
       if (!this.#reading) { e.live.textContent = 'Reading the attachment'; }
-    } else if (this.#reading && !entry) {
-      drawReceipt(e.status, 'answer-status reply-status', null);
+    } else if (this.#reading && (!entry || entry.request === this.#ended)) {
+      // Reading is over: its line goes, and an outcome line that had ended stays ended (its room stays).
+      drawReceipt(e.status, 'answer-status reply-status', entry ? { key: 'room', text: '', more: null, tone: 'room', line: false } : null);
     }
     this.#reading = reading;
     // Send is busy (ui.md §9), not the form: the receipt's live region is in it, and a reader may

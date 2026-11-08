@@ -645,6 +645,36 @@ test.describe('outcomes', () => {
     expect(second.fields.why).toBe('it has the JSON I need');
   });
 
+  test('words changed in a form after the host cancelled it are kept when the question is then withdrawn', async ({ page }) => {
+    await openDemo(page);
+    await script(page, FORM_RESET);
+    const q = await ask(page, form());
+    await q.getByRole('radio', { name: 'PostgreSQL' }).check();
+    await q.getByRole('textbox', { name: 'Why' }).fill('it has the JSON I need');
+    await q.getByRole('button', { name: 'Send answer' }).click();
+    await expect(q.locator('.answer-status')).toHaveText(NOT_DELIVERED);
+    await q.getByRole('textbox', { name: 'Why' }).fill('it has the JSON I need, and better tooling');
+    await withdraw(page);
+    await expect(card(page, CODEX).locator('.question-changed textarea')).toHaveValue(/better tooling/);
+  });
+
+  test('a form the host cancelled keeps its Not delivered item, not a "changed" note, when the question is redrawn and then withdrawn', async ({ page }) => {
+    await openDemo(page);
+    await script(page, FORM_RESET);
+    const q = await ask(page, form());
+    await q.getByRole('radio', { name: 'PostgreSQL' }).check();
+    await q.getByRole('textbox', { name: 'Why' }).fill('it has the JSON I need');
+    await q.getByRole('button', { name: 'Send answer' }).click();
+    await expect(q.locator('.answer-status')).toHaveText(NOT_DELIVERED);
+    // The same question drawn again (reworded) builds the panel again, with what was typed.
+    await ask(page, { ...form(), message: 'Which **database**, and why? (reworded)' });
+    await expect(q.locator('.question-message')).toContainText('reworded');
+    await withdraw(page);
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText(NOT_DELIVERED);
+    await expect(card(page, CODEX).locator('.answer-kept textarea')).toHaveValue('Database: PostgreSQL\nWhy: it has the JSON I need');
+    await expect(card(page, CODEX).locator('.question-changed')).toHaveCount(0);
+  });
+
   test('a form the host cancelled, its question gone from the list, keeps what the person typed to read and copy, and is not "No longer waiting"', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
     await openDemo(page);

@@ -1463,6 +1463,7 @@ export class SessionCard {
         machineName: this.machineName,
         answering: { service: ctx.service, hostId: ctx.hostId, sessionId: s.id },
         state: sameQuestion ? old.state : null,
+        sentDraft: sameQuestion ? old.sentDraft : null,
         asker,
         onSend: (typed) => this.#sent(typed),
         listed: () => this.#s?.question?.id === q.id,
@@ -1715,12 +1716,14 @@ export class SessionCard {
         const closed = d?.tone === 'closed';
         receipt.closed = closed;
         if (closed && !resolved) {
-          // Its line is under the question it is about, inside it.
+          // Its line is under the question it is about, inside it, and what was kept with it.
           resolved = renderResolved(question, { asker });
           element.prepend(resolved);
           resolved.append(line);
+          if (kept) { line.after(kept.element); }
         } else if (!closed && resolved) {
           element.prepend(line);
+          if (kept) { line.after(kept.element); }
           resolved.remove();
           resolved = null;
         }

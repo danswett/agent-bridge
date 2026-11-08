@@ -310,6 +310,8 @@ export class QuestionPanel {
   // A quiet hold while the app catches up after a return (hold.js), or null.
   #quiet = null;
   #receipt = null;
+  // The text the form held when its answer last went (unsentText).
+  #sentDraft = null;
 
   // answering: { service, hostId, sessionId }. state: what a previous panel for the same
   // question held, so a re-render loses nothing. escaped: for an approval the host escaped anything
@@ -319,8 +321,9 @@ export class QuestionPanel {
   // onSend(typed): called as an answer goes, with the text the form held, so the card can let go of
   // text it kept for the person once that text is sent. listed(): whether the session still lists
   // this question, for what is said of its answer once the panel is gone.
-  constructor(q, { machineName, answering, state = null, asker = null, escaped = null, onSend = null, listed = () => false }) {
+  constructor(q, { machineName, answering, state = null, asker = null, escaped = null, onSend = null, listed = () => false, sentDraft = null }) {
     this.q = q;
+    this.#sentDraft = sentDraft;
     this.asker = asker;
     this.onSend = onSend;
     this.machineName = machineName;
@@ -377,15 +380,22 @@ export class QuestionPanel {
 
   get entry() { const { service, hostId, sessionId } = this.answering; return service.get(hostId, sessionId, this.q.id); }
 
+  // The text the form held when its answer last went, carried to a panel drawn again for the same question.
+  get sentDraft() { return this.#sentDraft; }
+
   // When the check on the control that sent its delivered answer ends, or null.
   get checkUntil() { return this.#receipt.checkUntil; }
 
   // Text the person typed that has not gone to the machine, which would be lost if the
-  // panel went away silently.
+  // panel went away silently. After a stale answer from a cancelled form (formReset) the form takes
+  // an answer again, so what was changed since that answer went is unsent too; what went is kept
+  // by the card's receipt.
   unsentText() {
     const e = this.entry;
+    const reset = e?.state === 'done' && e.outcome === 'stale' && e.detail?.code === 'formReset';
     const unsent = !e || e.state === 'failed' || (e.state === 'done' && ['busy', 'refused'].includes(e.outcome));
-    return unsent ? draftText(this.q, this.state) : '';
+    const text = unsent || reset ? draftText(this.q, this.state) : '';
+    return reset && text === this.#sentDraft ? '' : text;
   }
 
   #build() {
@@ -701,6 +711,7 @@ export class QuestionPanel {
     this.#clearError();
     tapped?.setAttribute('aria-pressed', 'true');
     const typed = draftText(q, this.state);
+    this.#sentDraft = typed;
     service.submit({ hostId, sessionId, questionId: q.id, answer });
     this.onSend?.(typed);
   }
