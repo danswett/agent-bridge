@@ -1,8 +1,9 @@
 # The Beta acceptance run (#1185, #736): the real published Beta installer on a clean Windows
 # runner, as a person would install it. One architecture per invocation; the workflow runs both.
 # Steps are named so a failure says which one broke. This slice does steps 1, 2 and 6
-# (download and verify, install and first run, uninstall and leftovers); steps 3 to 5 and the
-# feedback step are reported NOT RUN, never PASS.
+# (download and verify, install and first run, the simulated agent, uninstall and leftovers);
+# pairing and driving from the PWA are NOT RUN until built and until the test account's secrets
+# exist, and the feedback step is NOT RUN. None is ever reported PASS unrun.
 #
 #   pwsh quality/lab/beta-acceptance.ps1 -Arch x64 -Out out/accept
 #Requires -Version 7
@@ -23,7 +24,7 @@ $steps = [ordered]@{}
 foreach ($n in '1-download', '2-install-first-run', '3-simulated-agent', '4-pair', '5-drive-from-pwa', '5b-feedback', '6-uninstall') {
     $steps[$n] = [ordered]@{ result = 'NOT RUN'; detail = '' }
 }
-$state = @{ Version = $null; Setup = $null; Root = $null }
+$state = @{ Version = $null; Setup = $null; Root = $null; Sim = $null }
 
 function Step([string]$name, [scriptblock]$body) {
     try {
@@ -120,6 +121,30 @@ Step '2-install-first-run' {
     }
     catch { Save-Screenshot 'first-run-failed.png'; throw }
 }
+
+Step '3-simulated-agent' {
+    if (-not $state.Root) { throw 'step 2 did not install the app' }
+    $hook = Get-ChildItem (Join-Path $state.Root 'current') -Filter 'agent-bridge-host-hook.exe' -Recurse | Select-Object -First 1
+    if (-not $hook) { throw 'the installed app has no agent-bridge-host-hook.exe' }
+    $home3 = Join-Path $Out 'copilot-home'
+    $sim = & (Join-Path $PSScriptRoot 'agent-sim.ps1') -Hook $hook.FullName -CopilotHome $home3 -Question 'Beta acceptance: proceed?'
+    $bad = @($sim.Hooks | Where-Object Exit -ne 0)
+    if ($bad) { throw "the hook exited non-zero for: $($bad.Hook -join ', ')" }
+    $ask = $sim.Hooks | Where-Object Hook -eq 'ask_user'
+    if ($ask.Output -notmatch 'allow') { throw "the hook's ask_user reply was '$($ask.Output)', not an allow" }
+    if (-not (Select-String -Path $sim.Transcript -Pattern 'Beta acceptance: proceed\?' -Quiet)) { throw 'the transcript lacks the question' }
+    $state.Sim = $sim
+    $steps['3-simulated-agent'].detail = "session $($sim.SessionId): transcript written, hook replies as contracted. The host reading it is checked in step 5."
+}
+
+# Steps 4 and 5 need the throwaway GitHub test account (#1185): its secrets come from the
+# beta-acceptance environment. With any missing they stay NOT RUN, never PASS. The login and PWA
+# driving are not built in this slice, so they stay NOT RUN either way, and say which.
+. (Join-Path $PSScriptRoot 'accept-secrets.ps1')
+Protect-AcceptSecrets
+$missing = Get-MissingAcceptSecrets
+$why = if ($missing) { "missing secrets: $($missing -join ', ')" } else { 'the device-flow login and PWA driver are not built yet' }
+foreach ($n in '4-pair', '5-drive-from-pwa') { $steps[$n].detail = $why }
 
 Step '6-uninstall' {
     if (-not (Test-Path $installDir)) { throw 'nothing was installed to uninstall' }

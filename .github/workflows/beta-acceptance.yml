@@ -18,6 +18,8 @@ jobs:
     name: accept (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    # The throwaway GitHub test account's secrets live only in this environment (#1185).
+    environment: beta-acceptance
     permissions:
       contents: read
       issues: write
@@ -35,6 +37,9 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          ACCEPT_GH_USER: ${{ secrets.ACCEPT_GH_USER }}
+          ACCEPT_GH_PASSWORD: ${{ secrets.ACCEPT_GH_PASSWORD }}
+          ACCEPT_GH_TOTP_SECRET: ${{ secrets.ACCEPT_GH_TOTP_SECRET }}
         run: ./quality/lab/beta-acceptance.ps1 -Arch ${{ matrix.arch }} -Out "$env:RUNNER_TEMP/accept" -Repo ${{ github.repository }}
       - name: Upload logs and screenshots
         if: always()
