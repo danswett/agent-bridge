@@ -264,6 +264,25 @@ test.describe('outcomes, as the card\'s buttons have them', () => {
     await expect(card(page, LAND).locator('.question')).toHaveAttribute('data-answer', 'stale');
   });
 
+  test('a stale answer whose question has gone is the closed line for the linger: neutral, never amber or "Already answered"', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'stale');
+    const e = await ask(page, LAND, permission());
+    await e.getByRole('button', { name: /^Approve once/ }).click();
+    await expect(e.locator('.needs-status')).toHaveText('Already answered or gone: the session is no longer asking this.');
+    // The session stops asking: the entry stays 5 s, its line now the closed one.
+    await page.evaluate(({ id, t }) => { const d = window.agentBridgeDemo; d.upsert({ ...d.host.get(id), status: 'working', statusSince: t, updatedAt: t, question: null }); }, { id: LAND, t: later() });
+    await expect(e).toHaveAttribute('data-lingering', 'true');
+    const status = e.locator('.needs-status');
+    await expect(status).toHaveText('No longer waiting');
+    await expect(status).toHaveClass(/\bclosed\b/);
+    await expect(status).not.toHaveClass(/\b(warn|bad)\b/);
+    await page.waitForTimeout(3000);
+    await expect(entryFor(page, LAND)).toHaveCount(1);
+    await expect(status).toHaveText('No longer waiting');
+    await expect(entryFor(page, LAND)).toHaveCount(0, { timeout: 5000 });
+  });
+
   test('refused shows the machine\'s reason, and either button can be pressed again, as a new request', async ({ page }) => {
     await openDemo(page);
     await script(page, { outcome: 'refused', reason: 'the session is running elevated' });

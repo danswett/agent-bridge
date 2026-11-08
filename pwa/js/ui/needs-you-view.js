@@ -6,7 +6,7 @@ import { h } from './dom.js';
 import { glyph } from './glyph.js';
 import { needsYou, AppBadge } from '../needs-you.js';
 import { tapState, prepareAnswer } from '../answers.js';
-import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer } from './question-view.js';
+import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer, describeClosed } from './question-view.js';
 import { ReceiptClock, ReceiptTiming, LINGER_READ_MS, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import { duration, localTime } from './time.js';
 import { holdOf, UPDATING } from './hold.js';
@@ -144,7 +144,10 @@ export class NeedsYouLane {
         view.service = ctx.service;
         // The lane's line keeps the receipt's quiet window, dwell and stalls, as the card's does.
         view.receipt = new ReceiptClock({
-          describe: (entry, { stalled }) => describeAnswer(entry, this.machine(view.entry.hostId).name, { question: view.entry.question, stalled }),
+          // Amber while its question is listed; once the question has gone (lingering) the line is the
+          // closed one, neutral: "No longer waiting", never amber (ui.md §7).
+          describe: (entry, { stalled }) => (view.lingering ? describeClosed : describeAnswer)(entry, this.machine(view.entry.hostId).name, { question: view.entry.question, stalled }),
+          followDescribe: (entry, { stalled }) => describeClosed(entry, this.machine(view.entry.hostId).name, { question: view.entry.question, stalled }),
           draw: (d) => {
             drawReceipt(els.status, 'needs-status', d);
             // From the tap, its line is there (empty unless something's wrong), so the entry grows
@@ -264,6 +267,8 @@ export class NeedsYouLane {
     view.el.dataset.lingering = 'true';
     view.els.approve.disabled = view.els.deny.disabled = true;
     view.els.resend.hidden = true;
+    // Its question has gone: the line is now the closed one.
+    view.receipt.show(current);
     return true;
   }
 
