@@ -50,7 +50,7 @@ function Save-Screenshot([string]$file) {
 }
 
 # The app's own window and what UI Automation shows of its Get started rows. The rows are text
-# elements named "<step> · <state> · <hint>"; the section's own panel has no automation peer, so
+# elements named "<state>, step N of M, <title>. <hint>"; the section's own panel has no automation peer, so
 # they are found by the heading and by that shape, not by the panel's AutomationId.
 function Read-GetStarted([Diagnostics.Process]$app) {
     Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
@@ -65,7 +65,7 @@ function Read-GetStarted([Diagnostics.Process]$app) {
             $all = $root.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
             $last = @($all | ForEach-Object { "$($_.Current.ControlType.ProgrammaticName) | $($_.Current.AutomationId) | $($_.Current.Name)" })
             $names = @($all | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text } | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
-            $rows = @($names | Where-Object { $_ -match '^.+ · .+ · .+' })
+            $rows = @($names | Where-Object { $_ -match '^[^,]+, step \d+ of \d+, ' })
             if (($names -contains 'Get started') -and $rows.Count) { return $rows }
         }
         Start-Sleep -Milliseconds 500
