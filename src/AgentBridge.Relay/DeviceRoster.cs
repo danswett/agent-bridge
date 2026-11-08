@@ -23,7 +23,12 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     public const int MaxStoredBytes = 224 * 1024;
     const int Retries = 5;
 
-    readonly ConcurrentDictionary<string, SemaphoreSlim> locks = new();
+    // Appends waiting on one account's lock, beyond the one running, are refused rather than queued.
+    public const int MaxWaiters = 4;
+
+    sealed class Gate { public readonly SemaphoreSlim Lock = new(1, 1); public int Waiting; }
+
+    readonly ConcurrentDictionary<string, Gate> locks = new();
     readonly byte[] nameKey = DeriveKey(o, store);
 
     public bool Enabled => store is not null;
@@ -75,7 +80,19 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     }
 
     static Stored? Decode(StoredRoster? read) =>
-        read is null ? null : JsonSerializer.Deserialize<Stored>(read.Body, Json);
+        read is null ? null : JsonSerializer.Deserialize<Stored>(read.Body, Json) switch
+        {
+            { Entries: not null, Generation: not null } s => s,
+            _ => throw new InvalidOperationException("stored device roster is malformed"),
+        };
+
+    // The reply with the property names docs/protocol/devices.md documents.
+    public static object AppendReply(long id, IReadOnlyList<Result> results) => new
+    {
+        t = "roster-append-result",
+        id,
+        results = results.Select(r => new { hash = r.Hash, verdict = r.Verdict, reason = r.Reason }).ToList(),
+    };
 
     static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -84,8 +101,14 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
     public async Task<IReadOnlyList<Result>?> AppendAsync(string accountId, IReadOnlyList<string> wrappers)
     {
         if (store is null) { return null; }
-        var gate = locks.GetOrAdd(accountId, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync();
+        var gate = locks.GetOrAdd(accountId, _ => new Gate());
+        if (Interlocked.Increment(ref gate.Waiting) > MaxWaiters + 1)
+        {
+            Interlocked.Decrement(ref gate.Waiting);
+            metrics.Roster("devices-append", "busy");
+            return null;
+        }
+        await gate.Lock.WaitAsync();
         try
         {
             for (var attempt = 0; attempt < Retries; attempt++)
@@ -100,14 +123,13 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
                     log.LogWarning(e, "device roster read failed");
                     return null;
                 }
-                var stored = Decode(read);
                 IReadOnlyList<Result> results;
                 Stored? next;
-                try { (results, next) = Apply(accountId, stored, wrappers); }
-                catch (InvalidOperationException e)
+                try { (results, next) = Apply(accountId, Decode(read), wrappers); }
+                catch (Exception e)
                 {
                     metrics.Roster("devices-append", "corrupt");
-                    log.LogError(e, "device roster failed to reconstruct");
+                    log.LogError(e, "device roster failed to decode or reconstruct");
                     return null;
                 }
                 if (next is null)
@@ -140,7 +162,11 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
             metrics.Roster("devices-append", "conflict");
             return null;
         }
-        finally { gate.Release(); }
+        finally
+        {
+            gate.Lock.Release();
+            Interlocked.Decrement(ref gate.Waiting);
+        }
     }
 
     // The stored log with the new entries offered to it. next is null when nothing is to be kept.
@@ -163,6 +189,15 @@ public sealed class DeviceRoster(RelayOptions o, RelayMetrics metrics, ILogger<D
         }
         if (parsed.Count == 0) { return (results, null); }
 
+        // Everything offered is already kept: nothing to verify, so skip the replay.
+        if (stored is not null && parsed.Count == wrappers.Count)
+        {
+            var have = new HashSet<string>(stored.Entries);
+            if (parsed.All(p => have.Contains(p.Entry.Canonical())))
+            {
+                return (parsed.Select(p => new Result(Codec.Base64Url(p.Entry.Hash), "duplicate", null)).ToList(), null);
+            }
+        }
         var generation = stored?.Generation;
         if (generation is null)
         {

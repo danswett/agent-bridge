@@ -56,9 +56,10 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
   parent: account
   name: 'default'
   properties: {
-    // A forgotten machine is gone when its roster is rewritten; nothing keeps an old copy.
-    deleteRetentionPolicy: { enabled: false }
-    containerDeleteRetentionPolicy: { enabled: false }
+    // The signed device roster lives in a container of its own, but under this blob service, so
+    // soft delete keeps a deleted or overwritten blob (the trust log included) for 14 days.
+    deleteRetentionPolicy: { enabled: true, days: 14 }
+    containerDeleteRetentionPolicy: { enabled: true, days: 14 }
     isVersioningEnabled: false
     changeFeed: { enabled: false }
     // Only the relay reads and writes here; no browser does.

@@ -11,7 +11,7 @@ namespace AgentBridge.Transport.Tests;
 // entries that are valid against its own copy, and never decides who may connect.
 public class DeviceRosterTests
 {
-    static DeviceRoster Make(World w, MemoryRosterStore? store = null)
+    static DeviceRoster Make(World w, IRosterStore? store = null)
     {
         store ??= new MemoryRosterStore();
         var time = new FakeTimeProvider(DateTimeOffset.UnixEpoch + w.Now);
@@ -140,6 +140,59 @@ public class DeviceRosterTests
         public Task<StoredRoster?> ReadAsync(string name, CancellationToken ct) => Task.FromResult<StoredRoster?>(null);
         public Task<string?> WriteAsync(string name, byte[] body, string? etag, CancellationToken ct) => Task.FromResult<string?>(null);
         public Task<bool> DeleteAsync(string name, string etag, CancellationToken ct) => Task.FromResult(false);
+    }
+
+    [Fact]
+    public async Task A_malformed_stored_log_reads_and_appends_as_unavailable_without_throwing()
+    {
+        var w = Scenario();
+        foreach (var bad in new[] { "not json", "{\"v\":1,\"generation\":\"x\",\"entries\":null}", "null" })
+        {
+            var store = new MemoryRosterStore();
+            var roster = Make(w, store);
+            await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G")]);
+            var name = store.Names.Single();
+            var etag = (await store.ReadAsync(name, default))!.ETag;
+            await store.WriteAsync(name, System.Text.Encoding.UTF8.GetBytes(bad), etag, default);
+            Assert.Null(await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G")]));
+            Assert.Null(await roster.GetAsync(RosterFixture.Account));
+        }
+    }
+
+    [Fact]
+    public async Task Appends_waiting_on_one_account_are_capped()
+    {
+        var w = Scenario();
+        var gate = new GatedStore();
+        var roster = Make(w, gate);
+        var first = roster.AppendAsync(RosterFixture.Account, [Wire(w, "G")]);
+        await gate.Reading.Task;
+        var queued = Enumerable.Range(0, DeviceRoster.MaxWaiters).Select(_ => roster.AppendAsync(RosterFixture.Account, [Wire(w, "G")])).ToList();
+        Assert.Null(await roster.AppendAsync(RosterFixture.Account, [Wire(w, "G")]));
+        gate.Release.SetResult();
+        Assert.NotNull(await first);
+        foreach (var q in queued) { Assert.NotNull(await q); }
+    }
+
+    [Fact]
+    public void An_append_reply_uses_the_documented_lowercase_names()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(DeviceRoster.AppendReply(7, [new DeviceRoster.Result("h", "accepted", null)]));
+        Assert.Equal("{\"t\":\"roster-append-result\",\"id\":7,\"results\":[{\"hash\":\"h\",\"verdict\":\"accepted\",\"reason\":null}]}", json);
+    }
+
+    sealed class GatedStore : IRosterStore
+    {
+        readonly MemoryRosterStore inner = new();
+        public readonly TaskCompletionSource Reading = new(), Release = new();
+        public async Task<StoredRoster?> ReadAsync(string name, CancellationToken ct)
+        {
+            Reading.TrySetResult();
+            await Release.Task;
+            return await inner.ReadAsync(name, ct);
+        }
+        public Task<string?> WriteAsync(string name, byte[] body, string? etag, CancellationToken ct) => inner.WriteAsync(name, body, etag, ct);
+        public Task<bool> DeleteAsync(string name, string etag, CancellationToken ct) => inner.DeleteAsync(name, etag, ct);
     }
 
     [Fact]

@@ -78,6 +78,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         public long FramesIn, FramesOut, BytesIn, BytesOut;
         public long WindowStart = Environment.TickCount64;
         public int WindowFrames;
+        public int RosterInFlight;
 
         public async Task SendAsync(byte[] data, WebSocketMessageType type)
         {
@@ -287,7 +288,26 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 {
                     var c = conn;
                     var message = m.Clone();
-                    _ = Task.Run(async () => await c.SendJsonAsync(await RosterMessageAsync(c, message)));
+                    var replyType = rt.GetString() == "roster-get" ? "roster" : "roster-append-result";
+                    var rid = m.TryGetProperty("id", out var ridp) && ridp.TryGetInt64(out var rn) ? rn : 0;
+                    if (Interlocked.Increment(ref c.RosterInFlight) > MaxRosterInFlight)
+                    {
+                        Interlocked.Decrement(ref c.RosterInFlight);
+                        _ = Task.Run(async () => await c.SendJsonAsync(new { t = replyType, id = rid, error = "unavailable" }));
+                        continue;
+                    }
+                    _ = Task.Run(async () =>
+                    {
+                        object reply;
+                        try { reply = await RosterMessageAsync(c, message); }
+                        catch (Exception e)
+                        {
+                            log.LogWarning(e, "roster message failed");
+                            reply = new { t = replyType, id = rid, error = "unavailable" };
+                        }
+                        finally { Interlocked.Decrement(ref c.RosterInFlight); }
+                        try { await c.SendJsonAsync(reply); } catch (Exception) { }
+                    });
                 }
                 else if (m.TryGetProperty("t", out var ft) && ft.GetString() == "forget")
                 {
@@ -372,8 +392,11 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         var results = await deviceRoster.AppendAsync(c.Account.Id, [.. arr.EnumerateArray().Select(e => e.GetString()!)]);
         return results is null
             ? new { t = "roster-append-result", id, error = "unavailable" }
-            : (object)new { t = "roster-append-result", id, results };
+            : DeviceRoster.AppendReply(id, results);
     }
+
+    // Roster requests one connection may have running at once; more get "unavailable" at once.
+    const int MaxRosterInFlight = 2;
 
     bool WithinRate(Connection c)
     {
