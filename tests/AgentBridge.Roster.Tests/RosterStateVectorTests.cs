@@ -9,6 +9,8 @@ using static RosterFixture;
 public sealed class RosterStateVectorTests
 {
     // Offer an entry at a running time, move the clock and record who is served, or adopt a head.
+    static readonly HashSet<string> CommandReasons = [nameof(Invalid.Reset), nameof(Invalid.Action), nameof(Invalid.Machine), nameof(Invalid.Probation), nameof(Invalid.Lifetime), nameof(Invalid.Future), nameof(Invalid.Expired), nameof(Invalid.Floor), nameof(Invalid.Nonce), nameof(Invalid.Heads), nameof(Invalid.Regress)];
+
     sealed record Step(string? Offer = null, double? Hours = null, string? Adopt = null);
 
     sealed record Scenario(string Name, string About, Func<World> Build, Func<World, Step[]>? Steps = null, int? AddCap = null);
@@ -287,8 +289,9 @@ public sealed class RosterStateVectorTests
         Assert.Equal(["A", "C", "G"], probation[^1]!["serving"]!.AsArray().Select(n => n!.GetValue<string>()));
 
         // Every refusal reason of the acceptance rule, each shown by a step: one added to the verifier needs a scenario and a place here.
+        // The person commands' and vetoes' reasons (R1c) have their own vectors, roster-commands.json.
         string[] reasons = ["parent", "account", "generation", "genesis", "seq", "signer", "signature", "presence", "readded", "target", "seniority", "cosign", "keep", "confirm", "merge", "active-cap", "cap", "budget", "evidence"];
-        Assert.Equal(reasons.Order(StringComparer.Ordinal), typeof(Invalid).GetFields().Select(f => (string)f.GetRawConstantValue()!).Order(StringComparer.Ordinal));
+        Assert.Equal(reasons.Order(StringComparer.Ordinal), typeof(Invalid).GetFields().Where(f => !CommandReasons.Contains(f.Name)).Select(f => (string)f.GetRawConstantValue()!).Order(StringComparer.Ordinal));
         var shown = byName.Values.SelectMany(s => s["steps"]!.AsArray()).Select(s => s!["reason"]?.GetValue<string>()).Where(r => r is not null).Distinct().Order(StringComparer.Ordinal);
         Assert.Equal(reasons.Order(StringComparer.Ordinal), shown);
         foreach (var name in byName.Keys.Where(n => n.StartsWith("refused-")))

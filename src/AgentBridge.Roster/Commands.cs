@@ -298,10 +298,10 @@ public sealed partial class PersonCommand
         return null;
     }
 
-    [GeneratedRegex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")]
+    [GeneratedRegex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\z")]
     private static partial Regex Uuid();
 
-    [GeneratedRegex("^[A-Za-z0-9._:-]+$")]
+    [GeneratedRegex("^[A-Za-z0-9._:-]+\\z")]
     private static partial Regex QuestionId();
 }
 
