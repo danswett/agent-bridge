@@ -320,4 +320,24 @@ public sealed class SessionHistoryTests
         Assert.Single(host.Sent(HistoryProtocol.Op));
         Assert.Equal(Enumerable.Range(1, 5), Numbers(history));
     }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_stale_cursor_whose_restart_pages_keep_leading_back_over_held_turns_stops_after_thirty_pages()
+    {
+        await using var host = Serving(45);
+        var history = await OpenAsync(host);
+        await history.LoadNewestAsync();
+        host.On(HistoryProtocol.Op, d =>
+        {
+            if (d.TryGetProperty("before", out var b) && b.GetString() == "b25") { return HistoryResult.StaleCursor; }
+            return new HistoryResult { Turns = [Turn(26)], Before = "x" };
+        });
+        var asked = host.Sent(HistoryProtocol.Op).Count;
+
+        await history.LoadOlderAsync();
+
+        Assert.Equal(1 + 30, host.Sent(HistoryProtocol.Op).Count - asked);
+        Assert.Equal(HistoryLoad.Idle, history.State);
+    }
 }
