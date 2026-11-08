@@ -162,6 +162,10 @@ public interface IFleetLink : IAsyncDisposable
     // what was read (EscapedText.Shown) and the answer's request, as of when its button was pressed.
     // Null when it cannot be signed now.
     SignedCommand? SignEscapedApproval(byte[]? machinePublic, string machine, string session, string question, string shown, string request, DateTimeOffset pressed) => null;
+    // An Update now press (#1159), signed as for SignTrust, for that machine alone: the release
+    // shown, and what the confirmation showed (accept, null on a quiet machine). Null when it cannot
+    // be signed now. None in a stand-in.
+    SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request) => null;
     // This app's own device id on the relay, which a machine approves to answer folder-trust
     // questions from; and the people's devices (the PWA, this app elsewhere) the relay lists now.
     string? DeviceId => null;
@@ -255,6 +259,7 @@ public sealed class Fleet : IAsyncDisposable
     public Task<string?> ForgetAsync(string machineId, CancellationToken ct) => link.ForgetAsync(machineId, ct);
     public SignedCommand? SignTransfer(TransferSource from, string session, string to) => link.SignTransfer(from, session, to);
     public SignedCommand? SignTrust(byte[]? machinePublic, string machine, string question, string choice, string request) => link.SignTrust(machinePublic, machine, question, choice, request);
+    public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request) => link.SignUpdateNow(machinePublic, machine, release, accept, request);
     public string? DeviceId => link.DeviceId;
     public IReadOnlyList<FleetHost> People => link.People;
 
@@ -752,6 +757,11 @@ public sealed class RelayFleetLink : IFleetLink
     public SignedCommand? SignEscapedApproval(byte[]? machinePublic, string machine, string session, string question, string shown, string request, DateTimeOffset pressed) =>
         machinePublic is { } k && Wire.DeviceId(k) == machine
             ? Transfers.SignCommand(key, k, EscapedApproval.Action, session, machine, pressed, request, question, shown)
+            : null;
+
+    public SignedCommand? SignUpdateNow(byte[]? machinePublic, string machine, string release, UpdateBusy? accept, string request) =>
+        machinePublic is { } k && Wire.DeviceId(k) == machine
+            ? Transfers.SignUpdateNow(key, k, release, accept, DateTimeOffset.UtcNow, request)
             : null;
 
     public async ValueTask DisposeAsync()
