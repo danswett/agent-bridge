@@ -1,3 +1,4 @@
+using AgentBridge.Local;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
@@ -27,12 +28,14 @@ public sealed record SetupStep(string Id, string Title, SetupStepState State, st
 // is never marked Done.
 public static class SetupGuide
 {
-    public static IReadOnlyList<SetupStep> Steps(bool hostRunning, IReadOnlyList<AgentReadinessRow> agents, bool signedIn)
+    public static IReadOnlyList<SetupStep> Steps(bool hostRunning, IReadOnlyList<AgentReadinessRow> agents, bool signedIn, IReadOnlyList<AgentVerificationReport>? verifications = null)
     {
         var installed = agents.Where(a => a.IsInstalled).ToList();
         var toSetUp = installed.Where(a => a.ShowSetUp || a.Offered).ToList();
         var connected = installed.Any(a => a.Setup == HookSetup.Completed || a.HooksWorking);
-        var tested = installed.Any(a => a.HooksWorking);
+        // A passed new-session test (#715) is the host's own evidence that a hook arrived from a session it opened.
+        var verified = verifications?.Any(v => v.State == VerificationState.Verified && installed.Any(a => a.Id == v.Agent)) == true;
+        var tested = installed.Any(a => a.HooksWorking) || verified;
 
         var steps = new List<(string Id, string Title, bool Done, string Todo, string Done_)>
         {
@@ -57,7 +60,7 @@ public static class SetupGuide
         result.Add(new("cli-signin", "Sign in to the CLI itself", SetupStepState.Yours,
             "Open the CLI once in a terminal and sign in if it asks. Settings can't see this yet."));
         result.Add(tested
-            ? new("session", "Start a new session", SetupStepState.Done, "A hook arrived from a session on this machine")
+            ? new("session", "Start a new session", SetupStepState.Done, verified ? "A test session on this machine sent its hook" : "A hook arrived from a session on this machine")
             : new("session", "Start a new session", nextTaken ? SetupStepState.Waiting : SetupStepState.Next,
                 "Restart the bridge if Settings asks, then start a session in the CLI; its first hook shows here as working."));
         result.Add(new("account", $"Sign in to {Product.Name} for your phone", signedIn ? SetupStepState.Done : SetupStepState.Optional,

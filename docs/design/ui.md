@@ -2065,7 +2065,7 @@ above the agent rows (§6.9). It reads the same readiness as the rows, names the
 adds no host operation. "Sign in to the CLI itself" is always **Yours to check**, because the host
 cannot verify it yet (#691). The list hides once every step is Done, Yours to check or Optional. Each
 step is read to a screen reader with its state and position first, for example "Next, step 3 of 6,
-Connect its hooks". The stepper below replaces it.
+Connect its hooks". The *Start a new session* step is also Done once the host's own new-session test of an installed agent has passed (slice 3, #715). The stepper below replaces it.
 
 Settings with a guide. Six steps, in a stepper that **replaces Settings' own pane** while setup
 runs; the app rail stays, with Settings selected, so Sessions and Machines are one click away
