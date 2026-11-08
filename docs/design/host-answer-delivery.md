@@ -382,6 +382,14 @@ The counts are:
 
 The canary (section 6) and the soak tests (section 7) report the same numbers.
 
+**What the fleet view can and cannot show.** The automatic events report failed attempts only, and
+section 3.11.3 deduplicates and caps them, so they carry no count of sends. The fleet view therefore
+shows failure counts and refusal keys ranked against each other, by agent and CLI version, and never
+a fleet success rate or delivery-time percentile. Rates and timings come only from the machine's own
+counts, the canary, the soak runs and the owner's machines. Fleet-wide rates would need a separate,
+privacy-reviewed daily total of sends and coarse timing buckets; that is not part of this design and
+needs its own Compliance review before it is proposed.
+
 ### 3.9 (h) Privacy and security review
 
 * **Never logged:** answer words, reply words, question text, option labels, command text, file
