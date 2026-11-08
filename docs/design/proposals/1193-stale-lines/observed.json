@@ -1,0 +1,80 @@
+{
+  "a1-answer-stale": {
+    "after": "question withdrawn, 7 s, no new turn",
+    "line": "Main agent asksWhich database should the migration target?Your answerDatabaserequiredChoose onePostgreSQL (Recommended)SQLiteNeitherSend answerTry againAlready answered or gone: the session is no longer asking this.Answer: Already answered or gone: the session is no longer asking this.",
+    "questionStillAsked": true
+  },
+  "a2-answer-stale-receipt": {
+    "after": "result came after a new question was drawn, 7 s",
+    "line": "Your answer: Already answered or gone: the session is no longer asking this.Answer: Already answered or gone: the session is no longer asking this.Main agent asksRun the tests now?Your answerokYes or noYesNoSend answerTry again",
+    "receiptCount": 1
+  },
+  "a3-answer-refused-gone": {
+    "after": "question withdrawn, 7 s",
+    "line": "Your answer: The machine refused this answer: the session is running elevated."
+  },
+  "a4-answer-busy-gone": {
+    "after": "question withdrawn, 7 s",
+    "line": "Your answer: Another answer to this session is being delivered. Try again in a moment."
+  },
+  "a5-answer-unconfirmed": {
+    "after": "host took the question away, 7 s",
+    "line": "Main agent asksWhich database should the migration target?Your answerDatabaserequiredChoose onePostgreSQL (Recommended)SQLiteNeitherSend answerTry againSent, but not confirmed. Check the conversation. (the session stopped answering)Answer: Sent, but not confirmed. Check the conversation. (the session stopped answering)"
+  },
+  "a6-answer-failed-gone": {
+    "after": "question withdrawn, 7 s",
+    "line": "Main agent asksWhich database should the migration target?Your answerDatabaserequiredChoose onePostgreSQL (Recommended)SQLiteNeitherSend answerTry againCouldn't send it: the host could not reach the session.",
+    "tryAgainOffered": true
+  },
+  "a7-question-changed": {
+    "after": "a new question has been drawn, 7 s",
+    "line": "The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.DismissMain agent asksA different question?Your answerokYes or noYesNoSend answerTry again"
+  },
+  "a8-answer-delivered": {
+    "after": "delivered, 7 s",
+    "line": "You answered · PostgreSQL (Recommended)"
+  },
+  "l1-launch-busy": {
+    "after": "6 s, settings untouched",
+    "line": "Not launched: a session this machine launched is waiting at its folder trust prompt; answer it at the machine. Try again in a moment."
+  },
+  "l2-launch-refused": {
+    "after": "6 s",
+    "line": "Not launched: agent-ha-bridge is running for this user, so this bridge leaves launching to it."
+  },
+  "l3-launch-unconfirmed": {
+    "after": "6 s",
+    "line": "Launched in a new worktree, but not confirmed: the session started, but it is asking whether to trust its folder; answer that at the machine."
+  },
+  "l4-trust-gone": {
+    "after": "6 s",
+    "line": "Codex on Demo machine is asking whether to trust a folderFolderC:\\Users\\demo\\repos\\agent-bridgeTrust this folder? Codex can read, edit, and run files here.Demo machine no longer lists this question as waiting.Not answered: that question is no longer waiting: it was answered, or the agent closed."
+  },
+  "r1-reply-busy": {
+    "after": "the pause is over and Send is back, 6 s later",
+    "line": "Not sent: an answer or another reply to this session is being delivered. Try again in a moment.",
+    "sendEnabled": true
+  },
+  "r2-reply-stale": {
+    "after": "6 s",
+    "line": "Not sent: the session has ended."
+  },
+  "r3-reply-unconfirmed": {
+    "after": "6 s",
+    "line": "Sent, but not confirmed. Check the conversation before sending it again. (the session did not record the reply within 60 seconds)"
+  },
+  "s1-stop-busy": {
+    "after": "the pause is over, 6 s",
+    "line": "Not ended: an answer or reply to this session is being delivered, or it is already being ended. Try again in a moment.",
+    "buttonPressable": true
+  },
+  "s2-stop-lapsed": {
+    "after": "window lapsed, 6 s",
+    "line": "End session NOT confirmed: no second press within 2 s. The session is still running."
+  },
+  "s3-stop-stale": {
+    "after": "6 s",
+    "line": "This session had already ended.",
+    "cardStillShown": true
+  }
+}
