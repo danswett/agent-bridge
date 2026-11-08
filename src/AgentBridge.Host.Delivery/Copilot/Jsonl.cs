@@ -17,7 +17,9 @@ internal static class Jsonl
     public static long Length(string path)
     {
         try { return new FileInfo(path).Length; }
-        catch (IOException) { return 0; }
+        // A file deleted while another handle is still open is, on Windows, access denied (not
+        // gone) until that handle closes; it reads as empty, and Lines then says it cannot be read.
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return 0; }
     }
 
     // Every complete line from `from`, with the offset it starts at; a line longer than any
