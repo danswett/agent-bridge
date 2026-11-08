@@ -94,6 +94,7 @@ public sealed class HostConnection : IAsyncDisposable
     // offers none (this machine's own pipe, a read-only host, an older host).
     public UpdateState? Update { get; private set; }
     public SessionStore Sessions { get; } = new();
+    public FeedbackDiagnostics Feedback { get; } = new();
 
     // Raised on the UI thread: the link, hello, status or usage changed.
     public event Action? Changed;
@@ -359,6 +360,7 @@ public sealed class HostConnection : IAsyncDisposable
             }
             catch (Exception e) when (e is IOException or HostErrorException or JsonException or TimeoutException or OperationCanceledException)
             {
+                Feedback.Record(FeedbackLog.HostConnectionError);
                 log($"host connection failed: {e.Message}");
                 ui.Post(() => SetState(LinkState.Connecting, e.Message));
             }
@@ -548,6 +550,12 @@ public sealed class HostConnection : IAsyncDisposable
         {
             await foreach (var ev in ch.Events.ReadAllAsync(ct))
             {
+                switch (ev.Name)
+                {
+                    case Events.SessionUpsert: Feedback.Record(FeedbackEvent.SessionsUpsert); break;
+                    case Events.SessionRemove: Feedback.Record(FeedbackEvent.SessionsRemove); break;
+                    case Events.SessionsSynced: Feedback.Record(FeedbackEvent.SessionsSynced); break;
+                }
                 // A gap means the buffer dropped events while the UI was slow: the sessions
                 // are subscribed again, which resends them all. Each connection numbers its
                 // events from 1, so a first event above 1 is a gap too.
@@ -753,6 +761,17 @@ public sealed class HostConnection : IAsyncDisposable
 
     void SetState(LinkState state, string? detail)
     {
+        if (State != state)
+        {
+            Feedback.Record(state switch
+            {
+                LinkState.Connecting => FeedbackEvent.Connecting,
+                LinkState.Connected => FeedbackEvent.Connected,
+                LinkState.NotRunning => FeedbackEvent.NotRunning,
+                LinkState.Refused => FeedbackEvent.Refused,
+                _ => throw new ArgumentOutOfRangeException(nameof(state)),
+            });
+        }
         State = state;
         StateDetail = detail;
         if (state != LinkState.Connected) { Hello = null; }
