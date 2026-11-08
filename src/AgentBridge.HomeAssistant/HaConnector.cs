@@ -753,7 +753,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             // while it is down, still retires what that write left behind.
             SaveLedger();
             await PublishEntitiesAsync(t, name, now, ct);
-            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, SessionId = s.Id, Drivers = drivers };
+            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, SessionId = s.Id, Drivers = drivers, Reply = new ReplyState { Log = ridLogs.GetOrAdd(s.Id, _ => new RidLog()) } };
             lock (gate)
             {
                 starting.Remove(s.Id);

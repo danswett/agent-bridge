@@ -199,6 +199,49 @@ public sealed partial class ReplyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_rid_repeated_after_a_pause_rebuilt_the_card_mid_delivery_is_still_dropped()
+    {
+        var release = new TaskCompletionSource<ReplyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = _ => { reached.TrySetResult(); return release.Task; };
+        await using var c = await Ready();
+        c.Observe(ha.SendFromCard(Node, "typed once", rid: "r-pause", sender: "A"));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        daemon = "agent-ha-bridge is running";
+        await Pass(c);
+        daemon = null;
+        await Pass(c);
+        release.SetResult(new ReplyResult(AnswerOutcome.Delivered));
+        await c.DeliveredAsync();
+        await Pass(c);
+        await Pass(c);
+        Assert.Equal("r-pause", Ack.GetProperty("rid").GetString());
+
+        c.Observe(ha.SendFromCard(Node, "typed once", rid: "r-pause", sender: "A"));
+        await Pass(c);
+        await Pass(c);
+
+        Assert.Equal("typed once", Assert.Single(replied).Text);
+        Assert.True(Ack.GetProperty("duplicate").GetBoolean());
+    }
+
+    [Fact]
+    public async Task A_senders_name_loses_control_characters_and_is_cut_between_whole_characters()
+    {
+        await using var c = await Ready();
+        var name = "Bu\u202Eil\u0007der " + string.Concat(Enumerable.Repeat("x", 62)) + "\U0001F600\U0001F600";
+
+        await Do(c, ha.SendFromCard(Node, "hi", rid: "r-name", sender: name));
+
+        var sender = Ack.GetProperty("sender").GetString()!;
+        Assert.StartsWith("Builder x", sender, StringComparison.Ordinal);
+        Assert.DoesNotContain(sender, ch => char.IsControl(ch) || ch == '\u202E' || char.IsSurrogate(ch));
+        Assert.True(sender.Length <= 64);
+    }
+
+    [Fact]
     public async Task A_message_published_twice_with_the_same_rid_is_delivered_once_and_acknowledged_again()
     {
         await using var c = await Ready();

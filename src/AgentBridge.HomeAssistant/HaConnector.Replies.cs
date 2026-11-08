@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Protocol;
@@ -49,9 +50,29 @@ public sealed partial class HaConnector
         // When the last reply-card publish went in (LastPayloadDeliveredAt).
         public DateTimeOffset? PayloadDeliveredAt;
 
-        // Request ids (rid) taken from the card, most recent last, each with what came of it
-        // (null while it is being delivered): a publish repeating one is dropped, and the sender
-        // reads the same outcome again. A refused one is forgotten so the sender can retry it.
+        // Request ids and the last acknowledgement, kept by the connector per session (ridLogs):
+        // a pause rebuilds this state while a delivery may still be running, and the rid must
+        // still be recorded when that delivery ends.
+        public RidLog Log = new();
+        public Dictionary<string, string?> Rids => Log.Rids;
+        public JsonObject? Ack { get => Log.Ack; set => Log.Ack = value; }
+        public void TakeRid(string rid) => Log.TakeRid(rid);
+        public void ForgetRid(string rid) => Log.ForgetRid(rid);
+        public bool IsHandled(string stamp) => Handled.Contains(stamp, StringComparer.Ordinal);
+
+        public void Handle(string stamp)
+        {
+            if (IsHandled(stamp)) { return; }
+            Handled.Add(stamp);
+            if (Handled.Count > 64) { Handled.RemoveAt(0); }
+        }
+    }
+
+    // Request ids (rid) taken from a session's reply card, most recent last, each with what came
+    // of it (null while it is being delivered): a publish repeating one is dropped, and the
+    // sender reads the same outcome again. A refused one is forgotten so the sender can retry it.
+    sealed class RidLog
+    {
         public readonly Dictionary<string, string?> Rids = new(StringComparer.Ordinal);
         readonly List<string> ridOrder = [];
         // The last acknowledgement: which rid the host delivered, published with the card's activity.
@@ -72,17 +93,9 @@ public sealed partial class HaConnector
             Rids.Remove(rid);
             ridOrder.Remove(rid);
         }
-
-        public bool IsHandled(string stamp) => Handled.Contains(stamp, StringComparer.Ordinal);
-
-        public void Handle(string stamp)
-        {
-            if (IsHandled(stamp)) { return; }
-            Handled.Add(stamp);
-            if (Handled.Count > 64) { Handled.RemoveAt(0); }
-        }
     }
 
+    readonly ConcurrentDictionary<string, RidLog> ridLogs = new(StringComparer.Ordinal);
     enum CardRead { Nothing, Taken, Delivering }
 
     // The most publishes kept waiting for one card: more than a person or an agent sends while one
@@ -99,10 +112,20 @@ public sealed partial class HaConnector
 
     static string? CleanSender(string? sender)
     {
-        var s = sender is null ? null : string.Join(' ', sender.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return string.IsNullOrEmpty(s) ? null : s.Length > 64 ? s[..64] : s;
+        // Control and format characters (bidi marks included) are dropped, whitespace collapsed,
+        // and the cut falls between whole characters, never inside a surrogate pair.
+        var kept = new StringBuilder();
+        foreach (var r in (sender ?? "").EnumerateRunes())
+        {
+            var cat = Rune.GetUnicodeCategory(r);
+            if (cat is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.Surrogate or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned) { continue; }
+            kept.Append(Rune.IsWhiteSpace(r) ? " " : r.ToString());
+        }
+        var s = string.Join(' ', kept.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        while (s.Length > 64) { s = s[..^1]; }
+        if (s.Length > 0 && char.IsHighSurrogate(s[^1])) { s = s[..^1]; }
+        return s.Length == 0 ? null : s;
     }
-
     JsonObject MakeAck(string rid, string? sender, string outcome, bool duplicate = false)
     {
         var ack = new JsonObject
