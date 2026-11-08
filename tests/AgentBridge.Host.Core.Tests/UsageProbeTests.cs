@@ -1491,9 +1491,14 @@ public sealed class UsageProbeTests : IDisposable
         await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
 
         Volatile.Write(ref armed, 1);
-        _ = Task.Run(() => time.Advance(TimeSpan.FromMilliseconds(300)));
+        // Steps the clock until a polling look begins. One advance could come before the watch's
+        // polling had registered its next wait on the fake clock (a loaded runner may not have
+        // started it yet), and that wait would then never end. Off the test's thread, as a look
+        // could run inline and sleeps in it; well inside the 60 s reporting timeout.
+        var advancing = Task.Run(() => AdvanceUntil(time, () => entered.Task.IsCompleted, TimeSpan.FromMilliseconds(50), TimeSpan.FromSeconds(30)));
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         release.SetResult();
+        await advancing;
         var outcome = await RunToEnd(run);
 
         Assert.Equal(CodexProbeKind.Reading, outcome.Kind);

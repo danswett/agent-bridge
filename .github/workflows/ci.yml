@@ -1219,17 +1219,37 @@ jobs:
       # fetched by release and checked against its SHA-256 here, rather than through
       # lychee-action, which downloads it by tag alone (#487): a release asset swapped under the
       # same tag fails this step instead of running. To update, take the new release's
-      # lychee-x86_64-unknown-linux-gnu.tar.gz.sha256.
+      # lychee-x86_64-unknown-linux-gnu.tar.gz.sha256. It comes through `gh release download` (the
+      # API) first, as install-trivy's Trivy does: the release's web URL has failed part way
+      # (curl exit 56) and returned HTTP 504 while the API still served the asset.
       - name: Links and anchors in Markdown resolve
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'docs-links')) }}
         env:
           LYCHEE_VERSION: v0.24.2
           LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+          GH_TOKEN: ${{ github.token }}
         run: |
           asset=lychee-x86_64-unknown-linux-gnu
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset.tar.gz" "https://github.com/lycheeverse/lychee/releases/download/lychee-$LYCHEE_VERSION/$asset.tar.gz"
-          echo "$LYCHEE_SHA256  $RUNNER_TEMP/$asset.tar.gz" | sha256sum --check --strict -
-          tar -xzf "$RUNNER_TEMP/$asset.tar.gz" -C "$RUNNER_TEMP"
+          file="$RUNNER_TEMP/$asset.tar.gz"
+          # gh a few times, then the web URL. Either way the pinned hash below decides; a mismatch
+          # is a failure, not a cue to retry, and a failed web download fails the step.
+          downloaded=false
+          for attempt in 1 2 3; do
+            # Never let an earlier or partial file pass as this attempt's download.
+            rm -f "$file"
+            if gh release download "lychee-$LYCHEE_VERSION" --repo lycheeverse/lychee --pattern "$asset.tar.gz" --dir "$RUNNER_TEMP" --clobber && [ -f "$file" ]; then
+              downloaded=true; break
+            fi
+            echo "::warning title=docs-links::gh release download of $asset.tar.gz failed (attempt $attempt of 3)"
+            if [ "$attempt" -lt 3 ]; then sleep 5; fi
+          done
+          if [ "$downloaded" != true ]; then
+            echo "::warning title=docs-links::falling back to the release's web URL for $asset.tar.gz"
+            rm -f "$file"
+            curl -fsSL --retry 3 -o "$file" "https://github.com/lycheeverse/lychee/releases/download/lychee-$LYCHEE_VERSION/$asset.tar.gz"
+          fi
+          echo "$LYCHEE_SHA256  $file" | sha256sum --check --strict -
+          tar -xzf "$file" -C "$RUNNER_TEMP"
           rc=0
           "$RUNNER_TEMP/$asset/lychee" --offline --include-fragments --no-progress --format markdown --output "$RUNNER_TEMP/lychee.md" '**/*.md' || rc=$?
           cat "$RUNNER_TEMP/lychee.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
