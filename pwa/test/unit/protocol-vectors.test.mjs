@@ -16,6 +16,7 @@ import {
 } from '../../js/protocol.js';
 import { checkAnswer } from '../../js/answers.js';
 import { checkReply } from '../../js/replies.js';
+import { checkHistoryRequest, readDelegateEvent, readHistoryResult, readPart, readPrompt, readStart, readTurn } from '../../js/history.js';
 import { checkLaunch, readLaunchOptions, readLaunchResult, readTrustQuestion, readTrustResult } from '../../js/launch.js';
 import { acceptOf, nowArgs, readBusy, readUpdateCommandResult, readUpdateState } from '../../js/update.js';
 import { readSignInDevices } from '../../js/signin-devices.js';
@@ -229,6 +230,13 @@ const READS = {
   DeliveryTimings: { read: (j) => readAnswerResult({ outcome: 'delivered', timings: j }).timings ?? {} },
   ReplyResult: { read: readAnswerResult },
   StopResult: { read: readStopResult },
+  // session.history's page and the records in it, as the history store gets them (#292).
+  HistoryResult: { read: readHistoryResult },
+  HistoryStart: { read: readStart },
+  HistoryTurn: { read: readTurn },
+  HistoryPrompt: { read: readPrompt },
+  HistoryPart: { read: readPart },
+  DelegateEvent: { read: readDelegateEvent },
   AttachmentState: { read: readAttachmentState },
   AttachmentDiscarded: {
     read: async (j) => {
@@ -288,6 +296,7 @@ const CHECKS = {
     return checkAnswer(readQuestion(context.question), j);
   },
   ReplyRequest: (j) => checkReply(j),
+  HistoryRequest: checkHistoryRequest,
   LaunchRequest: (j) => checkLaunch(j),
   // A patch the host sends, applied as host-client.js applies it to the session its context holds
   // (from the event at seq), which must then be its context's result exactly.
@@ -369,6 +378,17 @@ const BUILDS = {
       t.host({ re: t.sent.at(-1).id, ok: true, result: { sessions: [], revision: 1 } });
       await p;
       return sent;
+    },
+  },
+  // As the history store asks: the newest page with no cursor and no limit, an earlier one by the
+  // cursor it was given, each field only when it was named.
+  HistoryRequest: {
+    build: async (j) => {
+      const t = fakeTransport();
+      const p = new HostClient(t, { timeoutMs: 1000 }).history(j.id, { before: j.before, limit: j.limit });
+      await respond(t, 'session.history', { missing: true });
+      await p;
+      return t.lastRequest('session.history').data;
     },
   },
   AttachmentStart: {
@@ -458,16 +478,8 @@ const NOT_REPLAYED = {
   RestoreSession: 'the PWA does not read machine.restore yet (#780)',
   SessionRestored: 'no host sends a session\'s restored yet, and the PWA does not read it (#780)',
 
-  // Its client slice is #292's next step; the protocol and host land first (v1-history.md).
-  HistoryRequest: 'the PWA does not page a session\'s history yet (#292)',
-  HistoryResult: 'the PWA does not page a session\'s history yet (#292)',
-  HistoryStart: 'the PWA does not page a session\'s history yet (#292)',
-  HistoryTurn: 'the PWA does not page a session\'s history yet (#292)',
   AgentHelloRequest: 'agent.hello is local pipe only; no PWA or relay channel serves it (#720)',
   AgentHelloResult: 'agent.hello is local pipe only; no PWA or relay channel serves it (#720)',
-  HistoryPrompt: 'the PWA does not page a session\'s history yet (#292)',
-  HistoryPart: 'the PWA does not page a session\'s history yet (#292)',
-  DelegateEvent: 'the PWA does not page a session\'s history yet (#292)',
 
   JournalEntry: 'read by readEntry into what Review shows, not as sent; test/unit/diagnostics.test.mjs replays it',
   JournalStage: 'part of JournalEntry, read by readEntry',

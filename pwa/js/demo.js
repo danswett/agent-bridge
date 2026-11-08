@@ -51,6 +51,7 @@ import { deviceIdOf } from './identity.js';
 import { fromUtf8 } from './bytes.js';
 import { blobIdOf, fromBase64url, openBlob, storedSize, toBase64url } from './blobs.js';
 import { SIGN_IN } from './auth-state.js';
+import { HISTORY, checkHistoryRequest } from './history.js';
 
 const BLOB_FILE_MAX = 100 * 1024 * 1024;
 
@@ -209,6 +210,14 @@ export class DemoHost {
   diagnostics = null;
   diagnosticsLog = [];
   diagnosticsRefusal = null;
+  // session.history (#292): the turns each session has, oldest first, by session id (made up from
+  // the session when a test names none), every request as received, how many of the next cursors
+  // the host calls stale, why it has no history to give (a test sets it), and how long a page takes.
+  historyTurns = new Map();
+  historyLog = [];
+  historyStale = 0;
+  historyUnavailable = null;
+  historyDelayMs = 0;
 
   // answering: false plays a host that can't answer (agent-ha-bridge still running, say);
   // replying: false, one that can't reply; attaching: false, one that takes no files; large:
@@ -225,12 +234,13 @@ export class DemoHost {
   // or a reply until its outcome.
   // confirming: false, one that does not take an escaped approval's confirmation from this device (#803).
   // diagnosing: true, one that offers its diagnostics to this device (#802).
-  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, confirming = approving, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, updatingNow = false, signingIn = false, progress = true, diagnosing = false } = {}) {
+  // history: false plays a host from before session.history (#292), which does not offer it.
+  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, confirming = approving, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, updatingNow = false, signingIn = false, progress = true, diagnosing = false, history = true } = {}) {
     this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(answering && confirming ? [ESCAPED_CAPABILITY] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...((answering || replying) && progress ? ['sessions.progress'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : []), ...(signingIn && answering ? [SIGN_IN.capability] : []), ...(diagnosing ? [DIAGNOSTICS.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(answering && confirming ? [ESCAPED_CAPABILITY] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...((answering || replying) && progress ? ['sessions.progress'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : []), ...(signingIn && answering ? [SIGN_IN.capability] : []), ...(diagnosing ? [DIAGNOSTICS.capability] : []), ...(history ? [HISTORY.capability] : [])];
     if (diagnosing) { this.diagnostics = demoDiagnostics(); }
     if (updating) {
       this.update = { current: '0.1.0', installer: true, available: '0.2.0', notes: 'Updates from your phone', checkedAt: now(), phase: 'idle', automatic: false };
@@ -288,6 +298,14 @@ export class DemoHost {
           return undefined;
         }
         return reply(s ? withHistory(s) : { missing: true });
+      }
+      case HISTORY.op: {
+        if (!this.capabilities.includes(HISTORY.capability)) { break; }
+        this.historyLog.push(clone(data ?? {}));
+        const refused = checkHistoryRequest(data);
+        if (refused) { return t.deliver({ re: id, ok: false, error: refused }); }
+        new Promise((resolve) => setTimeout(resolve, this.historyDelayMs)).then(() => this.#responsesHeld).then(() => reply(this.#history(data)));
+        return undefined;
       }
       case 'sessions.subscribe': {
         t.subscribed = true;
@@ -496,6 +514,30 @@ export class DemoHost {
 
   // A response as a host gives one: after the answer delay, and after any hold.
   #after(decide) { return new Promise((resolve) => setTimeout(resolve, this.answerDelayMs)).then(() => this.#responsesHeld).then(decide); }
+
+  // One page of session.history as a host gives it: the newest `limit` turns before the cursor,
+  // from the newest 500 of the session. The cursor is opaque to a client; here it counts the
+  // turns before the page (h1.<n>), and one that does not fit the turns now is stale.
+  #history(data) {
+    const s = this.sessions.get(data.id);
+    if (!s) { return { missing: true }; }
+    if (this.historyUnavailable) { return { unavailable: this.historyUnavailable }; }
+    const turns = this.historyTurns.get(data.id) ?? demoTurns(s);
+    const served = turns.slice(-HISTORY.kept);
+    let end = served.length;
+    if (data.before !== undefined) {
+      const n = /^h1\.(\d+)$/.exec(data.before)?.[1];
+      if (this.historyStale > 0 || n === undefined || Number(n) < 1 || Number(n) > served.length) {
+        this.historyStale = Math.max(0, this.historyStale - 1);
+        return { stale: true };
+      }
+      end = Number(n);
+    }
+    const from = Math.max(0, end - (data.limit ?? HISTORY.defaultTurns));
+    const page = clone(served.slice(from, end));
+    if (from > 0) { return { turns: page, before: `h1.${from}` }; }
+    return { turns: page, start: turns.length > served.length ? { limited: true } : { at: served[0]?.at ?? s.startedAt ?? now() } };
+  }
 
   #launch(data, reply) {
     this.launchLog.push(clone(data ?? null));
@@ -1048,6 +1090,26 @@ function stagedName(name) {
   const stem = (ext ? leaf.slice(0, dot) : leaf).replace(/[^0-9A-Za-z._-]/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 48) || 'attachment';
   const prefix = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   return `${prefix}-${stem}${ext}`;
+}
+
+// session.history's turns for a session that has none named: one per turn it reports (at least
+// one), the latest from its own activity, each with a prompt, a tool and a reply.
+function demoTurns(s) {
+  const count = Math.max(1, s.activity?.turnCount ?? 1);
+  const base = Date.parse(s.updatedAt) || Date.now();
+  return Array.from({ length: count }, (_, k) => {
+    const latest = k === count - 1;
+    const at = (ms) => new Date(base - (count - k) * 600000 + ms).toISOString();
+    return {
+      id: `${s.id}-turn-${k + 1}`,
+      at: at(0),
+      prompt: { text: (latest && s.activity?.userMessage) || `Demo prompt ${k + 1}` },
+      parts: [
+        { id: `${s.id}-turn-${k + 1}.0`, kind: 'tool', at: at(1000), tool: { id: `${s.id}-turn-${k + 1}-t`, name: 'view', summary: 'docs/protocol/v1-history.md', status: 'done', startedAt: at(1000), endedAt: at(2000) } },
+        { id: `${s.id}-turn-${k + 1}.1`, kind: 'response', at: at(3000), text: (latest && s.activity?.response) || `Demo reply ${k + 1}.` },
+      ],
+    };
+  });
 }
 
 function withoutHistory(s) {
