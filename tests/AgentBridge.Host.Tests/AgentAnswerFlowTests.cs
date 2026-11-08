@@ -249,6 +249,21 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Claude_transcript_deleted_while_still_open_is_refused_as_unreadable_not_as_a_failure()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        // Windows keeps a deleted file, access denied, until the last handle closes.
+        using var held = new FileStream(claude, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        File.Delete(claude);
+
+        var refused = await Answerer().AnswerAsync(Request(ClaudeId, "toolu_1", Chosen));
+
+        Assert.Equal(AnswerOutcome.Refused, refused.Outcome);
+        Assert.Contains("could not be read", refused.Reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
     public async Task A_different_answer_recorded_by_Claude_is_unconfirmed_never_delivered()
     {
         injector.OnInject = _ => Fixture.Append(claude, Recorded(database: "DuckDB"));
