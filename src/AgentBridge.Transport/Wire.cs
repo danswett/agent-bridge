@@ -61,20 +61,66 @@ public static class Wire
     }
 
     // Null when the peer closed. Throws FrameTooLargeException before buffering more than max.
-    public static async Task<(WebSocketMessageType Type, byte[] Data)?> ReceiveAsync(WebSocket ws, int max, CancellationToken ct)
+    public static async Task<(WebSocketMessageType Type, byte[] Data)?> ReceiveAsync(WebSocket ws, int max, CancellationToken ct) =>
+        await ReceiveAsync(ws, max, max, ct, discardOversizeText: false);
+
+    // With discardOversizeText, a text frame that opens {"t":"roster" (the relay's signed device
+    // roster reply, up to 224 KiB stored and worst-case six times that as JSON) may run to maxText.
+    // One past maxText is read and thrown away without being buffered, and arrives empty, until
+    // MaxRosterDrain bytes; past that it throws. Every other frame, and every frame without the
+    // flag (all other callers), is held to max and throws FrameTooLargeException past it. Whether
+    // a frame is a roster reply is decided from its first bytes once it passes max, never by
+    // draining first.
+    public static async Task<(WebSocketMessageType Type, byte[] Data)?> ReceiveAsync(WebSocket ws, int max, int maxText, CancellationToken ct, bool discardOversizeText)
     {
         var buffer = new byte[16 * 1024];
         using var ms = new MemoryStream();
+        long total = 0;
+        var discarding = false;
+        var roster = false;
         WebSocketReceiveResult r;
         do
         {
             r = await ws.ReceiveAsync(buffer, ct);
             if (r.MessageType == WebSocketMessageType.Close) { return null; }
-            if (ms.Length + r.Count > max) { throw new FrameTooLargeException(); }
+            total += r.Count;
+            if (discarding)
+            {
+                if (total > MaxRosterDrain) { throw new FrameTooLargeException(); }
+                continue;
+            }
+            var isText = r.MessageType == WebSocketMessageType.Text;
+            if (isText && discardOversizeText && !roster && ms.Length + r.Count > max)
+            {
+                roster = StartsRoster(ms, buffer, r.Count);
+            }
+            var limit = isText && roster ? maxText : max;
+            if (ms.Length + r.Count > limit)
+            {
+                if (!isText || !roster) { throw new FrameTooLargeException(); }
+                discarding = true;
+                ms.SetLength(0);
+                if (total > MaxRosterDrain) { throw new FrameTooLargeException(); }
+                continue;
+            }
             ms.Write(buffer, 0, r.Count);
         } while (!r.EndOfMessage);
         return (r.MessageType, ms.ToArray());
     }
+
+    static bool StartsRoster(MemoryStream held, byte[] chunk, int count)
+    {
+        var head = new byte[Math.Min(256, held.Length + count)];
+        var fromHeld = (int)Math.Min(head.Length, held.Length);
+        Array.Copy(held.GetBuffer(), head, fromHeld);
+        Array.Copy(chunk, 0, head, fromHeld, head.Length - fromHeld);
+        return head.AsSpan().StartsWith("{\"t\":\"roster\""u8);
+    }
+
+    public const int MaxRosterFrame = 6 * 224 * 1024;
+    // A roster reply past MaxRosterFrame is drained, not buffered, but only this far: about three
+    // times the largest reply the relay can legitimately send.
+    public const int MaxRosterDrain = 4 * 1024 * 1024;
 }
 
 public sealed class FrameTooLargeException() : Exception("frame too large");
