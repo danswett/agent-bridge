@@ -730,6 +730,7 @@ meant as off is never read as on (host-config.md:139-141).
 | `limits.*` | integers | §5.4, §5.5 |
 | `label` | `prefix` \| `none` | Whether delivered text carries the provenance prefix (§6.4). `prefix` is forced for cross-account |
 | `links` | `[]` | Federation (§7). Must be empty in v1 |
+| `agentMessaging.remote`, `agentMessaging.allowAllTargets` | `"off"` \| `"own-account"`; `false` \| `true` | The **temporary AP5-lite mode** (#728), in the host's `config.json`, not this policy. Owner-decided 2026-11-08 for the owner's own agents on the owner's own account only, until the signed roster (#55) lands, when it is deleted or folded into AP5. **Default: `"off"` and `false`**; an unknown value is off. `allowAllTargets` counts only while `remote` is `"own-account"`; `false` sends allow-all targets to Home Assistant. Read per message, so a change needs no restart ([host-config.md](../host-config.md)) |
 
 **Defaults** (Q2, Q37). Decision 2 is "any session on the owner's account, subject to a
 per-machine policy". So the defaults let any session be **read** from the owner's other machines,
