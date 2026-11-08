@@ -342,9 +342,16 @@ into one folder with one version. An app update is a host update, so they never 
   is running (up to about 10 minutes for one that is slow to answer, usually under a minute) and
   Codex happens to be refreshing its sign-in, the person may have to sign in to Codex again.
   Keeping the probe alive across those is #974. The same holds for uninstall, whose hook has
-  30 s, and which then goes on;
-  `OnAfterUpdateFastCallback` (the new version, also 15 s) starts it again through its logon
-  task, waiting at most 10 s.
+  30 s, and which then goes on.
+  There is no `OnAfterUpdateFastCallback` (#497, #1167). It used to start the host through its
+  logon task and wait up to 10 s for it, but Velopack 1.2.161 ends every process in the package
+  as soon as a hook exits (`run_hook` in its `windows/util.rs`), so that host never survived.
+  Observed in Velopack's own log on one machine (`velopack_AgentBridgeApp.log`, 49 updates), that
+  hook took 4–15 s: 38 finished in 4.3–14.5 s, and 11 ran into its 15 s limit and were killed.
+  A host it started then ended at once matches the double start #497 reports after an update.
+  Every update here
+  restarts the app, from Restart to update or from the host's own update, and the restarted app
+  starts the host once.
   The app also stops the host itself before it hands an update to `Update.exe`, and starts it on
   launch if it is not running.
 * `OnBeforeUninstallFastCallback` stops the host and attempts bounded cleanup of only the
