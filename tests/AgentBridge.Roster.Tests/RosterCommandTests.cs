@@ -178,6 +178,8 @@ public sealed class RosterCommandTests
         Case("missing-choice", "a folder-trust answer without its choice", CommandAction.FolderTrustAnswer, "A", edit: b => { b.Remove("choice"); return b; }, refusal: Refusal.Missing),
         Case("transfer-with-a-nonce", "a transfer carries no nonce", CommandAction.Transfer, "A", edit: b => { b["nonce"] = Codec.Base64Url(HostNonce); return b; }, refusal: Refusal.Unknown),
         Case("request-not-a-uuid", "a request that is not a lowercase UUID", CommandAction.Update, "A", edit: b => { b["request"] = Request.ToUpperInvariant(); return b; }, refusal: Refusal.Value),
+        Case("request-with-a-trailing-lf", "a request with a line feed after the UUID, which a $ in a regex would accept", CommandAction.Update, "A", edit: b => { b["request"] = Request + "\n"; return b; }, refusal: Refusal.Value),
+        Case("question-with-a-trailing-lf", "a question id with a line feed after it", CommandAction.FolderTrustAnswer, "A", edit: b => { b["target"]!["question"] = "trust-1\n"; return b; }, refusal: Refusal.Value),
         Case("five-heads", "more than four heads", CommandAction.Update, "A", edit: b => { b["heads"] = Hashes(Enumerable.Range(0, 5).Select(i => SHA256.HashData([(byte)i]))); return b; }, refusal: Refusal.Count),
         Case("an-offset-time", "a time with an offset instead of Z", CommandAction.Update, "A", issued: "2026-11-04T11:59:00+00:00", refusal: Refusal.Time),
     ];

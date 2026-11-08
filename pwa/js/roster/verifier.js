@@ -56,7 +56,11 @@ export class RosterVerifier {
   #applied = null;
   #clock;
 
-  constructor(account, generation, clock) {
+  #addCap;
+
+  // addCap is for the vectors' shrunken cap; a real verifier keeps MAX_ADDS.
+  constructor(account, generation, clock, { addCap = MAX_ADDS } = {}) {
+    this.#addCap = addCap;
     this.account = account;
     this.generation = generation;
     this.#clock = clock;
@@ -286,7 +290,7 @@ export class RosterVerifier {
           if (g.at(a).isAdd && g.at(a).deviceId === body.device.id) return INVALID.readded;
         }
         if (p.activeCount >= MAX_ACTIVE) return INVALID.activeCap;
-        if (this.#adds >= MAX_ADDS || this.#nonRemovals >= MAX_ENTRIES) return INVALID.cap;
+        if (this.#adds >= this.#addCap || this.#nonRemovals >= MAX_ENTRIES) return INVALID.cap;
         return this.#overBudget(signer, 'add');
       }
       case 'remove': {
