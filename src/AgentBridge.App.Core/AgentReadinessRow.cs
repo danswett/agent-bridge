@@ -6,7 +6,7 @@ namespace AgentBridge.App.Core;
 // have their own AutomationIds, and its setup's result sits on the row, so Narrator and UI tests can
 // tell which agent a button or a result is about (#678; #670's design review).
 public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = false, bool canInstall = false, AgentSetupNote? note = null, HookSetup? setup = null, AgentSetupNote? shared = null,
-    AgentInstallProgress? install = null, bool installOffered = true)
+    AgentInstallProgress? install = null, bool installOffered = true, bool canSignIn = false)
 {
     // Agency runs on Copilot CLI's hooks: the host sets them up and removes them as Copilot's
     // (AgentSetupService), so what a setup on either row left is evidence for both (#705 review).
@@ -113,6 +113,11 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // say whether there's one: no button that can't work.
     public bool ShowRemove => !Blocked && Setup is HookSetup.Completed or HookSetup.Incomplete;
     public bool CanRemove => canManage && ShowRemove;
+    // Opens the CLI's own sign-in; never evidence of access (#691).
+    public bool ShowSignIn => Id is "copilot" or "claude" or "codex" && Installed && !Blocked;
+    public bool CanSignIn => canSignIn && ShowSignIn;
+    public string SignInName => $"Sign in to {Label} or switch account";
+    public string SignInId => $"SignInAgent_{Id}";
     public string RemoveName => $"Remove {Label}'s connection";
     public string RemoveId => $"RemoveAgent_{Id}";
     // The confirmation before either: named for the agent, and for what Remove leaves alone.
