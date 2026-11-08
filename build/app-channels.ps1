@@ -20,7 +20,7 @@ $AppPackId = 'AgentBridgeApp'
 # Settings' name, the setup icon and release titles name the app as the app itself does (#537).
 # Unlike the pack id above, which installed copies find their updates by, these name only the
 # displayed product and public downloads, not its packages, feeds or install folder.
-$AppProject = [xml](Get-Content -Raw (Join-Path $PSScriptRoot '..\src\AgentBridge.App\AgentBridge.App.csproj'))
+$AppProject = [xml](Get-Content -Raw (Join-Path $PSScriptRoot '..' 'src' 'AgentBridge.App' 'AgentBridge.App.csproj'))
 function Get-AppProjectProperty([string]$Name) {
     $value = @($AppProject.Project.PropertyGroup | ForEach-Object { $_.$Name } | Where-Object { $_ })
     if ($value.Count -ne 1) { throw "AgentBridge.App.csproj sets $Name $($value.Count) times, not once" }
