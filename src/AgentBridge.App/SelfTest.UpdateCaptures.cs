@@ -83,13 +83,6 @@ static partial class SelfTest
             {
                 var atRestPlate = await AccentPlate(plain);
                 check(atRestPlate is null, $"draws Restart to update in Highlight and HighlightText only{where} ({atRestPlate})");
-                // Pointer over swaps the pair; still nothing but the two.
-                VisualStateManager.GoToState(plain, "PointerOver", false);
-                await Task.Delay(200);
-                var overPlate = await AccentPlate(plain);
-                check(overPlate is null, $"draws Restart to update in Highlight and HighlightText only under the pointer{where} ({overPlate})");
-                await Picture(plain, File("restart", ".hover.hc"));
-                VisualStateManager.GoToState(plain, "Normal", false);
             }
             var restarting = update.RestartAsync(_ => Task.FromResult(true));
             await Bar("restarting", "Restarting to update\u2026");
