@@ -713,6 +713,15 @@ public sealed partial class HaConnector : IAsyncDisposable
             // phone this does not reach stays on record and the stale sweep tries it again.
             await ClearButtonsAsync(id, was?.Notify, forget: true, ct);
         }
+        // A session that ended while the connector was reconnecting was never published again, so the
+        // gone loop never saw it: drop any history whose session is neither live nor mid-delivery.
+        lock (gate)
+        {
+            foreach (var id in ridLogs.Keys)
+            {
+                if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
+            }
+        }
         if (gone.Count > 0) { WatchSetChanged(); }
         for (var i = 0; i < work.Count; i++)
         {

@@ -246,6 +246,28 @@ public sealed partial class ReplyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_session_that_ended_while_the_connector_was_rebuilding_still_loses_its_rid_history()
+    {
+        await using var c = await Ready();
+        await Do(c, ha.SendFromCard(Node, "first life", rid: "r-gap", sender: "A"));
+
+        daemon = "agent-ha-bridge is running";
+        await Pass(c);
+        sessions.End(A);
+        daemon = null;
+        await Pass(c);
+        await Pass(c);
+        sessions.Set(FakeSessions.Copilot(A));
+        await Pass(c);
+        await Pass(c);
+
+        await Do(c, ha.SendFromCard(Node, "second life", rid: "r-gap", sender: "A"));
+
+        Assert.Equal(["first life", "second life"], replied.Select(r => r.Text));
+        Assert.False(Ack.TryGetProperty("duplicate", out _));
+    }
+
+    [Fact]
     public async Task A_senders_name_loses_control_characters_and_is_cut_between_whole_characters()
     {
         await using var c = await Ready();
