@@ -360,14 +360,18 @@ public sealed class RelayClient : IAsyncDisposable
         {
             while (ws.State == WebSocketState.Open)
             {
-                var pending = Wire.ReceiveAsync(ws, Wire.MaxFrame, default);
+                var pending = Wire.ReceiveAsync(ws, Wire.MaxFrame, Wire.MaxRosterFrame, default);
                 if (!pending.IsCompleted) { receiving.TrySetResult(); }
                 var frame = await pending;
                 if (frame is null) { break; }
                 var (type, data) = frame.Value;
                 if (type == WebSocketMessageType.Text)
                 {
+                    // Empty: a text frame past even the roster's bound, dropped on the way in.
+                    if (data.Length == 0) { continue; }
                     var j = JsonDocument.Parse(data).RootElement;
+                    // Only the roster reply may pass the ordinary bound.
+                    if (data.Length > Wire.MaxFrame && j.GetProperty("t").GetString() != "roster") { throw new FrameTooLargeException(); }
                     switch (j.GetProperty("t").GetString())
                     {
                         case "presence": ApplyPresence(j); break;
