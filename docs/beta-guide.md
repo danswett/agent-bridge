@@ -60,9 +60,9 @@ What you lose and what to do is in [the address move notes](app-domain.md#if-you
 - Operator: Dan Swett, an individual.
 - Contact for privacy and support requests: support@slipgates.com.
 - First beta cohort: invited adults in the United States only.
-- Getting help: reply in the email or Teams conversation your invitation came in.
+- Getting help: reply to the invitation email or write support@slipgates.com.
 - Who answers: support@slipgates.com is live and receives mail; the owner's confirmed statement
-  and its limits are under "Support email, Teams and privacy requests" below.
+  and its limits are under "Support email and privacy requests" below.
 - Privacy notice: <https://slipgates.com/privacy>.
 
 Invitations are currently on hold. Real reports must not be sent through the in-app or staging
@@ -172,10 +172,10 @@ fact we do not yet know, not one we are leaving out.
   authorization, per-user deletion procedures and push and provider deletion limits have not yet
   been confirmed.
 
-### Support email, Teams and privacy requests
+### Support email and privacy requests
 
-For beta support, reply in the email or Teams conversation your invitation came in. The support
-participants can read what you send; send only the minimum needed. Do not post support content or
+For beta support, reply to the invitation email or write support@slipgates.com. Support is by
+email only. The support mailbox can be read by the operator; send only the minimum needed. Do not post support content or
 personal information in public GitHub issues. Screenshots, logs and attachments can contain names,
 paths, prompts, code, tokens or other private information; check them before sharing.
 
@@ -278,24 +278,32 @@ services.
 
 ## Beta conditions
 
-Slipgates is an experimental beta operated by the organisation or person identified in the
-privacy notice. Features may fail or change. Review remote approvals carefully: an approval on
+Slipgates is an experimental beta operated by Dan Swett, an individual, for invited adults in the
+United States only. Features may fail or change. Review remote approvals carefully: an approval on
 your phone can authorize an action on your PC. Use only devices, accounts and sessions you are
-authorized to control, and keep a recoverable copy of important work.
+authorized to control; keep a recoverable copy of important work.
 
-This guide names supported configurations, known issues, updates and the private support route.
-You can stop participating, disconnect devices or uninstall; use the privacy contact for
-separate requests about retained data. Optional diagnostics are not a condition of
-participation.
+See the beta guide for supported configurations, known issues and update instructions. For beta
+support or privacy questions, contact support@slipgates.com. Read the privacy notice at
+https://slipgates.com/privacy for the current data-handling facts, unresolved details and choices.
+Optional diagnostics are not a condition of participation and require separate opt-in if made
+available. Do not send real reports through an in-app or staging feedback path while that service
+remains held.
+
+You can stop participating, disconnect devices or uninstall. Uninstalling or revoking GitHub
+authorization does not itself erase server or support records. Use the privacy contact for separate
+requests about retained information; the privacy notice describes the beta's age-out/no-promised-
+manual-deletion plan and known limits. The published acknowledgement aim is not a guaranteed
+support response, resolution or erasure deadline.
 
 The applicable open-source and third-party licences accompany the distribution. These beta
 conditions do not take away rights those licences grant or mandatory rights the law gives you.
 
 ## Getting help and sending feedback
 
-For help today, reply privately in the email or Teams conversation your invitation came in. The
-support team can read what you send. How that channel handles and keeps it is described, with what
-is not yet confirmed, under "Support email, Teams and privacy requests" above. Send only the
+For help today, reply to the invitation email or write support@slipgates.com. How that channel
+handles and keeps what you send is described, with what is not yet confirmed, under "Support email
+and privacy requests" above. Send only the
 minimum needed. Remove names, paths, prompts, code, tokens and sign-in codes, and review any
 screenshot or log before sending it. Do not post support content or personal information in public
 GitHub issues. If something fails, tell us the first step that failed. If it all worked, tell us
