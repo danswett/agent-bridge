@@ -64,6 +64,12 @@ What you lose and what to do is in [the address move notes](app-domain.md#if-you
 - Contact for privacy and support requests: support@slipgates.com.
 - First beta cohort: invited adults in the United States only.
 - Getting help: reply in the email or Teams conversation your invitation came in.
+- Who answers: support@slipgates.com is live and receives mail. Dan Swett checks it each business
+  day, arranges authorized coverage when away, and aims to acknowledge privacy requests within
+  three business days. He owns triage and coordination with the relevant service operators for
+  access, correction and deletion requests, subject to applicable law and the retention and
+  provider limits described here. The three days is a target, not a legal deadline or a promise
+  that anything is completed or erased.
 - Privacy notice and beta terms: [confirm: links to the published privacy notice and terms].
 
 **What we keep, and for how long**
@@ -120,10 +126,10 @@ in the beta today.
 - [confirm: whether anyone besides your own devices can decrypt session content, and what copies
   exist on devices or with push services]
 - [confirm: which push services are actually used, and who can open a temporary item link]
-- [confirm: who runs the support mailbox and Teams conversations, how long messages are kept, and
-  who can read them]
-- [confirm: the written procedure and the person responsible for access, correction and deletion
-  requests, including relay records, which has no automatic erasure today]
+- [confirm: the mailbox and Teams provider, how long support messages are kept, and who besides
+  Dan Swett and any authorized cover can read them]
+- [confirm: how deletion is carried out for each system, including relay records, which has no
+  automatic erasure today]
 
 Optional diagnostics are always opt-in: they are off unless you choose to turn them on, and this
 applies to everyone, worldwide. Their design excludes session content. You can use Slipgates
