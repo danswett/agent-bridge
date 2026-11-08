@@ -735,6 +735,24 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
     }
 
     [Fact]
+    public async Task A_launch_starts_with_the_chosen_model_effort_and_context_and_reads_back_what_started()
+    {
+        Serve(Config(c => c with
+        {
+            Agents = new Dictionary<string, AgentConfig>
+            {
+                ["copilot"] = new() { Model = "gpt-6.1-sol", Models = ["gpt-6.1-sol", "claude-opus-5.5"], Efforts = ["low", "high"], Contexts = ["default", "long_context"] },
+            },
+        }));
+        var ch = await OpenAsync();
+        var o = await LaunchAsync(ch, new { model = "claude-opus-5.5", effort = "low", context = "long_context" });
+
+        Assert.Equal("started", o.Outcome_);
+        Assert.Equal(("claude-opus-5.5", "low", "long_context"), (o.Launched.GetProperty("model").GetString(), o.Launched.GetProperty("effort").GetString(), o.Launched.GetProperty("context").GetString()));
+        Assert.Equal(["--session-id", o.Session!, "--banner", "--model", "claude-opus-5.5", "--reasoning-effort", "low", "--context", "long_context"], starter.Specs[0].Arguments);
+    }
+
+    [Fact]
     public async Task Agency_starts_with_the_chosen_profile_and_a_profile_it_does_not_list_is_refused()
     {
         locator.Installed["agency"] = @"C:\fake\agency.exe";
