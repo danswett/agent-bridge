@@ -66,7 +66,7 @@ function Read-GetStarted([Diagnostics.Process]$app) {
             $last = @($all | ForEach-Object { "$($_.Current.ControlType.ProgrammaticName) | $($_.Current.AutomationId) | $($_.Current.Name)" })
             $names = @($all | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text } | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
             $rows = @($names | Where-Object { $_ -match '^[^,]+, step \d+ of \d+, ' })
-            if (($names -contains 'Get started') -and $rows.Count) { return $rows }
+            if (($names -contains 'Get started') -and $rows.Count) { $last | Set-Content (Join-Path $Out 'ui-tree.txt'); return $rows }
         }
         Start-Sleep -Milliseconds 500
     }
