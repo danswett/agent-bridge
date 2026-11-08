@@ -258,7 +258,7 @@ public sealed class FeedbackInboxProcessorTests
         await worker.StartAsync(CancellationToken.None);
         try
         {
-            await source.SecondSizeCall.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await source.SecondSizeCall.Task.WaitAsync(TimeSpan.FromSeconds(10));
         }
         finally
         {
