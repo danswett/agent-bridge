@@ -164,12 +164,14 @@ else { Step '6-uninstall' @() {
     $left += Get-Process AgentBridge, Update -ErrorAction SilentlyContinue | ForEach-Object { "process $($_.ProcessName) $($_.Id)" }
     $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
     $left += $run.PSObject.Properties | Where-Object { $_.Value -is [string] -and $_.Value -like '*AgentBridgeApp*' } | ForEach-Object { "Run entry $($_.Name)" }
+    # The host's logon task is ours alone (HostManager.TaskName); the uninstaller only logs a failure to delete it.
+    $left += Get-ScheduledTask -TaskName 'AgentBridgeHost_*' -ErrorAction SilentlyContinue | ForEach-Object { "scheduled task $($_.TaskName)" }
     $unKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
     $left += Get-ChildItem $unKey -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -like '*AgentBridgeApp*' } | ForEach-Object { "Uninstall entry $($_.PSChildName)" }
     $menu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
     $left += Get-ChildItem $menu -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -like '*Slipgates*' } | ForEach-Object { "shortcut $($_.FullName)" }
     if ($left.Count) { throw "left behind: $($left -join '; ')" }
-    $steps['6-uninstall'].detail = 'install folder, processes, Run and Uninstall entries and shortcuts are gone'
+    $steps['6-uninstall'].detail = 'install folder, processes, Run and Uninstall entries, the host logon task and shortcuts are gone'
 } }
 
 # What the person's data folder holds is kept as evidence, not judged: it is the user's data.

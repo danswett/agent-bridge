@@ -29,7 +29,9 @@ function Add-Event([string]$type, [hashtable]$data) {
 }
 function Invoke-Hook([string]$name, [hashtable]$event) {
     $json = $event | ConvertTo-Json -Depth 6 -Compress
-    $psi = [Diagnostics.ProcessStartInfo]::new($Hook)
+    # A batch file cannot be started directly without the shell; the real hook is an .exe.
+    if ($Hook -match '\.(cmd|bat)$') { $psi = [Diagnostics.ProcessStartInfo]::new($env:ComSpec); foreach ($a in '/c', $Hook) { $psi.ArgumentList.Add($a) } }
+    else { $psi = [Diagnostics.ProcessStartInfo]::new($Hook) }
     foreach ($a in 'copilot', $name) { $psi.ArgumentList.Add($a) }
     $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.UseShellExecute = $false
     $p = [Diagnostics.Process]::Start($psi)

@@ -36,6 +36,14 @@ Check 'the simulated agent writes a transcript with the question and runs the ho
     finally { Remove-Item $scratch -Recurse -Force }
 }
 
+Check 'the uninstall step checks the host logon task under the name the product registers' {
+    $harness = Get-Content ([IO.Path]::Combine($PSScriptRoot, 'beta-acceptance.ps1')) -Raw
+    $product = Get-Content ([IO.Path]::Combine($PSScriptRoot, '..', '..', 'src', 'AgentBridge.App.Core', 'HostManager.cs')) -Raw
+    Assert ($product -match '\$"(AgentBridgeHost)_\{profile\}') 'the product task name prefix changed'
+    Assert ($harness -match "Get-ScheduledTask -TaskName 'AgentBridgeHost_\*'") 'uninstall does not look for the host task'
+    Assert ($harness -match '(?s)\$left \+= Get-ScheduledTask.*if \(\$left\.Count\) \{ throw') 'the task is not part of the leftovers'
+}
+
 Check 'the workflow is dispatch-only, has no cron, secrets or environment, and only the report job writes' {
     $path = [IO.Path]::Combine($PSScriptRoot, '..', '..', '.github', 'workflows', 'beta-acceptance.yml')
     $y = (Get-Content $path | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
