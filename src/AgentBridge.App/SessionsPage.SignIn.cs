@@ -145,14 +145,7 @@ public sealed partial class SessionsPage
         void CopyCode()
         {
             if (!sheet.HasCode) { return; }
-            try
-            {
-                var data = new DataPackage();
-                data.SetText(sheet.Code);
-                Clipboard.SetContent(data);
-                sheet.CopiedCode(true);
-            }
-            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { sheet.CopiedCode(false); }
+            sheet.CopiedCode(ClipboardText.Put(sheet.Code));
         }
         copy.Click += (_, _) => CopyCode();
         // Enter copies the code, as Copy is the sheet's default (Creative 6675007095), while focus is on

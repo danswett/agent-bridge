@@ -15,6 +15,10 @@ public sealed partial class SettingsView : UserControl
 
     public SettingsView() => InitializeComponent();
 
+    internal event Action? FeedbackRequested;
+
+    void OnSendFeedback(object sender, RoutedEventArgs e) => FeedbackRequested?.Invoke();
+
     public SettingsViewModel ViewModel
     {
         get => viewModel!;
@@ -106,6 +110,39 @@ public sealed partial class SettingsView : UserControl
     async void OnSetUpAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: false);
     async void OnRemoveAgent(object sender, RoutedEventArgs e) => await ConfirmAgentAsync(sender, remove: true);
     async void OnCancelAgentInstall(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.CancelAgentInstallAsync(); } }
+    async void OnLoadVerification(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.LoadVerificationChoicesAsync(); } }
+    async void OnRefreshVerification(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.RefreshVerificationAsync(); } }
+    async void OnCancelVerification(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is { } v && sender is Button { Tag: string request }) { await v.CancelVerificationAsync(request); }
+    }
+    async void OnRunVerification(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanRunVerification: true } v) { return; }
+        var selection = v.CaptureVerificationSelection();
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot, Title = "Open a new verification session?",
+            Content = selection.Consent, PrimaryButtonText = "Open test session", CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.RunVerificationAsync(selection); }
+    }
+
+    async void OnSignInAgent(object sender, RoutedEventArgs e)
+    {
+        if (viewModel is not { CanSignInAgents: true } v || sender is not Button { Tag: string id }) { return; }
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = $"Open {v.Agents.FirstOrDefault(a => a.Id == id)?.Label ?? id} sign-in?",
+            Content = $"Open this CLI's own sign-in flow in a visible terminal, using the same agent home as new sessions. Complete or cancel in that window, including any browser approval. {Product.Name} does not collect credentials. This can change the account used by future sessions, but does not confirm access or entitlement, change hook or folder trust, or sign the bridge in to its relay.",
+            PrimaryButtonText = "Open sign-in",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary) { await v.SignInAgentAsync(id); }
+    }
 
     async void OnInstallAgent(object sender, RoutedEventArgs e)
     {
@@ -208,9 +245,7 @@ public sealed partial class SettingsView : UserControl
         if (viewModel is not { SignInCode: { } code, SignInUri: { } uri }) { return; }
         try
         {
-            var data = new DataPackage();
-            data.SetText(code);
-            Clipboard.SetContent(data);
+            ClipboardText.Put(code);
             if (Uri.TryCreate(uri, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps) { await Windows.System.Launcher.LaunchUriAsync(u); }
         }
         // async void: an escape would end the app. The code and the page are on screen anyway.

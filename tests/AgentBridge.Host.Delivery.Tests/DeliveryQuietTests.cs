@@ -8,6 +8,131 @@ public sealed class DeliveryQuietTests
     static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     [Fact]
+    public async Task Planned_stop_waits_through_confirmation_and_resends_get_the_original_outcome()
+    {
+        var gate = new DeliveryGate();
+        var memory = new OutcomeMemory<int>(TimeProvider.System, TimeSpan.FromMinutes(15), gate, () => -1);
+        var key = Guid.NewGuid();
+        var typed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var confirm = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = memory.Once(key, async () =>
+        {
+            await gate.WaitToTypeAsync();
+            gate.DoneTyping();
+            typed.SetResult();
+            return await confirm.Task;
+        }, _ => { });
+        await typed.Task.WaitAsync(Bound);
+        var stop = gate.PrepareStopAsync(Bound);
+        Assert.False(stop.IsCompleted);
+        var repeat = memory.Once(key, () => throw new Exception("must not type twice"), _ => { });
+        Assert.False(repeat.IsCompleted);
+        Assert.Equal(-1, await memory.Once(Guid.NewGuid(), () => Task.FromResult(9), _ => { }));
+        confirm.SetResult(7);
+        Assert.Equal(7, await first.WaitAsync(Bound));
+        using var prepared = await stop.WaitAsync(Bound);
+        Assert.NotNull(prepared);
+        Assert.Equal(7, await repeat.WaitAsync(Bound));
+        Assert.Equal(7, await memory.Once(key, () => throw new Exception("must not type twice"), _ => { }));
+        Assert.Null(gate.TryEnterDelivery());
+    }
+
+    [Fact]
+    public async Task A_recovery_stop_is_granted_after_a_journal_uncertainty_once_nothing_is_in_flight_and_the_failed_worker_is_proven_gone()
+    {
+        var gate = new DeliveryGate();
+        var delivery = gate.TryEnterDelivery();
+        Assert.NotNull(delivery);
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var injector = new GateTrackedInjector(new FailingInjector(new InjectorWorkerException(new IOException("pipe broke"), exited.Task)), gate);
+        await Assert.ThrowsAsync<InjectorWorkerException>(() => injector.InjectAsync(100, null!));
+        var stop = gate.PrepareStopAsync(Bound);
+        Assert.False(stop.IsCompleted);
+        delivery.Dispose();
+        Assert.False(stop.IsCompleted);
+        exited.SetResult();
+        using var lease = await stop.WaitAsync(Bound);
+        Assert.NotNull(lease);
+        Assert.Null(gate.TryEnterDelivery());
+    }
+
+    [Fact]
+    public async Task A_stop_is_refused_while_a_failed_injector_worker_is_still_running_and_granted_once_it_exits()
+    {
+        var gate = new DeliveryGate();
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var injector = new GateTrackedInjector(new FailingInjector(new InjectorWorkerException(new IOException("pipe broke"), exited.Task)), gate);
+        await Assert.ThrowsAsync<InjectorWorkerException>(() => injector.InjectAsync(100, null!));
+
+        Assert.Null(await gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50)));
+        // The refusal released the fence: deliveries go on while the host keeps running.
+        using (var next = gate.TryEnterDelivery()) { Assert.NotNull(next); }
+        exited.SetResult();
+        using var lease = await gate.PrepareStopAsync(Bound);
+        Assert.NotNull(lease);
+    }
+
+    [Fact]
+    public async Task A_stop_is_refused_after_an_injector_failure_that_cannot_prove_its_worker_ended()
+    {
+        var gate = new DeliveryGate();
+        var injector = new GateTrackedInjector(new FailingInjector(new InvalidOperationException("worker termination could not be confirmed")), gate);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => injector.InjectAsync(100, null!));
+        Assert.Null(await gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50)));
+
+        var other = new DeliveryGate();
+        var failed = new GateTrackedInjector(new FailingInjector(new InjectorWorkerException(new IOException("pipe broke"),
+            Task.FromException(new InvalidOperationException("no handle")))), other);
+        await Assert.ThrowsAsync<InjectorWorkerException>(() => failed.InjectAsync(100, null!));
+        Assert.Null(await other.PrepareStopAsync(Bound));
+    }
+
+    [Fact]
+    public async Task A_request_refused_by_a_stop_that_is_then_abandoned_is_delivered_when_sent_again()
+    {
+        var gate = new DeliveryGate();
+        var receipts = new Dictionary<Guid, int>();
+        var memory = new OutcomeMemory<int>(TimeProvider.System, TimeSpan.FromMinutes(15), gate, () => -1,
+            key => receipts.TryGetValue(key, out var known) ? (true, known) : (false, 0),
+            (key, result, _) => receipts[key] = result);
+        var key = Guid.NewGuid();
+        var stop = await gate.PrepareStopAsync(Bound);
+        Assert.NotNull(stop);
+        Assert.Equal(-1, await memory.Once(key, () => Task.FromResult(8), _ => { }));
+        Assert.Empty(receipts);
+
+        stop.Dispose();
+        Assert.Equal(8, await memory.Once(key, () => Task.FromResult(8), _ => { }).WaitAsync(Bound));
+        Assert.Equal(8, receipts[key]);
+    }
+
+    sealed class FailingInjector(Exception failure) : IConsoleInjector
+    {
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) => Task.FromException<InjectionResult>(failure);
+    }
+
+    [Fact]
+    public async Task A_stop_after_a_journal_uncertainty_is_still_refused_while_typing()
+    {
+        var gate = new DeliveryGate();
+        await gate.WaitToTypeAsync();
+        gate.MarkJournalUncertain();
+        Assert.Null(await gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50)));
+        gate.DoneTyping();
+    }
+
+    [Fact]
+    public async Task A_stop_that_times_out_leaves_the_host_and_delivery_running()
+    {
+        var gate = new DeliveryGate();
+        using var delivery = gate.TryEnterDelivery();
+        Assert.NotNull(delivery);
+        Assert.Null(await gate.PrepareStopAsync(TimeSpan.FromMilliseconds(50)));
+        using var next = gate.TryEnterDelivery();
+        Assert.NotNull(next);
+    }
+
+    [Fact]
     public void A_committed_exclusion_cannot_be_released_even_through_IDisposable()
     {
         var gate = new DeliveryGate(new FakeTimeProvider());

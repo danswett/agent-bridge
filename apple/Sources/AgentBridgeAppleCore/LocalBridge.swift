@@ -5,9 +5,13 @@
     /// One reader owns the wire order. Responses are also published so reducers can
     /// start a replacement snapshot at the subscribe response, before its first event.
     public actor LocalBridge {
-        public enum Failure: LocalizedError, Sendable {
-            case disconnected, timeout, duplicateID, invalidMessage, eventOverflow
-            case connection(String)
+        public enum Failure: LocalizedError, Sendable, BridgeFixedSentenceError {
+            case disconnected, timeout, duplicateID, invalidMessage, eventOverflow, pathTooLong
+            case connection
+
+            public var sentence: String {
+                errorDescription ?? ""
+            }
 
             public var errorDescription: String? {
                 switch self {
@@ -16,7 +20,8 @@
                 case .duplicateID: "A request identifier was reused."
                 case .invalidMessage: "The local host sent an invalid message."
                 case .eventOverflow: "Session updates arrived too quickly. Reconnect to sync again."
-                case let .connection(reason): "Could not connect to the local host: \(reason)"
+                case .connection: "Could not connect to the local host."
+                case .pathTooLong: "The socket path must fit in 103 UTF-8 bytes."
                 }
             }
         }
@@ -39,7 +44,7 @@
         {
             disconnect()
             guard !path.isEmpty, !path.utf8.contains(0), path.utf8.count <= 103 else {
-                throw Failure.connection("The socket path must fit in 103 UTF-8 bytes.")
+                throw Failure.pathTooLong
             }
             let token = UUID()
             generation = token
@@ -92,8 +97,8 @@
                         await self?.finish(Failure.timeout, generation: token)
                     }
                     connection.send(content: frame, completion: .contentProcessed { [weak self] error in
-                        if let error {
-                            Task { await self?.finish(Failure.connection(error.localizedDescription), generation: token) }
+                        if error != nil {
+                            Task { await self?.finish(Failure.connection, generation: token) }
                         }
                     })
                     if Task.isCancelled {
@@ -121,19 +126,19 @@
                 opening?.resume()
                 opening = nil
                 receive(generation: token)
-            case let .waiting(error):
+            case .waiting:
                 // Network.framework can transiently wait for its path even for a
                 // Unix socket. The opening deadline bounds recovery without
                 // rejecting a connection that is about to become ready.
                 if opening == nil {
-                    finish(Failure.connection(error.localizedDescription), generation: token)
+                    finish(Failure.connection, generation: token)
                 }
-            case let .failed(error):
+            case .failed:
                 // A peer can close immediately after its final response. Network
                 // may report failure before the queued receive callback delivers
                 // those bytes; that reader owns teardown once opening completes.
                 if opening != nil {
-                    finish(Failure.connection(error.localizedDescription), generation: token)
+                    finish(Failure.connection, generation: token)
                 }
             case .cancelled:
                 finish(Failure.disconnected, generation: token)
@@ -174,8 +179,8 @@
                         pending.removeValue(forKey: id)?.resume(returning: envelope)
                     }
                 }
-                if let error {
-                    throw Failure.connection(error.localizedDescription)
+                if error != nil {
+                    throw Failure.connection
                 }
                 if complete {
                     throw buffer.isEmpty ? Failure.disconnected : Failure.invalidMessage

@@ -458,6 +458,13 @@ transitions keep their own timing, the in-flight progress ring is the only loop 
 glyphs, and scrolling to a question never moves a conversation the person has scrolled back
 through.*
 
+> **Decided by the owner on 2026-11-04, D1–D6 (#659).** This section's text for "nothing pops"
+> (principle 4; the Disclosure, Arriving and leaving, Easing aside, Status glyph, Activity dot,
+> Value change and Toast and banner rows; and "Motion on data updates") is the spec, every
+> decision option A. The options and reasoning are in
+> [proposals/659-no-pop-motion.md](proposals/659-no-pop-motion.md); the clients follow in #684
+> (Windows) and #685 (PWA).
+
 Motion shows where something came from and where it went. It answers the person or a
 change, and never runs for its own sake. The values are in `tokens.json` under `motion`,
 generated as `--ab-motion-*` for the PWA and `AbMotion*` resources for the app
@@ -482,9 +489,13 @@ not the PWA.
    it. A control works during its own transition. A second tap interrupts the first
    motion instead of queueing behind it. Nothing is disabled or made untappable while it
    moves.
-4. **Rows never move on their own** (§1, principle 2). Only the thing that changed
-   animates. A row arriving fades in where it lands; its neighbours take their new places
-   at once rather than sliding, so the list never looks as if it reordered itself.
+4. **Nothing pops, and rows never move on their own** (§1, principle 2; #659). Nothing
+   appears, disappears, or changes its size or its value without at least an ease, on any
+   platform. An item arriving fades in as its slot opens, and its neighbours ease aside to
+   make room; an item leaving fades out as its slot eases closed. A neighbour only ever eases
+   to where the change put it, keeping its order, so the list never looks as if it reordered
+   itself. What arrives in a burst arrives as one change, and a list the person has scrolled
+   away from doesn't move under them (Easing aside, below).
 5. **Short and calm.** About 100–300 ms (83–250 on Windows and in the PWA), and nothing
    but the glyphs longer than 300 ms. Entering decelerates. Leaving accelerates and is
    quicker. A move on screen eases at both ends. Nothing overshoots or bounces.
@@ -528,14 +539,16 @@ easing in, its duration out, and how far it travels.
 | Push and pop | Narrow widths (§5.2): list → session → delegate | Opening a row or a delegate; Back, Esc or the system back gesture | The incoming screen's surface covers the old screen at once, and its content slides 24 in from the trailing side and fades in. Pop is the mirror: the screen beneath returns at once, and its content slides 24 in from the leading side. An approval's command never slides: a session asking a question only fades in, and the list's Needs you lane is there at once. Only content fades, never a surface, so two screens never show through each other | `push`: emphasis, decelerate; medium | Windows: `Frame` navigation with `SlideNavigationTransitionInfo`, or a connected animation from the row's title to the session's, configured Direct (never Gravity's lift and shadow). PWA: the tokens on the incoming content. Apple: `NavigationStack`. Android: Material's shared axis X, with predictive back | Cross-fade |
 | Pane and inspector | Wide widths: the delegate inspector, Details | The header's inspector toggle; Details; choosing a delegate | The pane's content slides 12 in from the trailing edge and fades in. The columns take their new widths at once, so text reflows once and not on every frame | `pane`: standard, decelerate; fast out; small | Windows: the tokens on the pane's content. PWA: a transition on transform and opacity. macOS: `.inspector` | Cross-fade |
 | Tab switch | Conversation / Delegates / Tools; machine tabs; the phone's bottom bar | Choosing a tab | The indicator moves to the new tab, as Selection does. The new content fades in without sliding (Fluent's top-level fade) | `tab`: standard, decelerate | Windows: `SelectorBar`'s and `NavigationView`'s own indicators. Apple: `TabView`. Android: `NavigationBar` | Instant |
-| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list, a fold of delegate events (§6.4) | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one; Show prompt's compact disclosure, the tokens on the chevron and the content (`Motion.Turn`, `Motion.Enter`). PWA: the tokens on the chevron and the content | Instant |
-| Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip, a delegate event in the conversation, the Jump to latest pill (§6.4) | A host adds or removes it; a question is asked or answered; Needs you is turned on or off; the conversation is scrolled more than a screen from its end, or back to it (the pill) | The item fades in where it lands. Leaving, its space closes at once and it fades out where it was. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: the tokens on the row; a copy of a leaving row, which nothing can find or tap, fades where it was. Until #253 reaches the PWA, its Needs you entries and an approval's command appear at once and never fade or move: only an entry's mark fades in. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
-| Status glyph | A row, the session header, the delegate strip, a delegate event's line in the conversation (§6.4) | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
-| Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
+| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list, a delegate's details, a fold of delegate events (§6.4) | Opening or closing it | The chevron turns. Opening, the space eases open as the content fades in and settles 4 down, and what is below eases down with it (Easing aside). Closing, the content fades out, quicker, and the space eases closed. The space is laid out once: what moves is clipped and translated, never resized every frame | `disclosure`: standard, decelerate; fast out; nudge. The space: `shift` | Windows: `Expander`'s own motion where it is one; Show prompt's compact disclosure, the tokens on the chevron and the content (`Motion.Turn`, `Motion.Enter`); what is below it as Easing aside says. PWA: the tokens on the chevron and the content; the space as Easing aside | Instant |
+| Arriving and leaving | A session row (also as Needs you shows or hides it), a Needs you entry, a delegate in the strip, a call in Tools, a line in the conversation (a delegate event, the Now line, a prompt you didn't type (#489), a receipt, a note, a question's card), an empty-state note, the Jump to latest pill (§6.4) | A host adds or removes it; a question is asked or answered; Needs you is turned on or off; the conversation is scrolled more than a screen from its end, or back to it (the pill) | The item fades in as its slot opens, and its neighbours ease aside (Easing aside). Leaving, it fades out where it was, quicker, as its slot eases closed. A session that ends, or leaves the list, while no card is held is the same: its card fades out where it was and the cards below ease up over `shift` to close the gap, as the cards a held card passes do in Reorder; they never jump into place (#659, replacing #605's departure jump). Items arriving in the same frame arrive together, as one block; one arriving while that block still eases joins its move. An approval's card and its command fade where they land and never travel of their own (D3, #659) | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` stays empty, because `AddDeleteThemeTransition` slides an item in from the side and `RepositionThemeTransition` keeps its own timing; a composition fade on the item, and its neighbours as Easing aside. PWA: the tokens on the item; a copy of a leaving item, which nothing can find or tap, fades where it was. Apple: `.transition(.opacity)` in a change animated with the `standard` spring. Android: `animateItem` with the tokens' fade and placement specs | Cross-fade; a session card's gap closes with a short cross-fade (`value`), with no travel |
+| Easing aside | Every list and stack: the session list, Needs you, the strip, Tools, the conversation, the inspector, and what is below a banner or a disclosure | Something above or beside it arrives, leaves, opens, closes or changes height | The neighbour eases from where it was to where the change put it, keeping its order. Only a translation runs: the layout changes once, and nothing is laid out again every frame. A second change while it moves retargets it from where it is, on `decelerate` so it never slows to a stop and starts again, never queued behind it. When the person has scrolled away from the edge things arrive at (the top of Tools, the end of a conversation they scrolled back through), what they are reading stays where it is: the scroll is anchored to it, and an "N new" pill at that edge says what came and takes them there. A response streaming in grows as it arrives, unanimated. Anything moved above an answerable question is a move for Scroll to a question's wait, which counts from where the move comes to rest | `shift`: standard, standard | Windows: an implicit composition animation on each item's `Offset` (and `Translation` for what a layout change moves), not a theme transition. PWA: FLIP (measure, lay out once, translate from the old place to none) with the Web Animations API. Apple: the change inside `withAnimation` on the `standard` spring. Android: `animateItem`'s placement spec, and `animateContentSize` on a block | Instant |
+| Status glyph | A row, the session header, the delegate strip, a delegate event's line in the conversation (§6.4) | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour, and the words cross-fade (Value change). The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
+| Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight cross-fades (Value change) | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
+| Value change | Details' values (Status, Model, Background, Turns, Compactions, Process, Updated), the status words on a row, in the header and in the strip; counts (Needs you · N, N finished, N new, Showing N of M); a title's weight; usage figures and bars | The value changes | The old value fades out as the new one fades in, in the same place, so nothing beside it jumps: numbers are tabular, and the value's cell keeps the wider of the two until the fade ends. A usage bar's fill eases to its reading (a horizontal scale). Changed at once: a value that changed less than 1 s before (it never strobes), an age or an elapsed time ticking, and a value drawn for the first time | `value`: fast, standard | Windows: the old text as a second `TextBlock` in the same cell, faded by composition. PWA: an absolutely placed copy of the old text faded out over the new. Apple: `.contentTransition(.opacity)`. Android: `Crossfade` | Cross-fade |
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
 | Send and Answer | The reply box; a question card | Send, Send answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button that sent it (Send or Send answer, never an option, #773) shows the platform's progress ring, which stops with the request. Decided, not yet built (#600; builds in #616, #625): the ring is the only in-flight signal (§6.5), turning while the request is open and still while this device waits for a machine that isn't connected. Delivered, the ring cross-fades to the `check` icon, which holds about 1 s and cross-fades back to the button's rest glyph; the button never changes size or fill. An exception's line (§6.5) fades in place in the room reserved for it under the box, or on the question card, and fades out in place when it goes; nothing pops and nothing below it moves. Today both clients show Sending…, Sending again… and "Delivered. The session has your reply." for a reply, and "Delivered. The session has your answer." for a question card's answer. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
-| Toast and banner | In-app toasts; banners such as a new version being ready (a machine going offline is never a banner, §6.1, #950) | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. PWA: the tokens on the banner coming in; a leaving one's space closes at once, and a copy of it, which nothing can find or tap, goes back the way it came. System notifications are each OS's own | Cross-fade |
+| Toast and banner | In-app toasts; banners such as a new version being ready (a machine going offline is never a banner, §6.1, #950) | The event it reports | It slides 12 in from its edge and fades in, and what is below eases down to make room (Easing aside). It leaves the same way, quicker, and what was below eases back | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens, on leaving too. PWA: the tokens on the banner coming in; a leaving one's copy, which nothing can find or tap, goes back the way it came, and the space eases closed over `shift`. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
 | Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar, a waiting row or (in the PWA, until #253 reaches it) a Needs you entry opens a session; Jump to latest is chosen (§6.4), which scrolls to the end as the person asked, scrolled back or not | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through (a response growing below on its own doesn't count: the reader is still at its end), is touching, or has the pointer over, nor one in a page or app in the background. For 500 ms after a question appears in a conversation on screen (arriving, shown as its session opens, shown again as its tab, the Sessions page or the app comes back (the window taking the focus back included, visible all along or not), moved as the inspector is shown or hidden or the window crosses a layout width, moved where it is by anything above it changing height (the title wrapping, a tool line, the response, the reasoning or your message, a kept draft dismissed or an answer's receipt going, the delegate strip or a banner appearing or going), by the conversation being pulled back as it gets shorter, or sideways as the window or a pane is narrowed or widened, or becoming answerable as its machine's hold lifts or its machine starts taking answers), or is scrolled into view (a notification's answer focused included), a click or tap on its choices, Approve once, Deny or Send is ignored, so a click already on its way to what was there can't answer it. Needs you's Approve once, Deny and Resend wait the same way after the lane changes (an entry arriving, going or moving, and its answers moved by an entry above growing as its answer goes, by anything above the lane changing height, a banner or the app bar appearing included, or by the list being pulled back as rows below get shorter or go while it is scrolled to its end; an answer's status appearing below the last answers, or the list scrolling, moves nothing and doesn't restart it) or comes back on screen, and while a session opened from it scrolls the list to its row. A smooth scroll to it counts from where it comes to rest; a scroll the person makes after that doesn't restart the wait, unless something above the answers changes height in the same moment, which counts as a move (the scroll and the move can't be told apart). A scroll pulled back to its end (what it scrolls got shorter, or it got taller) is never set aside as the person's: it counts as a move. A click or tap on an answer first reads where the answers are: moved since they were last read (an update drawn in the moment before the click), or unreadable, the click is ignored and the wait starts. A key acts at once | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`; the answers' places read after each layout pass and scroll (`AnswerWatch`) and as a pointer presses one, setting aside only a scroll the person makes (a wheel, a finger, a key or the scroll bar). PWA: `scrollIntoView` with smooth behaviour, at the browser's pace; the places read on `ResizeObserver` and scroll events (`watchMoves`) and as a click comes. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
@@ -550,11 +563,11 @@ easing in, its duration out, and how far it travels.
 - **Motion on data updates:**
   - A response streaming in shows as it arrives, with no typing effect and no fade per
     chunk.
-  - Ages, counts and percentages change in place, with no rolling numbers.
-  - Usage bars take each reading at once. A single fill-width ease when a reading changes
-    was considered and left out. A reading isn't something the person did, and several
-    bars easing every few minutes is motion on its own, which tells the person nothing
-    new. Phase 2 removes the PWA's current 0.4 s ease on them.
+  - Ages and elapsed times tick in place: a clock moving isn't news. Counts, words and
+    percentages cross-fade (Value change), and never roll.
+  - A usage bar eases to each reading over `value` (#659, D4), a single short scale. It used to
+    take each reading at once, so that several bars easing every few minutes wasn't motion on
+    its own; at 83 ms it reads as a change in place, not a sweep.
 - **Choreography for its own sake:** no staggered list on load, and no motion when the
   app starts, the window opens or the theme changes.
 
@@ -855,9 +868,43 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **From 760, and in the Windows app,** the header never collapses. A session never opens
     collapsed. Native clients use the platform's own: `NavigationStack`'s large title on
     Apple; `exitUntilCollapsedScrollBehavior` then `enterAlwaysScrollBehavior` on Android.
-- **Details** is a property list: Agent, Machine, Repository, Branch (mono), Folder (mono, and
-  a long path gives up its middle, never a word), Model, Started, how long in this state,
-  background agents and commands, turns, compactions and the process id; then End session.
+- **Details** is a property list, the same rows in the same order with the same words in every
+  client (#1087; the owner, 2026-11-06: one set, nothing either client showed dropped). A row
+  whose value the host didn't send is left out, never shown empty; Status, Agent, Updated and ID
+  are always there. Then End session.
+
+  | # | Row | Value | Shown |
+  |---|---|---|---|
+  | 1 | Status | The status words (§2.2), e.g. "Working", "Needs sign-in", without a time: rows 2 and 4 carry it. While away, the away words with their "last seen" | Always |
+  | 2 | In this state | "for 12m": how long in this status | Not when idle or away |
+  | 3 | Message | The host's sentence for what is wrong (#800), plain text, never a link | When sent |
+  | 4 | Not responding since | Clock time it went silent (§6.13) | When not responding, not away |
+  | 5 | Driven by | The driver's principal, else "an agent" | When agent-driven, not away |
+  | 6 | Agent | The agent's name, e.g. "Copilot", "Claude", "Codex" | Always |
+  | 7 | Model | As the host reports it | When sent |
+  | 8 | Machine | The machine's name | When known |
+  | 9 | Repository | owner/name | When sent |
+  | 10 | Branch | Mono | When sent |
+  | 11 | Folder | Mono; a long path gives up its middle, never a word | When sent |
+  | 12 | Started | Local clock time; another day adds the date; the full timestamp on hover | When sent |
+  | 13 | Updated | "2m ago" | Always |
+  | 14 | Background | "2 background agents · 1 background command" | When any |
+  | 15 | Turns | "12 turns", "1 turn" | When sent |
+  | 16 | Compactions | "3 compactions" | When more than 0 |
+  | 17 | Process | "pid 4312", mono | When sent |
+  | 18 | ID | The full session id, mono | Always |
+
+  The groups run state (1-5), who (6-7), where (8-11), when (12-13), activity (14-16), then
+  identifiers (17-18). Agent and Model sit together because the model is part of who is
+  working. A value carries its unit ("12 turns", "pid 4312"), so it still reads right when it
+  is copied or read alone. A value wraps rather than being cut off; only Folder shortens, and
+  only by its middle. A label may wrap too. While the session's machine is away (§2.2), Status
+  reads the away words, "Offline · last seen 5m ago" or "Reconnecting…", whose time is the only
+  one in the state group; In this state, Not responding since and Driven by are left out, since
+  they may no longer be so. The other rows stay as last known, and Updated says how old they are. Every value can be selected and copied. The ages and durations tick
+  with the row's own clock. The PWA draws it as a `dl`; the Windows app reads each row as
+  "Row, value". Both clients take the list from one shared definition where they can, and a
+  test in each checks its rows against this table.
   At three panes it heads the inspector, over Tools (each call: glyph, name and arguments in
   mono, age). Below three panes Tools is a tab beside Conversation, and Details takes the
   conversation's place until pressed again. Delegates (#176) join the inspector and the tabs: a
@@ -1010,8 +1057,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     age in meta style: when its turn began (`statusSince` when it started running, seen here). The
     protocol doesn't date a prompt, so one first seen after its turn has no age.
   - **Collapsed by default:** two lines of it in secondary text, then **Show prompt**, with the
-    Disclosure motion (§5.3): the chevron turns and the text settles in, nothing below slides, and
-    it is instant under reduced motion. Open, it reads "Hide prompt" and shows all of it in reading
+    Disclosure motion (§5.3): the chevron turns, the space eases open or closed over `shift` with
+    what is below easing with it, the text fades, and it is instant under reduced motion. Open, it
+    reads "Hide prompt" and shows all of it in reading
     style inside a thin (2 px) agent-colour rule on the leading edge, not a filled card. A new
     prompt starts collapsed; an update to the same one leaves it as the person left it.
   - **Repeats fold.** When a schedule's prompt has the same words as the last one shown under the
@@ -1278,6 +1326,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
     (`truncated`) can't be answered from here either, as before. Leaving the session is never
     an answer: the row keeps its glyph until the host clears the question.
+    In PWA and Windows cards, the host's `answerAtMachineReason: "shape"` adds a second line,
+    exactly "This kind of question can only be answered at the machine.", in Needs you's text
+    colour, after "Answer at the machine · *machine*". Both lines are accessible text, not a live
+    region. No reason, or an unknown one, keeps today's single line; no client guesses the reason.
+    This does not change the row, attention or HA text.
   - **Resolved:** the card quietens, with no Needs you fill, and reads "Main agent asked"
     (or "Delegate *name* asked") over the question as it was shown. Below that:
     - with this device's answer record for the question, the record's progress and outcome as
@@ -1507,7 +1560,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Near the end,** it rides down with the scroll, and past its room it is compact: a
     pinned 48 bar (plus the safe area) holding a one-line copy of the box, the draft's first
     line or the placeholder. The copy is drawn, not read, and is not a tab stop; a tap on it
-    brings the box back in full and focuses it.
+    brings the box back in full and focuses it. The box slid away behind the bar is clipped at the
+    conversation's foot, so on an installed iPhone none of it shows in the home indicator's band
+    below the bar (#1078).
   - **Away from the end,** 32 up sends it away and 64 down brings it back, with its own
     count. The end always shows it in full. A draft is never hidden: the bar shows its first
     line. Like the header, it never expands over the focused control: while that control
@@ -1624,6 +1679,31 @@ machine, online ones first, then the account's offline machines (#213):
   "Update ready · waiting for a question to be answered", never "answer at the machine".
   Every action is the same small secondary button. Check for updates, for every machine at once,
   sits under the rows in the same column.
+- **Update now** (#1159; design, not built; Creative's rules, 6711605555, are spelled out in
+  [v1-update.md](../protocol/v1-update.md#what-the-person-sees)): beside Install, only when an
+  update is ready and this device can carry it out; otherwise the row says why in text2. A quiet
+  machine updates on one press; a busy one, or one the bridge can't read, confirms first, listing
+  each busy session by name with "Mid-turn", "Question waiting" or "Approval waiting", then
+  "They pause while the bridge restarts, usually under a minute.", with **Update now** and
+  **Cancel**, focus on Cancel (as #1142). One that turns busy during the download waits: "Update
+  ready · waiting for the current turn to finish" (Product, #1161), for at most 15 minutes from
+  the press. The restart
+  reads "Restarting to update…", never "Updating…" (#950); the result reads "Updated to *v*" or
+  "Not updated: *reason*", the reason fixed by its code, never the machine's text (#826).
+- **The machine's own window while it updates** (#1167; [app-windows.md](../app-windows.md)):
+  not a row on another device, so "Updating" is right here. With the window open as the install
+  begins, its content becomes one centred state, with no buttons: an indeterminate progress ring,
+  "Updating to version *v*" (a heading that takes keyboard focus, so it is read) and "*Product* closes
+  for a moment and opens again by itself. Your agents keep running.", on the page's layer, the
+  window colour in high contrast. Nothing under it is in reach: the rail and pages are out of the
+  tab order and the automation tree, and search is disabled; if the install doesn't go ahead,
+  they come back and focus returns where it was. Velopack's own window never shows (the apply is silent). The new
+  version opens the window again and shows "Updated to version *v*." as a closable success bar
+  with **What's new**; with the window closed, the toast as before. A start still on the old
+  version after the installer started shows the update bar as a warning, "Couldn't install
+  version *v*. *Product* is still on *old*.", with **Try again**, and a toast too when the window
+  was closed: never silent, never an error's own text. Where the installer never started, nothing
+  was attempted, and nothing is said.
 - **When an update is ready** (owner decision on #689, 6674007815; Product, 6674016765; Creative,
   6674096426): a per-machine setting, a two-choice picker, never a toggle. Each choice carries its
   note.
@@ -1658,6 +1738,22 @@ machine, online ones first, then the account's offline machines (#213):
   keeps no roster lists it so only while its rows are kept.
 - **A machine whose bridge isn't running (§6.14, proposed):** still "Offline" on line 1, and
   line 2 says "Bridge isn't running · since *time*" in place of "Last seen…".
+- **Diagnose (#802, v1-diagnostics.md):** in another connected machine's row, after its updates,
+  a quiet small secondary **Diagnose** when its host offers it. A host that does not offer it
+  shows, in that place, the passive line "Can't be diagnosed from this device · update Slipgates
+  on <machine>", never a button that cannot act. This machine's own row has neither. The
+  states, the same on both clients except where said:
+  - **Asking:** Diagnose does nothing more until the answer (the PWA's reads "Diagnosing…"; the
+    app's is disabled).
+  - **Review:** the snapshot as plain monospace text, headed with the product, the machine and the
+    Pacific time. The PWA wraps it within the row, so a 400 px phone never scrolls sideways; the
+    app keeps lines whole in a read-only box that scrolls within 360 px. Under it the box "I have
+    read this and it is fine to share", and **Copy**, disabled until the box is ticked, beside
+    **Close** (the PWA's Diagnose reads "Diagnose again"). Close is the default: Escape anywhere
+    in the report, on its Copy and Close too, closes it, and Close and Escape both put focus back
+    on Diagnose.
+  - **Refused or unreadable:** one line in the row's error style, in the person's words
+    (v1-diagnostics.md "In the clients"), never the host's text; Diagnose stays pressable.
 
 ### 6.7 Collaborators (#519)
 
@@ -1905,7 +2001,7 @@ verbs). Every state is words on the row, with at most one verb:
   categorised set, never the installer's own text, and the row shows no output lines and no
   Copy details.
 - **Set up, not yet tested:** an agent whose hooks are set up but that no new session has
-  tested yet reads "Not tested yet" (#705), never Ready.
+  tested yet reads "Not tested yet" (#705). Once the host has handled one of its hooks (Agency: the shared Copilot CLI hooks), it reads "Ready" (#1221); a row with failed hooks, an unknown setup or an older host keeps its own words instead.
 - **A host the app can't act on:** "Read-only · *reason*" when the host reports `blocked`
   (for example "Read-only · this machine's bridge is older": a person never sees "host", #959,
     #1022);  "Hook ownership couldn't be checked · *reason*" (or "Hook intake couldn't be
@@ -1998,8 +2094,8 @@ Settings' page (§6.9), each agent from its row.
 above the agent rows (§6.9). It reads the same readiness as the rows, names the one next step, and
 adds no host operation. "Sign in to the CLI itself" is always **Yours to check**, because the host
 cannot verify it yet (#691). The list hides once every step is Done, Yours to check or Optional. Each
-step is read to a screen reader with its state and position first, for example "Next, step 3 of 5,
-Connect its hooks". The stepper below replaces it.
+step is read to a screen reader with its state and position first, for example "Next, step 3 of 6,
+Connect its hooks". The *Start a new session* step is also Done once the host's own new-session test of an installed agent has passed (slice 3, #715). The stepper below replaces it.
 
 Settings with a guide. Six steps, in a stepper that **replaces Settings' own pane** while setup
 runs; the app rail stays, with Settings selected, so Sessions and Machines are one click away
@@ -2110,6 +2206,120 @@ and setup never traps the person (decision 4). The steps, in order, with their b
   pop, and the Steps list is a flyout. The only loops are Checking's `working` glyph (§2.1) and
   Install CLI's ring while an install runs, and both are still under reduced motion. There is
   no progress bar and no percentage.
+
+### 6.11 Settings › Agents: one readiness state per agent (#783)
+
+Decided by the owner on 2026-11-04 (D1–D7, each option A). This builds on #705, which adds
+per-row names and one verb per state. It refines how Settings (§6.9, #384) draws the agents on
+this machine and the host. The check rows of Readiness (§6.8, #384) are unchanged. Until #384's
+sections land, this section applies to the Windows app's current Settings page.
+
+Today each agent is about eight lines of equal weight with no mark, and every card carries Set
+up / Repair and Remove connection. You can't tell whether anything is needed. Now each agent has
+**one state, one mark, one headline and at most one verb**, and everything else is in Details.
+
+**The roll-up state** (D1, D2). Each installed agent's card shows exactly one of these:
+
+| State | Mark (§2.1) | Headline | Verb |
+|---|---|---|---|
+| Ready | `done` in `ready` | "Ready · last hook 3:01 PM" (or "· test session passed 3:01 PM") | None |
+| Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Run test session** (#716). Until it ships: no button, and a hint. "Start a session in it to confirm" |
+| Not set up | `needs` | "Not set up" | **Set up** |
+| Needs repair | `failed`, Danger | "Setup didn't finish" | **Repair hooks** |
+| Managed elsewhere | None; neutral secondary text, no status colour | "Read-only · *why*" ("another bridge profile owns its hooks", "this machine's bridge is older" or "set in this bridge's settings") | None |
+| Couldn't be checked | None; neutral secondary text, no status colour | "Hook ownership couldn't be checked · *why*" ("access denied", "file in use" or "couldn't read"), or "Hook intake couldn't be checked · *why*" | None |
+| Can't check | None; neutral secondary text, no status colour | "Can't check · this machine's bridge is older" | None |
+| Setting up (while it runs) | `working`, Active | "Setting up…" | The pressed verb (Set up or Repair hooks) stays, busy (A4) |
+| Not installed | None | One quiet line in text3: "*Agent* · not installed" (D7) | **Install CLI** where the host can install it, as a subtle button on that line; otherwise "*Agent* · not installed · install it on this machine" and none. Installing, Cancel and "Install failed · *why*" follow [app-windows.md](../app-windows.md) |
+
+- **Ready needs evidence** (D2), the same rule as §6.8's Working. An agent is Ready when either:
+  - a hook from that agent was handled by the host's current run after the agent's last Set up
+    or Repair; or
+  - a test session passed (#716).
+
+  Agency runs on Copilot CLI's hooks, so a handled Copilot CLI hook counts for Agency too (#1221).
+- **The other states also need evidence.** A bridge setup record, with this profile's hook
+  intake on and nothing heard yet, is Not tested yet, never Needs repair, so a healthy machine
+  never shows Repair on its rows. No setup record, or intake off for this profile, is Not set
+  up, with Set up, which turns intake on (#705). Four states come first, in this order,
+  whatever the record and intake say:
+  - hooks the host holds back (`blocked`) are Managed elsewhere;
+  - hooks the host reports `failed` with `hookSetup: unknown` are Couldn't be checked;
+  - `hookSetup: unknown` beside any other hooks comes only from an older host, and is Can't
+    check;
+  - an incomplete setup (`hookSetup: incomplete`, registration failed after the record was
+    written) is Needs repair, with Repair hooks.
+
+  Repair is offered only for `incomplete`. The host has no signal for hooks changed outside
+  Slipgates, so no card claims it. The three neutral states offer no Set up, Repair or Remove,
+  and a blocked row hides Install CLI.
+- **Sign-in and trust** are never shown as checked until the host can observe them. They stay
+  neutral rows in Details and don't affect the roll-up.
+
+**The `ready` colour** (D1; partly amends #384 decision 1, "No success colour"). There is one
+green role, `ready`:
+- dark #3FB950, with words in #56D364;
+- light #1A7F37;
+- WindowText in high contrast.
+
+It colours only the roll-up mark of each agent and of the host (Running). It is never used on
+a check row, a count, a badge or a notification. It is always beside its word ("Ready",
+"Running"), never colour alone. Check rows in Details keep §6.8's neutral Working. The role
+joins `tokens.json` with the implementation, measured like the other roles (§3).
+
+**The card.**
+- The first line is the mark, the agent's name and the headline, and the verb on the right if
+  there is one.
+- **Details** (§5.3; D4) is collapsed when the agent is Ready and open otherwise. It holds:
+  - the executable's path and version (the version shown once);
+  - the agent's home;
+  - the neutral check rows (hooks, sign-in, trust, last hook);
+  - **Run test session**, when Ready (as a secondary button);
+  - at its foot, **Remove bridge integration…** (D5), only when the host reports a setup to
+    remove (`hookSetup` `completed` or `incomplete`). It is hidden on Not set up and on the
+    neutral states, since the host refuses a removal without a setup.
+- **Remove bridge integration…** is a subtle button in Danger's text colour. It asks for
+  confirmation, naming the agent and saying what stays (the CLI, its sign-in and its sessions).
+  Cancel is the default. "Remove connection" is no longer on the card.
+- No verb is drawn disabled: a verb that doesn't apply is hidden. The one exception is A4's
+  busy verb: while its request runs, the pressed verb stays in place, focusable, with its
+  ring, says it's busy, and ignores presses.
+- **When the outcome lands** (here and on the host card below), the busy verb gives way to the
+  new state's verb. If focus was on it, focus moves to that verb, or to the card's headline
+  when the new state has none (Ready and the neutral states). If focus was elsewhere, it stays
+  there. Stop… returns focus from its confirmation to Stop…, which is then the busy verb.
+
+**The host** (D6) is a card spanning the full width above the agents:
+
+| State | Mark | Verbs |
+|---|---|---|
+| Running | `done` in `ready`, "Running · since 2:58 PM" | **Restart**, **Stop…** |
+| Stopped | `idle`, Neutral, "Stopped" | **Start** |
+| Starting or stopping | `working`, Active | The pressed verb (Start, Stop… or Restart) stays, busy (A4); the others are hidden |
+
+- **Stop…** asks for confirmation (sessions on this machine stop reporting). Cancel is the default.
+- The process id, the version and the profile move into the host card's Details.
+
+**Reflow** (D3). The page fills its window, and isn't a fixed column:
+
+| Window width | Layout |
+|---|---|
+| ≥ 1280 | Settings' section pane (240) and the page: the host card spanning the full width, then agent cards in a grid of up to three columns, each at least 340 wide (three at 2000, two at 1280) |
+| 760–1279 | Section pane (208) and the page: the grid falls to two columns, then one |
+| < 760 | The sections as a pivot at the top; one column |
+
+- The grid gap is 16 (§5.1).
+- Prose inside a card keeps to about 75 characters a line.
+- Cards in a row share a height only up to their first line; an open Details grows its own card.
+
+**Accessibility** (§9.1).
+- Each card is a group named "*Agent*, *state*, *headline*" (for example "Copilot CLI, Ready, last
+  hook 3:01 PM").
+- Each button names its agent ("Set up Claude Code", "Run test session, Agency", "Remove bridge
+  integration, Codex").
+- Details is a button with `aria-expanded` (UIA ExpandCollapse).
+- A state change is a polite per-row announcement ("Claude Code, Ready"), never an alert.
+- Every confirmation's default is Cancel.
 
 ### 6.12 Restored sessions (#780)
 
@@ -2464,7 +2674,7 @@ that survives a failed turn never hides the error behind "Delegating".
 | Code expired | "Code expired" | Try again (a new request) |
 | Signed in, confirming (`recovery: pending`) | "Signed in · waiting for *n* sessions to confirm" | None |
 | Recovered (the host cleared `signInNeeded`) | "Signed in · *n* sessions recovered" for 60 s, then gone; or "Recovered by itself" when no person signed in | None |
-| Refused (the host refused the request) | "Sign-in refused · *reason*" | Try again (a new request) |
+| Refused (the machine refused the request) | "Sign-in refused · *reason*" | Try again (a new request) |
 | Failed | "Sign-in failed" (`signin.done` carries no reason) | Try again (a new request) |
 
 A session that fails sign-in again while confirming returns the banner to Needed, with its
@@ -2715,6 +2925,40 @@ question, as choosing its row does.
   push an hour at most, with a count and no text ("3 agent messages are waiting"), which opens
   Needs you.
 
+**Lines that outlive their cause, on every client (#1193):** a line says something about a
+cause: a question waiting, a press counting down, a machine busy. When the cause is gone, an
+amber or red line becomes a neutral closed line, or goes. It never sits. The rule, and what each
+line does:
+- **A closed line stays at least 5 s** (`LINGER_READ_MS`, as an entry in the Needs you lane,
+  §6.1), so it can be read, and then goes unless it is part of the conversation (below).
+- **A question that has left the session's list** is shown as the question as it was asked, kept
+  in the conversation, with "No longer waiting" in neutral words (§6.4, Resolved): never amber,
+  never red, never Try again, and never "Your answer:" (only the words of an answer the person
+  gave say that: one in flight, or one that may have gone in). It stays through the next question
+  and the next turn. The host cannot tell a question the agent withdrew from one answered at
+  the machine or on another device, so no cause is said: there is no "Cancelled" and no
+  "Answered on another device". A stale answer that carries the host's reason for a form it
+  cancelled part answered (`formReset`) is the exception: it says the answer was **not delivered**,
+  keeps what was typed to read and copy, and offers Try again while the question is still listed.
+- **Not confirmed** keeps its words: amber while the question is live, neutral once it is in the
+  history. If a later check says it was delivered, it reads "You answered".
+- **Typed text kept for a question that went** is a neutral note with Dismiss, not amber. It
+  stays through the next turn, and goes on Dismiss or once that text is sent.
+- **"Try again in a moment"** (busy, for an answer, reply, End session or launch) goes when the
+  2 s pause ends, as the control comes back.
+- **A reply's** not-sent, refused and cancelled lines go with the next edit of the box or the
+  next turn; "not confirmed" goes with the next turn, when the conversation shows whether it
+  went in. A line with Try again (could not send) stays while it can be tried.
+- **A lapsed "End session NOT confirmed"** is neutral, and goes after 5 s.
+- **A launch's own complaint about what is picked** ("Not launched: pick a workspace…") stays
+  until the setting it names changes, not until the machine's next list redraws the page.
+- **A folder-trust question the machine stops listing** is one neutral line, "*Machine* no longer
+  lists this question.", for 5 s, and then goes. What the person's own answer did (started,
+  declined, not confirmed) keeps its words.
+
+Windows follows the same rule in its own words for the same lines (#1195); the PWA is checked by
+`test/answer.spec.mjs`, `reply.spec.mjs`, `stop.spec.mjs` and `launch.spec.mjs`.
+
 **Coming back to the app, on every client (#950):** §6.1's "Coming back to the app" rules hold
 where each client comes back: the PWA first, on returning to the screen or a network change; the
 Windows app, rules 1–5, on waking from sleep, with the same 3 s grace and the slot and strip in
@@ -2722,6 +2966,15 @@ the list pane's header row, never in the title bar; Apple and Android when
 they are un-parked.
 
 **Windows (WinUI 3):**
+- **Lines that outlive their cause (#1193, #1195):** an error or warning line lasts only
+  while its cause stands. When the question it was about closes, a refused, stale or failed
+  answer line becomes the neutral "No longer waiting" (no tone, never prefixed "Your answer:"),
+  is kept 5 s so it can be read, then goes; a busy line goes with its 2 s pause. A held
+  answer ("offline", the machine was not connected so nothing was sent) says why it could not
+  go, so it is treated like a refused one. Only delivered and unconfirmed ("Sent, but not
+  confirmed") lines stay. A toast that says an
+  answer did not go is withdrawn when its question closes, and one that would arrive after is
+  not shown.
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
   and a centred search box. System caption buttons.
 - **Search:** finds sessions on every machine by the words of their title, repository, branch,

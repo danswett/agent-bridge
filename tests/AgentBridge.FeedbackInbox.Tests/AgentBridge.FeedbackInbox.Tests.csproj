@@ -16,6 +16,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\AgentBridge.FeedbackInbox\AgentBridge.FeedbackInbox.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.FeedbackEnvelope\AgentBridge.FeedbackEnvelope.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Fixtures\feedback-webcrypto.mjs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

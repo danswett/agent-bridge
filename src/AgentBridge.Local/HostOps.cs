@@ -15,6 +15,11 @@ public static class HostOps
     public const string AgentInstallCapability = "host.agents.install";
     public const string AgentsInstall = "host.agents.install";
     public const string AgentsInstallCancel = "host.agents.install.cancel";
+    public const string AgentVerificationCapability = "host.agents.verify";
+    public const string AgentsVerify = "host.agents.verify";
+    public const string AgentsVerifyCancel = "host.agents.verify.cancel";
+    public const string AgentSignInCapability = "host.agents.signIn";
+    public const string AgentsSignIn = "host.agents.signIn";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
@@ -38,7 +43,27 @@ public static class HostOps
     // running or in its grace. The app waits until none is before it stops the host. For the app
     // alone, like every management op. An older host answers "unknown op": it runs no such probe.
     public const string ProbeHold = "host.probes.hold";
+    // Update now's departure (#1159, docs/protocol/v1-update.md, Going, step 3): the app, its
+    // download checked and its probe hold over, asks the host to leave for the press it carries.
+    // The host takes #805's quiet lease as purpose Update, compares what is busy with what the
+    // person confirmed, announces and commits (UpdateService.DepartAsync), and answers committed
+    // (the app then stops it and installs), waiting (the download kept for the next quiet moment)
+    // or refused. For the app alone, like every management op. This is the departure step #870's
+    // lane owns: wired here, minimally, to the contract the design gives it. An older host answers
+    // "unknown op", and the press ends refused.
+    public const string UpdateDepart = "host.update.depart";
 }
+
+// host.update.depart's request: the press (an Update now's request) the app is carrying.
+public sealed record UpdateDepartRequest(string Request);
+
+// host.update.depart's answer: Committed (the host is fenced until it exits; Transition names the
+// departure), Waiting (Code is the waiting code: turn-running, question-waiting or unknown) or
+// Refused (Code says why, as UpdateCommandResult.Code). An unknown outcome reads as Refused.
+[UnknownAs(Refused)]
+public enum UpdateDepartOutcome { Committed, Waiting, Refused }
+
+public sealed record UpdateDepartResult(UpdateDepartOutcome Outcome, string? Code = null, string? Transition = null);
 
 // host.probes.hold's answer. Busy: a probe whose process goes with the host is running or in its
 // grace; Why says which, for the app's log.
@@ -46,15 +71,23 @@ public sealed record ProbeHoldResult(bool Busy, string? Why = null);
 
 // A device's press of Check or Install, waiting for this machine's app: carried in the host's
 // status, which the app follows, until the app says it has taken it (UpdateReport.Taken). By:
-// the device, as the host's log names it ("pwa 1a2b3c4d").
-public sealed record UpdateAsk(string Request, UpdateAskKind Kind, string By, DateTimeOffset At);
+// the device, as the host's log names it ("pwa 1a2b3c4d"). Now: an Update now (#1159), an Install
+// that skips the app's wait for a quiet machine; it is handed only to an app that says it carries
+// one (UpdateReport.CarriesUpdateNow), so an older app never reads it as a plain Install.
+public sealed record UpdateAsk(string Request, UpdateAskKind Kind, string By, DateTimeOffset At, UpdateNowAsk? Now = null);
+
+// An Update now's terms, as the person signed them: the release they were shown, what they
+// confirmed it may go over (absent on a quiet machine), and the end of the press's life (15 minutes
+// from its signature), after which the app drops it expired.
+public sealed record UpdateNowAsk(string Release, UpdateBusy? Accept, DateTimeOffset Until);
 
 // An unknown kind reads as Check, which changes nothing on the machine.
 [UnknownAs(Check)]
 public enum UpdateAskKind { Check, Install }
 
-// host.update.report: the app's updater now, and the asks it has taken on.
-public sealed record UpdateReport(UpdateState State, IReadOnlyList<string>? Taken = null);
+// host.update.report: the app's updater now, and the asks it has taken on. CarriesUpdateNow: the app
+// can carry an Update now (#1159); an older one says nothing, and the devices are told old-app.
+public sealed record UpdateReport(UpdateState State, IReadOnlyList<string>? Taken = null, bool CarriesUpdateNow = false);
 
 // host.relay.account: the relay that issued the account, and the account. Token is a bearer
 // credential for that relay, as private as the device key.
@@ -154,6 +187,8 @@ public sealed record HostStatus
     // Who can sign an agent in on this machine from their device (#972), read-only, from the
     // machine's person-device roster: none until #55's roster lands. Absent from an older host.
     public SignInDevices? SignInDevices { get; init; }
+    // Current-host-run tests, latest per selected launcher; no persisted ready flags.
+    public IReadOnlyList<AgentVerificationReport>? AgentVerifications { get; init; }
 }
 
 // host.signIn: start GitHub's device flow through this relay (or the one the profile used).
@@ -179,3 +214,5 @@ public sealed record AgentSetupResult(bool Completed, string Detail, bool Restar
 public sealed record AgentInstallRequest(string Agent, bool AcceptAgreements = false);
 public sealed record AgentInstallResult(bool Completed, string Detail, string? Executable = null);
 public sealed record AgentInstallProgress(string Agent, bool InProgress, string Detail, bool Blocked = false);
+public sealed record AgentSignInRequest(string Agent, bool Confirmed = false);
+public sealed record AgentSignInResult(bool Opened, string Detail);

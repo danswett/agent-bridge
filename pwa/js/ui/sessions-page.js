@@ -30,6 +30,7 @@ import { enter, scrollBehavior, watchLane } from './motion.js';
 import { QUESTION_ARRIVAL_GUARD_MS, watchMoves } from './session-card.js';
 import { stopReceipts } from './receipt.js';
 import { CUE_MS } from '../return-grace.js';
+import { PaneDividers } from './pane-dividers.js';
 import { UPDATING } from './hold.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
@@ -172,10 +173,11 @@ export class SessionsPage {
   // trust(hostId): how a folder-trust question on that machine is answered from here, or null.
   // status(id): a machine's status line. forget: a ForgetControl for offline machines, or null.
   // updates: an UpdateControl for the machines that offer updates (#51), or null.
+  // diagnose: a DiagnoseControl for each machine's Diagnose (#802), or null.
   // shell: the pages and app bar (./shell.js), or null: where a session shown goes, and where
   // machines online and a waiting folder-trust question are said.
-  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
-    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, storage, onRendered });
+  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, confirm = () => null, status = () => '', facts = null, forget = null, updates = null, signInDevices = null, diagnose = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {}, opened = () => {} }) {
+    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, confirm, status, facts, forget, updates, signInDevices, diagnose, storage, onRendered, opened });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     // One gate for every send (#269): nothing new is given for a machine with no route now (its
@@ -234,6 +236,14 @@ export class SessionsPage {
     this.view.onInspector = () => this.#toggleInspector();
     for (const m of [this.wide, this.phone]) { m.addEventListener('change', () => this.#resized()); }
     this.#drawPanes();
+    // The widths of the panes from 760 up (#1030): the dividers only draw on those widths.
+    this.dividers = $('list-divider') && $('sessions')
+      ? new PaneDividers({
+        root: $('sessions'), list: $('list-divider'), inspector: $('inspector-divider'), storage,
+        inspectorShown: () => this.wide.matches && !this.#inspectorHidden,
+        onChange: () => { this.view.layoutChanged(); this.view.selected?.reshow(); },
+      })
+      : null;
     // Needs you · N (#165): above the list, and apart from it. Its count is the app's badge.
     this.lane = new NeedsYouLane($('needs-you'), hosts.sessions, {
       answering: (hostId) => this.answering(hostId),
@@ -263,6 +273,8 @@ export class SessionsPage {
       // A session registered may be the one a launch's machine was busy with, or the one a launch
       // reported unconfirmed started (#896).
       if (c?.type === 'upsert') { this.launchPanel.sessionSeen(c.hostId, hosts.sessions.get(c.hostId, c.id)); }
+      // A question that came or went in the session shown is said again (sessions.focus).
+      if (c?.type === 'upsert') { this.#reportOpen(); }
     });
     const unwatchHosts = hosts.onChange(() => {
       const now = new Set((hosts.shownIds?.() ?? []).filter((id) => !hosts.staleOf?.(id)));
@@ -297,6 +309,8 @@ export class SessionsPage {
         this.launchPanel.setOpen(route === 'launch');
         const back = route === 'sessions' && was !== 'sessions';
         was = route;
+        // Sessions reports once its selection is settled, below; another page shows no session.
+        if (route !== 'sessions') { this.#reportOpen(); }
         // Back on Sessions, what it shows is seen now.
         if (route === 'sessions') {
           this.#navigate(() => this.#route(rest));
@@ -687,14 +701,27 @@ export class SessionsPage {
     raf(() => raf(() => { if (this.#frame === frame) { this.#painted = true; } }));
   }
 
+  // The session shown now, if any, said to `opened` (main.js: sessions.focus and the notices of
+  // that session, #1190): the one selected on the Sessions page, which on a phone shows only once
+  // pushed over the list. Another page, or the list, is none.
+  #reportOpen() {
+    const card = this.view?.selected;
+    const showing = card && (!this.shell || this.shell.route === 'sessions') && (!this.phone.matches || this.#open);
+    // The question its card shows is the session's own, as the store has it now.
+    const question = showing ? this.hosts.sessions.get(card.hostId, card.id)?.question?.id ?? null : null;
+    try { this.opened(showing ? { hostId: card.hostId, id: card.id, question } : null); } catch (e) { console.error(e); }
+  }
+
   // Which panes show: on a phone, the list or the session pushed over it; the inspector, as its
   // own pane at the three-pane width unless hidden.
   #drawPanes() {
+    this.#reportOpen();
     const body = globalThis.document?.body;
     if (!body) { return; }
     const was = body.dataset.sessionOpen;
     body.dataset.sessionOpen = this.#open && this.view?.selected ? 'true' : 'false';
     body.dataset.inspector = this.#inspectorHidden ? 'hidden' : 'shown';
+    this.dividers?.refresh();
     const none = this.$('no-session');
     if (none) { none.hidden = !!this.view?.selected; }
     // Push and pop (ui.md §5.3): on a phone the screen that comes covers the other at once, and
@@ -724,6 +751,8 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    // The account's session is no longer shown: said before the page lets go of what says it.
+    try { this.opened(null); } catch (e) { console.error(e); }
     this.#unroute?.();
     this.#unroute = null;
     this.#listening?.abort();
@@ -963,6 +992,7 @@ export class SessionsPage {
       forget: this.forget,
       updates: this.updates,
       signInDevices: this.signInDevices,
+      diagnose: this.diagnose,
       allStatus: hosts.all ? plural(hosts.sessions.size, 'session', 'sessions') : '',
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;
@@ -1009,4 +1039,3 @@ export class SessionsPage {
   #read(key) { try { return this.storage?.getItem(key) ?? null; } catch { return null; } }
   #write(key, value) { try { this.storage?.setItem(key, value); } catch { /* a nicety */ } }
 }
-

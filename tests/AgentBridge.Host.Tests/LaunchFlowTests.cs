@@ -167,6 +167,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
             .InstallAsync("copilot", false, TextWriter.Null);
         var saved = IntakeState.Load(profile).State!.Homes!;
         locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        locator.PathEnvironment = Path.Combine(f.Root, "new-runtime");
         starter.Registers = false;
         var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100), homes: saved);
 
@@ -176,6 +177,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(saved.Copilot, environment["COPILOT_HOME"]);
         Assert.Equal(saved.Claude, environment["CLAUDE_CONFIG_DIR"]);
         Assert.Equal(saved.Codex, environment["CODEX_HOME"]);
+        Assert.Equal(locator.PathEnvironment, environment["PATH"]);
         Assert.False(string.IsNullOrEmpty(environment[Launchers.SessionVariable]));
     }
 
@@ -195,6 +197,69 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.False(environment.ContainsKey("CLAUDE_CONFIG_DIR"));
         Assert.False(environment.ContainsKey("CODEX_HOME"));
         Assert.False(string.IsNullOrEmpty(environment[Launchers.SessionVariable]));
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task A_launched_session_asks_for_a_console_wide_enough_for_every_tab_title_of_a_long_form(string agent)
+    {
+        locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        starter.Registers = false;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = agent, Prompt = "go" }, "fixture");
+
+        // As wide as a six-field form's whole bar needs (AnswerFlowTests): the person's own
+        // default width is not asked for.
+        Assert.Equal(LaunchService.ConsoleColumns, Assert.Single(starter.Specs).Columns);
+    }
+
+    [Fact]
+    public async Task A_launched_sessions_console_is_widened_to_the_launch_width_and_the_width_it_got_is_logged()
+    {
+        starter.Registers = false;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Prompt = "go" }, "fixture");
+
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains($"console is {LaunchService.ConsoleColumns} columns wide", StringComparison.Ordinal))));
+        var widen = Assert.Single(screens.Widens);
+        Assert.Equal(LaunchService.ConsoleColumns, widen.Columns);
+        Assert.True(widen.Pid > 0);
+        // The process's creation time goes with its id, for the worker to check it is still that process.
+        Assert.NotEqual(default, widen.CreatedAt);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_widen_is_not_asked_again_once_the_launched_process_has_exited_so_a_reused_id_is_never_widened()
+    {
+        starter.Registers = false;
+        starter.ExitsAtOnce = true;
+        screens.Widened = _ => new ConsoleWidth(null, "the console could not be widened (attach error 6)", true);
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Prompt = "go" }, "fixture");
+
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("console was not widened: its process (pid", StringComparison.Ordinal))));
+        Assert.Single(screens.Widens);
+        Assert.Empty(screens.Typed);
+    }
+
+    [Fact]
+    public async Task A_console_that_cannot_be_widened_is_logged_once_and_left_as_it_is()
+    {
+        starter.Registers = false;
+        screens.Widened = _ => new ConsoleWidth(null, "the console could not be widened (widen error 87)", false);
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100));
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Prompt = "go" }, "fixture");
+
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("console was not widened: the console could not be widened (widen error 87)", StringComparison.Ordinal))));
+        Assert.Single(screens.Widens);
+        Assert.Empty(screens.Typed);
     }
 
     [Theory]
@@ -685,16 +750,72 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.StartsWith("Unknown profile 'play'; this machine has home, work", (await LaunchAsync(ch, new { agent = "agency", profile = "play" })).Reason);
     }
 
+    [Theory]
+    [InlineData("copilot", "--allow-all")]
+    [InlineData("agency", "--allow-all")]
+    [InlineData("claude", "--dangerously-skip-permissions")]
+    [InlineData("codex", "--ask-for-approval=never")]
+    [InlineData("codex", "--config=approval_policy=\"never\"")]
+    [InlineData("copilot", "--no-auto-update")]
+    public async Task Verification_refuses_configured_extra_arguments_before_starting_any_process(string agent, string extra)
+    {
+        locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        var config = Config(c => c with
+        {
+            Agents = new Dictionary<string, AgentConfig> { [agent] = new() { ExtraArgs = [extra] } },
+        });
+        var launcher = Launcher(config);
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString("D"), Agent = agent, Workspace = "App", Prompt = "connection test" };
+
+        var result = await launcher.LaunchVerificationAsync(request, "local app verification");
+
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("cannot guarantee standard permissions", result.Reason);
+        Assert.Empty(starter.Specs);
+        Assert.Equal(extra, Assert.Single(config.Agent(agent).ExtraArgs));
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("agency")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task The_real_verification_launcher_keeps_standard_permissions_despite_allow_all_defaults(string agent)
+    {
+        locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        starter.Registers = false;
+        var launcher = Launcher(Config(c => c with { Permissions = LaunchProtocol.AllowAll }),
+            wait: TimeSpan.FromMilliseconds(50), follow: TimeSpan.FromMilliseconds(100));
+        var result = await launcher.LaunchVerificationAsync(new LaunchRequest
+        {
+            Request = Guid.NewGuid().ToString("D"), Agent = agent, Workspace = "App",
+            Permissions = LaunchProtocol.AllowAll, Prompt = "connection test",
+        }, "local app verification");
+
+        var spec = Assert.Single(starter.Specs);
+        Assert.Equal(LaunchProtocol.Ask, result.Launched?.Permissions);
+        Assert.DoesNotContain("--allow-all", spec.Arguments);
+        Assert.DoesNotContain("--dangerously-skip-permissions", spec.Arguments);
+        Assert.DoesNotContain("--ask-for-approval", spec.Arguments);
+        Assert.Equal("connection test", spec.Arguments[^1]);
+    }
+
     [Fact]
     public async Task A_folder_trust_question_is_left_for_the_machine_and_other_launches_are_busy_meanwhile()
     {
         starter.Registers = false;
+        var launcher = Launcher(Config());
+        var registered = new TaskCompletionSource<(Guid Request, string Session)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        launcher.RequestRegistered += (key, id) => registered.TrySetResult((key, id));
+        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: launcher).HandleAsync;
         screens.Rows = ["Confirm folder trust", app, "Do you trust the files in this folder?", "❯ 1. Yes", "  2. Yes, and remember this folder for future sessions", "  3. No (Esc)"];
         var ch = await OpenAsync();
-        var first = await LaunchAsync(ch, new { workspace = "App", prompt = "go" });
+        var request = Guid.NewGuid().ToString("D");
+        var first = await LaunchAsync(ch, new { workspace = "App", prompt = "go" }, request);
         Assert.Equal("unconfirmed", first.Outcome_);
         Assert.Contains("is asking whether to trust App. Only a person at the machine can answer that", first.Reason);
         Assert.NotNull(first.Session);
+        Assert.False(registered.Task.IsCompleted);
 
         var second = await LaunchAsync(ch, new { workspace = "API" });
         Assert.Equal(("busy", "Busy: Copilot in App is waiting for a person to answer whether to trust that folder, so nothing was launched. Try again in a couple of minutes."), Pair(second));
@@ -711,6 +832,7 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         screens.Rows = CopilotReady;
         starter.Register(starter.Specs[0]);
         await WaitAsync(async () => (await RequestAsync(ch, LaunchProtocol.Options, new { })).TryGetProperty("busy", out _) == false);
+        Assert.Equal((Guid.Parse(request), first.Session), await registered.Task.WaitAsync(Patience));
         starter.Registers = true;
         Assert.Equal("started", (await LaunchAsync(ch, new { workspace = "API" })).Outcome_);
     }
@@ -1214,13 +1336,25 @@ public abstract partial class LaunchFlowFixture
 
         // Awaited while a read is on its way: where a test holds one.
         public Func<Task>? Reading;
+
+        // Every console widened, and how wide; Widened says what a widen leaves (as asked, by default).
+        public readonly System.Collections.Concurrent.ConcurrentQueue<(int Pid, DateTimeOffset CreatedAt, int Columns)> Widens = new();
+        public Func<int, ConsoleWidth>? Widened;
+
+        public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default)
+        {
+            Widens.Enqueue((processId, createdAt, columns));
+            return Task.FromResult(Widened?.Invoke(columns) ?? new ConsoleWidth(columns, null, false));
+        }
     }
 
     private protected sealed class FakeLocator : IAgentLocator
     {
         public readonly Dictionary<string, string> Installed = [];
+        public string? PathEnvironment;
 
         public string? Find(Launcher launcher, AgentConfig config) => Installed.GetValueOrDefault(launcher.Id);
+        public string? ChildPath() => PathEnvironment;
     }
 
     private protected sealed class FakeRunner : ICommandRunner

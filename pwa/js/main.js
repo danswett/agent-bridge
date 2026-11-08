@@ -23,18 +23,19 @@
 //   demo.js          ?demo=1: simulated machines (?machines=2 or 3), no relay; loaded only then
 //   brand.js         the product's name, for every place the app shows it
 //   release-watch.js new releases of the app that keep failing to install
-import { RELAY } from '../config.js';
+import { APP_VERSION, FEEDBACK_KEY_ID, FEEDBACK_PUBLIC_KEY, RELAY } from '../config.js';
 import { BRAND, NOTIFICATIONS_BLOCKED } from './brand.js';
 import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
 import { accountStore, startDeviceFlow } from './signin.js';
 import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
 import { ReturnGrace } from './return-grace.js';
+import { Reading } from './reading.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
 import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
-import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
-import { Capabilities } from './protocol.js';
+import { PushRegistrar, closeMachineNotices, closeNotices, closeReadNotices, closeStaleNotices, fetchVapidKey } from './push.js';
+import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
 import { offlineMachines } from './ui/views.js';
 import { Shell } from './ui/shell.js';
 import { SessionsPage } from './ui/sessions-page.js';
@@ -42,6 +43,7 @@ import { UsageBook } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
+import { DiagnoseControl } from './diagnostics.js';
 import { ReleaseWatch } from './release-watch.js';
 import { LastingBanner } from './banner-rule.js';
 import { UsageView } from './ui/usage-view.js';
@@ -52,6 +54,7 @@ import { RelayBlobs } from './blobs.js';
 import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 import { applyTextSize, readTextSize, saveTextSize } from './text-size.js';
+import { FeedbackDiagnostics, feedbackFailureMessage, isSensitiveFeedbackText, sendFeedbackBundle, serializeFeedbackBundle } from './feedback.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
 if (installedOnApple(markPlatform())) { edgeSwipeBack(document, () => history.back()); }
@@ -146,9 +149,9 @@ const signInAgent = (p) => { const v = p.get('signin'); return ['copilot', 'clau
 // A link's machine, session and question, or the agent whose sign-in it is about, taken out of the
 // address so neither a reload nor a later sign-in, possibly as another account, reuses it.
 function takeLink() {
-  const link = { host: param(params, 'host'), session: param(params, 'session'), question: param(params, 'question'), signin: signInAgent(params) };
-  if (!['host', 'session', 'question', 'signin'].some((k) => params.has(k))) { return null; }
-  for (const k of ['host', 'session', 'question', 'signin']) { params.delete(k); }
+  const link = { host: param(params, 'host'), session: param(params, 'session'), question: param(params, 'question'), signin: signInAgent(params), needsyou: params.get('needsyou') === '1' };
+  if (!['host', 'session', 'question', 'signin', 'needsyou'].some((k) => params.has(k))) { return null; }
+  for (const k of ['host', 'session', 'question', 'signin', 'needsyou']) { params.delete(k); }
   const rest = params.toString();
   history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}${location.hash}`);
   return { ...link, host: link.host && ID.test(link.host) ? link.host : null };
@@ -166,6 +169,7 @@ function takeLink() {
 function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
   if (linked.signin) { focusSignIn(); return; }
+  if (linked.needsyou) { focusNeedsYou(); return; }
   const card = page.view.card(linked.host, linked.session);
   if (!card) { return; }
   if (!linked.shown) {
@@ -219,6 +223,29 @@ function focusSignIn() {
   setLinked(null);
 }
 
+// A group push's link (#913): the list with Needs you in view, focus on its heading (never an
+// answer: Enter or Space would send one unread), once the machine's list is whole (#269) and only
+// if the person has not moved on. The lane is hidden when nothing needs anyone (answered since the
+// push): the machine as it is, and nothing said.
+function focusNeedsYou() {
+  if (!linked.shown) {
+    page.showList();
+    const want = { ...linked, shown: true, left: document.activeElement };
+    setLinked(want);
+    watchFocus(want);
+  }
+  if (!page.hosts.route(linked.host)) { return; }
+  const { left } = linked;
+  setLinked(null);
+  const now = document.activeElement;
+  if (now && now !== document.body && now !== left) { return; }
+  const lane = page.lane;
+  lane?.render();
+  if (!lane || lane.container.hidden) { return; }
+  lane.head.tabIndex = -1;
+  lane.head.focus({ preventScroll: false });
+}
+
 // A tap on a notification while the app is open: the worker says where to go.
 navigator.serviceWorker?.addEventListener('message', (e) => {
   if (e.data?.type !== 'agent-bridge.open' || typeof e.data.url !== 'string') { return; }
@@ -228,7 +255,7 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
   try { p = new URL(e.data.url).searchParams; } catch { return; }
   const host = param(p, 'host');
   if (!host || !ID.test(host)) { return; }
-  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question'), signin: signInAgent(p) });
+  followLink?.({ host, session: param(p, 'session'), question: param(p, 'question'), signin: signInAgent(p), needsyou: p.get('needsyou') === '1' });
 });
 navigator.serviceWorker?.startMessages?.();
 
@@ -385,7 +412,8 @@ async function startDemo() {
   // ?confirmDelay=: how long after typing an answer or reply the machine confirms it, to see Typed.
   host.confirmDelayMs = Number(params.get('confirmDelay')) || 0;
   // ?machines=2 or 3: the account's other machines, after this one.
-  const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
+  // ?diagnose=1: the laptop offers its diagnostics (#802); the others are hosts from before.
+  const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs, diagnosing: params.get('diagnose') === '1' })];
   // With ?signin=1, each other machine that takes answers needs a sign-in too (#800).
   if (params.get('signin') === '1') {
     for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) {
@@ -436,6 +464,8 @@ async function startDemo() {
     });
   }
   const demoUpdates = new UpdateControl({ fleet });
+  // ?diagnose=1: each machine's Diagnose (#802), as a person's device has it.
+  const demoDiagnose = params.get('diagnose') === '1' ? new DiagnoseControl({ fleet }) : null;
   const transfers = new Map();
   for (const m of machines) {
     if (m.capabilities.includes(TRANSFER.capability)) { transfers.set(m.machine.id, await demoTransfers(m, m.machine.id)); }
@@ -459,11 +489,13 @@ async function startDemo() {
     forget: demoForget,
     updates: demoUpdates,
     signInDevices: (id) => fleet.signIns(id),
+    diagnose: demoDiagnose,
     storage: demoStorage,
     onRendered: () => focusLinked(),
   });
   demoForget.onChange(() => page.drawMachines());
   demoUpdates.onChange(() => page.drawMachines());
+  demoDiagnose?.onChange(() => page.drawMachines());
   fleet.onChange(() => page.drawMachines());
   $('machines').hidden = false;
   hosts.restoreTarget(page.routedHost ?? null);
@@ -601,9 +633,143 @@ function begin(account) {
 
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
   const hosts = new HostSession({ connection, me: identity.deviceId, grace });
+  const feedbackDiagnostics = new FeedbackDiagnostics();
+  const feedbackDialog = $('feedback-dialog');
+  const feedbackNote = $('feedback-note');
+  const feedbackPreview = $('feedback-preview');
+  const feedbackError = $('feedback-error');
+  const feedbackWarning = $('feedback-warning');
+  const feedbackSend = $('feedback-send');
+  let feedbackBundle = null;
+  let feedbackSending = false;
+  const feedbackConfigured = !!(FEEDBACK_KEY_ID && FEEDBACK_PUBLIC_KEY);
+  $('feedback').hidden = !feedbackConfigured;
+  const fillFeedbackList = (element, values, field) => {
+    const items = values.map((value) => {
+      const item = document.createElement('li');
+      item.textContent = value[field];
+      return item;
+    });
+    if (!items.length) {
+      const item = document.createElement('li');
+      item.textContent = 'None collected';
+      items.push(item);
+    }
+    element.replaceChildren(...items);
+  };
+  const renderFeedbackOverview = () => {
+    $('feedback-platform').textContent = feedbackBundle.platform;
+    $('feedback-app-version').textContent = feedbackBundle.versions.app;
+    $('feedback-browser').textContent = feedbackBundle.versions.browser;
+    $('feedback-protocol-version').textContent = feedbackBundle.versions.protocol ?? 'Unknown';
+    const hosts = feedbackBundle.versions.hosts;
+    $('feedback-hosts-summary').textContent = `Machine versions (${hosts.length})`;
+    fillFeedbackList($('feedback-hosts-list'), hosts.map((version) => ({ version })), 'version');
+    const events = feedbackBundle.events;
+    $('feedback-events-summary').textContent = `${events.length} connection event${events.length === 1 ? '' : 's'}`;
+    fillFeedbackList($('feedback-events-list'), events, 'name');
+    const logs = feedbackBundle.logs;
+    $('feedback-error-codes-summary').textContent = `${logs.length} error code${logs.length === 1 ? '' : 's'}`;
+    fillFeedbackList($('feedback-error-codes-list'), logs, 'code');
+  };
+  const feedbackBlockReason = () => {
+    if (!connection.ready || !connection.relay) { return 'Connect to the relay to send feedback.'; }
+    if (!(connection.relay.feedbackMaxBytes > 0)) { return "This relay doesn't accept feedback uploads yet."; }
+    return '';
+  };
+  const drawFeedbackAvailability = () => {
+    const reason = feedbackBlockReason();
+    $('feedback-status').textContent = reason || 'Diagnostics are ready to review.';
+    if (!feedbackDialog.open) { return; }
+    if (reason && feedbackError.dataset.kind !== 'send') {
+      feedbackError.textContent = reason;
+      feedbackError.hidden = false;
+      feedbackError.dataset.kind = 'availability';
+    } else if (feedbackError.dataset.kind === 'availability') {
+      feedbackError.hidden = true;
+      feedbackError.dataset.kind = '';
+    }
+    feedbackSend.disabled = !!reason || feedbackSending || isSensitiveFeedbackText(feedbackNote.value);
+  };
+  const renderFeedbackPreview = () => {
+    if (!feedbackBundle) { return null; }
+    if (feedbackNote.value.trim()) { feedbackBundle.note = feedbackNote.value; } else { delete feedbackBundle.note; }
+    feedbackPreview.textContent = serializeFeedbackBundle(feedbackBundle);
+    renderFeedbackOverview();
+    const sensitive = isSensitiveFeedbackText(feedbackNote.value);
+    feedbackWarning.hidden = !sensitive;
+    feedbackWarning.textContent = sensitive ? 'This looks like a password or token. Remove it to send.' : '';
+    drawFeedbackAvailability();
+    return feedbackBundle;
+  };
+  $('feedback-open').onclick = () => {
+    if (!feedbackConfigured) { return; }
+    feedbackNote.value = '';
+    feedbackError.hidden = true;
+    feedbackError.dataset.kind = '';
+    feedbackWarning.hidden = true;
+    feedbackSend.textContent = 'Send feedback';
+    feedbackBundle = feedbackDiagnostics.snapshot({
+      appVersion: APP_VERSION,
+      protocolVersion: PROTOCOL_VERSION,
+      hostVersions: hosts.links().map((link) => link.machine?.hostVersion),
+    });
+    renderFeedbackPreview();
+    feedbackDialog.showModal();
+    drawFeedbackAvailability();
+    feedbackNote.focus();
+  };
+  feedbackNote.addEventListener('input', renderFeedbackPreview);
+  $('feedback-cancel').onclick = () => { if (!feedbackSending) { feedbackDialog.close(); } };
+  feedbackDialog.addEventListener('close', () => { feedbackBundle = null; });
+  feedbackDialog.addEventListener('cancel', (event) => { if (feedbackSending) { event.preventDefault(); } });
+  feedbackSend.onclick = async () => {
+    if (feedbackSending) { return; }
+    const bundle = renderFeedbackPreview();
+    if (!bundle || isSensitiveFeedbackText(bundle.note)) { return; }
+    const reason = feedbackBlockReason();
+    if (reason) {
+      feedbackError.textContent = reason;
+      feedbackError.hidden = false;
+      feedbackError.dataset.kind = 'availability';
+      return;
+    }
+    const relay = connection.relay;
+    feedbackSending = true;
+    feedbackNote.disabled = true;
+    $('feedback-cancel').disabled = true;
+    feedbackSend.textContent = 'Sending…';
+    feedbackError.hidden = true;
+    feedbackError.dataset.kind = '';
+    feedbackSend.disabled = true;
+    try {
+      await sendFeedbackBundle({
+        relay,
+        bundle,
+        keyId: FEEDBACK_KEY_ID,
+        publicKey: FEEDBACK_PUBLIC_KEY,
+        upload: (url, bytes) => new RelayBlobs(relay).upload(url, bytes),
+      });
+      const sentAt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date());
+      $('feedback-status').textContent = `Thanks. Sent at ${sentAt}.`;
+      feedbackDialog.close();
+    } catch (e) {
+      feedbackError.textContent = feedbackFailureMessage(e, BRAND.name);
+      feedbackError.hidden = false;
+      feedbackError.dataset.kind = 'send';
+      feedbackSend.textContent = 'Retry';
+    } finally {
+      feedbackSending = false;
+      feedbackNote.disabled = false;
+      $('feedback-cancel').disabled = false;
+      if (feedbackError.dataset.kind !== 'send') { feedbackSend.textContent = 'Send feedback'; }
+      drawFeedbackAvailability();
+    }
+  };
+  drawFeedbackAvailability();
   const link = takeLink();
   // A session's link wins over a sign-in's: a push carries one or the other.
-  const wanted = (l) => (l?.host && l.session ? { host: l.host, session: l.session, question: l.question } : l?.host && l.signin ? { host: l.host, signin: l.signin } : null);
+  const wanted = (l) => (l?.host && l.session ? { host: l.host, session: l.session, question: l.question } : l?.host && l.signin ? { host: l.host, signin: l.signin } : l?.host && l.needsyou ? { host: l.host, needsyou: true } : null);
   setLinked(wanted(link));
   // A link's machine is shown: with every other when every machine is, else on its own. A
   // notification is not a choice in the Machines panel, so what is remembered stays.
@@ -618,10 +784,13 @@ function begin(account) {
   // subscription is on that machine, which is gone; the notices it left here are closed.
   // Each machine's updates (#51): Check and Install, from a person's device, which this is.
   const updates = new UpdateControl({ fleet });
+  // Each machine's Diagnose (#802): read here, copied only after review.
+  const diagnose = new DiagnoseControl({ fleet });
   const dropMachine = (id) => {
     hosts.dropMachine(id);
     fleet.forget(id);
     updates.forget(id);
+    diagnose.forget(id);
     if (hosts.targetId === id) { hosts.select(ALL); }
     worker().then((r) => closeMachineNotices(r, id)).catch(() => {});
   };
@@ -630,8 +799,12 @@ function begin(account) {
   // channel to it is open now: after a reconnect, one still waiting for its outcome is resent
   // with the same request. Large files go through the blob store of the relay this page is
   // connected to, when it has one and the machine fetches from it (sessions.attach.blob).
+  // What this page shows is told to each machine (sessions.focus) and its notices taken down
+  // while it is read (#1190). worker() is defined below; it is only called once a session is open.
+  const reading = new Reading({ hosts, close: (hostId, sessionId, question) => worker().then((r) => closeReadNotices(r, hostId, sessionId, question)) });
   page = new SessionsPage({
     $, hosts, connection, me: identity.deviceId, shell,
+    opened: (open) => reading.open(open),
     blobs: () => (connection.relay ? new RelayBlobs(connection.relay) : null),
     relayMax: () => connection.relay?.blobs?.max ?? 0,
     // The account's other machines' sessions, each signed for when picked.
@@ -666,6 +839,7 @@ function begin(account) {
     forget: forgets,
     updates,
     signInDevices: (id) => fleet.signIns(id),
+    diagnose,
     onRendered: () => focusLinked(),
   });
   const { answers, replies, stops, launches } = page;
@@ -748,6 +922,7 @@ function begin(account) {
   });
   let staleTimer = null;
   hosts.sessions.onChange((c) => {
+    feedbackDiagnostics.recordEvent(`host.sessions.${c?.type}`);
     if (c.type !== 'synced' && !hosts.link(c.hostId)?.client?.synced) { return; }
     clearTimeout(staleTimer);
     staleTimer = setTimeout(() => {
@@ -766,6 +941,7 @@ function begin(account) {
   fleet.onChange(() => page.drawMachines());
   forgets.onChange(() => page.drawMachines());
   updates.onChange(() => page.drawMachines());
+  diagnose.onChange(() => page.drawMachines());
   hosts.restoreTarget(link?.host ?? page.routedHost ?? null);
   fleet.start();
   // "last seen 5m ago" moves on with nothing else to redraw the list: every machine may be offline.
@@ -785,8 +961,15 @@ function begin(account) {
     forgets.reconcile(now ?? []);
   });
   connection.on('presence', () => page.drawMachines());
-  connection.on('log', (line) => console.log(line));
-  connection.on('state', ({ state }) => {
+  connection.on('log', (line) => {
+    const code = line.startsWith('relay message: ') ? 'relay-message-error' : line.startsWith('undeliverable to ') ? 'relay-undeliverable' : 'transport-error';
+    feedbackDiagnostics.recordLog(code);
+    console.log(line);
+  });
+  connection.on('state', ({ state, detail }) => {
+    feedbackDiagnostics.recordEvent(`connection.${state}`);
+    drawFeedbackAvailability();
+    if (state === 'replaced') { $('replaced-text').textContent = detail; }
     replacedBanner.set(state === 'replaced');
     switch (state) {
       // News, as reconnecting is: the strip shows on a phone, in plain words.
@@ -810,8 +993,13 @@ function begin(account) {
     fleet.clear();
     forgets.clear();
     updates.clear();
+    diagnose.clear();
     lastKnown = null;
     page.clear();
+    // Its listeners go with the account: the next sign-in begins afresh with a Reading of its own.
+    reading.stop();
+    $('feedback').hidden = true;
+    if (feedbackDialog.open) { feedbackDialog.close(); }
     // A session's address names this account's machine: the next sign-in, perhaps another
     // account, would otherwise start on it. A link that arrives after this is kept.
     if (shell.route === 'sessions' && shell.rest.length) { shell.go('sessions', { replace: true }); }
@@ -834,6 +1022,9 @@ function begin(account) {
     hosts.forget();
     fleet.clear();
     page.clear();
+    reading.stop();
+    $('feedback').hidden = true;
+    if (feedbackDialog.open) { feedbackDialog.close(); }
     accountStore.clear();
     connection.stop();
     // Not for long: signing out must not wait on a service worker that isn't running.

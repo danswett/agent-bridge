@@ -16,18 +16,23 @@ namespace AgentBridge.Host;
 //     host.restart and host.stop is untouched and gains no way around it;
 //   * only a device the relay lists as a person's (pwa or app), connected now, that signed the
 //     command itself (design §5.5, SignedCommands) for this machine, at most two minutes before;
-//     never the app beside this host, whose key an agent here could use as the same user;
+//     never the app beside this host, whose key an agent here could use as the same user. This is
+//     the one gate Update now (#1159, UpdateService) passes too (SignedPress);
 //   * nothing on a read-only machine, reads included;
 //   * a restart leaves only through #805's quiet lease (LifecycleCoordinator): it is refused at once
-//     when the lease cannot be had, never forced, never carried out later (owner, Q-O7);
-//   * at most 2 committed restarts per machine every 6 hours until the signed roster (#55);
+//     when the lease cannot be had, never forced; a restart is never carried out later (owner, Q-O7);
+//     an update a person asks for now (#1159, owner 2026-11-07) waits for its download, up to 11
+//     minutes for a Codex usage check and up to a minute for the lease, lives at most 15 minutes from
+//     its signature, and goes over no busy session its confirmation didn't cover: if the machine
+//     became busier meanwhile it keeps the download and installs at the next quiet moment within
+//     that life (Product and the security review, #1161);
+//   * at most 2 committed restarts per machine every 6 hours until the signed roster (#55), counted
+//     together with Update now's, which has an allowance of its own (1 in 6 hours) it spends first;
 //   * a repair only for an agent this installation set up (its ownership record names this
 //     profile), and only ever the Settings repair, never a removal.
 // Stop, config and the Home Assistant token are refused here until #55, before their data is read.
 public sealed class ManageService
 {
-    // Connection's answer to Q-C1 on #886: a person's device is pwa or app, as for update and folder trust.
-    static readonly HashSet<string> PersonKinds = new(["pwa", "app"], StringComparer.Ordinal);
     public const string ThroughTheRelay = "managing a machine from another device goes through the relay; on this machine, use the app's Settings";
     public const string FileName = "manage.json";
     public const string PendingFile = "manage-pending.json";
@@ -156,7 +161,7 @@ public sealed class ManageService
     public IEnumerable<string> Offered(IProtocolChannel channel)
     {
         if (channel is not SecureChannel secure || !Enabled() || Lifecycle is null || (OfferedReadOnly ?? ReadOnly)() is not null) { yield break; }
-        if (Who(secure.PeerId) is not { } who || !PersonKinds.Contains(who.Kind) || IsLocalApp(secure.PeerId)) { yield break; }
+        if (Who(secure.PeerId) is not { } who || !SignedPress.IsPerson(who.Kind) || IsLocalApp(secure.PeerId)) { yield break; }
         yield return ManageProtocol.Capability;
         if (Hooks?.Available == true) { yield return ManageProtocol.HooksCapability; }
     }
@@ -190,7 +195,7 @@ public sealed class ManageService
 
     void ReadAllowed(SecureChannel secure)
     {
-        if (Who(secure.PeerId) is not { } who || !PersonKinds.Contains(who.Kind))
+        if (Who(secure.PeerId) is not { } who || !SignedPress.IsPerson(who.Kind))
         {
             throw new InvalidOperationException("only a person's phone, browser or Windows app can manage a machine");
         }
@@ -206,7 +211,7 @@ public sealed class ManageService
         finally { lock (gate) { inFlight.Remove(v.Request); } }
     }
 
-    async Task<object> RestartVerifiedAsync(SecureChannel channel, Verified v)
+    async Task<object> RestartVerifiedAsync(SecureChannel channel, SignedPress v)
     {
         // Q-C4 (Connection, #886): the shared CommandBody carries args for the actions that define
         // them; a restart defines none, so a body with any is not this press.
@@ -297,7 +302,7 @@ public sealed class ManageService
         finally { lock (gate) { inFlight.Remove(v.Request); } }
     }
 
-    async Task<object> RepairVerifiedAsync(Verified v)
+    async Task<object> RepairVerifiedAsync(SignedPress v)
     {
         // Q-C4: a repair defines one argument, agent, and nothing travels beside it.
         if (v.Body.ContentSha256 is not null || v.Body.Args is { } given && (given.ValueKind != JsonValueKind.Object || given.EnumerateObject().Any(p => p.Name != "agent")))
@@ -357,46 +362,30 @@ public sealed class ManageService
         }
     }
 
-    internal sealed record Verified(CommandBody Body, string Request, string Device, string By, string Name);
-    internal sealed record Checked(Verified? Verified, ManageResult? Refusal);
+    internal sealed record Checked(SignedPress? Verified, ManageResult? Refusal);
+
+    static readonly SignedPress.Words ManageWords = new("manage a machine", "a management command");
 
     // Every rule a press must pass, in the order docs/protocol/v1-sessions.md ("Managing a machine") gives. A request
     // already answered gets that answer again, even past its lifetime, and never acts again; one
     // being handled now is busy. A press that passes is in flight until its caller lets it go.
+    // The signature, the device and read-only are the one gate Update now passes too (SignedPress).
     Checked Check(SecureChannel channel, JsonElement data, string op, string kind)
     {
         var peer = channel.PeerId;
         ManageCommand? request = null;
         try { request = data.ValueKind == JsonValueKind.Object ? data.Deserialize<ManageCommand>(ProtocolJson.Options) : null; }
         catch (JsonException) { }
-        if (request?.Command is not { } command || Peek(command) is not { } peeked)
-        {
-            return new(null, Refuse(peer, op, null, ManageReason.BadSignature, "the command is malformed"));
-        }
-        // Verified as of its own signing time, so the MAC and every field are checked first; its
-        // lifetime is checked below, after the replay check.
-        var (body, problem) = SignedCommands.Verify(self, command, op, DateTimeOffset.FromUnixTimeSeconds(Math.Clamp(peeked.IssuedAt, 0, 253402300799)));
-        if (body is null) { return new(null, Refuse(peer, op, null, ManageReason.BadSignature, problem ?? "the command could not be verified")); }
-        var requestId = Guid.Parse(body.Request).ToString();
-        if (body.Principal.Device != peer) { return new(null, Refuse(peer, op, requestId, ManageReason.NotPeer, "the command must be signed by the device sending it")); }
-        if (Who(peer) is not { } who) { return new(null, Refuse(peer, op, requestId, ManageReason.NotConnected, "the device asking is not connected to the relay now")); }
-        if (!PersonKinds.Contains(who.Kind)) { return new(null, Refuse(peer, op, requestId, ManageReason.NotPerson, "only a person's phone, browser or Windows app can manage a machine")); }
-        if (IsLocalApp(peer)) { return new(null, Refuse(peer, op, requestId, ManageReason.LocalDevice, "the app on this machine manages it from its Settings, not through the relay")); }
-        if (ReadOnly() is { } readOnly) { return new(null, Refuse(peer, op, requestId, ManageReason.ReadOnly, $"this machine is read-only for other devices: {readOnly}")); }
-        var by = $"{who.Kind} {peer[..8]}";
-        var name = Limits.KeepStart(HostConfigFile.CleanName(who.Name), ManageProtocol.Name) ?? "";
-        var verified = new Verified(body, requestId, peer, by, name);
+        var passed = Gate(peer, request?.Command, op, ManageWords);
+        if (passed.Press is not { } verified) { return new(null, Refuse(peer, op, passed.Request, passed.Code!, passed.Detail!)); }
+        var requestId = verified.Request;
         lock (gate)
         {
             if (saved.Requests.FirstOrDefault(e => e.Request == requestId) is { } taken) { return new(null, Result(taken)); }
             if (inFlight.Contains(requestId)) { return new(null, Refuse(peer, op, requestId, ManageReason.Busy, "this press is already being handled")); }
         }
         var now = time.GetUtcNow();
-        var issued = DateTimeOffset.FromUnixTimeSeconds(body.IssuedAt);
-        var expires = DateTimeOffset.FromUnixTimeSeconds(body.ExpiresAt);
-        if (issued - Skew > now) { return new(null, Refuse(peer, op, requestId, ManageReason.Future, "the command was signed in the future; check the clocks of the two devices")); }
-        if (expires < now) { return new(null, Refuse(peer, op, requestId, ManageReason.Expired, "the command has expired; press again")); }
-        if (expires - issued > ManageProtocol.MaxLifetime) { return new(null, Refuse(peer, op, requestId, ManageReason.Expired, "a management command lasts at most 2 minutes")); }
+        if (SignedPress.Lifetime(verified.Body, now, ManageWords) is { } lapsed) { return new(null, Refuse(peer, op, requestId, lapsed.Code, lapsed.Detail)); }
         lock (gate)
         {
             // Again: the first press may have finished between the two looks.
@@ -411,14 +400,13 @@ public sealed class ManageService
         return new(verified, null);
     }
 
-    static CommandBody? Peek(SignedCommand command)
-    {
-        try
-        {
-            return BlobFormat.FromBase64Url(command.Body) is { } bytes ? JsonSerializer.Deserialize<CommandBody>(bytes, ProtocolJson.Options) : null;
-        }
-        catch (Exception e) when (e is JsonException or FormatException or ArgumentException) { return null; }
-    }
+    // The shared gate (SignedPress), with what this host knows of the device: who the relay says it
+    // is, and whether it is the app beside this host. UpdateService's Update now passes it too.
+    internal SignedPress.Checked Gate(string peer, SignedCommand? command, string action, SignedPress.Words words) =>
+        SignedPress.Verify(self, command, action, peer, Who(peer), IsLocalApp, ReadOnly, words);
+
+    // A press passed through Gate before, read back from its record (SignedPress.Reverify).
+    internal SignedPress? Reverify(SignedCommand command, string action, string by) => SignedPress.Reverify(self, command, action, by);
 
     PresenceEntry? Who(string peer) => Volatile.Read(ref presence) is { } devices ? devices().FirstOrDefault(d => d.Id == peer) : null;
 
@@ -438,6 +426,73 @@ public sealed class ManageService
         var left = Math.Max(0, count - saved.Restarts.Count);
         return (left, left == 0 ? saved.Restarts.Min() + window : null);
     }
+
+    // Update now's own allowance (owner, settled Q7 on #1161): one committed restart per machine in
+    // six hours on top of the shared cap, which manage.restart never spends. Under the gate.
+    public const int UpdateNowOwn = 1;
+    public static readonly TimeSpan UpdateNowWindow = TimeSpan.FromHours(6);
+
+    (int Left, DateTimeOffset? NextAt) UpdateNowLeft(DateTimeOffset now)
+    {
+        saved.UpdateNow.RemoveAll(t => now - t >= UpdateNowWindow);
+        var left = Math.Max(0, UpdateNowOwn - saved.UpdateNow.Count);
+        return (left, left == 0 ? saved.UpdateNow.Min() + UpdateNowWindow : null);
+    }
+
+    // Whether an Update now has a restart slot now, its own or the shared cap's, and when the first
+    // frees if not (UpdateState.UpdateNowAt).
+    internal (bool Free, DateTimeOffset? NextAt) UpdateNowSlot()
+    {
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            var own = UpdateNowLeft(now);
+            var shared = RestartsLeft(now);
+            if (own.Left > 0 || shared.Left > 0) { return (true, null); }
+            return (false, own.NextAt < shared.NextAt ? own.NextAt : shared.NextAt);
+        }
+    }
+
+    // An Update now's commit, with its slot checked and spent under the same lock as the shared cap
+    // (docs/protocol/v1-update.md, Going, step 3): its own allowance if a slot is free, else one of
+    // the shared cap, else refused restart-cap without committing. So a manage.restart committed
+    // while the update downloaded can't push the shared cap past what it allows. The slot is
+    // written through, flushed, before commit runs: a host that restarts after the departure
+    // (or crashes before it) never finds the slot unspent, and one that can't record it departs
+    // with nothing (Recorded false). commit returns null when the caller's own last checks, made
+    // under this lock, refuse it; then, as for a commit refused, the slot is given back. Should
+    // that write fail, the slot stays spent until its window passes: an unused slot charged is the
+    // safe side of the cap.
+    internal (DepartureResult? Departure, bool Own, bool Recorded) CommitUpdateNow(Func<DepartureResult?> commit)
+    {
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            var own = UpdateNowLeft(now).Left > 0;
+            if (!own && RestartsLeft(now).Left == 0) { return (null, false, true); }
+            var slots = own ? saved.UpdateNow : saved.Restarts;
+            slots.Add(now);
+            if (!TrySave())
+            {
+                slots.Remove(now);
+                return (null, own, false);
+            }
+            var departure = commit();
+            if (departure is not { Committed: true })
+            {
+                slots.Remove(now);
+                TrySave();
+            }
+            return (departure, own, true);
+        }
+    }
+
+    // permissions.remoteManage, and #800's sign-in, as Update now reads them for canUpdateNow.
+    internal bool RemoteManageOn => Enabled();
+    internal bool SignInPending => Eligibility?.SignInPending == true;
+
+    // The owner's other devices hear of an Update now as of a restart (Q-O3).
+    internal Task NotifyUpdate(SignedPress press, string what) => Notify(press, what);
 
     string? Limited(string peer, string kind, DateTimeOffset now)
     {
@@ -477,7 +532,7 @@ public sealed class ManageService
     }
 
     // A verified press that is refused: remembered, so the same press sent again gets the same answer.
-    ManageResult Refused(Verified v, string kind, string reason, string detail)
+    ManageResult Refused(SignedPress v, string kind, string reason, string detail)
     {
         var result = Refuse(v.Device, $"manage.{kind}", v.Request, reason, detail);
         lock (gate)
@@ -550,7 +605,7 @@ public sealed class ManageService
             $"{outcome.ToString().ToLowerInvariant()}{(reason is null ? "" : $": {reason}")}{(string.IsNullOrEmpty(detail) ? "" : $": {detail}")}");
 
     // The owner's other devices hear of it quietly (Q-O3): the machine, what, and who; no values.
-    Task Notify(Verified v, string what) =>
+    Task Notify(SignedPress v, string what) =>
         Notices?.Notify(v.Device, MachineName, $"{MachineName} {what} from {(v.Name.Length > 0 ? v.Name : "a device")} ({v.By}) at {Clock(time.GetUtcNow())}.") ?? Task.CompletedTask;
 
     // Called as this host hands over to its replacement, whoever asked for the restart. A committed
@@ -573,7 +628,7 @@ public sealed class ManageService
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"manage: {PendingFile} could not be written ({e.Message})"); }
     }
 
-    static string Reason(QuietBlockedReason? r) => r switch
+    internal static string Reason(QuietBlockedReason? r) => r switch
     {
         QuietBlockedReason.Typing or QuietBlockedReason.DeliveryInFlight or QuietBlockedReason.JournalUncertain or QuietBlockedReason.ConditionFault => ManageReason.NotQuiet,
         QuietBlockedReason.LifecycleInProgress => ManageReason.Busy,
@@ -593,7 +648,7 @@ public sealed class ManageService
         _ => "something changed while the host was getting ready to leave; nothing was done",
     };
 
-    static string Reason(DepartureBlocker? k) => k switch
+    internal static string Reason(DepartureBlocker? k) => k switch
     {
         DepartureBlocker.AnnounceUnacked => ManageReason.AnnounceFailed,
         // LeaseExpired (#885) is "changed, try again", as the lease's own expiry is in Reason(QuietBlockedReason).
@@ -641,6 +696,8 @@ public sealed class ManageService
     {
         public int V { get; set; } = 1;
         public List<DateTimeOffset> Restarts { get; set; } = [];
+        // Update now's own allowance, spent (UpdateNowOwn in UpdateNowWindow).
+        public List<DateTimeOffset> UpdateNow { get; set; } = [];
         public List<Entry> Requests { get; set; } = [];
         public List<string> AppDevices { get; set; } = [];
     }
@@ -663,6 +720,7 @@ public sealed class ManageService
             {
                 s.Requests = [.. s.Requests.Where(e => e?.Request is not null).TakeLast(RequestsKept)];
                 s.AppDevices = [.. s.AppDevices.Where(TransferProtocol.IsDeviceId).TakeLast(4)];
+                s.UpdateNow ??= [];
                 saved = s;
             }
         }
@@ -676,17 +734,34 @@ public sealed class ManageService
     }
 
     // Under the gate.
-    void Save()
+    void Save() => TrySave();
+
+    // Under the gate: false, logged, when manage.json could not be written.
+    bool TrySave()
     {
-        try { Atomic(Path.Combine(folder, FileName), JsonSerializer.Serialize(saved, Json)); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"manage: {FileName} could not be written ({e.Message})"); }
+        try
+        {
+            Atomic(Path.Combine(folder, FileName), JsonSerializer.Serialize(saved, Json));
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log($"manage: {FileName} could not be written ({e.Message})");
+            return false;
+        }
     }
 
+    // A whole file, the old or the new, flushed to the disk before it replaces the old one.
     static void Atomic(string path, string text)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + ".tmp";
-        File.WriteAllText(temp, text, Encoding.UTF8);
+        using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            file.Write(Encoding.UTF8.GetPreamble());
+            file.Write(Encoding.UTF8.GetBytes(text));
+            file.Flush(flushToDisk: true);
+        }
         File.Move(temp, path, overwrite: true);
     }
 }
@@ -813,6 +888,16 @@ public sealed class RemoteRestartEligibility(Func<string?> readOnly, Func<bool> 
 
     public DepartureBlocker Kind => DepartureBlocker.Ineligible;
 
+    // #800's sign-in entrypoint, read now (canUpdateNow), not the snapshot the commit reads.
+    public bool SignInPending
+    {
+        get
+        {
+            try { return signIns.BlocksDeparture; }
+            catch { return true; }
+        }
+    }
+
     public void Refresh()
     {
         var at = time.GetTimestamp();
@@ -823,4 +908,31 @@ public sealed class RemoteRestartEligibility(Func<string?> readOnly, Func<bool> 
     }
 
     public bool IsBlocking() => Volatile.Read(ref last) is not { Eligible: true } s || time.GetElapsedTime(s.At) > MaxAge;
+}
+
+// The Update purpose's other condition (#1159): no other profile's host runs from this installation.
+// Velopack stops every process in the package, busy or not, and restarts only the profile that
+// installed, so an update that left while another profile's host ran would cut that host off. Read
+// by Refresh outside the fence (it lists processes), just before the commit, as
+// RemoteRestartEligibility is; one never refreshed, or older than MaxAge, blocks. otherHosts names
+// one, or one that can't be looked at (not knowing is not permission), as HostUpdateGate.OtherHosts.
+public sealed class OtherProfileHosts(Func<string?> otherHosts, TimeProvider? time = null) : IDepartureCondition
+{
+    public static readonly TimeSpan MaxAge = RemoteRestartEligibility.MaxAge;
+    readonly TimeProvider time = time ?? TimeProvider.System;
+    sealed record Snapshot(bool Clear, long At);
+    Snapshot? last;
+
+    public DepartureBlocker Kind => DepartureBlocker.OtherHostRunning;
+
+    public void Refresh()
+    {
+        var at = time.GetTimestamp();
+        bool clear;
+        try { clear = otherHosts() is null; }
+        catch { clear = false; }
+        Volatile.Write(ref last, new Snapshot(clear, at));
+    }
+
+    public bool IsBlocking() => Volatile.Read(ref last) is not { Clear: true } s || time.GetElapsedTime(s.At) > MaxAge;
 }

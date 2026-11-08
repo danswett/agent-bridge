@@ -33,14 +33,25 @@ const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
 // Reasons said in fixed words, the same in every client (src/AgentBridge.Protocol/AnswerReasons.cs):
-// a field's otherUnavailable, and an answer refused for it (its result's code). otherNotSendable:
-// a Copilot list's Other, which the CLI offers and the machine cannot send yet (#908); temporary,
-// an exception to #876 until #908 lands.
-export const AnswerReasons = Object.freeze({ otherNotSendable: "Your own answer can't be sent from here yet. Pick an option, or answer at the machine." });
+// a field's otherUnavailable, and an answer refused or retired for it (its result's code).
+// otherNotSendable: a Copilot list's Other, which the CLI offers and the machine cannot send yet
+// (#908); temporary, an exception to #876 until #908 lands. formReset: on a stale answer only, the
+// machine reset a part-answered form and the session moved on, so the answer was never delivered
+// (#1123); kept on the result, not yet shown.
+export const AnswerReasons = Object.freeze({
+  otherNotSendable: "Your own answer can't be sent from here yet. Pick an option, or answer at the machine.",
+  formReset: 'The session moved on from this question. Your answer was not delivered.',
+});
 export const NOT_SENT = 'Not sent · ';
 export const knownAnswerReason = (code) => (typeof code === 'string' && has(AnswerReasons, code) ? code : null);
-// The code a refusal's reason says, if it is one of those sentences (AnswerReasons.Code).
-export const answerReasonCode = (reason) => Object.keys(AnswerReasons).find((k) => AnswerReasons[k] === reason) ?? null;
+// The code a field may carry as its otherUnavailable (AnswerReasons.OnField): only otherNotSendable.
+export const fieldAnswerReason = (code) => (code === 'otherNotSendable' ? code : null);
+// The code an answer's result may carry for its outcome: otherNotSendable on a refusal, formReset
+// on a stale answer, nothing else.
+const ResultReasons = Object.freeze({ refused: 'otherNotSendable', stale: 'formReset' });
+export const resultAnswerReason = (outcome, code) => (has(ResultReasons, outcome) && ResultReasons[outcome] === code ? code : null);
+// The code a refusal's reason says, if it is that sentence (AnswerReasons.Code).
+export const answerReasonCode = (reason) => (reason === AnswerReasons.otherNotSendable ? 'otherNotSendable' : null);
 const hasOther = (v) => (isObject(v) && has(v, 'other')) || (Array.isArray(v) && v.some(hasOther));
 
 const textProblem = (text, what) =>
@@ -109,7 +120,7 @@ export function checkAnswer(question, answer) {
       continue;
     }
     // Other the agent offers and the machine cannot send: the sentence the field already shows.
-    if (field.allowOther !== true && knownAnswerReason(field.otherUnavailable) && hasOther(value)) { return AnswerReasons[field.otherUnavailable]; }
+    if (field.allowOther !== true && fieldAnswerReason(field.otherUnavailable) && hasOther(value)) { return AnswerReasons[field.otherUnavailable]; }
     // Empty text is typed as nothing, which a form records as no answer at all, and text of only
     // spaces, or of control characters a host types as spaces, might be recorded trimmed to that
     // (Answers.Check, FieldConstraints.BlankOnceTyped).

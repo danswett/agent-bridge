@@ -139,6 +139,76 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal("DuckDB – 数据库 🚀", q.UnsentText());
     }
 
+    // #1193: an error line lasts only while its cause stands.
+    [Fact]
+    public async Task A_refused_answer_still_says_so_while_its_question_is_asked()
+    {
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Refused, "the prompt changed"));
+        var asked = Make.Choice();
+        var card = new SessionCardViewModel(Make.Session(question: asked), Context());
+        card.Question!.Choose(card.Question.Fields[0].Options[0]);
+        await Wait.UntilAsync(() => card.Question?.StatusText == "The machine refused this answer: the prompt changed.", "refused");
+
+        card.Update(Make.Session(question: asked));
+
+        Assert.Equal("The machine refused this answer: the prompt changed.", card.Question!.StatusText);
+        card.Detach();
+    }
+
+    [Fact]
+    public async Task The_cards_line_that_said_the_session_no_longer_asked_becomes_a_neutral_closed_line_that_goes_after_five_seconds()
+    {
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Stale));
+        var card = new SessionCardViewModel(Make.Session(question: Make.Choice()), Context());
+        card.Question!.Choose(card.Question.Fields[0].Options[0]);
+        await Wait.UntilAsync(() => card.Question?.StatusText.StartsWith("Already answered or gone", StringComparison.Ordinal) == true, "stale");
+
+        card.Update(Make.Session());
+
+        Assert.Null(card.Question);
+        Assert.True(card.HasReceipt);
+        Assert.Equal("No longer waiting", card.ReceiptText);
+        Assert.Equal(Tone.None, card.ReceiptTone);
+        clock.Advance(TimeSpan.FromSeconds(4.9));
+        Assert.Equal("No longer waiting", card.ReceiptText);
+        clock.Advance(TimeSpan.FromSeconds(0.2));
+        Assert.False(card.HasReceipt);
+        Assert.Equal("", card.ReceiptText);
+        card.Detach();
+    }
+
+    [Fact]
+    public async Task A_refusal_that_arrives_after_the_question_closed_shows_the_neutral_line_and_not_your_answer()
+    {
+        var gate = new TaskCompletionSource();
+        host.OnAsync(Ops.SessionAnswer, async _ => { await FakeHost.Until(gate.Task); return new AnswerResult(AnswerOutcome.Refused, "the prompt changed"); });
+        var card = new SessionCardViewModel(Make.Session(question: Make.Choice()), Context());
+        card.Question!.Choose(card.Question.Fields[0].Options[0]);
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count() == 1, "sent");
+        card.Update(Make.Session());
+
+        gate.SetResult();
+
+        await Wait.UntilAsync(() => card.ReceiptText == "No longer waiting", "the neutral line");
+        Assert.Equal(Tone.None, card.ReceiptTone);
+        card.Detach();
+    }
+
+    [Fact]
+    public async Task The_line_that_said_another_answer_is_being_delivered_goes_once_its_pause_has_passed()
+    {
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Busy, "being delivered"));
+        var q = Question(Make.Choice());
+        q.Choose(q.Fields[0].Options[0]);
+        await Wait.UntilAsync(() => q.StatusText.StartsWith("Another answer to this session", StringComparison.Ordinal), "busy");
+        Assert.False(q.CanAnswer);
+
+        await Wait.UntilAsync(() => q.StatusText == "", "the line gone");
+
+        Assert.True(q.CanAnswer);
+        q.Detach();
+    }
+
     [Fact]
     public async Task Other_the_machine_cannot_send_yet_is_shown_unavailable_with_why_and_a_refusal_for_it_says_so_in_the_same_words()
     {
@@ -296,6 +366,38 @@ public sealed class CardTests : IAsyncLifetime
         Assert.False(q.Answerable);
         Assert.Equal(why, q.Why);
         Assert.False(q.ShowReadOnlyFields);
+    }
+
+    [Theory]
+    [InlineData("shape", true)]
+    [InlineData(null, false)]
+    [InlineData("future", false)]
+    public void Only_the_hosts_shape_reason_adds_an_explanation_to_an_at_machine_card(string? reason, bool explains)
+    {
+        var question = Make.Choice() with { AnswerAtMachine = true, AnswerAtMachineReason = reason };
+        var q = Question(question);
+
+        Assert.False(q.Answerable);
+        Assert.False(q.ShowReadOnlyFields);
+        Assert.Equal(explains ? "Answer at the machine · Test PC" : "This prompt can only be answered at the machine on Test PC.", q.ReadOnlyNote);
+        Assert.Equal(explains ? "This kind of question can only be answered at the machine." : null, q.AtMachineExplanation);
+        Assert.Null(Question(question with { AnswerAtMachine = null }).AtMachineExplanation);
+        q.Detach();
+    }
+
+    [Fact]
+    public void A_reason_added_or_removed_under_the_same_question_id_rebuilds_the_card()
+    {
+        var question = Make.Choice() with { AnswerAtMachine = true };
+        var card = new SessionCardViewModel(Make.Session(question: question), Context());
+        var first = card.Question;
+        card.Update(card.Session with { Question = question with { AnswerAtMachineReason = "shape" } });
+
+        Assert.NotSame(first, card.Question);
+        Assert.Equal("This kind of question can only be answered at the machine.", card.Question!.AtMachineExplanation);
+        card.Update(card.Session with { Question = question });
+        Assert.Null(card.Question!.AtMachineExplanation);
+        card.Detach();
     }
 
     // An older host's approval can still hold a live bidi control, a zero-width character or
@@ -1219,6 +1321,20 @@ public sealed class CardTests : IAsyncLifetime
         var second = host.Sent(Ops.SessionStop)[1];
         Assert.Equal("tok_1", second.GetProperty("confirm").GetString());
         Assert.False(host.Sent(Ops.SessionStop)[0].TryGetProperty("confirm", out _));
+    }
+
+    [Fact]
+    public async Task The_line_that_said_a_session_was_not_ended_for_being_busy_goes_once_its_pause_has_passed()
+    {
+        host.On(Ops.SessionStop, _ => new StopResult(StopOutcome.Busy, "being delivered"));
+        var end = new EndSessionViewModel(Make.Session(status: SessionStatus.Working), deliveries, "Test PC");
+
+        end.Press();
+        await Wait.UntilAsync(() => end.StatusText.StartsWith("Not ended:", StringComparison.Ordinal), "busy");
+        Assert.False(end.CanPress);
+
+        await Wait.UntilAsync(() => end.StatusText == "", "the line gone");
+        Assert.True(end.CanPress);
     }
 
     [Fact]

@@ -40,10 +40,14 @@ public static class RelayApp
         // first upload.
         var blobBackend = BlobService.CreateBackend(options.Blobs);
         builder.Services.AddSingleton(sp => new BlobService(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<BlobService>>(), blobBackend));
+        var feedbackSink = FeedbackService.CreateBackend(options.Feedback);
+        builder.Services.AddSingleton(sp => new FeedbackService(options.Feedback, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<FeedbackService>>(), feedbackSink, options.TokenKey));
         var rosterStore = MachineRoster.CreateStore(options.Roster);
         builder.Services.AddSingleton(sp => new MachineRoster(options, sp.GetRequiredService<RelayMetrics>(), sp.GetRequiredService<ILogger<MachineRoster>>(), rosterStore));
         builder.Services.AddHostedService<RosterWriter>();
-        builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => Volatile.Read(ref theHub)?.Online ?? 0));
+        var insights = options.ApplicationInsightsConnectionString ?? builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+        if (!string.IsNullOrWhiteSpace(insights)) { builder.Services.AddSingleton<IHostedService>(sp => new RelayTelemetry(insights, sp.GetRequiredService<ILogger<RelayTelemetry>>())); }
+        builder.Services.AddSingleton(sp => new RelayMetrics(sp.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>(), () => Volatile.Read(ref theHub)?.Online ?? 0, () => Volatile.Read(ref theHub)?.OnlineByKind() ?? []));
         // The slim builder's console logger stays on the simple formatter whatever the configuration
         // says, so a deployment that asks for JSON lines (infra/ does) got plain text, silently.
         if (string.Equals(builder.Configuration["Logging:Console:FormatterName"], ConsoleFormatterNames.Json, StringComparison.OrdinalIgnoreCase))
@@ -224,6 +228,15 @@ public static class RelayApp
         }).RequireRateLimiting("connect");
 
         if (blobBackend is LocalBlobBackend local) { MapLocalBlobs(app, local, options.Blobs); }
+
+        // The feedback upload: the ticket in the path is the credential. Write only, no GET.
+        app.MapPut(FeedbackService.PathPrefix + "{ticket}", async (string ticket, HttpContext ctx) =>
+        {
+            var feedback = ctx.RequestServices.GetRequiredService<FeedbackService>();
+            ctx.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>()!.MaxRequestBodySize = options.Feedback.MaxBytes + 1;
+            try { return Results.StatusCode(await feedback.UploadAsync(ticket, ctx.Request.Body, ctx.RequestAborted)); }
+            catch (BadHttpRequestException) { return Results.StatusCode(StatusCodes.Status413PayloadTooLarge); }
+        }).RequireCors("dev-blobs");
 
         return app;
 

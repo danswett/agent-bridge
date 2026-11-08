@@ -13,6 +13,14 @@ public enum InjectionStatus
 
 public sealed record InjectionResult(InjectionStatus Status, string Detail);
 
+// What an injector throws when it failed after its worker may have started: Exited completes
+// once that worker is proven gone, and faults when nobody can tell. Any other exception from an
+// injector says nothing about its worker, which is then taken to be possibly still typing.
+public sealed class InjectorWorkerException(Exception inner, Task exited) : Exception(inner.Message, inner)
+{
+    public Task Exited { get; } = exited;
+}
+
 // Types a plan into the console of a process. The real one is the injector worker
 // (WorkerInjector); tests drive the whole answer flow with a fake.
 public interface IConsoleInjector
@@ -24,7 +32,18 @@ public interface IConsoleInjector
     // the screen is not typed.
     Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
         Task.FromResult(new ConsoleScreen(null, "this host cannot read the session's screen; answer at the machine"));
+
+    // A process's console made at least `columns` wide (its screen buffer, the width an agent in
+    // it draws to), typing nothing, and only while the id is still the process created at
+    // `createdAt` (so never a later process given the same id); the width read back after, or
+    // why not. NotYet: the console could not be reached, as before a process just started has
+    // one, so it may be asked again.
+    Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new ConsoleWidth(null, "this host cannot widen a session's console", false));
 }
+
+// The width a console was left at, or why it is not known.
+public sealed record ConsoleWidth(int? Columns, string? Problem, bool NotYet);
 
 // Rows, or why there are none.
 public sealed record ConsoleScreen(IReadOnlyList<string>? Rows, string? Problem);
@@ -33,6 +52,9 @@ public sealed record ConsoleScreen(IReadOnlyList<string>? Rows, string? Problem)
 // when it is not. While it is, this host must not type into any session (design G5).
 public interface IAgentHaBridgeProbe
 {
+    // Active's reason when it could not tell either way: refused, as running is, but not "running".
+    const string Unchecked = "whether agent-ha-bridge is running for this user could not be checked; answer at the machine";
+
     string? Active();
 
     // The same answer, perhaps a moment old (SharedAgentHaBridgeProbe), for what is only offered or

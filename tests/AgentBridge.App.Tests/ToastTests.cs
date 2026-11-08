@@ -628,6 +628,7 @@ public sealed class ToastTests
             ],
             [nameof(ToastXml.Finished)] = [ToastXml.Finished(Make.Session(response: "All **green**."), "PC", "remote-id"), ToastXml.Finished(Make.Session(), null)],
             [nameof(ToastXml.Updated)] = [ToastXml.Updated("0.1.9", "0.1.8", "- Quieter toasts"), ToastXml.Updated("0.1.9", "0.1.8", null)],
+            [nameof(ToastXml.CouldNotInstall)] = [ToastXml.CouldNotInstall("Couldn't install version 0.1.9. Slipgates is still on 0.1.8.")],
             [nameof(ToastXml.Outcome)] = [ToastXml.Outcome("s1", "A session", "Sent.", "remote-id"), ToastXml.Outcome("s1", "A session", "Sent.")],
             [nameof(ToastXml.SignIn)] = [ToastXml.SignIn(AgentKind.Copilot, 4, "PC", "remote-id"), ToastXml.SignIn(AgentKind.Claude, 1, null)],
         };
@@ -846,6 +847,76 @@ public sealed class ToastTests
 
         await responder.HandleAsync("action=open&session=s7", new Dictionary<string, string>());
         Assert.Equal("s7", opened);
+    }
+
+    // #1193: a toast saying an answer did not go outlived the question it was about.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_outcome_toast_that_says_an_answer_did_not_go_is_withdrawn_when_the_question_closes_or_the_session_ends(bool sessionEnds)
+    {
+        var responder = new ToastResponder(_ => null, sink, (_, _) => { });
+        var planner = new ToastPlanner(sink, clock) { QuestionClosed = id => responder.QuestionClosed(null, id) };
+        planner.Upsert(Make.Session(question: Make.Choice("q1")));
+        var other = ToastXml.Args(("action", "answer"), ("session", "s1"), ("question", "q1"), ("kind", "other"), ("field", "answer"), (ToastXml.AnswerVersionKey, ToastXml.AnswerVersion));
+        await responder.HandleAsync(other, new Dictionary<string, string> { ["other"] = " " });
+        Assert.Equal("s1~a", Assert.Single(sink.Shown).Tag);
+
+        if (sessionEnds) { planner.Remove("s1"); }
+        else { planner.Upsert(Make.Session()); }
+
+        Assert.Contains("s1~a", sink.Withdrawn);
+    }
+
+    // #1195: a held answer ("offline", Done) says why it could not go, so its toast leaves with its question.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_toast_saying_the_answer_is_held_because_its_machine_is_offline_is_withdrawn_when_the_question_closes()
+    {
+        await using var host = new FakeHost();
+        host.Start();
+        await using var connection = host.Connect();
+        var deliveries = new Deliveries(connection, new LockedDispatcher()) { Hold = _ => "the machine is offline" };
+        var responder = new ToastResponder(deliveries, sink, _ => { });
+        var planner = new ToastPlanner(sink, clock) { QuestionClosed = id => responder.QuestionClosed(null, id) };
+        planner.Upsert(Make.Session(question: Make.Choice("q1")));
+        var pg = ToastXml.Args(("action", "answer"), ("session", "s1"), ("question", "q1"), ("kind", "option"), ("field", "answer"), ("value", "pg"), (ToastXml.AnswerVersionKey, ToastXml.AnswerVersion));
+
+        await responder.HandleAsync(pg, new Dictionary<string, string>());
+        Assert.Equal("s1~a", Assert.Single(sink.Shown).Tag);
+        planner.Upsert(Make.Session());
+
+        Assert.Contains("s1~a", sink.Withdrawn);
+    }
+
+    [Theory]
+    [InlineData("offline", false)]
+    [InlineData("stale", false)]
+    [InlineData("busy", false)]
+    [InlineData("refused", false)]
+    [InlineData("delivered", true)]
+    [InlineData("unconfirmed", true)]
+    public void An_answers_outcome_outlives_its_question_only_when_it_says_what_was_sent(string outcome, bool outlives)
+    {
+        var entry = new Delivery { Key = "answer|s1|q1", Request = "r", State = DeliveryState.Done, Outcome = outcome };
+
+        Assert.Equal(outlives, QuestionViewModel.OutlivesQuestion(entry));
+        Assert.True(QuestionViewModel.OutlivesQuestion(entry with { State = DeliveryState.Sending, Outcome = null }));
+        Assert.False(QuestionViewModel.OutlivesQuestion(entry with { State = DeliveryState.Failed }));
+    }
+
+    [Fact]
+    public async Task An_outcome_toast_stays_while_its_question_is_still_asked()
+    {
+        var responder = new ToastResponder(_ => null, sink, (_, _) => { });
+        var planner = new ToastPlanner(sink, clock) { QuestionClosed = id => responder.QuestionClosed(null, id) };
+        planner.Upsert(Make.Session(question: Make.Choice("q1")));
+        var other = ToastXml.Args(("action", "answer"), ("session", "s1"), ("question", "q1"), ("kind", "other"), ("field", "answer"), (ToastXml.AnswerVersionKey, ToastXml.AnswerVersion));
+        await responder.HandleAsync(other, new Dictionary<string, string> { ["other"] = " " });
+
+        planner.Upsert(Make.Session(question: Make.Choice("q1")));
+
+        Assert.DoesNotContain("s1~a", sink.Withdrawn);
     }
 
     // #625 cr2-625d (6676595964): the words were taken after waiting for the machine, so an option

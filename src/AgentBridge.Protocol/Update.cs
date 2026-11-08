@@ -26,9 +26,27 @@ public static class UpdateProtocol
     // go of it, and an app that comes to it later (from a status it was slow to read) refuses it.
     public static readonly TimeSpan Lapses = TimeSpan.FromMinutes(10);
 
+    // Update now (#1159): update.install carrying { now: SignedCommand } and nothing else. The
+    // signed body's action is NowAction, its args NowArgs; it lives ManageProtocol.MaxLifetime
+    // from issuedAt, and the press it starts NowLife from that same issuedAt.
+    public const string NowAction = "update.install.now";
+    public static readonly TimeSpan NowLife = TimeSpan.FromMinutes(15);
+    // The busy sessions UpdateBusy lists, approvals first; past this, two counts say what it left out.
+    public const int BusyListed = 32;
+    // The most any of an accept's counts may say (working, waiting, moreApprovals, moreOther): far
+    // past the sessions any machine runs, and small enough that no sum of them overflows.
+    public const int BusyMost = 1_000_000;
+    // A code (UpdateCommandResult.Code, UpdateResult.Code, waitingCode, updateNowWhy) is a short
+    // lowercase word or words joined by '-'; anything else is dropped as the app reports it.
+    public const int Code = 32;
+
     // A request id is the device's UUID for one press, as session.answer's.
     public static bool IsRequest(string? request) => request is { Length: > 0 and <= RequestId } && Guid.TryParse(request, out _);
 
+    public static bool IsCode(string? code) => code is { Length: > 0 and <= Code } && code.All(c => c is >= 'a' and <= 'z' or '-');
+
+    // What the app reports, within the limits. canUpdateNow, updateNowWhy, updateNowAt and busy
+    // are the host's alone, from its own view, so whatever the app put there is dropped.
     public static UpdateState Fit(UpdateState s) => s with
     {
         Current = Limits.KeepStart(s.Current, Version),
@@ -38,14 +56,92 @@ public static class UpdateProtocol
         Unavailable = Limits.KeepStart(s.Unavailable, Reason),
         Request = IsRequest(s.Request) ? s.Request : null,
         Progress = s.Progress is { } p ? Math.Clamp(p, 0, 100) : null,
+        WaitingCode = IsCode(s.WaitingCode) ? s.WaitingCode : null,
+        CanUpdateNow = false,
+        UpdateNowWhy = null,
+        UpdateNowAt = null,
+        Busy = null,
         Last = s.Last is { } l ? l with
         {
             From = Limits.KeepStart(l.From, Version),
             To = Limits.KeepStart(l.To, Version),
             Reason = Limits.KeepStart(l.Reason, Reason),
             Request = IsRequest(l.Request) ? l.Request : null,
+            Code = IsCode(l.Code) ? l.Code : null,
         } : null,
     };
+}
+
+// Why Update now can't be pressed on a machine with an update ready (UpdateState.UpdateNowWhy).
+// A client words each itself (docs/protocol/v1-update.md, "What the person sees").
+public static class UpdateNowWhy
+{
+    public const string Disabled = "disabled";
+    public const string ReadOnly = "read-only";
+    public const string OldApp = "old-app";
+    public const string Unavailable = "unavailable";
+    public const string SignIn = "sign-in";
+    public const string Busy = "busy";
+    public const string RestartCap = "restart-cap";
+}
+
+// Update now's own codes for a press (UpdateCommandResult.Code) and how it ended (UpdateResult.Code),
+// beside manage.*'s (ManageReason), which it shares for everything the signed-command gate refuses.
+public static class UpdateCode
+{
+    public const string ReleaseChanged = "release-changed";
+    public const string OtherProfile = "other-profile";
+    public const string OldApp = "old-app";
+    public const string RestartCap = "restart-cap";
+    public const string SignIn = "sign-in";
+    public const string UsageCheck = "usage-check";
+}
+
+// Why an Update now waits (UpdateState.WaitingCode, with phase waiting).
+public static class UpdateWaitingCode
+{
+    public const string TurnRunning = "turn-running";
+    public const string QuestionWaiting = "question-waiting";
+    public const string Unknown = "unknown";
+    public const string UsageCheck = "usage-check";
+}
+
+// A busy session's state in UpdateBusy: a turn (or delegated work) running, a question waiting, or
+// an approval waiting, named as one so a confirmation never calls an approval anything else.
+public static class UpdateBusyState
+{
+    public const string Working = "working";
+    public const string Question = "question";
+    public const string Approval = "approval";
+
+    public static bool Is(string? state) => state is Working or Question or Approval;
+}
+
+// One busy session, by id and state only: never its title, prompt, question or answer.
+public sealed record UpdateBusySession(string Id, string State);
+
+// What Update now would go over (UpdateState.Busy), from the host's own session snapshot; and, in a
+// press's args (accept), what the person confirmed. Working: sessions with a turn or delegated work
+// running. Waiting: sessions with a question or approval waiting. Unknown: the host can't tell
+// whether one is busy. Sessions: at most UpdateProtocol.BusyListed of them, approvals first, then
+// questions, then turns; past that MoreApprovals and MoreOther count the ones left out.
+public sealed record UpdateBusy
+{
+    public int Working { get; init; }
+    public int Waiting { get; init; }
+    public bool? Unknown { get; init; }
+    public IReadOnlyList<UpdateBusySession>? Sessions { get; init; }
+    public int? MoreApprovals { get; init; }
+    public int? MoreOther { get; init; }
+}
+
+// The signed args of an Update now press: now true, the release the person was shown, and what
+// they confirmed it may go over (absent: the one-press case, valid only on a quiet machine).
+public sealed record UpdateNowArgs
+{
+    public bool Now { get; init; }
+    public string? Release { get; init; }
+    public UpdateBusy? Accept { get; init; }
 }
 
 // What the machine's updater is doing. An unknown phase reads as Idle: nothing a client would
@@ -67,6 +163,8 @@ public sealed record UpdateResult
     public string? Reason { get; init; }
     // The press it answers, when a device asked for it; absent for an automatic update.
     public string? Request { get; init; }
+    // For an Update now: why it ended so, as UpdateCommandResult.Code. A client words it itself.
+    public string? Code { get; init; }
     public required DateTimeOffset At { get; init; }
 }
 
@@ -93,17 +191,37 @@ public sealed record UpdateState
     // Whether the app also installs updates without being asked.
     public bool Automatic { get; init; }
     public UpdateResult? Last { get; init; }
+    // #1159, the host's own: whether Update now can be pressed here, and when it can't but an
+    // update is ready, why (UpdateNowWhy) and, for restart-cap, when the first slot frees.
+    public bool CanUpdateNow { get; init; }
+    public string? UpdateNowWhy { get; init; }
+    public DateTimeOffset? UpdateNowAt { get; init; }
+    // Only with CanUpdateNow: what Update now would go over, from the host's session snapshot.
+    public UpdateBusy? Busy { get; init; }
+    // The app's: the press in Request is an Update now, and with phase waiting, why it waits
+    // (UpdateWaitingCode).
+    public bool RequestNow { get; init; }
+    public string? WaitingCode { get; init; }
 }
 
-// update.check and update.install: Request is the device's UUID for this press.
-public sealed record UpdateCommand(string Request);
+// update.check and update.install: Request is the device's UUID for this press. For Update now,
+// update.install carries Now instead, and the request only inside it: a host that doesn't know Now
+// finds no request and refuses the press, never taking it as a plain Install.
+public sealed record UpdateCommand(string? Request = null)
+{
+    [Strict(Strictness.Security)]
+    public SignedCommand? Now { get; init; }
+}
 
 // Accepted: the machine's app has been asked; how it ends is in the state (Last, with this
-// request). Refused: nothing was asked, and Reason says why.
+// request). Refused: nothing was asked, and Reason says why. Confirm (Update now): what is busy
+// now is more than the person confirmed; nothing was asked, and State.Busy says what is busy.
 [UnknownAs(Refused)]
-public enum UpdateAck { Accepted, Refused }
+public enum UpdateAck { Accepted, Refused, Confirm }
 
 public sealed record UpdateCommandResult(UpdateAck Outcome, string? Reason = null)
 {
     public UpdateState? State { get; init; }
+    // Only for a press with Now: why it was refused, as a code (ManageReason's and UpdateCode's).
+    public string? Code { get; init; }
 }

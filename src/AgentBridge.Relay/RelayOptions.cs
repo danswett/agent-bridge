@@ -34,6 +34,11 @@ public sealed class RelayOptions
     // unless asked for, and the product image ships no wwwroot (the spike defaulted to on).
     public bool ServePwa { get; set; }
 
+    // Application Insights connection string for exporting the relay's meter (RelayTelemetry.cs).
+    // Unset (and no APPLICATIONINSIGHTS_CONNECTION_STRING): nothing is exported. It is an app
+    // setting supplied by the deployment, never kept in the repo.
+    public string? ApplicationInsightsConnectionString { get; set; }
+
     // Web Push (spike S5). The relay signs and forwards pushes that hosts have already
     // encrypted to the browser; it cannot read them. Unset key: pushes are refused.
     public string? VapidPrivateKey { get; set; }
@@ -47,6 +52,9 @@ public sealed class RelayOptions
 
     // The blob store for files over 256 KiB (design §4.6; Blobs.cs). Off unless configured.
     public BlobOptions Blobs { get; set; } = new();
+
+    // Beta feedback upload: write-only, to a container of its own (Feedback.cs). Off unless configured.
+    public FeedbackOptions Feedback { get; set; } = new();
 
     // The account's machines, online or not (Roster.cs, docs/protocol/roster.md). In memory
     // unless a store is configured.

@@ -38,6 +38,18 @@ export function blobOrigin(url) {
   return u.origin;
 }
 
+function feedbackConfiguration(keyId, publicKey) {
+  if (!keyId && !publicKey) { return { keyId: '', publicKey: '' }; }
+  if (typeof keyId !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(keyId)) {
+    throw new Error('--feedback-key-id must be 1-64 ASCII letters, digits, dot, underscore or hyphen');
+  }
+  const decoded = typeof publicKey === 'string' ? Buffer.from(publicKey, 'base64url') : null;
+  if (typeof publicKey !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(publicKey) || decoded.length !== 32 || decoded.toString('base64url') !== publicKey) {
+    throw new Error('--feedback-public-key must be a base64url-encoded 32-byte X25519 public key');
+  }
+  return { keyId, publicKey };
+}
+
 export function contentSecurityPolicy(relay, blobOrigins = []) {
   const origin = relayOrigin(relay);
   // 'self' does not cover WebSockets in every Safari, so the socket origin is named too.
@@ -71,13 +83,21 @@ export function copyFonts(out, repo = path.dirname(appRoot)) {
   return copied;
 }
 
-export function buildSite({ out, relay = '', blobOrigins = [], root = appRoot }) {
+export function buildSite({ out, relay = '', blobOrigins = [], version = 'dev', feedbackKeyId = '', feedbackPublicKey = '', root = appRoot }) {
   const origin = relayOrigin(relay);
+  const feedback = feedbackConfiguration(feedbackKeyId, feedbackPublicKey);
+  if (typeof version !== 'string' || !version || version.length > 128) { throw new Error('--version must be 1-128 characters'); }
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
   for (const f of FILES) { cpSync(path.join(root, f), path.join(out, f), { recursive: true }); }
   copyFonts(out);
-  writeFileSync(path.join(out, 'config.js'), `export const RELAY = ${JSON.stringify(origin)};\n`);
+  writeFileSync(path.join(out, 'config.js'), [
+    `export const RELAY = ${JSON.stringify(origin)};`,
+    `export const APP_VERSION = ${JSON.stringify(version)};`,
+    `export const FEEDBACK_KEY_ID = ${JSON.stringify(feedback.keyId)};`,
+    `export const FEEDBACK_PUBLIC_KEY = ${JSON.stringify(feedback.publicKey)};`,
+    '',
+  ].join('\n'));
   const index = path.join(out, 'index.html');
   const html = readFileSync(index, 'utf8');
   const marker = '<meta charset="utf-8">';
@@ -197,7 +217,14 @@ function stampWorker(out) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const arg = (name) => { const k = process.argv.indexOf(name); return k > 0 ? process.argv[k + 1] : undefined; };
   const out = arg('--out');
-  if (!out) { console.error('usage: build-site.mjs --out <dir> [--relay <origin>] [--blob-origin <origin>]'); process.exit(2); }
-  buildSite({ out: path.resolve(out), relay: arg('--relay') ?? '', blobOrigins: arg('--blob-origin') ? [arg('--blob-origin')] : [] });
+  if (!out) { console.error('usage: build-site.mjs --out <dir> [--relay <origin>] [--blob-origin <origin>] [--version <id>] [--feedback-key-id <id> --feedback-public-key <base64url>]'); process.exit(2); }
+  buildSite({
+    out: path.resolve(out),
+    relay: arg('--relay') ?? '',
+    blobOrigins: arg('--blob-origin') ? [arg('--blob-origin')] : [],
+    version: arg('--version') ?? 'dev',
+    feedbackKeyId: arg('--feedback-key-id') ?? '',
+    feedbackPublicKey: arg('--feedback-public-key') ?? '',
+  });
   console.log(`built ${out}${arg('--relay') ? ` for ${arg('--relay')}` : ''}`);
 }

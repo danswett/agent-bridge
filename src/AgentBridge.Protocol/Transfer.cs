@@ -33,8 +33,15 @@ public static partial class TransferProtocol
 
     // A command's parts are base64url; these bound what a host reads before checking them.
     public const int MaxBody = 2048;
+    // update.install's Update now (UpdateProtocol.NowAction) only: its signed args carry the
+    // confirmation, which lists up to 32 busy sessions by id and state (docs/protocol/v1-update.md),
+    // and 32 UUIDs with the envelope come to about 3,300 characters. Every other action keeps MaxBody.
+    public const int MaxNowBody = 4096;
     public const int MaxKey = 96;
     public const int MaxMac = 64;
+
+    // The most body a signed command for action may carry, checked before its MAC.
+    public static int MaxBodyFor(string? action) => action == UpdateProtocol.NowAction ? MaxNowBody : MaxBody;
 
     public static bool IsDeviceId(string? id) => id is { Length: 32 } && DeviceId().IsMatch(id);
 
@@ -46,10 +53,13 @@ public static partial class TransferProtocol
         return t.Command is null ? "transfer.command is missing: a transfer needs a command signed by the device asking for it" : Check(t.Command);
     }
 
-    public static string? Check(SignedCommand c)
+    public static string? Check(SignedCommand c) => Check(c, null);
+
+    // For the action it is checked as: the body's bound is that action's (MaxBodyFor).
+    public static string? Check(SignedCommand c, string? action)
     {
         static bool Part(string? s, int max) => s is { Length: > 0 } && s.Length <= max && s.All(x => char.IsAsciiLetterOrDigit(x) || x is '-' or '_');
-        if (!Part(c.Body, MaxBody) || !Part(c.By, MaxKey) || !Part(c.Mac, MaxMac)) { return "the signed command is malformed"; }
+        if (!Part(c.Body, MaxBodyFor(action)) || !Part(c.By, MaxKey) || !Part(c.Mac, MaxMac)) { return "the signed command is malformed"; }
         return null;
     }
 

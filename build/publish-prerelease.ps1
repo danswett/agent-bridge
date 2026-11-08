@@ -16,6 +16,12 @@
 # `win-arm64` (build/app-channels.ps1). A release carries both, so publishing needs both.
 #
 # Needs gh and vpk 1.2.161, and GH_TOKEN with contents: write unless -DryRun.
+#
+# -RequireSignature -SignerEku <identity EKU> (CI's APP_SIGNING, docs/app-windows.md, Signing):
+# every folder must carry the pinned publisher's timestamped signatures before anything else, and
+# the draft release is downloaded back and checked again (its feeds' hashes too) before it is
+# published; a failure leaves it a draft, which installed copies never see. Without it, releases
+# are unsigned as before.
 #Requires -Version 7
 [CmdletBinding()]
 param(
@@ -28,7 +34,9 @@ param(
     [ValidateRange(1, 1000)][int]$Keep = 20,
     [string]$MainHead,
     [string]$MainRepo,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$RequireSignature,
+    [string]$SignerEku
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -36,6 +44,10 @@ if (-not $DryRun -and ($MainHead -cnotmatch '^[0-9a-f]{40}$' -or -not $MainRepo)
     throw "publishing needs -MainHead, main's head commit ('$MainHead'), and -MainRepo, a clone of main at it"
 }
 . (Join-Path $PSScriptRoot 'app-channels.ps1')
+if ($RequireSignature) {
+    . (Join-Path $PSScriptRoot 'app-signing.ps1')
+    Assert-AppSignerEku $SignerEku
+}
 
 $packId = $AppPackId
 $tag = "v$Version"
@@ -153,6 +165,19 @@ foreach ($b in $builds) {
     $b.Identity = $identity
 }
 
+# --- Signed, when signing is required: by the pinned publisher, every file, before anything is
+# read from or written to the repository.
+$signer = $null
+if ($RequireSignature) {
+    foreach ($b in $builds) {
+        $check = Test-AppReleaseSignature $b.Dir $b.Channel $Version $SignerEku (Join-Path $work 'signatures')
+        if ($check.Problems) { throw "the $($b.Channel) folder is not signed as it must be; nothing was published:`n  $($check.Problems -join "`n  ")" }
+        if ($signer -and $check.Signer -ne $signer) { throw "the $($b.Channel) folder is signed by $($check.Signer), another folder by $signer; nothing was published" }
+        $signer = $check.Signer
+        Write-Plan "the $($b.Channel) release is signed by $signer, with a timestamp"
+    }
+    if (Test-Path $work) { Remove-Item $work -Recurse -Force }
+}
 # --- Whether to publish: once per version, never a version older than one already out, never
 # a commit the latest release's commit isn't part of, and never one main has since changed the app past.
 $releases = Get-Release
@@ -163,6 +188,11 @@ $newer = @($released | Where-Object { $_ -gt $semver })
 $publishing = -not $published -and -not $newer
 if ($published) {
     Write-Plan "$tag is already published; nothing to upload"
+    # A previous attempt may have published the app but failed to upload the site's manifest.
+    # This signal is not 'published': a retry must not attest rebuilt packages as the old ones.
+    if (-not $DryRun -and $env:GITHUB_OUTPUT -and @($releases | Where-Object { -not $_.draft -and $_.prerelease -and $_.tag_name -ceq $tag }).Count -eq 1) {
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "manifest-tag=$tag"
+    }
 } elseif ($newer) {
     # Two merges close together: the later one's build published first. Installed copies take
     # the highest version, so this one would only be noise, and a delta base nobody has.
@@ -280,17 +310,17 @@ if ($publishing) {
 if ($DryRun) {
     # vpk itself reads each folder, through the same build-assets file the GitHub upload reads,
     # into a scratch feed beside it: the nearest a pull request can come to uploading. Each
-    # channel's feed must list its own packages and nothing else: it is all its copies read.
+    # channel's feed must list its own packages, as an installed copy picks and checks them, and
+    # nothing else: it is all its copies read.
     foreach ($b in $builds) {
         Reset-Work
         & vpk upload local --outputDir $b.Dir --channel $b.Channel --path $work | Out-Host
         if ($LASTEXITCODE) { throw "vpk upload local failed: vpk cannot upload the $($b.Channel) folder" }
-        $feed = Get-Content (Join-Path $work "releases.$($b.Channel).json") -Raw | ConvertFrom-Json
-        if (-not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Full' })) { throw "vpk's $($b.Channel) feed has no full package of $Version" }
-        if ((Test-Path $b.DeltaPath) -and -not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Delta' })) { throw "vpk's $($b.Channel) feed has no delta of $Version" }
-        $stray = @($feed.Assets | Where-Object { $_.FileName -notin $b.Expected.Full, $b.Expected.Delta } | ForEach-Object FileName)
-        if ($stray) { throw "vpk's $($b.Channel) feed lists what is not this channel's $Version`: $($stray -join ', ')" }
-        Write-Plan "the $($b.Channel) feed lists $(@($feed.Assets.FileName) -join ', ')"
+        $feedPath = Join-Path $work "releases.$($b.Channel).json"
+        $types = @('Full') + @(if (Test-Path $b.DeltaPath) { 'Delta' })
+        $problems = @(Get-AppFeedProblem $feedPath $b.Channel $Version $b.Dir $types | Where-Object { $_ })
+        if ($problems) { throw "vpk's $($b.Channel) feed is not this channel's $Version`:`n  $($problems -join "`n  ")" }
+        Write-Plan "the $($b.Channel) feed lists $(@((Get-Content $feedPath -Raw | ConvertFrom-Json).Assets.FileName) -join ', ')"
     }
     Remove-Item $work -Recurse -Force
 }
@@ -332,6 +362,31 @@ if ($publishing) {
         # The same reviewed policy for every channel; upload before exposing the draft.
         # Clients verify GitHub's asset digest and never treat a missing policy as empty.
         Invoke-Gh release upload $tag $haltsPath -R $Repository --clobber | Out-Null
+        if ($RequireSignature) {
+            # What clients would download, read back from the draft: each file the one checked
+            # above, still signed, and each feed's hashes those of the packages beside it.
+            Reset-Work
+            $problems = foreach ($b in $builds) {
+                $dir = Join-Path $work "draft-$($b.Channel)"
+                $names = @($b.Expected.Full, $b.Expected.Installer, $b.Expected.Portable)
+                if (Test-Path $b.DeltaPath) { $names += $b.Expected.Delta }
+                $feedName = "releases.$($b.Channel).json"
+                $patterns = @($names + $feedName | ForEach-Object { '-p'; $_ })
+                Invoke-Gh release download $tag -R $Repository -D $dir @patterns | Out-Null
+                foreach ($name in $names) {
+                    $downloaded = Join-Path $dir $name
+                    if (-not (Test-Path -LiteralPath $downloaded)) { "the draft has no $name"; continue }
+                    if ((Get-FileHash -LiteralPath $downloaded).Hash -ne (Get-FileHash -LiteralPath (Join-Path $b.Dir $name)).Hash) { "the draft's $name is not the file checked" }
+                }
+                $types = @('Full') + @(if (Test-Path $b.DeltaPath) { 'Delta' })
+                if (Test-Path (Join-Path $dir $feedName)) { Get-AppFeedProblem (Join-Path $dir $feedName) $b.Channel $Version $dir $types } else { "the draft has no $feedName" }
+                (Test-AppReleaseSignature $dir $b.Channel $Version $SignerEku (Join-Path $work 'draft-signatures')).Problems
+            }
+            $problems = @($problems | Where-Object { $_ })
+            if ($problems) { throw "the draft $tag, downloaded back, is not what was checked; it was left a draft, not published:`n  $($problems -join "`n  ")" }
+            Remove-Item $work -Recurse -Force
+            Write-Plan "the draft $tag, downloaded back, is the release checked: signed by $signer, its feeds' hashes its packages'"
+        }
         $run = if ($env:GITHUB_RUN_ID) { " (CI run $env:GITHUB_SERVER_URL/$Repository/actions/runs/$env:GITHUB_RUN_ID)" } else { '' }
         $hasDelta = [bool]($builds | Where-Object { Test-Path $_.DeltaPath })
         $installers = @($builds | ForEach-Object { "$($_.Expected.Installer) on $(if ($_.Machine -eq 'x64') { 'an x64 PC' } else { 'a Windows on Arm PC' })" })
@@ -342,7 +397,11 @@ if ($publishing) {
             ''
             '## Installation and updates'
             ''
-            "Unsigned: Windows SmartScreen warns on first install (More info, then Run anyway). To install, run $($installers -join ', or ')."
+            $(if ($RequireSignature) {
+                    "Signed by $signer with Azure Artifact Signing: Setup.exe, the app and every executable in it. Windows SmartScreen may still warn on first install until the publisher's reputation builds (More info, then Run anyway). To install, run $($installers -join ', or ')."
+                } else {
+                    "Unsigned: Windows SmartScreen warns on first install (More info, then Run anyway). To install, run $($installers -join ', or ')."
+                })
             ''
             "An installed copy installs it by itself once its host is idle, or at once from Settings, Check for updates (pre-releases included)$(if ($hasDelta) { ', downloading only the delta from the previous one' }), and only ever for its own architecture."
         ) -join "`n"
@@ -352,7 +411,9 @@ if ($publishing) {
         if ($LASTEXITCODE) { throw "gh release publication failed ($LASTEXITCODE)" }
         # For CI's attest job: these assets are this run's, so its SBOMs describe them. A run that
         # uploads nothing (a re-run, or an older version) leaves it unset and attests nothing.
-        if ($env:GITHUB_OUTPUT) { Add-Content -Path $env:GITHUB_OUTPUT -Value 'published=true' }
+        if ($env:GITHUB_OUTPUT) {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value @('published=true', "manifest-tag=$tag")
+        }
     }
     Write-Plan "$(if ($DryRun) { 'would publish' } else { 'published' }) $tag as a pre-release ($($builds.Channel -join ', '))"
 }

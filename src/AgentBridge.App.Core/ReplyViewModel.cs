@@ -496,11 +496,13 @@ public sealed class ReplyViewModel : Observable
         }
         if (e is { State: DeliveryState.Done, Outcome: "busy" } && !pausedAfterBusy && handled == e.Request && e.Request != busyFor)
         {
-            busyFor = e.Request;
+            var request = e.Request;
+            busyFor = request;
             pausedAfterBusy = true;
-            _ = Task.Delay(2000).ContinueWith(_ => deliveries.Ui.Post(() => { pausedAfterBusy = false; Raise(nameof(CanSend)); Raise(nameof(SendEnabled)); }), TaskScheduler.Default);
+            _ = Task.Delay(2000).ContinueWith(_ => deliveries.Ui.Post(() => { pausedAfterBusy = false; busyGone = request; Refresh(); }), TaskScheduler.Default);
         }
-        receipt.Show(e, preparing > 0 && !Pending ? new ReceiptLine("reading", "Reading the attachment…", null, Tone.Progress, ReceiptMark.Ring, null) : null);
+        // A busy refusal is a moment's news: once the pause has passed, the line goes (#1193).
+        receipt.Show(e is { State: DeliveryState.Done, Outcome: "busy" } && e.Request == busyGone ? null : e, preparing > 0 && !Pending ? new ReceiptLine("reading", "Reading the attachment…", null, Tone.Progress, ReceiptMark.Ring, null) : null);
         Raise(nameof(Held));
         Raise(nameof(HeldText));
         Raise(nameof(Pending));
@@ -515,6 +517,7 @@ public sealed class ReplyViewModel : Observable
     }
 
     string? busyFor;
+    string? busyGone;
 
     // What a reply's progress or outcome says: the receipt under the box (Receipt; ui.md §6.5,
     // decided on #617). Its files going; then nothing on the line through the stages and a

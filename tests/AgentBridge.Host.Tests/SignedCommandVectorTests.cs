@@ -44,6 +44,37 @@ public sealed class SignedCommandVectorTests
 
     static readonly CommandBody Transfer = Body(TransferProtocol.Action, Session, Target);
 
+    // The longest Update now a client can send (#1159, docs/protocol/v1-update.md): 32 listed
+    // sessions, each a UUID (every agent's session id) with the longest state, every count at its
+    // largest that still adds up, unknown shown, and a release of 64 characters.
+    static readonly CommandBody LongestUpdateNow = Body(UpdateProtocol.NowAction, null!, MachineId) with
+    {
+        Target = new CommandTarget { Machine = MachineId },
+        Args = JsonSerializer.SerializeToElement(new UpdateNowArgs
+        {
+            Now = true,
+            Release = "1.2.3-" + new string('9', UpdateProtocol.Version - 6),
+            Accept = new UpdateBusy
+            {
+                Working = UpdateProtocol.BusyMost,
+                Waiting = UpdateProtocol.BusyMost,
+                Unknown = true,
+                Sessions = [.. Enumerable.Range(0, UpdateProtocol.BusyListed).Select(i => new UpdateBusySession($"ffffffff-ffff-4fff-bfff-{i:D12}", UpdateBusyState.Approval))],
+                MoreApprovals = UpdateProtocol.BusyMost,
+                MoreOther = UpdateProtocol.BusyMost - UpdateProtocol.BusyListed,
+            },
+        }, ProtocolJson.Options),
+    };
+
+    [Fact]
+    public void The_longest_Update_now_fits_its_own_bound_and_no_other_actions()
+    {
+        var body = SignedCommands.Sign(Phone, Machine.Public, LongestUpdateNow).Body;
+
+        Assert.Null(UpdateNowRules.Check(JsonSerializer.Deserialize<UpdateNowArgs>(LongestUpdateNow.Args!.Value, ProtocolJson.Options)!.Accept!));
+        Assert.InRange(body.Length, TransferProtocol.MaxBody + 1, TransferProtocol.MaxNowBody);
+    }
+
     static JsonObject Generate()
     {
         static JsonObject KeyJson((string D, string X, string Y) k, P256KeyPair pair) => new()
@@ -73,6 +104,9 @@ public sealed class SignedCommandVectorTests
         // MAC covers them (#801; Connection's Q-C4 on #886). It names no session.
         var repair = Body(ManageProtocol.HooksRepair, null!, MachineId);
         Valid("a-hook-repair-with-args", repair with { Target = repair.Target with { Session = null }, Args = JsonSerializer.SerializeToElement(new ManageRepairArgs("copilot"), ProtocolJson.Options) }, ManageProtocol.HooksRepair);
+        // Update now's press at its longest (#1159): the only action whose body may pass 2048
+        // characters, up to 4096, as its args carry the confirmation's 32 sessions.
+        Valid("an-update-now-at-its-longest", LongestUpdateNow, UpdateProtocol.NowAction);
 
         var refused = new JsonArray();
         var signed = SignedCommands.Sign(Phone, Machine.Public, Transfer);
@@ -102,6 +136,11 @@ public sealed class SignedCommandVectorTests
         Refused("a-request-that-is-not-a-uuid", Sign(b => b with { Request = "again" }));
         Refused("a-malformed-mac", signed with { Mac = "not a mac!" });
         Refused("a-mac-of-the-wrong-length", signed with { Mac = signed.Mac[..20] });
+        // The bound is the action's: Update now's longest body is malformed as any other action,
+        // and one past 4096 characters is malformed as Update now too.
+        var longest = SignedCommands.Sign(Phone, Machine.Public, LongestUpdateNow);
+        Refused("an-update-now-at-its-longest-sent-as-another-action", longest, action: ManageProtocol.Restart);
+        Refused("a-body-over-4096-characters-for-update-now", longest with { Body = new string('b', TransferProtocol.MaxNowBody + 1) }, action: UpdateProtocol.NowAction);
 
         return new JsonObject
         {

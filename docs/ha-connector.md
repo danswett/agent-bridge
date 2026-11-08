@@ -650,6 +650,18 @@ recorded machine (`Resolve-DaemonRequestedLaunch`), the outcome record and the c
   that took a request launches nothing (the daemon's guard against two presses for one request).
   A press whose prompt payload cannot be read waits for the next pass rather than launching from
   the card, since it may carry a request with settings of its own.
+- **Launch options (beyond agent-ha-bridge, #1142).** `sensor.agent_bridge_<machine>_launch_options`
+  is read-only. Its state is a 12-character `version` (a hash of `default_agent` and the lists, so it
+  changes exactly when an answer does); its attributes (`json_attributes_topic` `newsession/options`,
+  retained) are `{version, default_agent, agents: {<id>: {label, models, efforts, contexts,
+  defaults: {model, effort, context}}}}` for every agent the host's launcher offers, whichever
+  agent the card has selected, so choosing another agent on the card never changes it. The lists
+  are the launcher's own (the card's selectors show only the selected agent's, "Agent default"
+  excluded: omit an axis to take it). It is republished on the card's refresh (30 s) when a
+  list changes, and again after a pause. When the host does not serve launch it is withdrawn (its
+  config and state cleared) rather than left with lists nothing refreshes. It is not in
+  agent-ha-bridge's per-machine topic list, so that daemon's Forget does not clear it. `launch-remote.ps1 -Options` prints it and a launch is checked
+  against it before the button is pressed.
 * **The purple edge**: a session an agent's press launched is `agent`-driven from the moment it
   appears, for the turn it was launched with (already under way or still to come); the turn
   after that is whoever's it is.

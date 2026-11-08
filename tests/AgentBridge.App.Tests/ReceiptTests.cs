@@ -389,6 +389,9 @@ public sealed class ReceiptTests
         var unconfirmed = new Delivery { Key = "k", Request = "r", State = DeliveryState.Done, Outcome = "unconfirmed" };
         Assert.Equal("Sent, but not confirmed. Check the conversation.", QuestionViewModel.Describe(unconfirmed, "ULTRA").Whole);
         Assert.Equal("Sent, but not confirmed. Check the conversation. (no word from the agent)", QuestionViewModel.Describe(unconfirmed with { Reason = "no word from the agent" }, "ULTRA").Whole);
+        // A retry of an answer already typed (#1093): the bridge's reason only adds that this send typed nothing.
+        Assert.Equal("Sent, but not confirmed. Check the conversation. (nothing was typed again: this repeats an answer already typed once)",
+            QuestionViewModel.Describe(unconfirmed with { Reason = "nothing was typed again: this repeats an answer already typed once" }, "ULTRA").Whole);
         Assert.DoesNotContain("sending it again", QuestionViewModel.Room("ULTRA"), StringComparison.Ordinal);
     }
 

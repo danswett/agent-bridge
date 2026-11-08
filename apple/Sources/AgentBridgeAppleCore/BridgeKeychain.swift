@@ -41,7 +41,7 @@ public enum BridgeKeychain {
          kSecUseDataProtectionKeychain: true, kSecAttrSynchronizable: false]
     }
 
-    private static func failure(_ status: OSStatus) -> RelayError {
-        .refused("Keychain access failed (\(status)). Unlock this device and try again.")
+    private static func failure(_: OSStatus) -> RelayError {
+        .refused("Keychain access failed. Unlock this device and try again.")
     }
 }

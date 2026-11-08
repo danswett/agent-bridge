@@ -55,7 +55,7 @@ public static class LocalApi
             if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller
                 && !(caller.Kind == CallerKind.HostCli && op == HostOps.Restart))
             {
-                throw Refuse(op, caller, op == HostOps.UpdateReport
+                throw Refuse(op, caller, op is HostOps.UpdateReport or HostOps.UpdateDepart
                     ? $"only the {Product.App} beside this host reports its updates, and takes other devices' presses of Install"
                     : caller.Kind == CallerKind.Agent
                     ? $"stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the {Product.App}"
@@ -67,6 +67,12 @@ public static class LocalApi
         if (Acts.Contains(op) && callers.Classify(channel) is { Kind: CallerKind.Agent } agent)
         {
             throw Refuse(op, agent, "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
+        }
+        // What a device says it shows decides whether the person is using it, and a device in use
+        // holds back the person's pushes (#1190): an agent saying it would silence them.
+        if (op == Ops.SessionsFocus && callers.Classify(channel) is { Kind: CallerKind.Agent } focused)
+        {
+            throw Refuse(op, focused, "telling the host the person is using the app is for the person, from the app or a phone", log);
         }
         // A whole past conversation of every session, words the person pasted into other sessions
         // included, is more than an agent reading the latest exchange needs, until agents have a
@@ -81,7 +87,9 @@ public static class LocalApi
             CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability,
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
-                .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : []] },
+                .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : [],
+                .. control.HasAgentVerification ? new[] { HostOps.AgentVerificationCapability } : [],
+                .. control.HasAgentSignIn ? new[] { HostOps.AgentSignInCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
         });

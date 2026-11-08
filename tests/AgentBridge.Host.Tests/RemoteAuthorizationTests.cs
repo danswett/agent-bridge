@@ -287,7 +287,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         Result(await channel.RequestAsync(Ops.SessionsList, new { }, Patience));
         Assert.Equal(SessionId, Result(await channel.RequestAsync(Ops.SessionGet, new { id = SessionId }, Patience)).GetProperty("id").GetString());
         Result(await channel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
-        await Wait.UntilAsync(() => service.Subscribers == 1, "the read-only feed", Patience);
+        await HostWait.UntilAsync(() => service.Subscribers == 1, "the read-only feed", Patience);
         foreach (var op in new[]
         {
             Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop, Ops.AttachmentStart, Ops.PushSubscribe,
@@ -407,7 +407,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var channel = await peer.Hub.OpenAsync(host.Id, Patience);
         var otherChannel = await other.Hub.OpenAsync(host.Id, Patience);
         Result(await channel.RequestAsync(Ops.SessionsSubscribe, new { }, Patience));
-        await Wait.UntilAsync(() => service.Subscribers == 1, "the active feed", Patience);
+        await HostWait.UntilAsync(() => service.Subscribers == 1, "the active feed", Patience);
         var held = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         peer.Hub.Handler = (_, _, _) => { started.TrySetResult(); return held.Task; };
@@ -419,7 +419,7 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
             else { store.Revoke(peer.Key.Public); authorization.Revalidate(); }
             await Assert.ThrowsAsync<IOException>(async () => await pending);
             await channel.Closed.WaitAsync(Patience);
-            await Wait.UntilAsync(() => service.Subscribers == 0, "the revoked feed to end", Patience);
+            await HostWait.UntilAsync(() => service.Subscribers == 0, "the revoked feed to end", Patience);
             Result(await otherChannel.RequestAsync(Ops.Hello, new { }, Patience));
         }
         finally { held.TrySetResult(new { finished = true }); }
@@ -475,6 +475,77 @@ public sealed class RemoteAuthorizationTests : IAsyncLifetime
         var response = Result(await channel.RequestAsync(Ops.SessionAnswer,
             new { id = SessionId, question = "q", request = Guid.NewGuid().ToString(), text = "yes" }, Patience));
         Assert.Equal("this host does not take answers; answer at the machine", response.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task Diagnostics_reach_only_a_device_pinned_as_a_person_whatever_it_claims_or_sends()
+    {
+        var diagnostics = new RemoteDiagnostics(authorization.IsPinnedPerson, null, "0.1.0", false, () => null, () => (DiagnosticsReadOnly.None, null), time);
+        host.Hub.Handler = authorization.Handler(new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"))
+        {
+            Drivers = drivers,
+            Diagnostics = diagnostics,
+        });
+        HelloResult Hello(JsonElement response) => Result(response).Deserialize<HelloResult>(ProtocolJson.Options)!;
+        // A service or another host says it is a person's app, and is still what its pin says.
+        foreach (var role in new[] { TrustedPeerStore.Service, TrustedPeerStore.Host })
+        {
+            var peer = await PeerAsync("pwa");
+            Pin(peer, role);
+            var other = await peer.Hub.OpenAsync(host.Id, Patience);
+            Assert.DoesNotContain(DiagnosticsProtocol.Capability, Hello(await other.RequestAsync(Ops.Hello, new { }, Patience)).Capabilities);
+            await DeniedAsync(other, DiagnosticsProtocol.Get);
+        }
+
+        var person = await PeerAsync("host");
+        Pin(person, TrustedPeerStore.Person);
+        var channel = await person.Hub.OpenAsync(host.Id, Patience);
+        Assert.Contains(DiagnosticsProtocol.Capability, Hello(await channel.RequestAsync(Ops.Hello, new { }, Patience)).Capabilities);
+        // Who asks is the channel's pinned key: a principal or origin in the request is refused, not obeyed or ignored.
+        var forged = await channel.RequestAsync(DiagnosticsProtocol.Get, new { maxEntries = 5, principal = "agent", origin = "copilot" }, Patience);
+        Assert.False(forged.GetProperty("ok").GetBoolean());
+        Assert.False(forged.TryGetProperty("result", out _));
+        // Nor is an agent's principal or signed origin nested inside the person's request.
+        var nested = await channel.RequestAsync(DiagnosticsProtocol.Get,
+            new { maxEntries = 5, on = new { principal = "agent", origin = new { kind = "agent", signed = "copilot" } } }, Patience);
+        Assert.False(nested.GetProperty("ok").GetBoolean());
+        Assert.False(nested.TryGetProperty("result", out _));
+        var snapshot = Result(await channel.RequestAsync(DiagnosticsProtocol.Get, new { maxEntries = 5 }, Patience))
+            .Deserialize<DiagnosticsSnapshot>(ProtocolJson.Options)!;
+        Assert.Equal(DiagnosticsProtocol.Schema, snapshot.Schema);
+        Assert.Empty(snapshot.Journal.Entries);
+        Assert.Equal(DiagnosticsMissing.NotConfigured, snapshot.Journal.Missing);
+        Assert.Equal(DiagnosticsMissing.NotStarted, snapshot.Relay.Missing);
+        // The same device again at once is refused over the channel, then served after MinInterval.
+        var again = await channel.RequestAsync(DiagnosticsProtocol.Get, new { }, Patience);
+        Assert.Equal(RemoteDiagnostics.TooSoon, again.GetProperty("error").GetString());
+        time.Advance(DiagnosticsProtocol.MinInterval);
+        Assert.True((await channel.RequestAsync(DiagnosticsProtocol.Get, new { }, Patience)).GetProperty("ok").GetBoolean());
+
+        store.Revoke(person.Key.Public);
+        authorization.Revalidate();
+        await channel.Closed.WaitAsync(Patience);
+    }
+
+    [Fact]
+    public async Task Diagnostics_are_neither_offered_nor_served_while_pins_are_off()
+    {
+        authorization.Dispose();
+        authorization = new RemoteAuthorization(false, store, time);
+        authorization.Attach(host.Hub);
+        host.Hub.Handler = authorization.Handler(new SessionService(source, new MachineInfo(host.Id, "Host", "windows", "0.1.0"))
+        {
+            Drivers = drivers,
+            Diagnostics = new RemoteDiagnostics(authorization.IsPinnedPerson, null, "0.1.0", false, () => null, () => (DiagnosticsReadOnly.None, null), time),
+        });
+        var peer = await PeerAsync("app");
+        Pin(peer, TrustedPeerStore.Person);
+        var channel = await peer.Hub.OpenAsync(host.Id, Patience);
+        var hello = Result(await channel.RequestAsync(Ops.Hello, new { }, Patience)).Deserialize<HelloResult>(ProtocolJson.Options)!;
+        Assert.DoesNotContain(DiagnosticsProtocol.Capability, hello.Capabilities);
+        var refused = await channel.RequestAsync(DiagnosticsProtocol.Get, new { }, Patience);
+        Assert.False(refused.GetProperty("ok").GetBoolean());
+        Assert.Equal(RemoteDiagnostics.Refusal, refused.GetProperty("error").GetString());
     }
 
     public async Task DisposeAsync()

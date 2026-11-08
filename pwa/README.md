@@ -5,8 +5,14 @@ through the relay. Plain ES modules and CSS, no framework, no build step, nothin
 CDN: the page's Content-Security-Policy allows scripts and styles from this site only,
 and network access to the relay only.
 
-Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`.
-Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
+Published at <https://app.slipgates.com/> (live since 2026-11-07, #393) by `.github/workflows/pages.yml`, with the
+repository variable `PAGES_APP_AT_ROOT` set to `true`: the app is the site's root, and the old
+`danswett.github.io/agent-bridge/app/` address sends visitors there. The tests serve the app at `/`, as it is there.
+The move, what people who installed the old address have to do again (their sign-in and saved settings do not
+carry over), what was checked on the live address and what was not, and the rollback:
+[docs/app-domain.md](../docs/app-domain.md). `node test/live-origin-check.mjs` repeats the read-only browser checks
+against the live address.
+Try it without a machine: [`?demo=1`](https://app.slipgates.com/?demo=1).
 
 It shows sessions, their activity and their pending questions, answers those questions
 (`session.answer`), replies to sessions (`session.reply`) with files and images
@@ -38,7 +44,7 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/identity.js` | This device's P-256 key, generated non-extractable and kept in IndexedDB; its device id |
 | `js/signin.js` | GitHub device flow through the relay; the stored account |
 | `js/relay.js` | One relay WebSocket: hello, key proof, presence (with the account's offline machines, `known`), routed frames, `forget`. A send on a dead socket throws |
-| `js/connection.js` | The relay over time: reconnect with jittered backoff (`js/backoff.js`, tested in `test/unit/backoff.test.mjs`), at once on `visibilitychange`/`pageshow`/`online`; stop on a refused sign-in or a takeover by another window. Out of sight for 15 s (`QUIET_AFTER_MS`), it rests (#610): the socket closes, and with it every channel, subscription and look, and Web Push says what needs the person meanwhile; never while an answer, reply, stop, launch, request or blob is on its way. Back in sight it connects at once, and each machine shown is subscribed again and held as confirming until its list is whole (#427), as after a drop. Unlike a drop, a rest is not trouble: each machine whose list was current shows as confirming, not reconnecting, and its questions stay in the app badge, though not in the lane, until its list is whole, its channel fails or the relay does not come back (`js/host-session.js` `rested`) |
+| `js/connection.js` | The relay over time: reconnect with jittered backoff (`js/backoff.js`, tested in `test/unit/backoff.test.mjs`), at once on `visibilitychange`/`pageshow`/`online`; stop on a refused sign-in; a window another window has replaced (close 4009) takes the connection back once on its own and says nothing, in sight at once or out of sight when next in front, and stops for good, saying so with Use here, if it is replaced again within `REPLACED_GUARD_MS` (60 s) of that take-back (#1218). Out of sight for 15 s (`QUIET_AFTER_MS`), it rests (#610): the socket closes, and with it every channel, subscription and look, and Web Push says what needs the person meanwhile; never while an answer, reply, stop, launch, request or blob is on its way. Back in sight it connects at once, and each machine shown is subscribed again and held as confirming until its list is whole (#427), as after a drop. Unlike a drop, a rest is not trouble: each machine whose list was current shows as confirming, not reconnecting, and its questions stay in the app badge, though not in the lane, until its list is whole, its channel fails or the relay does not come back (`js/host-session.js` `rested`) |
 | `js/channels.js` | Noise_XX_P256 channels to hosts, as the initiator, with the peer's key checked against its id |
 | `js/noise-p256.js` | Vendored copy of `spikes/s2-noise-interop/web/noise-p256.js` |
 | `js/protocol.js` | Op and event names, and the tolerant reader: unknown fields dropped, unknown enum values read as the C# reader reads them |
@@ -64,10 +70,12 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/launch-service.js` | Starting sessions: `answer-service.js` with `session.launch`, one launch on its way per machine, resent with the same request until it has an outcome |
 | `js/launch-follow.js` | A launch followed after its outcome, as the app's `LaunchViewModel` does (#891, #896): a busy machine listed again once its busy can have ended (its question's two minutes and a second, or 2 min 1 s with none named) or when a session registers on it, one listing at a time; and a launch the machine could not confirm said to have started when its session registers, by the host's rule (not a Copilot's, which registers before it is ready), or when its folder-trust question is trusted here. One whose outcome named no session (a Codex's) is not followed, as which session is its own can't be told here, until the host names it (#983) |
 | `js/push.js` | Notifications: whether this device can have them, turning them on (permission, then a push subscription with the relay's VAPID key) and off, and registering with each machine opened (`push.subscribe`) |
+| `js/reading.js` | The session being read (#1190): tells each machine what the page shows (`sessions.focus`, through `HostSession.setFocus`) when it is in sight or hidden or the open session changes, and closes that session's shown notices when it opens, when the page comes back to it, and a second after each change to it while it is in sight, and again about 4 s and 10 s after the last (the host's question push comes 2 s after the question, a finished turn's 3 s after the turn; the passes stop when the page hides, the session shown changes, or it is stopped) (all of them but a question's other than the one its card shows: `openQuestion`, also said in `sessions.focus`). Signing out stops it, taking off every listener. It also times the person's input (passive listeners, a timestamp write each) for `sessions.focus`'s `idleMs`: said again on the first input after a spell without any and about each minute while input goes on, never while idle or hidden. The service worker is untouched: it still shows every push |
 | `js/usage.js` | Agent usage: the tolerant reader, merging every machine's reports into one row per allowance (a reading beats a failure, then the freshest wins), and the card's words: colours at 75% and 90%, pace, resets, ages |
 | `js/fleet.js` | Each machine's status line (`3 sessions · 0.1.0 (dev)`), usage, updates and who can sign Copilot in there (`signin.devices`, where offered): each machine shown on its own channel (`usage.subscribe`, `update.subscribe`), every other online machine by a short channel (`hello`, `usage.get`, `update.get`) every five minutes while the app is in front (#610; it was every minute), every ten seconds while an update there is under way; a machine shown asked for its hello again on its channel when it says it changed (`hello.changed`), else every minute; `call` sends a press to a machine on whichever |
 | `js/update.js` | A machine's updates ([v1-update.md](../docs/protocol/v1-update.md), #51): the tolerant reader, the row's words (what the machine's app is doing, how the last update ended), and `UpdateControl`, Check and Install with a request of their own each, a refusal shown on the row, and Check all |
 | `js/signin-devices.js` | Who can sign Copilot in on a machine (#972, ui.md §6.6): the tolerant reader of `signin.devices` (only a roster read lists anyone; a kind not a person's is dropped) and the row's words, in Creative's, with this device named and more than three folded. Read-only: nothing here adds or removes a device |
+| `js/diagnostics.js` | A machine's diagnostics ([v1-diagnostics.md](../docs/protocol/v1-diagnostics.md), #802): the reader of `diagnostics.get`'s snapshot, its plain-text report, and `DiagnoseControl`, Diagnose on a machine's row, never asked of a host that does not offer it, and Copy only after the person says they reviewed it |
 | `js/forget.js` | Forgetting an offline machine ([roster.md](../docs/protocol/roster.md)): two presses, the first arming for 5 seconds; an arm goes with a machine that comes back; the relay's refusals in words |
 | `sw.js` | The service worker: each release in a cache of its own, filled whole when its worker installs and served from there without asking the network, so a warm start waits on nothing and works offline (#609); anything else (the demo's chunk) stale-while-revalidate; and showing pushes (`push`) and opening the app at them (`notificationclick`). A release changes only as a whole: the browser checks `sw.js` on each start and the app on each return to the front, a new worker fills its own cache before it takes over, and the app then offers Reload, so old and new modules never mix (#26). The release before is kept for a page still open on it |
 | `js/release-watch.js` | New releases that keep failing to install (#650): a release installs whole or not at all, so one file missing from a deploy leaves the app on the release it has, and the browser tries again quietly at every start. After three failures in a row (counted in `localStorage` under the release in control, from the worker's record, so a release that installs with no page open clears them too), an app running a release it has says so, with Try again (a reload, the browser's next try); a release that installs clears it |
@@ -75,6 +83,7 @@ makes it a new device, signed in and approved again, so keeping it is fine.
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/hidden-text.js` | Text not on screen as it runs (#165, #220): the hidden and right-to-left characters the Needs you lane refuses, and the `\uXXXX` escapes code and approvals draw them as (the app's `HiddenText`) |
 | `js/auth-state.js` | An agent that needs sign-in, whose turn ended on an error, or that has stopped answering (#800): every protocol name for them in one place (`Session.attention`, `hello.machine.signIn`, `sessions.signin` and its `signin.*` ops and events, as Connection's contract on #800 has them), the github.com allowlist, the user code's shape, and agent text cut short and refused when token-shaped (the app's `AuthState`) |
+| `js/details-rows.js` | A session's Details rows ([ui.md](../docs/design/ui.md) §6.2, #1087), pure: the words and their order the table both clients share sets ([session-details.json](../docs/design/session-details.json)), which `test/unit/details-rows.test.mjs` checks them against, as the Windows app's `DetailsTableTests` does; `session-card.js` draws what it returns |
 | `js/ui/sign-in-view.js` | The sign-in banners (#800): one per machine, agent and account, naming the sessions held up as links in its line, with Sign in, and focused from a sign-in push's link (#969); and the sheet that press opens, with the code from this device's own `signin.code`, Copy and Open |
 | `js/ui/needs-you-view.js` | Needs you on screen, above the list and apart from it, its entries kept in place across redraws |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each session's answers, replies, files, End session and the launch panel to the machine it is for; which session is chosen (from the address, kept across a resize) and which panes show; the heading, count, empty state and a line per machine that can't be reached |
@@ -216,6 +225,10 @@ sessions and never moves their rows. An entry leaves when its question does.
 * **A form**, or a question this machine won't take from the phone, opens its session (the
   title), where the card says what it asks.
 * **A prompt marked `answerAtMachine`** says "Answer at the machine", with nothing to press.
+  Only `answerAtMachineReason: "shape"` adds "This kind of question can only be answered at
+  the machine." after "Answer at the machine · *machine*", in Needs you's text colour.
+  Both lines are accessible text, not a live region. Missing or unknown reasons retain the
+  current single line. Row status and attention do not change.
 
 The lane's count is the app's badge on the Home Screen or taskbar, where the browser has the
 Badging API (`navigator.setAppBadge`), and nothing where it hasn't.
@@ -296,15 +309,22 @@ as unconfirmed rather than sent again. Outcomes:
 | Outcome | Shown | Then |
 |---|---|---|
 | `delivered` | The check on the control that sent it for about a second, then You answered · *value* | The host's upsert takes the question away; the card keeps the line |
-| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again |
-| `unconfirmed`, stage `typed` | Typed into the prompt, but not confirmed as submitted. Check the conversation. | The same, but on a reconnect the same request is sent once more, which the host answers from the session's record without typing: delivered if it was submitted since (#467) |
+| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again. Once its question has left the session's list the card keeps the question as it was asked, with *Your answer: Sent, but not confirmed…* in neutral words |
+| `unconfirmed`, stage `typed` | Typed into the prompt, but not confirmed as submitted. Check the conversation. | The same, but on a reconnect the same request is sent once more, which the host answers from the session's record without typing: delivered if it was submitted since (#467), and then it reads You answered |
 | `unconfirmed`, stage `recorded` | The session recorded something for this question, but not confirmed as this answer. Check the conversation. The reason says what it recorded, or the error. | As `typed` |
-| `stale` | Already answered or gone | Final |
-| `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request |
-| `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request |
+| `stale`, with no reason code | Already answered or gone, while the question is still listed | Once the question has left the list: the question as it was asked, kept in the conversation, with **No longer waiting** in neutral words (no cause: the host cannot tell a question the agent withdrew from one answered elsewhere) |
+| `stale`, code `formReset` | Not delivered: the form could not take your answer at the machine. The words typed stay, and Try again sends them as a new request while the question is listed | Once the question has left the list: the same line, neutral, with what was typed in a read-only box with Copy |
+| `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request. Once the question has left the list: **No longer waiting** |
+| `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request. Once the question has left the list: **No longer waiting** |
+| `failed` (could not send), with Try again | Couldn't send it: *reason* | Once the question has left the list: **No longer waiting**, with nothing to try again |
+
+A closed question stays in the conversation, through the next question and the next turn, up
+to 20 a card. Only the words of an answer the person gave (in flight, or that may have gone in)
+say *Your answer:*. The rule for every line that outlives its cause is in
+[`docs/design/ui.md` §7](../docs/design/ui.md).
 
 If the question changes or goes while something typed hasn't been sent, the card says so
-and keeps the text, read-only, to copy. A card that moves while its form is in use keeps
+and keeps the text, read-only, to copy, in a neutral note with Dismiss. It stays through the next turn and goes on Dismiss, or once that text is sent. A card that moves while its form is in use keeps
 focus and the caret. On a desktop, everything is reachable by Tab in order, radios move
 with the arrow keys, and Ctrl+Enter (Cmd+Enter) sends from a text box.
 
@@ -332,10 +352,10 @@ what was sent (anything typed meanwhile stays), and every other outcome keeps th
 | Outcome | Shown | Then |
 |---|---|---|
 | `delivered` | Send's check for about a second; no line | The session's upsert shows it as your last message |
-| `unconfirmed`, or unknown | Sent, but not confirmed. Check the conversation before sending it again. | The words stay; sending them again is a new reply |
-| `stale` | Not sent: the session has ended. | |
-| `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s |
-| `refused` | The machine refused this reply: *reason* (a question pending, an agent it can't reply to yet) | |
+| `unconfirmed`, or unknown | Sent, but not confirmed. Check the conversation before sending it again. | The words stay; sending them again is a new reply. The line goes when the session's next turn starts |
+| `stale` | Not sent: the session has ended. | The line goes with the next edit of the box, or the next turn |
+| `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s, and the line goes with it |
+| `refused` | The machine refused this reply: *reason* (a question pending, an agent it can't reply to yet) | The line goes with the next edit of the box, or the next turn |
 
 A host waits up to a minute for a working session to take a reply, so the request waits
 90 s for its response before it counts as lost. Demo mode replies as a host would
@@ -500,9 +520,10 @@ destinations) at two sizes, and fail one whose time grows faster than its length
 Code blocks wrap rather than scroll sideways (`pre-wrap`, breaking even a long base64
 token), keeping indentation, and each has a Copy button in its top-right corner that copies
 exactly what the block draws, whatever the wrapping. The button is made by `toDom`, never by
-the parser, so no reply text can produce a `<button>`. It uses the Clipboard API and falls
-back to a hidden text area and `execCommand('copy')` where that API is missing or refuses
-(older WebViews, some iOS Home Screen apps). Inline code has no button.
+the parser, so no reply text can produce a `<button>`. It copies through a hidden text area and
+`execCommand('copy')` first, inside the tap, and uses the Clipboard API where that is refused:
+WebKit's Clipboard API resolved with nothing on the clipboard, so its answer was no proof the text
+got there (#1090). It says Copy failed when neither wrote. Inline code has no button.
 
 What is drawn is what runs (#415, ui.md §6.4, the app's #296): every code block and code span
 reads strictly left to right (`dir="ltr"`, `unicode-bidi: isolate`), with bidi controls,
@@ -709,7 +730,11 @@ route is seen to work before a feature adds its own states.
   kept for a page still open on it and older ones dropped) and its handlers in every
   case (tags, quiet replacement, unknown kinds, taps that never leave the app, a tap with
   the app open or closed), and turning notifications on and off, iOS's Home Screen rule,
-  a relay key change, a turn-off racing a registration, and closing stale notices.
+  a relay key change, a turn-off racing a registration, and closing stale notices. With
+  `test/unit/host-client.test.mjs` and `test/unit/host-session.test.mjs`: the page says on
+  `sessions.focus` whether it is in sight and which session it shows (only to a host that
+  offers it, again after every subscribe, at most once a second), and the open session's
+  notices are closed while it is read and not otherwise (#1190).
 * `test/unit/protocol-vectors.test.mjs`: the shared protocol vectors
   ([docs/protocol/vectors](../docs/protocol/vectors/README.md)), which the C# records generate,
   replayed through this app's readers, its answer, reply and launch checks, its request

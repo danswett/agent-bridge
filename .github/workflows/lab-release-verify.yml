@@ -1,0 +1,146 @@
+name: Lab release verification (held)
+
+# DRAFT, HELD: verifies one named release on the shared #736 lab (#357, quality/README.md §8
+# phase 4) by running the lab nightly (#854) against exactly that release, then holding both
+# roles' results to it. Nothing in it can run today: its first job, gate, refuses every run, and
+# every other job needs gate.
+#
+# What it adds to the nightly, and what it doesn't:
+#  - The nightly resolves and verifies the cut (ci.yml's attestation, a push to main), runs both
+#    roles through the shared runner and the provisioner, and judges the cut. This workflow does
+#    none of that again: it calls the nightly with the release as its cut, so the nightly verifies
+#    exactly that release and never "the newest".
+#  - verify then holds both roles' result.json to the release asked for, and to each other (one
+#    lab run, one commit, one CI run), and to the nightly's own outcome: a pass for another cut, or
+#    a pass the results don't bear out, is invalid, never a pass.
+#  - Its outcome is v1 evidence about one release, nothing more. It promotes nothing, publishes
+#    nothing and moves no channel (quality/README.md §7); it never counts toward Beta 1 (v2, three
+#    consecutive qualifying releases, #736); and the ring 4 gates and channels stay off. Which
+#    consumer may read it (SRE's #590 cut and promotion path) is a prerequisite in gate.
+#
+# Why it can't run, and what lets it (quality/lab/release-gate.ps1 is the list):
+#  - The nightly (#854), the lab contract and provisioner (#849) and the shared runner (#736) are
+#    not on main. gate refuses while their files are missing; this workflow carries no copy.
+#  - The nightly is called at the reviewed #854 commit, pinned by SHA, never a branch: a ref that
+#    moves could change what runs. That pin isn't main's code, and the nightly's jobs run the
+#    scripts of this run's own checkout, so once #854 merges, a reviewed change re-points the call
+#    at main's ./.github/workflows/lab-nightly.yml and only then marks nightly-landed met.
+#  - Every prerequisite of the nightly's own gate, the contract's approval, and a consumer for the
+#    result. Each is a constant in gate's script, marked met only by the reviewed change that
+#    delivers its receipt. No input, variable or secret clears one; the only inputs are the release
+#    and the relay. And the nightly's own gate refuses again, behind this one.
+#
+# The jobs, by what they may do:
+#   gate     reads the checkout and refuses (today, always). contents: read, no environment, no
+#            OIDC, no secret.
+#   nightly  the call. It grants exactly what the nightly's jobs ask (contents, attestations and
+#            actions read; id-token: write for its run job's lab sign-in): GitHub won't start a
+#            call whose jobs ask for more than the caller grants. Nothing in this workflow signs
+#            in; the nightly's run job alone does, in the lab environment, behind its own gate.
+#            No secret is passed: the lab's live only in that environment.
+#   verify   quality/lab/release-verify.ps1 over the nightly's outcome and both results. contents:
+#            read only, so it can't publish, promote or tag anything.
+#
+# Re-runs: as in the nightly, a retry is a new run (#849 §8). Re-running failed jobs reuses gate's
+# earlier outputs without running gate again, so nightly and verify each refuse any attempt but the
+# first in their own if:. On attempt 2 or later nothing is called, nothing signs in and no outcome
+# is produced.
+#
+# No schedule: a release is verified when someone names it. Its consumer, once one is reviewed, may
+# call it (workflow_call) in the same change that lets gate accept that event.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: The release tag to verify (v0.1.N), built by main's ci.yml; never a default
+        type: string
+        required: true
+      relay:
+        description: staging (until PPE) or ppe; never production
+        type: choice
+        required: true
+        options: [staging, ppe]
+
+permissions: {}
+
+# One release verification at a time, never cancelled mid-run (resources would be the sweeper's).
+# The nightly keeps its own lab-nightly group; whether it holds inside a call is unproven, so the
+# lab's one-run-at-a-time is a nightly-landed check before gate lets this run.
+concurrency:
+  group: lab-release-verify
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      cleared: ${{ steps.gate.outputs.cleared }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Refuse the verification unless the lab may run it
+        id: gate
+        shell: pwsh
+        env:
+          RELEASE: ${{ inputs.release }}
+          RELAY: ${{ inputs.relay }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPO: ${{ github.repository }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          ./quality/lab/release-gate.ps1 -Release "$env:RELEASE" -Relay "$env:RELAY" -EventName "$env:EVENT" -Ref "$env:REF" `
+            -Repository "$env:REPO" -RunAttempt "$env:GH_RUN_ATTEMPT" | Out-Null
+          "cleared=true" >> $env:GITHUB_OUTPUT
+
+  nightly:
+    needs: gate
+    if: github.run_attempt == '1' && needs.gate.outputs.cleared == 'true'
+    # #854's reviewed head, not main's: see the header. Re-pointed at ./.github/workflows/lab-nightly.yml
+    # by the change that marks nightly-landed met.
+    uses: danswett/agent-bridge/.github/workflows/lab-nightly.yml@52e959b00e7e3aa5cae37bf0cb0077ee3d988240
+    permissions:
+      contents: read
+      attestations: read
+      actions: read
+      id-token: write
+    with:
+      relay: ${{ inputs.relay }}
+      cut: ${{ inputs.release }}
+
+  verify:
+    needs: [gate, nightly]
+    # Also after a failed nightly: a fail or invalid outcome is reported as one, never left blank.
+    if: ${{ !cancelled() && github.run_attempt == '1' && needs.gate.outputs.cleared == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.verify.outputs.outcome }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # This run's own artifacts only: the nightly's run jobs uploaded them within this run.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: lab-result-*
+          path: ${{ runner.temp }}/results
+      - name: Hold both roles' results to the release
+        id: verify
+        shell: pwsh
+        env:
+          RELEASE: ${{ inputs.release }}
+          NIGHTLY_OUTCOME: ${{ needs.nightly.outputs.outcome }}
+        run: |
+          $verdict = ./quality/lab/release-verify.ps1 -Release $env:RELEASE -NightlyOutcome "$env:NIGHTLY_OUTCOME" -ResultsDir "$env:RUNNER_TEMP/results"
+          "outcome=$($verdict.outcome)" >> $env:GITHUB_OUTPUT
+          @("## Lab release verification: $($verdict.release) $($verdict.outcome) ($($verdict.coverageVersion) evidence only; promotes nothing)", '') +
+            @($verdict.reasons | ForEach-Object { "- $_" }) >> $env:GITHUB_STEP_SUMMARY
+          if ($verdict.outcome -ne 'pass') { exit 1 }

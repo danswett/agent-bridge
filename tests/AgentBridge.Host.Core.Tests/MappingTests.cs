@@ -41,6 +41,40 @@ public class QuestionMappingTests
     }
 
     [Theory]
+    [InlineData("""{ "message": "What next?" }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": {} }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "type": "object", "properties": {} } }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": 7 }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": [] }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": "not json" }""")]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "a": "text", "b": 1 } } }""")]
+    [InlineData("""{ "question": "Which?", "choices": ["a", "b"] }""")]
+    [InlineData("""{ "question": "Which?", "choices": "[\"a\",\"b\"]" }""")]
+    [InlineData("""{ "message": "m", "choices": [], "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "choices": "", "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "choices": " ", "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    [InlineData("""{ "message": "m", "choices": ["a"], "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""")]
+    public void A_Copilot_question_with_no_form_or_with_legacy_choices_explains_why_it_is_held_at_the_machine(string arguments)
+    {
+        var q = Ask(arguments);
+
+        Assert.True(q.AnswerAtMachine);
+        Assert.Equal("shape", q.AnswerAtMachineReason);
+    }
+
+    [Theory]
+    [InlineData("""{ "message": "m", "choices": null, "requestedSchema": { "properties": { "go": { "type": "boolean" } } } }""", false)]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"], "default": "z" } } } }""", true)]
+    [InlineData("""{ "message": "m", "requestedSchema": { "properties": { "go": { "type": "boolean", "title": "" } } } }""", true)]
+    public void A_form_offered_or_held_for_another_guard_does_not_claim_to_have_no_form_or_legacy_choices(string arguments, bool held)
+    {
+        var q = Ask(arguments);
+
+        Assert.Equal(held ? true : null, q.AnswerAtMachine);
+        Assert.Null(q.AnswerAtMachineReason);
+    }
+
+    [Theory]
     // What CopilotForm.Read refuses, or reads as no fields at all, the host never types, so each
     // is shown to be answered at the machine rather than offered and refused every time (#510
     // review, Copilot 4480874464): an empty schema, one with no properties, one that is not an

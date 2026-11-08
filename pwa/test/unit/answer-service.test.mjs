@@ -50,6 +50,22 @@ test('an answer is sent once with a fresh request, and its outcome is kept', asy
   assert.equal(conn.client.calls.length, 1);
 });
 
+test('a stale answer from a form the host cancelled never went in, so it can be given again as a new request', async () => {
+  const { conn, service, submit } = setup();
+  submit();
+  conn.client.last().resolve({ outcome: 'stale', reason: 'cancelled the form', code: 'formReset' });
+  await flush();
+  assert.equal(service.get('h1', 's1', 'q1').detail.code, 'formReset');
+  submit();
+  assert.equal(conn.client.calls.length, 2);
+  assert.equal(conn.client.calls[1].data.request, 'r2');
+  // Any other stale is final: the question is no longer asked.
+  conn.client.last().resolve({ outcome: 'stale', reason: 'gone' });
+  await flush();
+  submit();
+  assert.equal(conn.client.calls.length, 2);
+});
+
 test('a lost response is resent with the same request until an outcome arrives', async (t) => {
   // The resend waits on a timer, mocked here: with a real 5 ms one, a CI runner that came
   // back to this test more than 5 ms late found the resend already sending, not waiting.

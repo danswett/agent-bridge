@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Transport;
 using Microsoft.UI.Dispatching;
 
@@ -49,6 +50,10 @@ static class Paths
 
 static class CrashLog
 {
+    // The app's own diagnostics journal (#737): the crash as its type and frames only, beside the
+    // crash.log line, which stays as it was for the person's own reading.
+    static readonly Lazy<DiagnosticsJournal> Journal = new(() => new DiagnosticsJournal(TimeProvider.System, Path.Combine(Paths.AppData, "diagnostics-journal.jsonl")));
+
     // A XAML failure surfaces only as 0xC000027B in Microsoft.UI.Xaml.dll with the real
     // exception lost (S3), so every unhandled exception is written down first.
     public static void Write(Exception? e)
@@ -60,6 +65,7 @@ static class CrashLog
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+        Journal.Value.Record(JournalEvents.Crash(e, JournalEvents.Version(typeof(CrashLog).Assembly)));
     }
 }
 

@@ -119,6 +119,29 @@ public sealed class LaunchPieceTests : IDisposable
 
     [WindowsFact]
     [Trait("Category", "Process")]
+    public async Task A_probe_resolves_a_new_runtime_from_its_fresh_child_PATH_without_changing_the_host()
+    {
+        var runtime = Out("new-runtime-\u03bb");
+        Directory.CreateDirectory(runtime);
+        File.WriteAllText(Path.Combine(runtime, "fixture-runtime.cmd"), "@echo fixture version 1.2.3\r\n");
+        var shim = Out("fresh-cli.cmd");
+        File.WriteAllText(shim, "@echo off\r\ncall fixture-runtime.cmd\r\n");
+        var inherited = Environment.GetEnvironmentVariable("PATH");
+        IReadOnlyDictionary<string, string?> environment = new Dictionary<string, string?>();
+        var runner = new VersionCommandRunner(() => environment);
+        environment = new Dictionary<string, string?> { ["PATH"] = runtime };
+
+        var result = await runner.RunAsync(shim, ["--help"], TimeSpan.FromSeconds(15));
+
+        Assert.True(result.Ran);
+        Assert.False(result.TimedOut);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("fixture version 1.2.3", result.Output);
+        Assert.Equal(inherited, Environment.GetEnvironmentVariable("PATH"));
+    }
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
     public Task Cancelling_a_version_probe_terminates_its_orphaned_grandchild_before_returning() => ProbeDescendant(false, true);
 
     [WindowsFact]
@@ -320,6 +343,20 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.NotNull(WindowsCommandLine.For(@"C:\bin\copilot.exe", ["-i", new string('a', 9000)], out _));
         Assert.Null(WindowsCommandLine.For(@"C:\bin\copilot.exe", ["-i", new string('a', 33000)], out problem));
         Assert.Contains("Windows takes at most", problem);
+    }
+
+    [Fact]
+    public void A_wide_console_starts_minimized_without_the_focus_so_the_console_host_keeps_it_to_be_widened()
+    {
+        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowMinimizedNoActivate), ConsoleStartup.For(250, hidden: false));
+    }
+
+    [Fact]
+    public void A_console_without_a_width_opens_as_before_and_a_hidden_one_stays_hidden()
+    {
+        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowNormal), ConsoleStartup.For(null, hidden: false));
+        Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(250, hidden: true).Show);
+        Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(null, hidden: true).Show);
     }
 
     [WindowsFact]

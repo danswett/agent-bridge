@@ -24,7 +24,9 @@ public interface IUpdater
     // Exits the app, replaces it, and starts the new version: only the release named, the one the
     // person or the updater chose, and only while it is the one ready. Anything else throws before
     // anything is replaced (a check or download meanwhile may have replaced it; r4487830884).
-    void ApplyAndRestart(string version);
+    // handedOver: called once the installer has started, just before the app exits, so the next
+    // start knows an install was attempted (#1167); never when anything threw first.
+    void ApplyAndRestart(string version, Action? handedOver = null);
     // Where releases come from now (the feed, and Include pre-releases): what a check found, or a
     // download fetched, belongs to it.
     string Source => "";
@@ -41,7 +43,7 @@ public interface IAppAtSignIn
 // The Settings page: this machine's host (running, version, start at sign-in, start, stop,
 // restart, its log), its relay sign-in and name, what it lets other devices do, and the app's
 // own preferences and updates.
-public sealed class SettingsViewModel : Observable
+public sealed partial class SettingsViewModel : Observable
 {
     readonly HostConnection host;
     readonly HostManager manager;
@@ -66,6 +68,7 @@ public sealed class SettingsViewModel : Observable
     int foundAt;
     string log = "";
     string agentInstallStatus = "";
+    string agentSignInStatus = "";
     bool agentInstallInProgress;
     bool installRequestPending;
     string? installing;
@@ -134,7 +137,7 @@ public sealed class SettingsViewModel : Observable
         {
             if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability) || Status?.Agents is not { } report) { return []; }
             AgentReadinessRow[] rows = [.. report.Agents.Select(a => new AgentReadinessRow(a, CanManageAgents, CanInstallAgents, agentNotes.GetValueOrDefault(a.Id),
-                shared: hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(a.Id)), install: InstallOf(a.Id), installOffered: InstallOffered))];
+                shared: hookResults.GetValueOrDefault(AgentReadinessRow.HooksOf(a.Id)), install: InstallOf(a.Id), installOffered: InstallOffered, canSignIn: CanSignInAgents))];
             // Never on a host that is read-only or beside agent-ha-bridge: the row's own words say why
             // there (Review migration, Read-only), and the card would offer what can't be done.
             var mayOffer = Status?.ReadOnly is null && Status?.AgentHaBridge is null;
@@ -159,7 +162,7 @@ public sealed class SettingsViewModel : Observable
     }
     // "Get started": none while the host can't report agents, so it never guesses.
     public IReadOnlyList<SetupStep> SetupSteps => !HostRunning ? SetupGuide.Steps(false, [], false)
-        : Agents is { Count: > 0 } rows ? SetupGuide.Steps(true, rows, Status?.Account is not null) : [];
+        : Agents is { Count: > 0 } rows ? SetupGuide.Steps(true, rows, Status?.Account is not null, Status?.AgentVerifications) : [];
     public bool ShowSetupSteps => SetupSteps is { Count: > 0 } steps && !steps.All(s => s.Settled);
     // Where the app's log is (AppLog in the app).
     public Action<string> LogTo { get; init; } = _ => { };
@@ -200,6 +203,9 @@ public sealed class SettingsViewModel : Observable
     }
     public string AgentInstallStatus { get => agentInstallStatus; private set => Set(ref agentInstallStatus, value); }
     public bool AgentInstallInProgress => agentInstallInProgress || Status?.AgentInstallation?.InProgress == true;
+    public bool CanSignInAgents => HostRunning && host.Can(HostOps.AgentSignInCapability) && !Busy && !AgentInstallInProgress
+        && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
+    public string AgentSignInStatus { get => agentSignInStatus; private set => Set(ref agentSignInStatus, value); }
     public bool CanCheckAgents => HostRunning && host.Can(HostOps.AgentReadinessCapability) && !Busy;
     public string AgentsState => !HostRunning ? "Connect to this machine's bridge to check its agents."
         : !host.Can(HostOps.AgentReadinessCapability) ? "This host does not report agent readiness. Update the app and restart the host."
@@ -562,7 +568,7 @@ public sealed class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(CanSignInAgents)); Raise(nameof(Agents)); RaiseOffers(); Raise(nameof(UpdateStatus)); RaiseVerification(); } }
     }
     // The card's Set up follows what the row's would (CanManageAgents), so it is drawn again wherever the rows are.
     void RaiseOffers() { Raise(nameof(AgentOffers)); Raise(nameof(HasAgentOffers)); Raise(nameof(AgentsNavName)); }
@@ -734,6 +740,23 @@ public sealed class SettingsViewModel : Observable
         CaughtUp();
         DrawDevices();
         RaiseAll();
+        OfferGuide();
+    }
+
+    // Slice 2 of #384: a first install opens on the Get started list once, the first time the host
+    // reports agents and none has its hooks connected (AppPreferences.GuidePending, set only by a
+    // first run, so an upgrader is never pulled to Settings). The app asks for it only when its window
+    // is to be shown: not the demo, a development copy, the self-test or a start at sign-in, which
+    // leaves it pending for the first launch that shows the window.
+    public bool OpenGuideAtFirstLaunch { get; init; }
+    public event Action? GuideWanted;
+    void OfferGuide()
+    {
+        if (!OpenGuideAtFirstLaunch || !prefs().GuidePending || !HostRunning || Agents.Count == 0) { return; }
+        var steps = SetupSteps;
+        if (steps.Any(s => s.Id == "hooks" && s.State == SetupStepState.Done)) { return; }
+        GuideWanted?.Invoke();
+        savePrefs(prefs() with { GuidePending = false });
     }
 
     public Task StartHostAsync() => RunAsync(() => manager.StartAsync());
@@ -886,6 +909,32 @@ public sealed class SettingsViewModel : Observable
         await host.CallAsync(HostOps.AgentsInstallCancel);
     });
 
+    public Task SignInAgentAsync(string agent) => RunAsync(async () =>
+    {
+        if (!HostRunning || !host.Can(HostOps.AgentSignInCapability))
+        {
+            throw new InvalidOperationException("This host does not support CLI sign-in. Update the app and restart the host.");
+        }
+        if (Status?.ReadOnly is not null || Status?.AgentHaBridge is not null)
+        {
+            throw new InvalidOperationException($"CLI sign-in is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
+        }
+        AgentSignInStatus = "Opening the CLI's own sign-in flow...";
+        var reported = false;
+        try
+        {
+            var result = await host.CallAsync<AgentSignInResult>(HostOps.AgentsSignIn,
+                new AgentSignInRequest(agent, Confirmed: true), TimeSpan.FromSeconds(30));
+            AgentSignInStatus = result.Detail;
+            reported = true;
+            if (!result.Opened) { throw new InvalidOperationException(result.Detail); }
+        }
+        finally
+        {
+            if (!reported) { AgentSignInStatus = "The sign-in window's result is unavailable. Check your desktop before retrying; account access remains unverified."; }
+        }
+    });
+
     // How long a setup may take at the host before its row says it took too long (tests shorten it).
     internal TimeSpan SetupTimeout { get; set; } = TimeSpan.FromMinutes(4);
 
@@ -1001,7 +1050,7 @@ public sealed class SettingsViewModel : Observable
             await manager.StopAndApplyAsync(() => AutoUpdater.Record(prefs, savePrefs, updater), () =>
             {
                 UpdateStatus = "Restarting…";
-                updater.ApplyAndRestart(updateVersion!);
+                updater.ApplyAndRestart(updateVersion!, AutoUpdater.HandedOver(prefs, savePrefs));
             });
         }
         // The automatic update got there first, and is installing (and recorded) it.

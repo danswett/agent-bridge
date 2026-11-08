@@ -176,6 +176,63 @@ public sealed class LaunchTests : IDisposable
     }
 
     [Fact]
+    public async Task The_launch_options_sensor_lists_every_agent_whichever_is_selected_and_follows_the_hosts_lists()
+    {
+        await using var c = await Ready();
+        JsonObject Sensor() => JsonNode.Parse(ha.Retained[HaContract.LaunchOptionsTopic(Slug)])!.AsObject();
+        var before = Sensor();
+        Assert.Equal(["gpt-5.5", "claude-sonnet-5"], before["agents"]!["copilot"]!["models"]!.AsArray().Select(m => m!.GetValue<string>()));
+        Assert.Equal(4, before["agents"]!.AsObject().Count);
+
+        c.Observe(ha.Choose(Entity("select", "new_agent"), "Claude"));
+        await Pass(c);
+        Assert.Equal(before["version"]!.GetValue<string>(), Sensor()["version"]!.GetValue<string>());
+
+        offered = offered with { Agents = [offered.Agents[0], offered.Agents[1] with { Models = ["gpt-5.5", "claude-sonnet-5", "claude-opus-5"] }, .. offered.Agents.Skip(2)] };
+        await Pass(c, 31);
+        Assert.NotEqual(before["version"]!.GetValue<string>(), Sensor()["version"]!.GetValue<string>());
+        Assert.Contains("claude-opus-5", Sensor()["agents"]!["copilot"]!["models"]!.AsArray().Select(m => m!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_change_of_the_default_agent_alone_is_published_and_a_pause_republishes_the_sensor()
+    {
+        await using var c = await Ready();
+        JsonObject Sensor() => JsonNode.Parse(ha.Retained[HaContract.LaunchOptionsTopic(Slug)])!.AsObject();
+        var before = Sensor();
+        Assert.Equal("copilot", before["default_agent"]!.GetValue<string>());
+
+        offered = offered with { Defaults = offered.Defaults with { Agent = "claude" } };
+        await Pass(c, 31);
+        Assert.Equal("claude", Sensor()["default_agent"]!.GetValue<string>());
+        Assert.NotEqual(before["version"]!.GetValue<string>(), Sensor()["version"]!.GetValue<string>());
+
+        // A pause withdraws the machine; the sensor is published again, not skipped as unchanged.
+        daemon = "agent-ha-bridge is running";
+        await Pass(c);
+        ha.Retained.Remove(HaContract.LaunchOptionsTopic(Slug));
+        daemon = null;
+        await Pass(c);
+        await Pass(c, 2);
+        await Pass(c, 6);
+        Assert.Equal("claude", Sensor()["default_agent"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_launch_options_sensor_left_by_an_earlier_run_is_withdrawn_when_launch_is_not_served()
+    {
+        available = false;
+        var (config, body) = HaContract.LaunchOptionsConfig(Slug, "");
+        ha.Seed(config, HaContract.Serialize(body));
+        ha.Seed(HaContract.LaunchOptionsTopic(Slug), "{\"version\":\"old\"}");
+        await using var c = Connector();
+        await Pass(c);
+        await Pass(c);
+        Assert.False(ha.Retained.ContainsKey(config));
+        Assert.False(ha.Retained.ContainsKey(HaContract.LaunchOptionsTopic(Slug)));
+    }
+
+    [Fact]
     public async Task A_persons_press_launches_what_the_card_shows_and_the_note_goes_once_it_has_started()
     {
         await using var c = await Ready();

@@ -43,7 +43,7 @@ and naming changes, and this branch adds operational behaviour. Compared side by
 | Devices | Id = SHA-256 of the device key; nothing stored | Same | None: nothing to migrate |
 | Presence | In memory, rebuilt as devices reconnect | Same | Devices reconnect once (1012), as on any restart |
 | Web Push | `PushGateway`, VAPID key `Relay:VapidPrivateKey`, push-host allowlist, 30/min/account | Same code | **Subscriptions survive only if the VAPID key is carried over** (a browser subscription is bound to the public key). `deploy.ps1` copies it |
-| CORS and origins | `Relay:AllowedOrigins` = `https://danswett.github.io`, and `https://app.slipgates.com` from #393 | Same option and checks | Set the same origins (they are in `regions/westus2.bicepparam`) |
+| CORS and origins | `Relay:AllowedOrigins` = `https://danswett.github.io`, and `https://app.slipgates.com` from #393 (both stamps). Staging alone also allows `https://preview.slipgates.com` (`stagingExtraAllowedOrigins`) | Same origins as staging, without the preview one | Set the same origins (they are in `regions/westus2.bicepparam`) |
 | GitHub sign-in | Device flow through the GitHub App client id | Same | Same client id; nothing for users to do |
 | Limits | 200 frames/s per socket, 32 devices per account, 60 sign-in calls/min per IP | Same, plus 120 new sockets/min per IP, 16 KiB request bodies, 10,000 sockets per replica | None for real clients: hosts and the PWA back off 1 s → 30 s |
 | Logs | GitHub login, account id, device id prefix and device name per connection | None of those: a random per-socket tag, kind and counts; JSON lines | Operational only |
@@ -259,12 +259,11 @@ Rollout, staging first, production on the owner's approval, by someone with Azur
 4. Set the repository variable `RELAY_SLIPGATES_LIVE` to `true` so every later promotion smoke-tests the new name too.
 
 Rollback: first set `RELAY_SLIPGATES_LIVE` to `false` (otherwise every promotion smoke-tests a name that is gone and fails), then remove `extraCustomDomains` from `production` and re-run step 2. The hostname comes off the app
-(an incremental deploy leaves its certificate behind, harmless) and `relay.bad-duck.com` is untouched; nothing else changed, since no client defaults moved. Leave the
+(an incremental deploy leaves its certificate behind, harmless) and `relay.bad-duck.com` is untouched; client defaults now point at `relay.slipgates.com` (#1112), so revert that change first (`S4_RELAY` in `pages.yml`, the app's default relay); apps with a saved relay keep it. Leave the
 DNS records in place (they are harmless unbound). To delete the leftover certificate:
 `az containerapp env certificate delete -n <environment> -g <resource group> --certificate mc-relay-slipgates-com`.
 
-Moving new pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) to `relay.slipgates.com`
-is a later change, once both names pass step 3. Retiring `relay.bad-duck.com` is the owner's later decision.
+New pairings and defaults (`S4_RELAY` in `pages.yml`, the app's default relay) moved to `relay.slipgates.com` in #1112, with both names live. Retiring `relay.bad-duck.com` is the owner's later decision.
 
 The first name's steps work as follows. `deploy.ps1` steps it forward
 as DNS allows: it prints both records while they are missing; once they resolve it puts the
@@ -463,6 +462,46 @@ Azure Storage on URLs the relay signs; no blob byte passes through a relay node.
   `Relay__Blobs__Container`, `Relay__Blobs__ManagedIdentityClientId`. Not a secret among
   them. An app without them (`Backend` empty) says `blobs: null` in `ready`, and every
   client keeps to 256 KiB in its channels.
+* A second private container, `feedback` (docs/protocol/feedback.md): the relay takes each
+  beta-feedback bundle itself (exact ticketed size, 8 MiB cap) and writes it with
+  create-only semantics. Its role assignment there is Blob Data Contributor with a condition
+  that removes read, list and delete, and a 30-day time-based retention policy on the
+  container means the relay cannot overwrite or delete a bundle before the
+  30 days are up. A lifecycle rule deletes `feedback/` at 31 days; the `blobs` rule is
+  scoped to its own container. Reading feedback is a role given to the feedback lead's
+  identity (SRE), never to the relay. Environment: `Relay__Feedback__Backend`,
+  `AccountUrl`, `Container`, `ManagedIdentityClientId`; empty `Backend` turns it off.
+* Feedback reader (staging, `feedbackReaderIdentityName`): a separate user-assigned identity,
+  `id-agent-bridge-feedback-reader-staging`, with the built-in Storage Blob Data Reader role
+  scoped to the `feedback` container only: no condition, no write or delete, no access to
+  `blobs`, no account key or SAS (shared key access is off). It is neither the relay nor the
+  writer.
+  * **Token without a stored secret.** A user-assigned identity can only get a token from
+    inside Azure: attach it to the Azure VM that runs the Feedback Inbox
+    (`az vm identity assign -g <rg> -n <vm> --identities <identity resource id>`), then the
+    inbox asks the VM's metadata endpoint for a storage token
+    (`DefaultAzureCredential` or `ManagedIdentityCredential` with the identity's client id).
+    Nothing is stored. Any process on that VM can ask for the token, so the VM is dedicated
+    to the inbox and the decryption key stays with the `fbinbox` account (#740). A host that
+    is not an Azure VM has no secret-free path for this identity: do not hand it a client
+    secret or SAS; ask for a different design.
+  * **Cleanup, by name.** Detach it from any VM first (`az vm identity remove ...`), then
+    `az role assignment delete --assignee <principalId> --scope <feedback container id>`
+    and `az identity delete -g rg-agent-bridge-relay -n id-agent-bridge-feedback-reader-staging`.
+    Removing `feedbackReaderIdentityName` from the staging config stops a later apply from
+    recreating it.
+* The retention policy deploys **unlocked**. Until it is locked, someone with write access
+  to the storage account (not the relay) could shorten or remove it, so "no one can
+  overwrite or delete" holds against the relay and any data-plane identity, not against an
+  account owner. After the first production apply, a person locks it (this cannot be
+  undone, and a locked policy can only be extended):
+
+  ```powershell
+  $etag = az storage container immutability-policy show --account-name <account> --container-name feedback --query etag -o tsv
+  az storage container immutability-policy lock --account-name <account> --container-name feedback --if-match $etag
+  ```
+
+  Until then the accepted risk is account-owner tampering; record the lock on #731.
 
 Staging has its account (`abblobstgwus2`, applied with `./infra/deploy.ps1` on 2026-10-29,
 which also registered `Microsoft.Storage` in the subscription). Production gets
@@ -606,3 +645,9 @@ West US 2 consumption prices; the subscription's monthly free grant is 180,000 v
 
 Levers when it matters: GHCR instead of ACR saves the $5 registry; a second region is
 another ≈ $14; the next step up is 0.5 vCPU / 1 GiB (≈ $34) for tens of thousands of sockets.
+
+## Metrics export (#1134)
+
+The relay's meter (`AgentBridge.Relay`) is exported to Application Insights by the Azure Monitor OpenTelemetry exporter (`RelayTelemetry.cs`), only when `Relay__ApplicationInsightsConnectionString` or `APPLICATIONINSIGHTS_CONNECTION_STRING` is set as an app setting (a connection string, supplied by the deployment, never kept in the repo). Unset, nothing is exported. Instruments added: `relay.forward.latency` (ms, frame received to written to its target), `relay.connect.duration` (ms, socket opened to ready) and `relay.sockets.live` (gauge). Each carries the `kind` tag only; `RelayMetrics.AllowedTags` is the whole tag allow-list and a test fails if an id-like key joins it. Wiring the app setting in `infra/` is a follow-up that needs the owner's deploy approval.
+
+A malformed connection string does not stop the relay: it logs a generic warning (never the string) and runs without export.

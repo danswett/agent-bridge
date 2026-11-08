@@ -156,3 +156,5 @@ home node will hold them (design §5.8).
   in-memory store. Anything else is refused before any request is made.
 * **No PII.** The relay logs and counts only operations, outcomes and sizes; never names,
   tickets, URLs or account ids.
+
+Beta feedback uses its own container and rules: see [feedback.md](feedback.md).

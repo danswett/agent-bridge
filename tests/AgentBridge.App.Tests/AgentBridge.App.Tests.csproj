@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\TestTimeoutDiagnostics.cs" Link="TestTimeoutDiagnostics.cs" />
     <!-- The generated motion resources the app loads, read by MotionTests as the app reads them. -->
     <None Include="..\..\src\AgentBridge.App\Design\DesignResources.xaml" Link="DesignResources.xaml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
@@ -26,6 +27,7 @@
     <ProjectReference Include="..\..\src\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />
     <!-- The logon task's launcher and its restart rule (HostSupervisorTests). -->
     <ProjectReference Include="..\..\src\AgentBridge.HostLauncher\AgentBridge.HostLauncher.csproj" />
+    <ProjectReference Include="..\..\src\AgentBridge.FeedbackInbox\AgentBridge.FeedbackInbox.csproj" />
     <ProjectReference Include="..\AgentBridge.Transport.Tests\AgentBridge.Transport.Tests.csproj" />
     <!-- The protocol's worked example of a session with delegates (AttributionTests). -->
     <None Include="..\..\docs\protocol\examples\session-subagents.json" Link="examples\session-subagents.json" CopyToOutputDirectory="PreserveNewest" />

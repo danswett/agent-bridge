@@ -72,13 +72,16 @@ public sealed class QuietLease : IDisposable
     int cancellationStatus;
     public Guid Transition { get; } = Guid.NewGuid();
     public DeparturePurpose Purpose { get; }
+    // The verified person's press an Update departure was taken for (Update now, #1159); null for
+    // every other lease, an automatic update's included.
+    public SignedPress? SignedBy { get; }
     public bool IsCurrent => !Disposed && Fence.IsCurrent;
     public CancellationOutcome CancellationStatus => (CancellationOutcome)Volatile.Read(ref cancellationStatus);
     public Task<CancellationOutcome> Cancellation => cancellation.Task;
 
-    internal QuietLease(LifecycleCoordinator owner, DeliveryGate.Exclusion fence, DeparturePurpose purpose)
+    internal QuietLease(LifecycleCoordinator owner, DeliveryGate.Exclusion fence, DeparturePurpose purpose, SignedPress? signedBy = null)
     {
-        (Owner, Fence, Purpose) = (owner, fence, purpose);
+        (Owner, Fence, Purpose, SignedBy) = (owner, fence, purpose, signedBy);
         fence.Expired += () => owner.Release(this);
     }
 
@@ -136,7 +139,16 @@ public sealed class LifecycleCoordinator
         TryAcquireQuiet(DefaultWait, purpose, cancellationToken);
 
     public async Task<QuietResult<QuietLease>> TryAcquireQuiet(TimeSpan maxWait, DeparturePurpose purpose, CancellationToken cancellationToken = default,
-        DepartureMode mode = DepartureMode.SelfInitiatedGraceful)
+        DepartureMode mode = DepartureMode.SelfInitiatedGraceful) => await AcquireAsync(maxWait, purpose, null, cancellationToken, mode).ConfigureAwait(false);
+
+    // An Update departure a person asked for now (#1159), with the verified press it was signed in:
+    // the one Update lease that may leave on a Legacy receipt, as a remote restart may (SRE, settled
+    // decision 2 on #1161). Only SignedPress.Verify makes a press, so an automatic update can't.
+    public Task<QuietResult<QuietLease>> TryAcquireQuiet(TimeSpan maxWait, DeparturePurpose purpose, SignedPress? signedBy, CancellationToken cancellationToken = default) =>
+        AcquireAsync(maxWait, purpose, signedBy, cancellationToken, DepartureMode.SelfInitiatedGraceful);
+
+    async Task<QuietResult<QuietLease>> AcquireAsync(TimeSpan maxWait, DeparturePurpose purpose, SignedPress? signedBy, CancellationToken cancellationToken,
+        DepartureMode mode)
     {
         lock (state) { if (RejectReentry()) { return QuietResult<QuietLease>.Blocked(QuietBlockedReason.ConditionFault); } }
         if (maxWait < TimeSpan.Zero || maxWait > MaxWait) { throw new ArgumentOutOfRangeException(nameof(maxWait)); }
@@ -144,6 +156,8 @@ public sealed class LifecycleCoordinator
         if (!Enum.IsDefined(mode)) { throw new ArgumentOutOfRangeException(nameof(mode)); }
         if (purpose == DeparturePurpose.WatchdogRecovery || mode != DepartureMode.SelfInitiatedGraceful)
         { return QuietResult<QuietLease>.Blocked(QuietBlockedReason.JournalUncertain); }
+        // A press is a person's word for an Update only; no other purpose carries one.
+        if (signedBy is not null && purpose != DeparturePurpose.Update) { throw new ArgumentException("only an Update departure carries a signed press", nameof(signedBy)); }
         var started = time.GetTimestamp();
         var probed = false;
         DeliveryGate.Blocker blocker = default;
@@ -153,7 +167,7 @@ public sealed class LifecycleCoordinator
             if (probed && time.GetElapsedTime(started) >= maxWait) { return QuietResult<QuietLease>.Blocked(Map(blocker)); }
             if (delivery.TryExclude(LeaseLifetime, out blocker) is { } fence)
             {
-                return QuietResult<QuietLease>.Granted(new QuietLease(this, fence, purpose));
+                return QuietResult<QuietLease>.Granted(new QuietLease(this, fence, purpose, signedBy));
             }
             probed = true;
             var remaining = maxWait - time.GetElapsedTime(started);
@@ -190,7 +204,10 @@ public sealed class LifecycleCoordinator
                     lease.ConnectionRevision = connection.Snapshot.Revision;
                     if (!transport.Negotiated)
                     {
-                        if (lease.Purpose is DeparturePurpose.RemoteRestart or DeparturePurpose.RemoteStop)
+                        // Legacy (no planned state sent) only for a person's own press: a remote
+                        // restart or stop, or an Update now they signed. An automatic update never.
+                        if (lease.Purpose is DeparturePurpose.RemoteRestart or DeparturePurpose.RemoteStop
+                            || lease.Purpose == DeparturePurpose.Update && lease.SignedBy is not null)
                         {
                             lease.Receipt = new PlannedStateReceipt(lease.Transition, true, lease.Generation, lease.ConnectionRevision);
                             return QuietResult<PlannedStateReceipt>.Granted(lease.Receipt);
