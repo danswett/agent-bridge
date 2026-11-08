@@ -700,6 +700,9 @@ public sealed partial class HaConnector : IAsyncDisposable
             {
                 published.Remove(id, out was);
                 starting.Remove(id);
+                // An ended session's rid history goes with it, unless a delivery is still running
+                // (RepliesDoneAsync drops it then).
+                if (!underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
                 retiring.TryAdd(node, new Retiring());
                 // Observed here, so forgotten here: one that comes back starts as the person's.
                 if (!drivers.SourceObserves) { drivers.Forget(id); }
@@ -709,6 +712,15 @@ public sealed partial class HaConnector : IAsyncDisposable
             // Its question went with it: withdrawn from the phones (Clear-DaemonAnswerButtons). A
             // phone this does not reach stays on record and the stale sweep tries it again.
             await ClearButtonsAsync(id, was?.Notify, forget: true, ct);
+        }
+        // A session that ended while the connector was reconnecting was never published again, so the
+        // gone loop never saw it: drop any history whose session is neither live nor mid-delivery.
+        lock (gate)
+        {
+            foreach (var id in ridLogs.Keys)
+            {
+                if (!live.ContainsKey(id) && !underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
+            }
         }
         if (gone.Count > 0) { WatchSetChanged(); }
         for (var i = 0; i < work.Count; i++)
@@ -753,7 +765,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             // while it is down, still retires what that write left behind.
             SaveLedger();
             await PublishEntitiesAsync(t, name, now, ct);
-            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, SessionId = s.Id, Drivers = drivers };
+            p = new Published { Node = node, Name = name, Kind = HaPayloads.Kind(s.Agent), PublishedAt = now, SessionId = s.Id, Drivers = drivers, Reply = new ReplyState { Log = ridLogs.GetOrAdd(s.Id, _ => new RidLog()) } };
             lock (gate)
             {
                 starting.Remove(s.Id);
@@ -837,6 +849,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         // Get-DaemonCardSummary: while End session waits for its second press, the card keeps
         // asking for it over whatever the session does meanwhile.
         if (p.Stop.Asking(now)) { summary = HaStop.ConfirmNote; detail["hint"] = p.Stop.Hint; }
+        // The last delivered reply id stays on the card, so a sender can read it after the session moves on.
+        if (p.Reply.Ack is { } replyAck) { detail["reply_ack"] = replyAck.DeepClone(); }
         var activitySignature = summary + "\n" + Signature(detail);
         if (activitySignature != p.Activity)
         {

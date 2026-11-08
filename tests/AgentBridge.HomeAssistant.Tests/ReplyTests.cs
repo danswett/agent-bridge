@@ -183,6 +183,161 @@ public sealed partial class ReplyTests : IDisposable
         AssertCalls(name, services);
     }
 
+    JsonElement Ack => Detail.GetProperty("reply_ack");
+
+    [Fact]
+    public async Task A_reply_card_publish_with_a_rid_is_acknowledged_with_that_rid_and_its_sender()
+    {
+        await using var c = await Ready();
+
+        await Do(c, ha.SendFromCard(Node, "hello", rid: "r-1", sender: "SG Builder"));
+
+        Assert.Equal("hello", Assert.Single(replied).Text);
+        Assert.Equal("r-1", Ack.GetProperty("rid").GetString());
+        Assert.Equal("SG Builder", Ack.GetProperty("sender").GetString());
+        Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public async Task A_rid_repeated_after_a_pause_rebuilt_the_card_mid_delivery_is_still_dropped()
+    {
+        var release = new TaskCompletionSource<ReplyResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outcome = _ => { reached.TrySetResult(); return release.Task; };
+        await using var c = await Ready();
+        c.Observe(ha.SendFromCard(Node, "typed once", rid: "r-pause", sender: "A"));
+        await Pass(c);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        daemon = "agent-ha-bridge is running";
+        await Pass(c);
+        daemon = null;
+        await Pass(c);
+        release.SetResult(new ReplyResult(AnswerOutcome.Delivered));
+        await c.DeliveredAsync();
+        await Pass(c);
+        await Pass(c);
+        Assert.Equal("r-pause", Ack.GetProperty("rid").GetString());
+
+        c.Observe(ha.SendFromCard(Node, "typed once", rid: "r-pause", sender: "A"));
+        await Pass(c);
+        await Pass(c);
+
+        Assert.Equal("typed once", Assert.Single(replied).Text);
+        Assert.True(Ack.GetProperty("duplicate").GetBoolean());
+    }
+
+    [Fact]
+    public async Task An_ended_sessions_rid_history_is_dropped_so_a_new_session_under_that_id_starts_empty()
+    {
+        await using var c = await Ready();
+        await Do(c, ha.SendFromCard(Node, "first life", rid: "r-end", sender: "A"));
+        sessions.End(A);
+        await Pass(c);
+        await Pass(c);
+        sessions.Set(FakeSessions.Copilot(A));
+        await Pass(c);
+        await Pass(c);
+
+        await Do(c, ha.SendFromCard(Node, "second life", rid: "r-end", sender: "A"));
+
+        Assert.Equal(["first life", "second life"], replied.Select(r => r.Text));
+        Assert.False(Ack.TryGetProperty("duplicate", out _));
+    }
+
+    [Fact]
+    public async Task A_session_that_ended_while_the_connector_was_rebuilding_still_loses_its_rid_history()
+    {
+        await using var c = await Ready();
+        await Do(c, ha.SendFromCard(Node, "first life", rid: "r-gap", sender: "A"));
+
+        daemon = "agent-ha-bridge is running";
+        await Pass(c);
+        sessions.End(A);
+        daemon = null;
+        await Pass(c);
+        await Pass(c);
+        sessions.Set(FakeSessions.Copilot(A));
+        await Pass(c);
+        await Pass(c);
+
+        await Do(c, ha.SendFromCard(Node, "second life", rid: "r-gap", sender: "A"));
+
+        Assert.Equal(["first life", "second life"], replied.Select(r => r.Text));
+        Assert.False(Ack.TryGetProperty("duplicate", out _));
+    }
+
+    [Fact]
+    public async Task A_senders_name_loses_control_characters_and_is_cut_between_whole_characters()
+    {
+        await using var c = await Ready();
+        var name = "Bu\u202Eil\u0007der " + string.Concat(Enumerable.Repeat("x", 55)) + "\U0001F600\U0001F600";
+
+        await Do(c, ha.SendFromCard(Node, "hi", rid: "r-name", sender: name));
+
+        var sender = Ack.GetProperty("sender").GetString()!;
+        Assert.StartsWith("Builder x", sender, StringComparison.Ordinal);
+        Assert.DoesNotContain(sender, ch => char.IsControl(ch) || ch == '\u202E' || char.IsSurrogate(ch) || ch == '\uFFFD');
+        Assert.True(sender.Length <= 64);
+    }
+
+    [Fact]
+    public async Task A_message_published_twice_with_the_same_rid_is_delivered_once_and_acknowledged_again()
+    {
+        await using var c = await Ready();
+        await Do(c, ha.SendFromCard(Node, "once", rid: "r-dup", sender: "A"));
+
+        await Do(c, ha.SendFromCard(Node, "once", rid: "r-dup", sender: "A"));
+
+        Assert.Equal("once", Assert.Single(replied).Text);
+        Assert.Equal("r-dup", Ack.GetProperty("rid").GetString());
+        Assert.True(Ack.GetProperty("duplicate").GetBoolean());
+        Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public async Task Two_senders_writing_one_slot_at_once_are_both_delivered_and_each_rid_is_acknowledged_in_turn()
+    {
+        await using var c = await Ready();
+        var acks = new List<string>();
+        c.Observe(ha.SendFromCard(Node, "from A", rid: "rid-a", sender: "A"));
+        c.Observe(ha.SendFromCard(Node, "from B", rid: "rid-b", sender: "B"));
+
+        for (var i = 0; i < 6; i++)
+        {
+            await Pass(c);
+            await c.DeliveredAsync();
+            if (Detail.TryGetProperty("reply_ack", out var a) && acks.LastOrDefault() != a.GetProperty("rid").GetString()) { acks.Add(a.GetProperty("rid").GetString()!); }
+        }
+
+        Assert.Equal(["from A", "from B"], replied.Select(r => r.Text));
+        Assert.Equal(["rid-a", "rid-b"], acks);
+    }
+
+    [Fact]
+    public async Task A_refused_rid_is_said_refused_and_may_be_sent_again()
+    {
+        outcome = _ => Task.FromResult(new ReplyResult(AnswerOutcome.Refused, "the console refused the keys"));
+        await using var c = await Ready();
+        await Do(c, ha.SendFromCard(Node, "try", rid: "r-retry"));
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        sessions.Set(sessions.Get(A)! with { Title = "Renamed after the refusal" });
+        await Pass(c);
+        Assert.Equal("refused", Ack.GetProperty("outcome").GetString());
+        var duringSend = new List<bool>();
+        outcome = _ =>
+        {
+            duringSend.Add(Detail.TryGetProperty("reply_ack", out var seen));
+            return Task.FromResult(new ReplyResult(AnswerOutcome.Delivered));
+        };
+        await Do(c, ha.SendFromCard(Node, "try", rid: "r-retry"));
+
+        Assert.Equal([false], duringSend);
+        Assert.Equal(2, replied.Count);
+        Assert.Equal("delivered", Ack.GetProperty("outcome").GetString());
+        Assert.False(Ack.TryGetProperty("duplicate", out _));
+    }
+
     [Fact]
     public async Task A_reply_card_publish_with_an_image_and_a_file_sends_both_and_deletes_the_image_once_sent()
     {
