@@ -44,7 +44,7 @@ public static partial class FeedbackRedactor
     [GeneratedRegex(@"(\b[a-z][a-z0-9+.-]*://)[^\s/@:]+(?::[^\s/@]*)?@", RegexOptions.IgnoreCase)]
     private static partial Regex UrlCredentials();
 
-    [GeneratedRegex(@"(\b[\w.-]*(?:password|passwd|secret|token|api[_ -]?key|authorization|private[_ -]?key|credential|connection[_ -]?string)[\w.-]*[""']?)(\s*[:=]\s*[""']?)(?!\[redacted\])[^\s""',;}]+", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(\b[\w.-]*(?:password|passwd|secret|token|api[_ -]?key|authorization|private[_ -]?key|credential|connection[_ -]?string)[\w.-]*(?:\\*[""'])?)(\s*[:=]\s*(?:\\*[""'])?)(?!\[redacted\])(?:[^\s""',;}\\]|\\(?![""']))+", RegexOptions.IgnoreCase)]
     private static partial Regex Assignment();
 
     [GeneratedRegex(@"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")]

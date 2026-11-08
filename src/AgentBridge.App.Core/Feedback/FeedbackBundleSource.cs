@@ -59,7 +59,10 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
         var bundleId = RandomNumberGenerator.GetBytes(16);
 
         progress?.Report(FeedbackGatherStage.Versions);
-        var env = sources.Environment();
+        FeedbackEnvironment env;
+        try { env = sources.Environment(); }
+        catch (Exception) { env = new FeedbackEnvironment("unavailable", "unavailable", "unavailable", "unavailable", 0, []); }
+        env = env with { HostVersions = env.HostVersions ?? [] };
         progress?.Report(FeedbackGatherStage.Agents);
         var agents = await Safe(sources.DetectAgentsAsync, ct);
         progress?.Report(FeedbackGatherStage.Config);
@@ -150,7 +153,7 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
 
             if (note.Trim().Length > 0)
             {
-                var cleaned = FeedbackRedactor.Redact(note);
+                var cleaned = Sanitize(FeedbackRedactor.Redact(note));
                 w.WriteString("note", cleaned);
                 items.Add(Item("note", "Your note", cleaned == note ? "Exactly what you typed" : "What you typed, with secrets removed", w, buffer, ref mark, true));
             }
@@ -196,8 +199,32 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
 
     static string Clean(string? text, int max)
     {
-        var redacted = FeedbackRedactor.Redact(text ?? "");
-        return redacted.Length <= max ? redacted : redacted[..max] + "…";
+        var redacted = Sanitize(FeedbackRedactor.Redact(text ?? ""));
+        if (redacted.Length <= max) { return redacted; }
+        // Don't cut between the halves of a surrogate pair; the JSON writer rejects a lone half.
+        var cut = char.IsHighSurrogate(redacted[max - 1]) ? max - 1 : max;
+        return redacted[..cut] + "…";
+    }
+
+    // Lone surrogates cannot be written as UTF-8 JSON.
+    static string Sanitize(string text)
+    {
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1])) { i++; continue; }
+            if (char.IsSurrogate(c))
+            {
+                var chars = text.ToCharArray();
+                for (var j = 0; j < chars.Length; j++)
+                {
+                    if (char.IsHighSurrogate(chars[j]) && j + 1 < chars.Length && char.IsLowSurrogate(chars[j + 1])) { j++; }
+                    else if (char.IsSurrogate(chars[j])) { chars[j] = '\uFFFD'; }
+                }
+                return new string(chars);
+            }
+        }
+        return text;
     }
 
     static string Base64Url(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');

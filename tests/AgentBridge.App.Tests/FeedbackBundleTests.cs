@@ -120,6 +120,32 @@ public class FeedbackBundleTests
     }
 
     [Fact]
+    public async Task Text_cut_mid_emoji_or_holding_a_lone_surrogate_still_gathers()
+    {
+        var f = new Fake { Turns = [new("user", new string('a', 1999) + "😀 tail", DateTimeOffset.UnixEpoch)] };
+        var bundle = Ready(await Gather(f, new FeedbackRequest { Note = "bad \ud83d half", SessionTurnsFor = "s" }));
+        using var doc = JsonDocument.Parse(bundle.Text);
+        Assert.Contains("\uFFFD", doc.RootElement.GetProperty("note").GetString());
+    }
+
+    [Fact]
+    public async Task A_failing_environment_source_becomes_unavailable_instead_of_throwing()
+    {
+        var bundle = Ready(await new FeedbackBundleSource(new ThrowingEnv()).GatherAsync(new FeedbackRequest(), null, default));
+        Assert.Contains("unavailable", bundle.Text);
+    }
+
+    sealed class ThrowingEnv : IFeedbackSources
+    {
+        public FeedbackEnvironment Environment() => throw new InvalidOperationException(@"C:\Users\alice");
+        public Task<IReadOnlyList<FeedbackAgent>> DetectAgentsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<FeedbackAgent>>([]);
+        public Task<IReadOnlyDictionary<string, string>> ConfigAsync(CancellationToken ct) => Task.FromResult<IReadOnlyDictionary<string, string>>(new Dictionary<string, string>());
+        public Task<IReadOnlyList<string>> JournalTailAsync(int max, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
+        public Task<IReadOnlyList<string>> CrashRecordsAsync(int max, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
+        public Task<IReadOnlyList<FeedbackSessionTurn>?> SessionTurnsAsync(string id, int max, CancellationToken ct) => Task.FromResult<IReadOnlyList<FeedbackSessionTurn>?>(null);
+    }
+
+    [Fact]
     public async Task A_hung_source_times_out_and_cancellation_is_passed_on()
     {
         await Assert.ThrowsAsync<TimeoutException>(() => Gather(new Fake { Hang = true }, timeout: TimeSpan.FromMilliseconds(50)));
@@ -133,6 +159,7 @@ public class FeedbackBundleTests
     [InlineData("see /home/dan/.ssh", "dan")]
     [InlineData("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----", "abc")]
     [InlineData("password=hunter2hunter2", "hunter2")]
+    [InlineData("{\\\"password\\\":\\\"hunter2\\\"}", "hunter2")]
     [InlineData("https://user:pw1234@example.com/x", "pw1234")]
     [InlineData("key AAAAB3NzaC1yc2EAAAADAQABAAABAQC7vbqajDhA9bP8f0dQ1c2e3f4g5h6i7j8k9l0m", "AAAAB3NzaC1")]
     public void Redaction_removes_these_shapes(string input, string gone)
