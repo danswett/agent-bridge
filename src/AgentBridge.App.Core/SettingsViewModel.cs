@@ -52,6 +52,7 @@ public sealed partial class SettingsViewModel : Observable
     readonly Func<AppPreferences> prefs;
     readonly Action<AppPreferences> savePrefs;
     string relayUrl;
+    readonly string defaultRelay;
     string machineName = "";
     bool nameEdited;
     string? error;
@@ -82,7 +83,7 @@ public sealed partial class SettingsViewModel : Observable
     // says nothing on the rows of the host that came back.
     int hostsGone;
 
-    public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay)
+    public SettingsViewModel(HostConnection host, HostManager manager, IUpdater updater, IAppAtSignIn appAtSignIn, Func<AppPreferences> prefs, Action<AppPreferences> savePrefs, string appVersion, string defaultRelay, bool relayEditable = true)
     {
         this.host = host;
         this.manager = manager;
@@ -91,7 +92,10 @@ public sealed partial class SettingsViewModel : Observable
         this.prefs = prefs;
         this.savePrefs = savePrefs;
         AppVersion = appVersion;
-        relayUrl = prefs().Relay ?? defaultRelay;
+        this.defaultRelay = defaultRelay;
+        RelayEditable = relayEditable;
+        // A release build signs in to its own build's relay: an address saved by an earlier build or a dev copy is not used.
+        relayUrl = relayEditable ? prefs().Relay ?? defaultRelay : defaultRelay;
         trust = TrustEditor.For(host);
         trust.Changed += Refresh;
         host.Changed += Refresh;
@@ -102,7 +106,7 @@ public sealed partial class SettingsViewModel : Observable
 
     // The same page over another updater: the self-test's stand-in release, for its pictures of
     // the update row (Creative's acceptance on #719). The app itself never uses it.
-    public SettingsViewModel WithUpdater(IUpdater other) => new(host, manager, other, appAtSignIn, prefs, savePrefs, AppVersion, relayUrl);
+    public SettingsViewModel WithUpdater(IUpdater other) => new(host, manager, other, appAtSignIn, prefs, savePrefs, AppVersion, defaultRelay, RelayEditable);
 
     // Done with such a page: it stops following the host.
     public void Detach()
@@ -228,7 +232,11 @@ public sealed partial class SettingsViewModel : Observable
     public string? SignInError => Status?.SignIn.State == SignInState.Failed ? Status.SignIn.Error : null;
     public bool CanSignIn => HostRunning && !SignInPending && Status?.Relay.State != RelayState.Off;
 
-    public string RelayUrl { get => relayUrl; set => Set(ref relayUrl, value); }
+    // False in an installed release build, where the relay is the build's and shown as text; a development copy can still type one.
+    public bool RelayEditable { get; }
+    public bool RelayFixed => !RelayEditable;
+    public string RelayUrl { get => relayUrl; set { if (RelayEditable && Set(ref relayUrl, value)) { Raise(nameof(SignInLabel)); } } }
+    public string SignInLabel => Uri.TryCreate(relayUrl.Trim(), UriKind.Absolute, out var u) ? $"Sign in with GitHub to {u.Host}" : "Sign in with GitHub";
 
     public string MachineName
     {
@@ -774,8 +782,8 @@ public sealed partial class SettingsViewModel : Observable
 
     public Task SignInAsync() => RunAsync(async () =>
     {
-        var url = RelayUrl.Trim();
-        savePrefs(prefs() with { Relay = url });
+        var url = RelayEditable ? RelayUrl.Trim() : defaultRelay;
+        if (RelayEditable) { savePrefs(prefs() with { Relay = url }); }
         await host.CallAsync<SignInStatus>(HostOps.SignIn, new SignInRequest(url.Length > 0 ? url : null), TimeSpan.FromSeconds(40));
     });
 

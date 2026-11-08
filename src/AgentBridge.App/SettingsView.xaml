@@ -248,10 +248,11 @@
                 <TextBlock Style="{StaticResource AbSectionTitle}" Text="Your devices" />
                 <TextBlock TextWrapping="Wrap" AutomationProperties.AutomationId="Account" Text="{x:Bind ViewModel.AccountText, Mode=OneWay}" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.RelayText, Mode=OneWay}" />
-                <TextBox Header="Relay" AutomationProperties.AutomationId="RelayUrl" Text="{x:Bind ViewModel.RelayUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBox Header="Relay" AutomationProperties.AutomationId="RelayUrl" Text="{x:Bind ViewModel.RelayUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Visibility="{x:Bind local:Ui.Show(ViewModel.RelayEditable)}" />
+                <TextBlock AutomationProperties.AutomationId="RelayFixed" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind ViewModel.RelayUrl, Mode=OneWay}" Visibility="{x:Bind local:Ui.Show(ViewModel.RelayFixed)}" />
                 <local:WrapRow Spacing="8">
                     <Button
-                        Content="Sign in with GitHub"
+                        Content="{x:Bind ViewModel.SignInLabel, Mode=OneWay}"
                         Style="{StaticResource AccentButtonStyle}"
                         AutomationProperties.AutomationId="SignIn"
                         IsEnabled="{x:Bind ViewModel.CanSignIn, Mode=OneWay}"

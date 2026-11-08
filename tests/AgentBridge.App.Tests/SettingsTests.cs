@@ -1712,6 +1712,23 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(settings.CanSignIn);
     }
 
+    [Fact]
+    public async Task A_release_build_signs_in_to_its_own_relay_whatever_an_earlier_build_saved()
+    {
+        host.On(HostOps.SignIn, _ => new SignInStatus(SignInState.Pending));
+        prefs = prefs with { Relay = "https://relay.saved" };
+        var release = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default", relayEditable: false);
+        await Connected();
+
+        Assert.Equal("https://relay.default", release.RelayUrl);
+        release.RelayUrl = "https://relay.typed";
+        Assert.Equal("Sign in with GitHub to relay.default", release.SignInLabel);
+        await release.SignInAsync();
+
+        Assert.Equal("https://relay.default", Assert.Single(host.Sent(HostOps.SignIn)).GetProperty("relay").GetString());
+        Assert.Equal("https://relay.saved", prefs.Relay);
+    }
+
     // Home Assistant refusing this machine is shown in the host's words, a rejected token and a ban
     // alike, and goes when the host says it has; each change is announced, so the page redraws.
     [Fact]
