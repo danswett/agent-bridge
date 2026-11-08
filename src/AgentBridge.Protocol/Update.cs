@@ -33,6 +33,9 @@ public static class UpdateProtocol
     public static readonly TimeSpan NowLife = TimeSpan.FromMinutes(15);
     // The busy sessions UpdateBusy lists, approvals first; past this, two counts say what it left out.
     public const int BusyListed = 32;
+    // The most any of an accept's counts may say (working, waiting, moreApprovals, moreOther): far
+    // past the sessions any machine runs, and small enough that no sum of them overflows.
+    public const int BusyMost = 1_000_000;
     // A code (UpdateCommandResult.Code, UpdateResult.Code, waitingCode, updateNowWhy) is a short
     // lowercase word or words joined by '-'; anything else is dropped as the app reports it.
     public const int Code = 32;

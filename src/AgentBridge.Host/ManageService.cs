@@ -456,21 +456,34 @@ public sealed class ManageService
     // An Update now's commit, with its slot checked and spent under the same lock as the shared cap
     // (docs/protocol/v1-update.md, Going, step 3): its own allowance if a slot is free, else one of
     // the shared cap, else refused restart-cap without committing. So a manage.restart committed
-    // while the update downloaded can't push the shared cap past what it allows. commit returns
-    // null when the caller's own last checks, made under this lock, refuse it. Only a commit
-    // spends a slot.
-    internal (DepartureResult? Departure, bool Own) CommitUpdateNow(Func<DepartureResult?> commit)
+    // while the update downloaded can't push the shared cap past what it allows. The slot is
+    // written through, flushed, before commit runs: a host that restarts after the departure
+    // (or crashes before it) never finds the slot unspent, and one that can't record it departs
+    // with nothing (Recorded false). commit returns null when the caller's own last checks, made
+    // under this lock, refuse it; then, as for a commit refused, the slot is given back. Should
+    // that write fail, the slot stays spent until its window passes: an unused slot charged is the
+    // safe side of the cap.
+    internal (DepartureResult? Departure, bool Own, bool Recorded) CommitUpdateNow(Func<DepartureResult?> commit)
     {
         lock (gate)
         {
             var now = time.GetUtcNow();
             var own = UpdateNowLeft(now).Left > 0;
-            if (!own && RestartsLeft(now).Left == 0) { return (null, false); }
+            if (!own && RestartsLeft(now).Left == 0) { return (null, false, true); }
+            var slots = own ? saved.UpdateNow : saved.Restarts;
+            slots.Add(now);
+            if (!TrySave())
+            {
+                slots.Remove(now);
+                return (null, own, false);
+            }
             var departure = commit();
-            if (departure is not { Committed: true }) { return (departure, own); }
-            (own ? saved.UpdateNow : saved.Restarts).Add(time.GetUtcNow());
-            Save();
-            return (departure, own);
+            if (departure is not { Committed: true })
+            {
+                slots.Remove(now);
+                TrySave();
+            }
+            return (departure, own, true);
         }
     }
 
@@ -721,17 +734,34 @@ public sealed class ManageService
     }
 
     // Under the gate.
-    void Save()
+    void Save() => TrySave();
+
+    // Under the gate: false, logged, when manage.json could not be written.
+    bool TrySave()
     {
-        try { Atomic(Path.Combine(folder, FileName), JsonSerializer.Serialize(saved, Json)); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"manage: {FileName} could not be written ({e.Message})"); }
+        try
+        {
+            Atomic(Path.Combine(folder, FileName), JsonSerializer.Serialize(saved, Json));
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log($"manage: {FileName} could not be written ({e.Message})");
+            return false;
+        }
     }
 
+    // A whole file, the old or the new, flushed to the disk before it replaces the old one.
     static void Atomic(string path, string text)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + ".tmp";
-        File.WriteAllText(temp, text, Encoding.UTF8);
+        using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            file.Write(Encoding.UTF8.GetPreamble());
+            file.Write(Encoding.UTF8.GetBytes(text));
+            file.Flush(flushToDisk: true);
+        }
         File.Move(temp, path, overwrite: true);
     }
 }

@@ -114,6 +114,9 @@ public sealed class UpdateService
     // (about a minute in all, docs/protocol/v1-update.md, Going, step 3).
     internal TimeSpan DepartWait { get; init; } = TimeSpan.FromSeconds(10);
     internal int DepartTries { get; init; } = 6;
+    // For tests: runs just before the departure's commit, the press and its restart slot already
+    // recorded spent, where a host that stops (a crash) leaves both spent and nothing departed.
+    internal Action? BeforeCommit { get; set; }
     // busy is sent again for a session's change at most this often.
     public static readonly TimeSpan BusyEvery = TimeSpan.FromSeconds(2);
 
@@ -223,7 +226,16 @@ public sealed class UpdateService
 
     void BusyPush()
     {
-        var busy = JsonSerializer.Serialize(State().Busy, ProtocolJson.Options);
+        string busy;
+        try { busy = JsonSerializer.Serialize(State().Busy, ProtocolJson.Options); }
+        catch (Exception e)
+        {
+            // Never left pending: a look at the state that fails once must not stop every later
+            // push of busy. Nor thrown into the session source that raised the change.
+            lock (gate) { busyPushPending = false; }
+            log($"update now: busy could not be read for subscribers ({e.GetType().Name})");
+            return;
+        }
         lock (gate)
         {
             busyPushPending = false;
@@ -511,10 +523,16 @@ public sealed class UpdateService
                 return UpdateDeparture.Refused(ManageReason.Changed);
             }
             Changed();
+            // Spent on disk before the lease is even asked for: whatever this attempt comes to, a
+            // host that restarts or crashes from here on finds the press spent, so it never departs
+            // twice, and one whose spending can't be recorded departs with nothing. Only a press
+            // sent back to waiting is given back, and if that can't be recorded it stays spent
+            // (the update is offered again for a new press).
+            if (!record.Consume(request)) { return UpdateDeparture.Refused(ManageReason.Unavailable); }
             result = await LeaveAsync(parts, new NowPress(signed, args.Release!, args.Accept), cancellationToken);
-            if (result.Outcome != UpdateDepartureOutcome.Waiting)
+            if (result.Outcome == UpdateDepartureOutcome.Waiting && !record.Restore(request))
             {
-                lock (gate) { record.Finish(request); }
+                result = UpdateDeparture.Refused(ManageReason.Unavailable);
             }
         }
         finally { Volatile.Write(ref departing, 0); }
@@ -568,7 +586,7 @@ public sealed class UpdateService
             parts.Eligibility.Refresh();
             parts.OtherHosts.Refresh();
             UpdateDeparture? late = null;
-            var (departure, own) = parts.Manage.CommitUpdateNow(() =>
+            var (departure, own, recorded) = parts.Manage.CommitUpdateNow(() =>
             {
                 // Just before committing, under the cap's lock: a turn, question or approval that
                 // came since, or a press past its 15 minutes, commits nothing and spends no slot.
@@ -582,9 +600,12 @@ public sealed class UpdateService
                     late = UpdateDeparture.Refused(ManageReason.Expired);
                     return null;
                 }
+                BeforeCommit?.Invoke();
                 return parts.Lifecycle.CommitDeparture(held);
             });
             if (late is not null) { return late; }
+            // The restart slot could not be recorded: nothing was consumed or committed.
+            if (!recorded) { return UpdateDeparture.Refused(ManageReason.Unavailable); }
             if (departure is null) { return UpdateDeparture.Refused(UpdateCode.RestartCap); }
             if (departure.Guard is not { } guard)
             {

@@ -624,6 +624,12 @@ public sealed class UpdateNowTests : IAsyncLifetime
 
         Assert.Equal((UpdateDepartureOutcome.Refused, UpdateCode.OtherProfile), Outcome(departure));
         AssertServing();
+        // Refused at the commit, it spends no slot: Update now's own one is still there for the next.
+        otherHost = null;
+        Compose();
+        Assert.Equal(UpdateDepartureOutcome.Committed, (await UpdateNowAndOutcomeAsync(phone, ch)).Outcome);
+        Compose();
+        Assert.Equal(Shared, (await ManageStateAsync(ch)).Restarts.Left);
     }
 
     [Fact]
@@ -658,6 +664,120 @@ public sealed class UpdateNowTests : IAsyncLifetime
     }
 
     static (UpdateDepartureOutcome, string?) Outcome(UpdateDeparture d) => (d.Outcome, d.Code);
+
+    // A file's next write fails: a directory stands where it writes its temporary copy.
+    void BlockWrites(string file) => Directory.CreateDirectory(Path.Combine(folder, file + ".tmp"));
+
+    void UnblockWrites(string file) => Directory.Delete(Path.Combine(folder, file + ".tmp"));
+
+    bool SpentOnDisk(string request) =>
+        JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, "update-now.json"))).RootElement.GetProperty("presses").EnumerateArray()
+            .Single(p => p.GetProperty("request").GetString() == request).GetProperty("done").GetBoolean();
+
+    [Fact]
+    public async Task A_departure_whose_press_cant_be_recorded_spent_is_refused_and_starts_nothing()
+    {
+        var (phone, ch) = await OpenAsync();
+        var press = Press(phone);
+        Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
+        BlockWrites("update-now.json");
+
+        var departure = await updates.DepartAsync(RequestOf(press));
+
+        Assert.Equal((UpdateDepartureOutcome.Refused, ManageReason.Unavailable), Outcome(departure));
+        AssertServing();
+        Assert.DoesNotContain(log, l => l.StartsWith("restart for update", StringComparison.Ordinal));
+        Assert.Equal(Shared, (await ManageStateAsync(ch)).Restarts.Left);
+        // Spent on this host all the same: it is never tried again here.
+        UnblockWrites("update-now.json");
+        Assert.Equal((UpdateDepartureOutcome.Refused, ManageReason.Changed), Outcome(await updates.DepartAsync(RequestOf(press))));
+    }
+
+    [Fact]
+    public async Task A_press_that_departed_is_refused_after_the_host_restarts_even_when_a_write_after_its_commit_failed()
+    {
+        var (phone, ch) = await OpenAsync();
+        var press = Press(phone);
+        Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
+        // Every write of the record from here on fails: it must already say the press is spent.
+        composedOtherHosts = () => { BlockWrites("update-now.json"); return null; };
+        Assert.Equal(UpdateDepartureOutcome.Committed, (await updates.DepartAsync(RequestOf(press))).Outcome);
+        composedOtherHosts = null;
+        UnblockWrites("update-now.json");
+
+        Compose();
+        var again = await updates.DepartAsync(RequestOf(press));
+
+        Assert.Equal((UpdateDepartureOutcome.Refused, ManageReason.Changed), Outcome(again));
+        AssertServing();
+    }
+
+    [Fact]
+    public async Task A_host_that_stops_after_spending_the_press_and_before_the_commit_never_lets_it_depart_again()
+    {
+        var (phone, ch) = await OpenAsync();
+        var press = Press(phone);
+        Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
+        var crashed = new InvalidOperationException("the host stopped here");
+        updates.BeforeCommit = () =>
+        {
+            Assert.True(SpentOnDisk(RequestOf(press)));
+            throw crashed;
+        };
+
+        Assert.Same(crashed, await Assert.ThrowsAsync<InvalidOperationException>(() => updates.DepartAsync(RequestOf(press))));
+
+        Compose();
+        Assert.Equal((UpdateDepartureOutcome.Refused, ManageReason.Changed), Outcome(await updates.DepartAsync(RequestOf(press))));
+        AssertServing();
+    }
+
+    [Fact]
+    public async Task A_departure_whose_restart_slot_cant_be_recorded_is_refused_and_commits_nothing()
+    {
+        var (phone, ch) = await OpenAsync();
+        var press = Press(phone);
+        Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
+        BlockWrites(ManageService.FileName);
+
+        var departure = await updates.DepartAsync(RequestOf(press));
+
+        Assert.Equal((UpdateDepartureOutcome.Refused, ManageReason.Unavailable), Outcome(departure));
+        AssertServing();
+        Assert.DoesNotContain(log, l => l.StartsWith("restart for update", StringComparison.Ordinal));
+        UnblockWrites(ManageService.FileName);
+        Compose();
+        Assert.Equal(Shared, (await ManageStateAsync(ch)).Restarts.Left);
+    }
+
+    [Fact]
+    public void Coverage_counts_left_out_sessions_without_overflowing_however_large_the_counts()
+    {
+        var busy = Many(40);
+        var shown = UpdateBusyView.Of(busy, false).Shown();
+        var huge = shown with { MoreApprovals = int.MaxValue, MoreOther = int.MaxValue };
+
+        Assert.Equal(UpdateBusyView.Cover.Covered, UpdateBusyView.Of(busy, false).CoveredBy(huge));
+        Assert.NotNull(UpdateNowRules.Check(huge));
+        Assert.NotNull(UpdateNowRules.Check(new UpdateBusy { Working = UpdateProtocol.BusyMost + 1, Waiting = 0, Sessions = [.. shown.Sessions!], MoreOther = UpdateProtocol.BusyMost + 1 - 32 }));
+    }
+
+    [Fact]
+    public async Task A_look_at_busy_that_fails_once_doesnt_stop_later_pushes_of_it()
+    {
+        var (_, ch) = await OpenAsync();
+        var subscribed = await ch.RequestAsync(UpdateProtocol.Subscribe, new { });
+        Assert.True(subscribed.GetProperty("ok").GetBoolean(), subscribed.GetRawText());
+        sessions.OnSnapshot = () => throw new IOException("the sessions could not be read just now");
+
+        sessions.Set(S(Id(1), SessionStatus.Working));
+        sessions.Set(S(Id(1), SessionStatus.Working), S(Id(2), SessionStatus.Working));
+
+        using var cts = new CancellationTokenSource(Bound);
+        var pushed = await ch.Events.ReadAsync(cts.Token);
+        Assert.Equal(UpdateProtocol.Event, pushed.Name);
+        Assert.Equal(2, pushed.Data.Deserialize<UpdateState>(ProtocolJson.Options)!.Busy!.Working);
+    }
 
     [Fact]
     public async Task An_Update_now_ask_is_never_handed_to_an_app_that_doesnt_say_it_carries_one()

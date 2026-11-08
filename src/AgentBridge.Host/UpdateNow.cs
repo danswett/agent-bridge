@@ -78,13 +78,14 @@ public sealed class UpdateBusyView
         }
         var listedWorking = listed.Values.Count(v => v == UpdateBusyState.Working);
         var listedWaiting = listed.Count - listedWorking;
-        var moreApprovals = accept.MoreApprovals ?? 0;
-        var moreOther = accept.MoreOther ?? 0;
+        // In long: an accept built past Check could carry counts whose int sum wraps negative.
+        long moreApprovals = accept.MoreApprovals ?? 0;
+        long moreOther = accept.MoreOther ?? 0;
         var unlistedApprovals = unlisted.Count(s => s.State == UpdateBusyState.Approval);
         var unlistedWorking = unlisted.Count(s => s.State == UpdateBusyState.Working);
         var unlistedWaiting = unlisted.Count - unlistedWorking;
-        if (unlistedApprovals > moreApprovals || unlistedWaiting > accept.Waiting - listedWaiting || Waiting > accept.Waiting) { question = true; }
-        if (unlistedWorking > accept.Working - listedWorking || Working > accept.Working) { turn = true; }
+        if (unlistedApprovals > moreApprovals || unlistedWaiting > (long)accept.Waiting - listedWaiting || Waiting > accept.Waiting) { question = true; }
+        if (unlistedWorking > (long)accept.Working - listedWorking || Working > accept.Working) { turn = true; }
         if (unlisted.Count > moreApprovals + moreOther)
         {
             if (unlistedWaiting > 0) { question = true; } else { turn = true; }
@@ -182,6 +183,10 @@ public static class UpdateNowRules
         var moreApprovals = accept.MoreApprovals ?? 0;
         var moreOther = accept.MoreOther ?? 0;
         if (accept.Working < 0 || accept.Waiting < 0 || moreApprovals < 0 || moreOther < 0) { return "an Update now's accept has a count below zero"; }
+        if (accept.Working > UpdateProtocol.BusyMost || accept.Waiting > UpdateProtocol.BusyMost || moreApprovals > UpdateProtocol.BusyMost || moreOther > UpdateProtocol.BusyMost)
+        {
+            return $"an Update now's accept counts more than {UpdateProtocol.BusyMost} sessions";
+        }
         if ((moreApprovals > 0 || moreOther > 0) && sessions.Count < UpdateProtocol.BusyListed) { return "an Update now's accept leaves sessions out of a list that isn't full"; }
         if (moreApprovals > 0 && sessions.Any(s => s.State != UpdateBusyState.Approval)) { return "an Update now's accept leaves out an approval while listing something else"; }
         if ((long)sessions.Count + moreApprovals + moreOther != (long)accept.Working + accept.Waiting) { return "an Update now's accept doesn't add up to what it counts"; }
@@ -194,7 +199,9 @@ public static class UpdateNowRules
 // and kept for the press's longest life, 15 minutes from issuedAt plus Skew, across the host's own
 // restart. A request recorded is the same press: it gets that press's answer and is never acted on
 // again. An accepted press keeps its signed command, which its departure verifies again (by a host
-// that has restarted since, too), and is marked done once it has left or been refused there. The
+// that has restarted since, too). Each attempt to depart spends it first (Consume, flushed) and
+// gives it back only when sent back to waiting (Restore), so a press never departs twice, whatever
+// write fails or wherever the host stops. The
 // app's record of its last 32 is a second line, not the authority.
 //
 // A record that can't be read fails closed: presses signed before it was found unreadable (allowing
@@ -251,11 +258,17 @@ sealed class UpdateNowRecord
 
     static DateTimeOffset Until(DateTimeOffset issued) => issued + UpdateProtocol.NowLife + ManageService.Skew;
 
-    // Under the caller's lock.
+    // Its own lock, held only around its list and file: the departure consumes a press under
+    // ManageService's lock (Consume), so this must never be held while taking any other.
+    readonly Lock sync = new();
+
     public Entry? Find(string request, DateTimeOffset now)
     {
-        entries.RemoveAll(e => Until(e.IssuedAt) < now);
-        return entries.FirstOrDefault(e => e.Request == request);
+        lock (sync)
+        {
+            entries.RemoveAll(e => Until(e.IssuedAt) < now);
+            return entries.FirstOrDefault(e => e.Request == request);
+        }
     }
 
     // Whether this record can vouch that a press signed at issued was never acted on.
@@ -268,44 +281,72 @@ sealed class UpdateNowRecord
     // full record refuses the press rather than forget one still inside its life.
     public bool Add(Entry e, DateTimeOffset now)
     {
-        entries.RemoveAll(x => Until(x.IssuedAt) < now || x.Request == e.Request);
-        if (entries.Count >= Kept)
+        lock (sync)
         {
-            log($"update now: {FileName} holds {Kept} presses inside their life already; this one is refused");
+            entries.RemoveAll(x => Until(x.IssuedAt) < now || x.Request == e.Request);
+            if (entries.Count >= Kept)
+            {
+                log($"update now: {FileName} holds {Kept} presses inside their life already; this one is refused");
+                return false;
+            }
+            entries.Add(e);
+            if (Write()) { return true; }
+            entries.Remove(e);
             return false;
         }
-        entries.Add(e);
-        if (Write()) { return true; }
-        entries.Remove(e);
-        return false;
     }
 
     // The press's answer, once it has one, with its signed command if it was accepted. A failed
     // write keeps the answer here; the press stays recorded either way, so it is never acted on again.
     public void Answer(string request, string outcome, string? code, string? reason, SignedCommand? command = null)
     {
-        var i = entries.FindIndex(e => e.Request == request);
-        if (i < 0) { return; }
-        entries[i] = entries[i] with { Outcome = outcome, Code = code, Reason = reason, Command = command ?? entries[i].Command };
-        Write();
+        lock (sync)
+        {
+            var i = entries.FindIndex(e => e.Request == request);
+            if (i < 0) { return; }
+            entries[i] = entries[i] with { Outcome = outcome, Code = code, Reason = reason, Command = command ?? entries[i].Command };
+            Write();
+        }
     }
 
-    // The press has left, or been refused at its departure: it is never departed with again.
-    public void Finish(string request)
+    // The press is spent before its departure is attempted, written through and flushed, so
+    // neither a failed write nor a host that stops partway (a crash between this and the commit
+    // included) leaves on disk a press a restarted host would let depart again. False if it could
+    // not be written: the caller then attempts nothing. Spent in memory either way.
+    public bool Consume(string request) => Mark(request, done: true);
+
+    // A press sent back to waiting is given back for the next quiet moment. False if that could
+    // not be written; it then stays spent, the safe side.
+    public bool Restore(string request) => Mark(request, done: false);
+
+    bool Mark(string request, bool done)
     {
-        var i = entries.FindIndex(e => e.Request == request);
-        if (i < 0) { return; }
-        entries[i] = entries[i] with { Done = true };
-        Write();
+        lock (sync)
+        {
+            var i = entries.FindIndex(e => e.Request == request);
+            if (i < 0) { return false; }
+            var was = entries[i];
+            entries[i] = was with { Done = done };
+            if (Write()) { return true; }
+            // Not written: spent stays spent; a restore that didn't reach the disk is undone here too.
+            entries[i] = was with { Done = true };
+            return false;
+        }
     }
 
+    // Written to a temporary file, flushed to the disk, then moved over the record, so the record
+    // on disk is always a whole one, the old or the new.
     bool Write()
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var temp = path + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(new Saved { Presses = [.. entries] }, Json), Encoding.UTF8);
+            using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(file, new Saved { Presses = [.. entries] }, Json);
+                file.Flush(flushToDisk: true);
+            }
             File.Move(temp, path, overwrite: true);
             return true;
         }

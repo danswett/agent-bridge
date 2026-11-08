@@ -56,12 +56,12 @@ public sealed class SignedCommandVectorTests
             Release = "1.2.3-" + new string('9', UpdateProtocol.Version - 6),
             Accept = new UpdateBusy
             {
-                Working = int.MaxValue,
-                Waiting = int.MaxValue,
+                Working = UpdateProtocol.BusyMost,
+                Waiting = UpdateProtocol.BusyMost,
                 Unknown = true,
                 Sessions = [.. Enumerable.Range(0, UpdateProtocol.BusyListed).Select(i => new UpdateBusySession($"ffffffff-ffff-4fff-bfff-{i:D12}", UpdateBusyState.Approval))],
-                MoreApprovals = int.MaxValue,
-                MoreOther = int.MaxValue - UpdateProtocol.BusyListed,
+                MoreApprovals = UpdateProtocol.BusyMost,
+                MoreOther = UpdateProtocol.BusyMost - UpdateProtocol.BusyListed,
             },
         }, ProtocolJson.Options),
     };

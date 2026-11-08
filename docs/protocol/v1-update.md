@@ -159,7 +159,7 @@ does), and the clients (slices 3 and 4). Everything below is the design all slic
 characters for every action ([v1-transfer.md](v1-transfer.md#the-signed-command)) but
 `update.install.now`, whose bound is **4096**, checked before the MAC as every bound is. This is
 deliberate and per action: the press's signed `accept` lists up to 32 busy sessions by id and
-state, and 32 UUIDs with the envelope and every count at its largest come to 3,476 characters
+state, and 32 UUIDs with the envelope and every count at its largest come to 3,459 characters
 (`signed-command.json`'s `an-update-now-at-its-longest`), where 2048 holds only 17. No other
 action reads a body past 2048, so the same body signed for another action is refused malformed.
 
@@ -238,8 +238,15 @@ again, whether the first was handed to the app, was still being verified (refuse
 `changed` once the host that was verifying it has restarted), or was taken by a host
 that has restarted since. An accepted press keeps its signed command there, so its departure
 (step 3 of [Going](#going-the-lease-and-the-departure)) verifies the signature again, on this host
-or one that restarted meanwhile, and leaves only once: the record marks it done when it has left
-or been refused there. A record that can't be read fails closed: presses signed before it was
+or one that restarted meanwhile, and leaves only once. Each attempt to depart spends the press in
+the record first, written through and flushed before the lease is asked for; only a press sent
+back to `waiting` is given back. So neither a write that fails after the departure nor a host
+that stops between spending it and committing (the update is then offered again, for a new press)
+lets the same press depart twice; a press whose spending can't be written departs with nothing,
+refused `unavailable`, and one whose giving back can't be written stays spent and ends `refused`.
+The restart slot is written the same way, before the commit: a departure whose slot can't be
+recorded is refused `unavailable` and commits nothing, and a slot taken for a departure refused
+at the commit is given back. A record that can't be read fails closed: presses signed before it was
 found unreadable are refused `changed`; one that can't be written, or that already holds 256
 presses inside their life, refuses the press. The app's own record of the last 32 presses stays as a second line,
 not the authority. Its `args`, signed with the rest:
@@ -248,7 +255,7 @@ not the authority. Its `args`, signed with the rest:
 |---|---|---|
 | `now` | `true` | Required. Anything else is refused `bad-args` |
 | `release` | string | The release the person was shown (`available`). Anything else at the press, or at the departure, is refused `release-changed` |
-| `accept` | `UpdateBusy`? | What the person confirmed it may go over: the counts, `unknown` if it was shown, `sessions`, the ids and states the confirmation listed, and past 32 `moreApprovals` and `moreOther`, how many approvals and other busy sessions it left out. Absent: the one-press case, valid only while the machine is quiet |
+| `accept` | `UpdateBusy`? | What the person confirmed it may go over: the counts, `unknown` if it was shown, `sessions`, the ids and states the confirmation listed, and past 32 `moreApprovals` and `moreOther`, how many approvals and other busy sessions it left out. Each count is at most 1,000,000 (`UpdateProtocol.BusyMost`, far past any machine's sessions, so no sum of them overflows); more is `bad-args`. Absent: the one-press case, valid only while the machine is quiet |
 
 Anything else in `args`, or a `contentSha256`, is refused `bad-args`.
 
