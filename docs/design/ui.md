@@ -2821,8 +2821,10 @@ they are un-parked.
 - **Lines that outlive their cause (#1193, #1195):** an error or warning line lasts only
   while its cause stands. When the question it was about closes, a refused, stale or failed
   answer line becomes the neutral "No longer waiting" (no tone, never prefixed "Your answer:"),
-  is kept 5 s so it can be read, then goes; a busy line goes with its 2 s pause. Only
-  delivered and unconfirmed ("Sent, but not confirmed") lines stay. A toast that says an
+  is kept 5 s so it can be read, then goes; a busy line goes with its 2 s pause. A held
+  answer ("offline", the machine was not connected so nothing was sent) says why it could not
+  go, so it is treated like a refused one. Only delivered and unconfirmed ("Sent, but not
+  confirmed") lines stay. A toast that says an
   answer did not go is withdrawn when its question closes, and one that would arrive after is
   not shown.
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)

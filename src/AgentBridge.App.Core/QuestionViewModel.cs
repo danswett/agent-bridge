@@ -532,11 +532,12 @@ public sealed partial class QuestionViewModel : Observable
     }
 
     // Whether what became of an answer is still worth saying once its question has gone: what was
-    // sent and what came of it is; a line that says why it could not go (not connected, busy, the
-    // session no longer asks, refused, failed) is not, for its cause is over with the question (#1193).
+    // sent and what came of it is; a line that says why it could not go (held offline, busy, the
+    // session no longer asks, refused) is not, for its cause is over with the question (#1193).
+    // A failed delivery is not Sending, Waiting or Done, so it is already left out.
     internal static bool OutlivesQuestion(Delivery e) =>
         e.State is DeliveryState.Sending or DeliveryState.Waiting
-        || e is { State: DeliveryState.Done, Outcome: not ("stale" or "busy" or "refused") };
+        || e is { State: DeliveryState.Done, Outcome: not ("stale" or "busy" or "refused" or "offline") };
 
     static ReceiptLine Changed(ReceiptLine failed) =>
         new("changed", $"{failed.Text} The question changed since, so answer it again.", null, Tone.Bad, ReceiptMark.None, $"Answer: {failed.Text} The question changed since, so answer it again.");
