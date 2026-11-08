@@ -23,6 +23,11 @@ public class WireTextBoundTests
                 WebSocket.CreateFromStream(c.GetStream(), isServer: false, null, TimeSpan.Zero));
     }
 
+    const string RosterHead = "{\"t\":\"roster\",";
+
+    static Task SendRosterAsync(WebSocket ws, int size) =>
+        ws.SendAsync(Encoding.UTF8.GetBytes(RosterHead + new string('a', size - RosterHead.Length)), WebSocketMessageType.Text, true, default);
+
     static Task SendTextAsync(WebSocket ws, int size, char fill) =>
         ws.SendAsync(Encoding.UTF8.GetBytes(new string(fill, size)), WebSocketMessageType.Text, true, default);
 
@@ -31,7 +36,7 @@ public class WireTextBoundTests
     {
         var (server, client) = await PairAsync();
         var size = Wire.MaxFrame + 1000;
-        var send = SendTextAsync(server, size, 'a');
+        var send = SendRosterAsync(server, size);
 
         var frame = await Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true);
         await send;
@@ -45,7 +50,7 @@ public class WireTextBoundTests
         var (server, client) = await PairAsync();
         var send = Task.Run(async () =>
         {
-            await SendTextAsync(server, Wire.MaxRosterFrame + 1, 'a');
+            await SendRosterAsync(server, Wire.MaxRosterFrame + 1);
             await SendTextAsync(server, 5, 'b');
         });
 
@@ -74,6 +79,26 @@ public class WireTextBoundTests
         var send = SendTextAsync(server, Wire.MaxFrame + 1, 'a');
 
         await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, default));
+        _ = send;
+    }
+
+    [Fact]
+    public async Task An_oversized_text_frame_that_is_not_a_roster_reply_is_refused_not_drained()
+    {
+        var (server, client) = await PairAsync();
+        var send = SendTextAsync(server, Wire.MaxFrame + 1, 'a');
+
+        await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true));
+        _ = send;
+    }
+
+    [Fact]
+    public async Task A_roster_reply_past_the_drain_cap_is_refused()
+    {
+        var (server, client) = await PairAsync();
+        var send = SendRosterAsync(server, Wire.MaxRosterDrain + 1);
+
+        await Assert.ThrowsAsync<FrameTooLargeException>(() => Wire.ReceiveAsync(client, Wire.MaxFrame, Wire.MaxRosterFrame, default, discardOversizeText: true));
         _ = send;
     }
 }
