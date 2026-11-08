@@ -20,6 +20,7 @@ import { checkLaunch, readLaunchOptions, readLaunchResult, readTrustQuestion, re
 import { readUpdateCommandResult, readUpdateState } from '../../js/update.js';
 import { readSignInDevices } from '../../js/signin-devices.js';
 import { readUsage } from '../../js/usage.js';
+import { readDiagnostics } from '../../js/diagnostics.js';
 import { HostClient } from '../../js/host-client.js';
 import { PatchError, applyPatch, readPatch } from '../../js/session-patch.js';
 import { SessionsStore } from '../../js/sessions-store.js';
@@ -142,6 +143,12 @@ function holds(read, wire, unread = [], at = '') {
 // cannot drop one it fails to read.
 const SESSION_ID = '4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b';
 const ESCAPED_MESSAGE = () => records.get('Question').valid.find((v) => v.name === 'an-escaped-approval').json.message;
+// A snapshot section as readDiagnostics reads it: within the vectors' whole snapshot, so a
+// section it refuses drops the snapshot it came in.
+const inSnapshot = (key) => (j) => {
+  const s = JSON.parse(JSON.stringify(records.get('DiagnosticsSnapshot').valid.find((v) => v.name === 'a-machine').json));
+  return readDiagnostics({ ...s, [key]: j })?.[key] ?? null;
+};
 const READS = {
   MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine },
   HelloResult: { read: readHello },
@@ -251,6 +258,16 @@ const READS = {
   PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at', 'notification.data.agent'], refuses: 'a push is always shown' },
   PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at', 'data.agent'], refuses: 'a push is always shown' },
   PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at', 'agent'], refuses: 'a push is always shown' },
+  // Journal entries are read into what Review shows (readEntry), not kept as sent:
+  // test/unit/diagnostics.test.mjs replays what it keeps and drops. The schema is checked, not kept.
+  DiagnosticsSnapshot: { read: readDiagnostics, unread: ['schema', 'journal.entries'] },
+  DiagnosticsHost: { read: inSnapshot('host') },
+  DiagnosticsRestart: { read: inSnapshot('lastRestart') },
+  DiagnosticsRelay: { read: inSnapshot('relay') },
+  DiagnosticsHolds: { read: inSnapshot('holds') },
+  DiagnosticsReadiness: { read: inSnapshot('readiness') },
+  DiagnosticsAgent: { read: (j) => inSnapshot('readiness')({ checkedAt: null, omitted: 0, missing: null, agents: [j] })?.agents[0] ?? null },
+  DiagnosticsJournalPart: { read: inSnapshot('journal'), unread: ['entries'] },
 };
 
 // Records the PWA sends that it checks first, mirroring the host's check word for word.
@@ -321,6 +338,17 @@ const BUILDS = {
       return sentBy(LaunchService, 'launch', j.request, (s) => s.submit({ hostId: 'h', launch }));
     },
   },
+  FocusRequest: {
+    build: async (j) => {
+      const t = fakeTransport();
+      const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0 });
+      client.capabilities = ['sessions.focus'];
+      client.setFocus({ visible: j.visible, open: j.open ?? null });
+      await flush();
+      client.close();
+      return t.lastRequest('sessions.focus').data;
+    },
+  },
   ListRequest: {
     build: async (j) => {
       const t = fakeTransport();
@@ -381,7 +409,6 @@ const BUILDS = {
 const NOT_REPLAYED = {
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
-  FocusRequest: 'the PWA does not send sessions.focus yet (#610)',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',
@@ -427,6 +454,10 @@ const NOT_REPLAYED = {
   HistoryPart: 'the PWA does not page a session\'s history yet (#292)',
   DelegateEvent: 'the PWA does not page a session\'s history yet (#292)',
 
+  JournalEntry: 'read by readEntry into what Review shows, not as sent; test/unit/diagnostics.test.mjs replays it',
+  JournalStage: 'part of JournalEntry, read by readEntry',
+  JournalException: 'part of JournalEntry: readEntry keeps a recognized type and a count of frames',
+  JournalFrame: 'part of JournalEntry: readEntry keeps only how many frames there were',
 };
 
 // ---- the replay ----
@@ -513,6 +544,20 @@ for (const [record, r] of records) {
 }
 
 // ---- recorded sessions, patched ----
+
+// openQuestion and idleMs are the PWA's own additions to sessions.focus (#1190); the vectors do not
+// carry them yet, and a host that does not read them ignores them. Each goes in the request only
+// beside what it belongs to, and the vectors' own two requests are unchanged by them (above).
+test('a FocusRequest with the question on screen and the age of the last input is the vector\'s with those two fields added', async () => {
+  const t = fakeTransport();
+  const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0 });
+  client.capabilities = ['sessions.focus'];
+  const open = records.get('FocusRequest').valid.find((v) => v.name === 'a-session-open').json;
+  client.setFocus({ visible: open.visible, open: open.open, openQuestion: 'q1', idle: () => 1500 });
+  await flush();
+  client.close();
+  assert.deepEqual(t.lastRequest('sessions.focus').data, { ...open, openQuestion: 'q1', idleMs: 1500 });
+});
 
 // session-patches.json: each recorded session as a host sends it to a client that asked for
 // patches. Every patch, applied as the PWA applies it, must give exactly the session an upsert of

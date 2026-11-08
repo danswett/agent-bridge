@@ -46,9 +46,11 @@ From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonReques
   The agent draws to the buffer's width (libuv's columns, which follow a resize), and the
   injector reads whole buffer rows. Restoring or resizing the window takes the buffer back to
   the window's width, as wide as the screen allows (about 200 columns or more at 1920
-  pixels). Where a form is then too wide (that, a session a person started, or titles longer
-  than 250 columns hold), the answer is refused before any key: the window is too narrow for
-  phone answers, widen it or answer at the machine (host-answers.md).
+  pixels). Maximizing a launched session's window therefore narrows it, from 250 to what the
+  screen allows. Where a form is then too wide (that, a session a person started, or titles
+  longer than 250 columns hold), the answer is refused before any key, saying how many
+  columns the titles need and to widen the window or make its font smaller, or, where they
+  need more than 250, that the titles are too long for Slipgates to check (host-answers.md).
   Considered and not first: tabs of one Windows Terminal window (`wt -w <name> new-tab`):
   `wt` returns its own process, not the agent's, and the host reads and types through the
   agent's console (`AttachConsole` on its process); unproven. Wrapping the agent in

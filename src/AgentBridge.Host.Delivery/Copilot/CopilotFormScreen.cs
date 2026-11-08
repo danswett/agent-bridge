@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using AgentBridge.Host.Core.Parsing;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Delivery.Copilot;
 
@@ -22,6 +23,8 @@ namespace AgentBridge.Host.Delivery.Copilot;
 //     field being answered, headed on a row of its own: a list, a Yes/No or a multi-select
 //     (`Dxn`, `Oxn`, `Nxn`) as `<title ?? name>:`, a text or number box (`Fxn`, `Lxn`) as
 //     `<title ?? name>` with no colon (and " * <error>" beside it while its input is invalid).
+//     The box itself is drawn between two rules or, with the CLI's prompt frame on, between
+//     a row of "▄" and a row of "▀" (Box).
 //     The bar shows every label only while they all fit across the window; otherwise it
 //     shows those around the selected one, between arrows (`Da`, read in Bars). Whole, the bar
 //     read at the first field vouches for every later field's title before the first key:
@@ -195,7 +198,7 @@ public static partial class CopilotFormScreen
     }
 
     // Whether the text or number field `index` shows exactly `words` in its input, and nothing
-    // else (#1123 review): the box's two rules (`Fxn`, `qc`), its first row "❯ " and the words, the
+    // else (#1123 review): the box's two edges (Box), its first row "❯ " and the words, the
     // rows they wrap onto at the same column, read as the question is (Drawn) with only its
     // row-wrap tolerance, every character of the words compared from the column right after the
     // caret's "❯ " (never inferred from the words, so " OK" is not "OK"), leading spaces included.
@@ -271,8 +274,16 @@ public static partial class CopilotFormScreen
         }
     }
 
-    // A text or number field's box at `index`: the rows between its two rules (`Fxn`, `qc`), the
-    // first starting with the caret, the column the caret is at, and the width the words wrap at.
+    // A text or number field's box at `index`: the rows between its two edges, the first
+    // starting with the caret, the column the caret is at, and the width the words wrap at. The
+    // CLI draws the box (`Ud`, `iVn` in 1.0.106 and 1.0.107) one of two ways: between two rules
+    // (`borderStyle: "single"`, sides off) with the caret at the rule's first column; or, while
+    // its prompt frame is on (`PROMPT_FRAME`, which a CLI may have on with no setting of the
+    // person's, as on the machines #1123 was reported from; `COPILOT_PROMPT_FRAME=1`/`0` forces
+    // it), between a row of "▄" and a row of "▀" as wide, sides off, the caret one column in
+    // (`paddingLeft: 1`). Exactly one such pair, and no other edge of either kind in the field,
+    // or it is no box: read as one that is not there, an empty box was taken for one already
+    // typed into, and the field refused (#1123).
     static bool Box(IReadOnlyList<string> rows, CopilotForm form, int index, out List<string> box, out int caret, out int width)
     {
         (box, caret, width) = ([], -1, 0);
@@ -280,14 +291,30 @@ public static partial class CopilotFormScreen
         if (Locate(rows, form, index, out var heading, out var hints) is not null) { return false; }
         var region = rows.Skip(heading + 1).Take(hints - heading - 1).ToList();
         var rules = Enumerable.Range(0, region.Count).Where(r => IsRule(region[r])).ToList();
-        if (rules.Count != 2 || rules[1] - rules[0] < 2) { return false; }
-        box = region.GetRange(rules[0] + 1, rules[1] - rules[0] - 1);
+        var tops = Enumerable.Range(0, region.Count).Where(r => IsEdge(region[r], '\u2584')).ToList();
+        var bottoms = Enumerable.Range(0, region.Count).Where(r => IsEdge(region[r], '\u2580')).ToList();
+        int top, bottom, pad;
+        if (rules.Count == 2 && tops.Count == 0 && bottoms.Count == 0) { (top, bottom, pad) = (rules[0], rules[1], -1); }
+        else if (rules.Count == 0 && tops.Count == 1 && bottoms.Count == 1
+            && Indent(region[tops[0]]) == Indent(region[bottoms[0]]) && region[tops[0]].TrimEnd(' ').Length == region[bottoms[0]].TrimEnd(' ').Length)
+        {
+            (top, bottom, pad) = (tops[0], bottoms[0], 1);
+        }
+        else { return false; }
+        if (bottom - top < 2) { return false; }
+        box = region.GetRange(top + 1, bottom - top - 1);
         var first = box[0].TrimEnd(' ');
         caret = first.IndexOf('\u276F');
         if (caret < 0 || first[..caret].Trim(' ').Length != 0) { return false; }
-        width = Math.Max(1, region[rules[0]].TrimEnd(' ').Length - caret - 2);
+        if (pad >= 0 && caret != Indent(region[top]) + pad) { return false; }
+        // The words fill the box less the caret's two columns and its right padding (one more
+        // inside the frame, `paddingRight: 1` on both sides of its edges).
+        width = Math.Max(1, region[top].TrimEnd(' ').Length - caret - 2 - Math.Max(pad, 0));
         return true;
     }
+
+    // A row of one half block alone, as the prompt frame's top ("▄") or bottom ("▀") edge.
+    static bool IsEdge(string row, char block) => row.Trim(' ') is { Length: > 0 } line && line.All(c => c == block);
 
     static string? Locate(IReadOnlyList<string> rows, CopilotForm form, int index, out int fieldHeading, out int hintsStart) =>
         Locate(rows, form, index, out fieldHeading, out hintsStart, out _, out _);
@@ -316,7 +343,27 @@ public static partial class CopilotFormScreen
 
     const string Prompted = "a permission prompt showed on the session's screen in place of the question's form";
     const string NotForm = "the session's screen no longer showed the question's form";
-    const string Narrow = "the session's window is too narrow for phone answers to this question (its form cannot show every field's title to check); widen it and answer again, or answer it at the machine";
+
+    // A bar windowed to some of the form's titles (bar-window): said with how wide the window
+    // must be for the whole bar, the console's width less four (`$fn`), as a lower bound (each
+    // title counted a column a character; a wide character takes two). Wider than the console
+    // the host launches sessions with, widening is no advice: a maximized window on the owner's
+    // screen was still too narrow, and the card told him to widen it (#1123), so it says to
+    // answer at the machine or ask with shorter titles. It names the product, never "phone": a
+    // browser or the Windows app answers the same way.
+    internal static string Narrow(IReadOnlyList<string> labels)
+    {
+        var needed = BarColumns(labels);
+        return needed > Launch.LaunchService.ConsoleColumns
+            ? $"this question's titles are too long for {Product.Name} to check which field is open; answer it at the machine, or ask with shorter titles"
+            : $"the session's window is too narrow for {Product.Name} to check which field this question's form is at (its titles need a window at least {needed} columns wide); widen it or make its font smaller, then answer again, or answer it at the machine";
+    }
+
+    // The fewest columns a console needs for the bar to show every label: each ` <label> ` (or
+    // `[<label>]`), one column between them, within the console's width less four.
+    internal static int BarColumns(IReadOnlyList<string> labels) =>
+        labels.Sum(l => new System.Globalization.StringInfo(l).LengthInTextElements + 2) + Math.Max(0, labels.Count - 1) + 4;
+
     // The tab bar under the question names other fields, or reads as no bar the CLI draws at
     // this field. A form at this point has its own heading and the question's message, so this
     // is seldom a form gone; it was said so, and a bar too long for its row was read as one (#1123).
@@ -396,9 +443,9 @@ public static partial class CopilotFormScreen
                 // question before the one title that tells them apart showed (#1137 review).
                 // Named, it is refused with nothing typed, for the machine, rather than read as
                 // no form at all (#1123).
-                if (windowed) { return found.Fail(FormCheck.BarWindow, at, Narrow); }
+                if (windowed) { return found.Fail(FormCheck.BarWindow, at, Narrow(labels)); }
             }
-            else if (at < rows.Count && Wrapped(rows, at, labels, index)) { return found.Fail(FormCheck.BarWindow, at, Narrow); }
+            else if (at < rows.Count && Wrapped(rows, at, labels, index)) { return found.Fail(FormCheck.BarWindow, at, Narrow(labels)); }
             else { return found.Fail(FormCheck.Bar, at, Unchecked); }
             at++;
         }

@@ -94,7 +94,7 @@ public sealed class DeliveryQuietTests
         var receipts = new Dictionary<Guid, int>();
         var memory = new OutcomeMemory<int>(TimeProvider.System, TimeSpan.FromMinutes(15), gate, () => -1,
             key => receipts.TryGetValue(key, out var known) ? (true, known) : (false, 0),
-            (key, result) => receipts[key] = result);
+            (key, result, _) => receipts[key] = result);
         var key = Guid.NewGuid();
         var stop = await gate.PrepareStopAsync(Bound);
         Assert.NotNull(stop);

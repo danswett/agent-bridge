@@ -52,6 +52,12 @@ public static class LocalApi
         {
             throw Refuse(op, agent, "answering, replying, ending and launching sessions are for the person, from the app or a phone", log);
         }
+        // What a device says it shows decides whether the person is using it, and a device in use
+        // holds back the person's pushes (#1190): an agent saying it would silence them.
+        if (op == Ops.SessionsFocus && callers.Classify(channel) is { Kind: CallerKind.Agent } focused)
+        {
+            throw Refuse(op, focused, "telling the host the person is using the app is for the person, from the app or a phone", log);
+        }
         // A whole past conversation of every session, words the person pasted into other sessions
         // included, is more than an agent reading the latest exchange needs, until agents have a
         // principal of their own (design §5.5, #45; docs/protocol/v1-history.md).
@@ -66,7 +72,8 @@ public static class LocalApi
                 .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : [],
                 .. control.HasAgentSetup ? new[] { HostOps.AgentSetupCapability } : [],
                 .. control.HasAgentInstall ? new[] { HostOps.AgentInstallCapability } : [],
-                .. control.HasAgentVerification ? new[] { HostOps.AgentVerificationCapability } : []] },
+                .. control.HasAgentVerification ? new[] { HostOps.AgentVerificationCapability } : [],
+                .. control.HasAgentSignIn ? new[] { HostOps.AgentSignInCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
         });

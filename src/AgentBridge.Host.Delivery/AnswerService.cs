@@ -161,12 +161,28 @@ public sealed class AnswerService : ISessionAnswerer
         this.options = options;
         this.log = log ?? (_ => { });
         this.gate = gate ?? throw new ArgumentNullException(nameof(gate));
-        ledger = options.AttemptLedger ?? new AttemptLedger(options.AttemptLedgerPath, options.Time, this.log);
+        ledger = options.AttemptLedger ?? new AttemptLedger(options.AttemptLedgerPath, options.Time, this.log, expire: false);
         requests = new OutcomeMemory<AnswerResult>(options.Time, options.RememberFor, this.gate, Busy,
             key => ledger.Outcome(key) is { } result ? (true, result) : (false, default!),
-            (key, result) => ledger.RecordOutcome(key, result) is null ? result
+            (key, result, owner) => ledger.RecordOutcome(key, result, owner as AttemptLedger.Owner) is null ? result
                 : ledger.HasClaim(key) ? Unconfirmed(DeliveryReasons.CouldNotDeliver) : Refused(DeliveryReasons.CouldNotDeliver));
+        // The words of every answer whose session or question has gone go (after one last read of its
+        // record): at start, as a session changes, and as an answer settles (its question may have
+        // gone while it was typed, with no change to come).
+        Swept = SweepAsync();
+        // A service built only to show it does no delivery work has no source to hear.
+        if (source is not null)
+        {
+            source.Changed += (_, change) =>
+            {
+                if (change.Kind == SessionChangeKind.Removed) { removed[change.Id] = 0; } else { removed.TryRemove(change.Id, out byte _); }
+                Swept = SweepAsync(change.Id);
+            };
+        }
     }
+
+    // The latest sweep of held words started (tests).
+    internal Task Swept { get; private set; }
 
     public bool Available => options.PlatformSupported && probe.Recent() is null;
 
@@ -190,6 +206,7 @@ public sealed class AnswerService : ISessionAnswerer
         // other asking for it, whether the first's record is still held or not, is a request of
         // its own under a new UUID, so that no outcome, stage or progress is given to it.
         var prompt = (request.Id, request.Question);
+        var by = new AttemptLedger.Owner(sender, request.Id, request.Question);
         Task<AnswerResult> AsAnother() => AnswerAsync(request with { Request = Guid.NewGuid().ToString("D") }, cancellationToken, watch, confirmed, sender);
         // Finding the prompt's first answer, registering this one as it, and admitting it to the
         // request cache are one step: a second identical call cannot land between them and start
@@ -197,7 +214,7 @@ public sealed class AnswerService : ISessionAnswerer
         // later identical call joins it, and its outcome is saved against the right record.
         lock (firstGate)
         {
-            var first = SameAnswerBefore(prompt, key, AnswerDigest.Of(request), sender, out var foreign);
+            var first = SameAnswerBefore(prompt, key, ledger.Keyed(AnswerDigest.Of(request)), sender, out var foreign);
             if (foreign) { return AsAnother(); }
             if (first is null) { AfterRegistered?.Invoke(); }
             if (first is not null)
@@ -207,15 +224,16 @@ public sealed class AnswerService : ISessionAnswerer
             }
             var flow = first?.Request ?? key;
             var outcome = requests.Once(flow, watch, () => new DeliveryTimeline(options.Time, "answer", flow, log),
-                t => first is null ? DeliverAsync(request, key, t, confirmed) : Task.FromResult(AsRetried(first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed), true)),
+                t => first is null ? Typing(key, () => DeliverAsync(request, key, t, confirmed, by)) : Task.FromResult(AsRetried(first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed), true)),
                 result =>
                 {
                     log($"answer {flow.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}");
                     Settled(prompt, flow, result);
+                    if (first is null && result.Outcome == AnswerOutcome.Unconfirmed) { Swept = Task.Run(() => SweepAsync(request.Id)); }
                 },
-                Recheck(flow), (sender, request.Id, request.Question), AsAnother, result => AsRetried(result, true));
+                Recheck(flow), by, AsAnother, result => AsRetried(result, true));
             // Refused to start (the host is departing): nothing ran, so nothing is the first.
-            if (first is null && !requests.Knows(key) && firstAnswers.TryGetValue(prompt, out var mine) && mine.Request == key) { firstAnswers.Remove(prompt); }
+            if (first is null && !requests.Knows(key) && firstAnswers.TryGetValue(prompt, out var mine) && mine.Request == key && !mine.Restored) { firstAnswers.Remove(prompt); }
             return outcome;
         }
     }
@@ -228,6 +246,18 @@ public sealed class AnswerService : ISessionAnswerer
         var last = first.Last ?? Unconfirmed(DeliveryReasons.AnswerNotConfirmed);
         Func<Task<AnswerResult?>>? read;
         lock (firstGate) { read = first.Read; }
+        // The words it would be read from are the ledger's to keep: once they have gone (past an
+        // exit, or lost to a delete that failed), nothing is read from memory either, so a retry is
+        // told the same before a restart as after it; and what a last read made of it then stands.
+        if (read is not null && !ledger.HoldsWords(first.Request))
+        {
+            lock (firstGate) { first.Read = read = null; }
+            if (Further(ledger.ResultOf(first.Request), last) is { } stored)
+            {
+                lock (firstGate) { first.Last = stored; }
+                last = stored;
+            }
+        }
         if (last.Outcome == AnswerOutcome.Unconfirmed && read is not null)
         {
             AnswerResult? later = null;
@@ -240,11 +270,19 @@ public sealed class AnswerService : ISessionAnswerer
                     first.Last = later;
                     if (later.Outcome == AnswerOutcome.Delivered) { first.Read = null; }
                 }
+                ledger.RecordReread(first.Request, later);
                 last = later;
             }
         }
         return AsRetried(last, retry);
     }
+
+    // What the ledger has since an unconfirmed outcome, when it says more: settled otherwise, or
+    // recorded where it was only typed. Null when it says nothing more.
+    static AnswerResult? Further(AnswerResult? stored, AnswerResult known) =>
+        stored is null || known.Outcome != AnswerOutcome.Unconfirmed ? null
+        : stored.Outcome != AnswerOutcome.Unconfirmed || (stored.Stage == AnswerStage.Recorded && known.Stage != AnswerStage.Recorded) ? stored
+        : null;
 
     // Typed, and nothing recorded for it since: the first attempt's own words (what was typed
     // and what was held back, or what the session recorded instead) are not the retry's to say;
@@ -254,15 +292,18 @@ public sealed class AnswerService : ISessionAnswerer
         retry && result.Outcome == AnswerOutcome.Unconfirmed ? result with { Reason = DeliveryReasons.AnswerNotConfirmed } : result;
 
     // What each prompt's first answer was, by session and question: kept as long as the ledger
-    // keeps the prompt's claim, in memory only. A host that restarts forgets it and refuses a
-    // second request for a prompt it typed into, as the ledger alone does.
+    // keeps the prompt's claim. A host that restarts finds it again in the ledger, which since
+    // #1159 slice 0 keeps its sender, keyed digest and outcome, and while it is unconfirmed what reading
+    // it again needs (Restore).
     readonly Dictionary<(string Session, string Question), FirstAnswer> firstAnswers = [];
     readonly Lock firstGate = new();
 
-    sealed class FirstAnswer(Guid request, byte[] digest, string? sender, DateTimeOffset at)
+    // digest: keyed with this install's key (AttemptLedger.Keyed), as the ledger keeps it; null with
+    // no key, when it is never taken for the same answer.
+    sealed class FirstAnswer(Guid request, byte[]? digest, string? sender, DateTimeOffset at)
     {
         public Guid Request { get; } = request;
-        public byte[] Digest { get; } = digest;
+        public byte[]? Digest { get; } = digest;
         // Who sent it (the channel's peer, or the connector): only that sender is given its
         // outcome for the same answer, so no other can learn what a first answer said by
         // guessing it under a new request.
@@ -273,6 +314,119 @@ public sealed class AnswerService : ISessionAnswerer
         // How to read the session's record of that same call again, without typing, while it
         // is unconfirmed; kept as long as the answer is.
         public Func<Task<AnswerResult?>>? Read;
+        // Found in the ledger after a restart rather than admitted by this host.
+        public bool Restored;
+    }
+
+    // The prompt's first answer as the ledger keeps it, for a host that has none in memory (it
+    // restarted): its outcome (unconfirmed, if the host stopped before recording one), and while
+    // its words are held, a read of its record again with the plan rebuilt from them.
+    void Restore((string Session, string Question) prompt)
+    {
+        if (firstAnswers.ContainsKey(prompt) || ledger.FirstFor(prompt.Session, prompt.Question) is not { } kept) { return; }
+        var first = new FirstAnswer(kept.Request, kept.Digest, kept.By.Sender, kept.At)
+        {
+            Last = kept.Result ?? Unconfirmed(AttemptLedger.NotRecorded),
+            Restored = true,
+        };
+        if (kept is { Reread: { } at, Words: { } words } && Reader(kept.By, at, words, kept.Request) is { } read)
+        {
+            first.Read = read;
+            rechecks[kept.Request] = (read, options.Time.GetUtcNow());
+        }
+        firstAnswers[prompt] = first;
+    }
+
+    // Reads the session's record of a held answer again from what the ledger keeps: the agent,
+    // transcript, call and offset, and the plan rebuilt from the answer's words, as the first
+    // delivery built it. Copilot forms and Claude only; nothing else is read again.
+    Func<Task<AnswerResult?>>? Reader(AttemptLedger.Owner by, AttemptLedger.Reread at, AnswerWords.Words words, Guid request)
+    {
+        var asked = new AnswerRequest { Id = by.Session, Question = by.Question, Request = request.ToString("D"), Text = words.Text, Fields = words.Fields };
+        var timeline = new DeliveryTimeline(options.Time, "answer", request, log);
+        switch (at.Agent)
+        {
+            case "copilot":
+                var seen = new System.Runtime.CompilerServices.StrongBox<DateTimeOffset?>();
+                return async () =>
+                {
+                    if (CopilotTranscript.Find(at.Transcript, at.Call).Arguments is not { } arguments
+                        || CopilotForm.Read(arguments).Form is not { } form
+                        || CopilotPlanner.Plan(form, asked).Plan is not { } plan) { return null; }
+                    return await LateCopilotAsync(at.Transcript, at.Call, at.Offset, plan, seen, timeline);
+                };
+            case "claude":
+                return () =>
+                {
+                    if (ClaudeTranscript.Find(at.Transcript, at.Call).Input is not { } input
+                        || ClaudeForm.Read(input).Form is not { } form
+                        || ClaudePlanner.Plan(form, asked).Plan is not { } plan) { return Task.FromResult<AnswerResult?>(null); }
+                    return Task.FromResult(LateClaude(at.Transcript, at.Call, at.Offset, plan, timeline));
+                };
+            default:
+                return null;
+        }
+    }
+
+    // The words of a held answer whose session, or the question they were typed into, has gone
+    // (Gone): its record is read one last time, so an answer the session recorded still settles
+    // (delivered, or recorded), and then the words go (Trust's condition 3). Not while this host is
+    // still typing or watching it: its question may be out of the listing for a moment then. A claim
+    // left from before a restart is never in flight here.
+    async Task SweepAsync(string? only = null)
+    {
+        try
+        {
+            foreach (var (key, request, by, at) in ledger.Holding())
+            {
+                if (typing.ContainsKey(request) || (only is not null && by.Session != only) || !Gone(by, at)) { continue; }
+                if (ledger.WordsOf(key) is { } words && Reader(by, at, words, request) is { } read)
+                {
+                    AnswerResult? later = null;
+                    try { later = await read(); }
+                    catch (Exception e) { log($"the last read of answer {request.ToString()[..8]} to {Short(by.Session)} failed: {e.GetType().Name}"); }
+                    if (later is not null)
+                    {
+                        ledger.RecordReread(request, later);
+                        lock (firstGate)
+                        {
+                            foreach (var first in firstAnswers.Values.Where(f => f.Request == request)) { first.Last = later; }
+                        }
+                    }
+                }
+                ledger.Cancel(key);
+            }
+            // A removal heard is needed only while words of that session are kept.
+            if (only is not null && removed.ContainsKey(only) && !ledger.Holding().Any(h => h.By.Session == only)) { removed.TryRemove(only, out _); }
+        }
+        catch (Exception e) { log($"the words of unconfirmed answers could not be swept: {e.GetType().Name}"); }
+    }
+
+    // Whether a held answer's question has gone, on what is known, never on what is missing: its
+    // session listed asking another question (or none), unless discovery is held for its agent; or
+    // its session removed, as the source says when it ends. A session merely not listed (not yet
+    // found after a restart, or not accounted for while its agent is held, when nothing may be
+    // decided from its absence: ISessionSource.Held) keeps its words, at most their 24 hours.
+    bool Gone(AttemptLedger.Owner by, AttemptLedger.Reread at)
+    {
+        if (source.GetForDelivery(by.Session) is not { } session) { return removed.ContainsKey(by.Session); }
+        if (session.Question?.Id is { } asked && (asked == at.Call || asked == by.Question)) { return false; }
+        AgentKind? agent = at.Agent switch { "copilot" => AgentKind.Copilot, "claude" => AgentKind.Claude, _ => null };
+        return agent is { } kind && source.Held?.Agents.Contains(kind) != true;
+    }
+
+    // The sessions the source has said were removed, from the change that said so until one says
+    // they are back, or no words of theirs are kept.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> removed = new(StringComparer.Ordinal);
+
+    // The requests this host is delivering: typed, or being watched for their record.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> typing = new();
+
+    async Task<AnswerResult> Typing(Guid request, Func<Task<AnswerResult>> deliver)
+    {
+        typing[request] = 0;
+        try { return await deliver(); }
+        finally { typing.TryRemove(request, out _); }
     }
 
     // The prompt's first answer when this request, from the same sender, says the same, to be
@@ -281,25 +435,36 @@ public sealed class AnswerService : ISessionAnswerer
     // memory answers, or another sender or a different answer, which goes the usual way and is
     // refused by the ledger once anything was typed: the same refusal for both, so a guess
     // cannot be told from a miss. A request seen first is recorded as the prompt's first.
-    FirstAnswer? SameAnswerBefore((string Session, string Question) prompt, Guid key, byte[] digest, string? sender, out bool foreign)
+    FirstAnswer? SameAnswerBefore((string Session, string Question) prompt, Guid key, byte[]? digest, string? sender, out bool foreign)
     {
         foreign = false;
         lock (firstGate)
         {
             var now = options.Time.GetUtcNow();
             foreach (var old in firstAnswers.Where(a => now - a.Value.At > AttemptLedger.Keep).Select(a => a.Key).ToList()) { firstAnswers.Remove(old); }
+            Restore(prompt);
             // A UUID is the sender's, for the prompt it was first admitted for, whatever question
             // or sender comes with it now and however long ago the request's own record went.
             foreach (var (admitted, owner) in firstAnswers)
             {
                 if (owner.Request == key && (admitted != prompt || !string.Equals(owner.Sender, sender, StringComparison.Ordinal))) { foreign = true; return null; }
             }
+            // And after a restart, as the ledger has it: its receipt or claim is the owner's alone,
+            // and one from before #1159, whose owner is not known, is nobody's (#1159 slice 0).
+            if (!requests.Knows(key) && ledger.Known(key, out var by)
+                && (by is null || by.Session != prompt.Session || by.Question != prompt.Question || !string.Equals(by.Sender, sender, StringComparison.Ordinal)))
+            {
+                foreign = true;
+                return null;
+            }
             if (firstAnswers.TryGetValue(prompt, out var known))
             {
                 // Both compared, whatever the first says, and the digests in constant time.
                 var sameSender = string.Equals(known.Sender, sender, StringComparison.Ordinal);
-                var same = CryptographicOperations.FixedTimeEquals(known.Digest, digest) & sameSender;
-                if (known.Request == key) { return known.Last is not null && !requests.Knows(key) ? known : null; }
+                var same = known.Digest is { } kept && digest is { } said && CryptographicOperations.FixedTimeEquals(kept, said) & sameSender;
+                // The request's own receipt, still remembered after a restart, answers its resend
+                // itself, as it did before #1159 (OutcomeMemory reads it again if unconfirmed).
+                if (known.Request == key) { return known.Last is not null && !requests.Knows(key) && !(known.Restored && ledger.Outcome(key) is not null) ? known : null; }
                 if (!same) { return null; }
                 // Still known, or settled and forgotten with its outcome kept.
                 if (requests.Knows(known.Request) || known.Last is not null) { return known; }
@@ -329,7 +494,15 @@ public sealed class AnswerService : ISessionAnswerer
     // never touched. Null for anything else, which gets its first outcome again.
     Func<AnswerResult, Task<AnswerResult?>> Recheck(Guid key) => async first =>
     {
-        if (first.Outcome != AnswerOutcome.Unconfirmed || !rechecks.TryGetValue(key, out var entry)) { return null; }
+        if (first.Outcome != AnswerOutcome.Unconfirmed) { return null; }
+        // Its words gone from the ledger (past an exit, or lost to a delete that failed), nothing
+        // is read from memory either; what a last read made of it then stands (ReadAgain).
+        if (!ledger.HoldsWords(key))
+        {
+            rechecks.TryRemove(key, out _);
+            return Further(ledger.ResultOf(key), first);
+        }
+        if (!rechecks.TryGetValue(key, out var entry)) { return null; }
         AnswerResult? later;
         try { later = await entry.Read(); }
         catch (Exception) { return null; }
@@ -351,7 +524,7 @@ public sealed class AnswerService : ISessionAnswerer
         }
     }
 
-    async Task<AnswerResult> DeliverAsync(AnswerRequest request, Guid key, DeliveryTimeline timeline, IEscapedConfirmation? confirmed)
+    async Task<AnswerResult> DeliverAsync(AnswerRequest request, Guid key, DeliveryTimeline timeline, IEscapedConfirmation? confirmed, AttemptLedger.Owner by)
     {
         try
         {
@@ -378,10 +551,10 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 return session.Agent switch
                 {
-                    AgentKind.Claude => await ClaudeAsync(session, question, request, timeline),
-                    AgentKind.Codex => await CodexAsync(session, question, request, timeline, confirmed),
-                    _ when permission => await CopilotPermissionAsync(session, question, request, timeline, confirmed),
-                    _ => await CopilotAsync(session, question, request, timeline),
+                    AgentKind.Claude => await ClaudeAsync(session, question, request, timeline, by),
+                    AgentKind.Codex => await CodexAsync(session, question, request, timeline, confirmed, by),
+                    _ when permission => await CopilotPermissionAsync(session, question, request, timeline, confirmed, by),
+                    _ => await CopilotAsync(session, question, request, timeline, by),
                 };
             }
             finally { gate.Release(session.Id, key); }
@@ -451,12 +624,12 @@ public sealed class AnswerService : ISessionAnswerer
 
     // Every answer to a Copilot form leaves one line in the log saying how it went
     // (CopilotAnswerTrace), whatever it ended in, the screen reads it made counted against it.
-    async Task<AnswerResult> CopilotAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline)
+    async Task<AnswerResult> CopilotAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, AttemptLedger.Owner by)
     {
         var trace = new CopilotAnswerTrace(options.Time, request.Request, session.Id);
         CopilotAnswerTrace.Current.Value = trace;
         AnswerResult? result = null;
-        try { return result = await CopilotFormAsync(session, question, request, timeline, trace); }
+        try { return result = await CopilotFormAsync(session, question, request, timeline, trace, by); }
         finally
         {
             CopilotAnswerTrace.Current.Value = null;
@@ -465,7 +638,7 @@ public sealed class AnswerService : ISessionAnswerer
         }
     }
 
-    async Task<AnswerResult> CopilotFormAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, CopilotAnswerTrace trace, bool redo = false)
+    async Task<AnswerResult> CopilotFormAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, CopilotAnswerTrace trace, AttemptLedger.Owner by, bool redo = false)
     {
         // The session id names a folder; only the agent's own id shape is accepted.
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Refused("the session's id is not a Copilot session id"); }
@@ -592,7 +765,7 @@ public sealed class AnswerService : ISessionAnswerer
             }
             (plan, from) = (planned, call.ScannedTo);
 
-            if (ledger.Claim(attempt, Guid.Parse(request.Request)) is { } claimed) { return Refused(claimed); }
+            if (Claim(attempt, request, by, new("copilot", transcript, question.Id, from)) is { } claimed) { return Refused(claimed); }
             (typed, held, partial) = await TypeWordsApartAsync(session.Id, pid, form, plan.Keys, StillAsked, timeline, progress);
             trace.Stage("typed");
         }
@@ -720,6 +893,18 @@ public sealed class AnswerService : ISessionAnswerer
                     return new(went, why, null, false);
                 }
                 var rows = await ReadRowsAsync(pid);
+                // No Esc for a form showing the field after its whole ones with no key of the
+                // answer in it (#1123): the keys stopped before it (refused there, typing nothing),
+                // so there is nothing in it to take back, and the Esc would cancel the whole form,
+                // the fields the session took with it. It is left as it is, for the person. A form
+                // still showing a field whose Enter went (it never moved on) is reset as below.
+                if (rows is not null && went.Status == InjectionStatus.Typed && !progress.Partway && !progress.Unknown
+                    && progress.Taken < form.Fields.Count && CopilotFormScreen.Showing(rows, form, progress.Taken) is null)
+                {
+                    log($"the part-answered form in {Short(session.Id)} (pid {pid}) shows field {progress.Taken + 1} of {form.Fields.Count} with no key of the answer in it; nothing is pressed, not even esc, and it is left for the person");
+                    trace.Resume(CopilotAnswerTrace.ResumeLeft);
+                    return new(went, null, Unconfirmed(Left()), false);
+                }
                 // Esc only where the hints say it cancels: on Copilot CLI 1.0.106 a text or number
                 // field holding words says "esc clear", and Esc there empties the field instead.
                 if (rows is null || !Enumerable.Range(0, form.Fields.Count).Any(i => CopilotFormScreen.Cancels(rows, form, i)))
@@ -752,7 +937,7 @@ public sealed class AnswerService : ISessionAnswerer
                     log($"the session {Short(session.Id)} asked the reset question again; the answer is typed into it afresh");
                     // Said before the redo, so what became of the redo is kept with it.
                     trace.Resume(CopilotAnswerTrace.ResumeRedone);
-                    var redone = await CopilotFormAsync(session, listed, request, timeline, trace, redo: true);
+                    var redone = await CopilotFormAsync(session, listed, request, timeline, trace, by, redo: true);
                     return new(went, null, redone, true);
                 }
                 trace.Resume(CopilotAnswerTrace.ResumeReplaced);
@@ -792,6 +977,14 @@ public sealed class AnswerService : ISessionAnswerer
                 log($"the check of {Short(session.Id)} for a prompt over its form failed: {e.GetType().Name}: {e.Message}");
             }
             return StillAsked();
+        }
+
+        // What a form left with only whole fields entered says (no Esc pressed): which fields the
+        // session took, the one nothing went into, and that nothing was cancelled.
+        string Left()
+        {
+            static string Name(CopilotField f) => $"\"{f.Label ?? f.Name}\"";
+            return $"{Product.Name} entered {string.Join(", ", form.Fields.Take(progress.Taken).Select(Name))} but typed nothing into {Name(form.Fields[progress.Taken])}, and cancelled nothing; the question is still open at the machine: finish it there";
         }
 
         // Whether the transcript positively says this question's call is over: answered, the
@@ -1417,7 +1610,7 @@ public sealed class AnswerService : ISessionAnswerer
     //     still reads so when it is typed (the worker checks it in the same attach);
     //   * delivered only when the transcript records that request approved, or denied with no
     //     message; anything else is unconfirmed. Never retried.
-    async Task<AnswerResult> CopilotPermissionAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, IEscapedConfirmation? confirmed)
+    async Task<AnswerResult> CopilotPermissionAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, IEscapedConfirmation? confirmed, AttemptLedger.Owner by)
     {
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Refused("the session's id is not a Copilot session id"); }
         if (CopilotPermissionPrompt.ParseQuestionId(question.Id) is not { } parsed) { return Refused("this Copilot permission prompt can only be answered at the machine"); }
@@ -1477,7 +1670,7 @@ public sealed class AnswerService : ISessionAnswerer
             keys = new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Hold)]);
             from = after.ScannedTo;
 
-            if (ledger.Claim(attempt, Guid.Parse(request.Request)) is { } claimed) { return Refused(claimed); }
+            if (Claim(attempt, request, by, null) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, keys, timeline);
         }
         finally { gate.DoneTyping(); }
@@ -1544,7 +1737,7 @@ public sealed class AnswerService : ISessionAnswerer
             : null;
 
     // Claude Code's AskUserQuestion, keyed by its tool_use id in the session's transcript.
-    async Task<AnswerResult> ClaudeAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline)
+    async Task<AnswerResult> ClaudeAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, AttemptLedger.Owner by)
     {
         if (source.Files(session.Id)?.Transcript is not { Length: > 0 } transcript) { return Refused("the session's transcript is not known; answer at the machine"); }
         if (Target(session, AgentKind.Claude) is { } unfit) { return unfit; }
@@ -1574,7 +1767,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (planned is null) { return Refused(problem!); }
             (plan, from) = (planned, call.ScannedTo);
 
-            if (ledger.Claim(attempt, Guid.Parse(request.Request)) is { } claimed) { return Refused(claimed); }
+            if (Claim(attempt, request, by, new("claude", transcript, question.Id, from)) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, plan.Keys, timeline);
         }
         finally { gate.DoneTyping(); }
@@ -1661,7 +1854,7 @@ public sealed class AnswerService : ISessionAnswerer
     // so the question is rebuilt from the fresh marker and its id must still be this one.
     // The session's listing is no help there: it is refreshed by a watcher or a poll, and can
     // still show the approval that was answered after the marker has moved on.
-    async Task<AnswerResult> CodexAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, IEscapedConfirmation? confirmed)
+    async Task<AnswerResult> CodexAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline, IEscapedConfirmation? confirmed, AttemptLedger.Owner by)
     {
         if (question.Kind != QuestionKind.Approval) { return Refused("this Codex prompt can only be answered at the machine"); }
         if (CodexApprovalId.Parse(question.Id) is not { } parsed) { return Refused("this Codex approval can only be answered at the machine"); }
@@ -1697,7 +1890,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (EscapedRefusal(question, request, confirmed) is { } unconfirmed) { return Refused(unconfirmed); }
             if (marker.Attempted) { return Refused("agent-ha-bridge has already typed an answer into this approval, and it is never typed again"); }
 
-            if (ledger.Claim(attempt, Guid.Parse(request.Request)) is { } claimed) { return Refused(claimed); }
+            if (Claim(attempt, request, by, null) is { } claimed) { return Refused(claimed); }
             typed = await TypeAsync(pid, keys, timeline);
         }
         finally { gate.DoneTyping(); }
@@ -1736,6 +1929,13 @@ public sealed class AnswerService : ISessionAnswerer
         if (final && result.Status == InjectionStatus.Typed) { timeline?.Typed(false); }
         return result;
     }
+
+    // The prompt claimed before the first key, for the sender, session and question the request
+    // was admitted for, with a hash of the answer; and, where its record can be read again
+    // (reread), the answer's words, kept apart (AnswerWords), or it is refused before any key.
+    string? Claim(string attempt, AnswerRequest request, AttemptLedger.Owner by, AttemptLedger.Reread? reread) =>
+        ledger.Claim(attempt, Guid.Parse(request.Request), new AttemptLedger.Admission(by, AnswerDigest.Of(request), reread,
+            reread is null ? null : new AnswerWords.Words(request.Text, request.Fields)));
 
     // What typing came to, when that is already the outcome: nothing typed (refused, and the
     // prompt may be answered again) or keys that may have landed (unconfirmed).

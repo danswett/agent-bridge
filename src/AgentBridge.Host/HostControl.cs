@@ -67,6 +67,7 @@ public sealed class HostControlOptions
     // Host-only seam for graceful departures; it is not exposed as a pipe/relay operation.
     public LifecycleCoordinator? Lifecycle { get; init; }
     public AgentVerificationService? AgentVerification { get; init; }
+    public AgentCliSignInService? AgentSignIn { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -134,9 +135,18 @@ public sealed class HostControl
     }
 
     public bool HasAgentReadiness => options.Agents is not null;
+    public DateTimeOffset StartedAt => startedAt;
+
+    // The relay connection as SetRelay last reported it, without the rest of Status (which reads
+    // settings and the account): diagnostics.get projects only its state and time. Not under
+    // gate: Status holds it while it reads config.json and looks at agent-ha-bridge, so a read
+    // that waited on it could outlast diagnostics' deadline. Each change publishes a whole
+    // immutable record (written under gate, read with Volatile.Read), so this is never torn.
+    public RelayStatus RelayNow => Volatile.Read(ref relay);
     public bool HasAgentSetup => options.AgentSetup is not null;
     public bool HasAgentInstall => options.AgentInstall is not null;
     public bool HasAgentVerification => options.AgentVerification is not null;
+    public bool HasAgentSignIn => options.AgentSignIn is not null;
 
     HostStatus StatusLocked(bool fresh = false)
     {
@@ -186,7 +196,7 @@ public sealed class HostControl
         lock (gate)
         {
             if (relay.State == state && relay.Detail == detail) { return; }
-            relay = new RelayStatus(state, options.Relay()?.ToString(), detail, options.Time.GetUtcNow());
+            Volatile.Write(ref relay, new RelayStatus(state, options.Relay()?.ToString(), detail, options.Time.GetUtcNow()));
         }
         Changed();
     }
@@ -215,6 +225,9 @@ public sealed class HostControl
             case HostOps.AgentsVerifyCancel when options.AgentVerification is not null:
                 return options.AgentVerification.Cancel((Read<AgentVerificationCancel>(data)
                     ?? throw new ArgumentException("Choose the verification to stop observing.")).Request);
+            case HostOps.AgentsSignIn when options.AgentSignIn is not null:
+                return await options.AgentSignIn.OpenAsync(Read<AgentSignInRequest>(data)
+                    ?? throw new ArgumentException("CLI sign-in needs an agent and explicit confirmation."));
             case HostOps.SignIn:
                 return await SignInAsync(Read<SignInRequest>(data) ?? new SignInRequest());
             case HostOps.SignInCancel:
@@ -360,7 +373,7 @@ public sealed class HostControl
                 lock (gate)
                 {
                     signIn = new SignInStatus(SignInState.Idle);
-                    relay = new RelayStatus(RelayState.Connecting, relayUri.ToString(), null, options.Time.GetUtcNow());
+                    Volatile.Write(ref relay, new RelayStatus(RelayState.Connecting, relayUri.ToString(), null, options.Time.GetUtcNow()));
                 }
             }
             catch (Exception e)

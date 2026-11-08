@@ -110,8 +110,8 @@ public sealed class PackageHandoffTests : IDisposable
     }
 
     // Update.exe is started as Velopack's ApplyUpdatesAndRestart starts it (UpdateExe.Apply: apply,
-    // --package, --waitPid, --rootDir, --packageDir, then the app's arguments after --), but with
-    // --package naming the copy. --packageDir stays the installation's shared packages folder, where
+    // --package, --waitPid, --rootDir, --packageDir, then the app's arguments after --), silent
+    // (#1167), with --package naming the copy. --packageDir stays the installation's shared packages folder, where
     // Update.exe takes its install lock (packages\.velopack_lock), so one profile still can't install
     // over another's install.
     [Fact]
@@ -124,8 +124,23 @@ public sealed class PackageHandoffTests : IDisposable
 
         using var held = handoff.Launch(copy, 4242, install, Packages, ["--background", "--profile", "work"], args => handed = args);
 
-        Assert.Equal(["apply", "--package", copy.Package, "--waitPid", "4242", "--rootDir", install, "--packageDir", Packages, "--", "--background", "--profile", "work"], handed);
+        Assert.Equal(["--silent", "apply", "--package", copy.Package, "--waitPid", "4242", "--rootDir", install, "--packageDir", Packages, "--", "--background", "--profile", "work"], handed);
         Assert.NotEqual(Path.GetFullPath(Packages), Path.GetFullPath(Path.GetDirectoryName(copy.Package)!));
+    }
+
+    // #1167: Velopack's "Installing Update" window never shows; the app's own Updating screen says it.
+    [Fact]
+    public void Update_exe_is_started_silently_so_Velopacks_own_install_window_never_shows()
+    {
+        var handoff = new PackageHandoff(Mark, ProfileCopies);
+        var copy = handoff.Prepare(Downloaded(), "0.2.0", Source);
+        IReadOnlyList<string>? handed = null;
+
+        using var held = handoff.Launch(copy, 4242, Path.Combine(root, "install"), Packages, ["--background"], args => handed = args);
+
+        Assert.NotNull(handed);
+        Assert.Equal("--silent", handed[0]);
+        Assert.Equal("apply", handed[1]);
     }
 
     // Engineering's review of #1036 (6693104164, MEDIUM): the handle on the copy closes with the app,

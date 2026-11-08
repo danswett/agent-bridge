@@ -3,6 +3,7 @@
 // upsert when it types an answer, and plays any outcome a test scripts. Every field type,
 // every outcome, resends, a question changing under the person, and the keyboard.
 import { test, expect } from '@playwright/test';
+import { BRAND } from '../js/brand.js';
 import { open, view } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
@@ -416,7 +417,7 @@ test.describe('on a phone', () => {
     const q = await ask(page, { ...permission, answerAtMachine: true }, COPILOT);
     await expect(q).toHaveAttribute('data-answerable', 'false');
     await expect(q.locator('.question-message')).toContainText('git push origin main --force-with-lease');
-    await expect(q.locator('.read-only-why')).toHaveText('Approving permission prompts from the phone is turned off on this machine. Answer at the machine on Demo machine.');
+    await expect(q.locator('.read-only-why')).toHaveText(`Approving permission prompts from ${BRAND.name} is turned off on this machine. Answer at the machine on Demo machine.`);
     // Nothing that answers.
     await expect(q.locator(':is(button, input, select, textarea):not(.md-copy)')).toHaveCount(0);
   });

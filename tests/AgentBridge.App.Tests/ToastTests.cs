@@ -628,6 +628,7 @@ public sealed class ToastTests
             ],
             [nameof(ToastXml.Finished)] = [ToastXml.Finished(Make.Session(response: "All **green**."), "PC", "remote-id"), ToastXml.Finished(Make.Session(), null)],
             [nameof(ToastXml.Updated)] = [ToastXml.Updated("0.1.9", "0.1.8", "- Quieter toasts"), ToastXml.Updated("0.1.9", "0.1.8", null)],
+            [nameof(ToastXml.CouldNotInstall)] = [ToastXml.CouldNotInstall("Couldn't install version 0.1.9. Slipgates is still on 0.1.8.")],
             [nameof(ToastXml.Outcome)] = [ToastXml.Outcome("s1", "A session", "Sent.", "remote-id"), ToastXml.Outcome("s1", "A session", "Sent.")],
             [nameof(ToastXml.SignIn)] = [ToastXml.SignIn(AgentKind.Copilot, 4, "PC", "remote-id"), ToastXml.SignIn(AgentKind.Claude, 1, null)],
         };

@@ -257,3 +257,15 @@ export async function closeNotices(registration, hostId, sessionId) {
   const shown = await registration?.getNotifications?.({ tag: noticeTag(hostId, sessionId) }) ?? [];
   for (const n of shown) { n.close(); }
 }
+
+// Closes the notices of a session that is being read (#1190): all of them but a question's that is
+// not the question its card shows. A notice of a question not on screen is not read, so it stays
+// until that question is answered or goes.
+export async function closeReadNotices(registration, hostId, sessionId, openQuestion = null) {
+  const shown = await registration?.getNotifications?.({ tag: noticeTag(hostId, sessionId) }) ?? [];
+  for (const n of shown) {
+    const d = n.data ?? {};
+    if (d.kind === 'question' && (!openQuestion || d.question !== openQuestion)) { continue; }
+    n.close();
+  }
+}

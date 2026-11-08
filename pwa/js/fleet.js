@@ -22,6 +22,7 @@ import { Capabilities, Ops } from './protocol.js';
 import { USAGE, machineFacts, machineStatus } from './usage.js';
 import { UPDATE, underWay } from './update.js';
 import { SIGN_IN_DEVICES, readSignInDevices } from './signin-devices.js';
+import { DIAGNOSTICS } from './diagnostics.js';
 
 export const PROBE_EVERY_MS = 5 * 60 * 1000;
 export const REFRESH_EVERY_MS = 60 * 1000;
@@ -126,6 +127,10 @@ export class FleetStatus {
     this.#watchUntil.set(id, this.now() + forMs);
     this.#retime();
   }
+
+  // Whether a machine offers this device its diagnostics (#802): true or false as its last hello
+  // said, null while none has been heard.
+  diagnosable(id) { return this.#machines.get(id)?.diagnostics ?? null; }
 
   // What a machine's updater is doing, or null when it offers no updates (or none is known yet).
   update(id) { return this.#updates.get(id) ?? null; }
@@ -287,7 +292,7 @@ export class FleetStatus {
       shown.add(id);
       if (link.phase !== 'open' || !client) { continue; }
       // What the machine says now, refreshed hellos included (read-only, say).
-      this.#note(id, link.machine);
+      this.#note(id, link.machine, link.capabilities);
       this.#followUpdates(link);
       this.#readSignIns(link);
       if (this.#viewed.get(id) === client) { continue; }
@@ -334,9 +339,10 @@ export class FleetStatus {
     client.subscribeUpdate().then((s) => { if (mine()) { this.#setUpdate(id, s); } }, () => { if (mine()) { this.#updateFollowed.delete(id); } });
   }
 
-  #note(id, machine) {
+  #note(id, machine, capabilities) {
     if (!id || !machine) { return; }
-    this.#machines.set(id, { hostVersion: machine.hostVersion ?? null, dev: machine.dev === true, sessions: machine.sessions ?? null, readOnly: machine.readOnly ?? null, at: this.now() });
+    // diagnostics: whether its hello offers diagnostics.get (#802); an older host does not.
+    this.#machines.set(id, { hostVersion: machine.hostVersion ?? null, dev: machine.dev === true, sessions: machine.sessions ?? null, readOnly: machine.readOnly ?? null, diagnostics: Array.isArray(capabilities) && capabilities.includes(DIAGNOSTICS.capability), at: this.now() });
   }
 
   // Looks at every online machine not shown that has not been looked at for a minute. One at
@@ -385,7 +391,7 @@ export class FleetStatus {
       const viewed = () => this.#followed(id);
       const hello = await client.hello();
       if (viewed() || forgotten()) { return; }
-      this.#note(id, hello.machine);
+      this.#note(id, hello.machine, hello.capabilities);
       if (hello.capabilities.includes(USAGE.capability)) {
         const report = await client.usage({ shared: hello.capabilities.includes(USAGE.shared) });
         if (!viewed() && !forgotten()) { this.book.set(id, report, hello.machine?.name); }
