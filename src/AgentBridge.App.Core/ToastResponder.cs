@@ -75,6 +75,11 @@ public sealed class ToastResponder
     // The outcome toasts that say why an answer could not go: their cause ends with the question.
     readonly HashSet<string> causeBound = new(StringComparer.Ordinal);
 
+    // The session is known and no longer asks the question the click named: a cause-bound outcome
+    // arriving now has nothing left to say, and QuestionClosed has already come and gone.
+    bool Closed(ToastAction action) =>
+        action.Session is { } session && SessionOf(action.Machine, session) is { } s && s.Question?.Id != action.Question;
+
     // The question closed (answered elsewhere, cancelled, its session ended): a toast saying an
     // answer to it did not go has nothing left to say, and goes. What an answer came to stays (#1193).
     public void QuestionClosed(string? machine, string session)
@@ -151,11 +156,11 @@ public sealed class ToastResponder
             try { result = await done.Task.WaitAsync(OutcomeWait); }
             catch (TimeoutException)
             {
-                if (Gone()) { return; }
+                if (Gone() || Closed(action)) { return; }
                 Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, "Still sending your answer. Open the session to see what became of it.", action.Machine));
                 return;
             }
-            if (Gone()) { return; }
+            if (Gone() || (Closed(action) && !QuestionViewModel.OutlivesQuestion(result))) { return; }
             var text = QuestionViewModel.Describe(result, null).Whole;
             Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, text, action.Machine), QuestionViewModel.OutlivesQuestion(result));
         }
