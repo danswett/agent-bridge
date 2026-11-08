@@ -198,9 +198,13 @@ static partial class SelfTest
             {
                 demo.Script(busyCard.Id, () => Task.FromResult<object?>(new AnswerResult(AnswerOutcome.Busy, "the agent is mid-step")));
                 if (ById<Button>(busyView, "Option:fixes") is { } fixes) { Press(fixes); }
-                var again = await Until(() => busyCard.Question is { CanAnswer: true, StatusText.Length: > 0 } && ById<Button>(busyView, "Option:docs") is { IsEnabled: true }, TimeSpan.FromSeconds(8));
-                check(again, $"offers every option again after busy ({pass}: \"{busyCard.Question?.StatusText}\")");
+                var busyShown = await Until(() => busyCard.Question is { StatusText.Length: > 0 }, TimeSpan.FromSeconds(8));
+                var busyText = busyCard.Question?.StatusText;
+                check(busyShown, $"says the agent is busy ({pass}: \"{busyText}\")");
                 await Draw("tap-busy");
+                // The line stays only as long as the pause that follows it; after that the options are back and the line is gone.
+                var again = await Until(() => busyCard.Question is { CanAnswer: true, StatusText.Length: 0 } && ById<Button>(busyView, "Option:docs") is { IsEnabled: true }, TimeSpan.FromSeconds(8));
+                check(again, $"offers every option again after busy, with the busy line gone ({pass}: \"{busyCard.Question?.StatusText}\")");
                 demo.Script(busyCard.Id, () => Task.FromResult<object?>(new AnswerResult(AnswerOutcome.Refused, "the prompt changed")));
                 if (ById<Button>(busyView, "Option:docs") is { } docs) { Press(docs); }
                 var refused = await Until(() => busyCard.Question is { CanAnswer: true } q && q.StatusText.StartsWith("The machine refused", StringComparison.Ordinal) && ById<Button>(busyView, "Option:fixes") is { IsEnabled: true }, TimeSpan.FromSeconds(8));
