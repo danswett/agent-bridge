@@ -369,6 +369,7 @@ static partial class SelfTest
             await CheckMachinesPage(window, main, Check, outFile);
             await CheckMachineHeld(window, main, remote, Check, outFile);
             await CheckResumeHeld(window, launch, remote, Check, outFile);
+            await CheckMachineDiagnosis(window, remote, Check);
             await CheckNarrowest(window, Check, outFile);
             // The theme passes draw the Sessions page with a delegate in its strip and inspector.
             await ShowADelegate(window, main, Check);

@@ -197,7 +197,7 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
         }
         if (!known)
         {
-            return "whether agent-ha-bridge is running for this user could not be checked; answer at the machine";
+            return IAgentHaBridgeProbe.Unchecked;
         }
         return null;
     }

@@ -233,6 +233,40 @@ public sealed partial class MainWindow : Window
     }
     void OnCheckMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Check();
     void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
+    void OnDiagnoseMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Diagnosis?.Diagnose();
+    void OnCopyMachineDiagnosis(object sender, RoutedEventArgs e) => RowOf(sender)?.Diagnosis?.Copy(text => MarkdownView.PutText(text));
+    void OnCloseMachineDiagnosis(object sender, RoutedEventArgs e)
+    {
+        FocusDiagnose(sender);
+        RowOf(sender)?.Diagnosis?.Close();
+    }
+    // Escape closes a report being read, as Close does: from the report, and from its Copy and
+    // Close, which sit with the row's other buttons rather than in the report's panel.
+    void OnMachineDiagnosisKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != Windows.System.VirtualKey.Escape || RowOf(sender)?.Diagnosis is not { HasText: true } diagnosis) { return; }
+        e.Handled = true;
+        FocusDiagnose(sender);
+        diagnosis.Close();
+    }
+    // Focus goes back to the row's Diagnose, as the Close button or report that had it goes away:
+    // looked for only within the row (the elements whose item is the same row).
+    static void FocusDiagnose(object sender)
+    {
+        var row = RowOf(sender);
+        DependencyObject? top = null;
+        for (var at = sender as DependencyObject; at is FrameworkElement f && ReferenceEquals(f.DataContext ?? f.Tag, row); at = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(at)) { top = at; }
+        if (row is not null && top is not null && FindDiagnose(top) is { } diagnose) { diagnose.Focus(FocusState.Programmatic); }
+    }
+    static Button? FindDiagnose(DependencyObject at)
+    {
+        if (at is Button b && Microsoft.UI.Xaml.Automation.AutomationProperties.GetAutomationId(b) == "DiagnoseMachine") { return b; }
+        for (var i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(at); i++)
+        {
+            if (FindDiagnose(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(at, i)) is { } found) { return found; }
+        }
+        return null;
+    }
     void OnForgetMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Offline?.Press();
 
     // The banner's Restart to update (#516): warned, just before the host stops, when a session here is busy.

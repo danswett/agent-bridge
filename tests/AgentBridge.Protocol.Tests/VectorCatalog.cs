@@ -109,13 +109,11 @@ public sealed class RecordBuilder<T>(VectorFileBuilder file, string direction, s
     // shown at all.
     bool ReadLeniently => ProtocolVectors.ReadLeniently(direction, file.Name);
 
-    T Read(JsonNode json) => ReadLeniently
-        ? (T)Received.Read(JsonSerializer.SerializeToElement(json), typeof(T))
-        : JsonSerializer.Deserialize<T>(json.ToJsonString(), ProtocolJson.Options)!;
+    T Read(JsonNode json) => (T)ProtocolVectors.Read(direction, file.Name, typeof(T), json);
 
     public override bool Has(string vector) => vector.StartsWith(typeof(T).Name + "/", StringComparison.Ordinal) && names.Contains(vector[(typeof(T).Name.Length + 1)..]);
 
-    static JsonNode Json(object? value) => JsonSerializer.SerializeToNode(value, ProtocolJson.Options)!;
+    static JsonNode Json(object? value) => ProtocolVectors.Write(value, typeof(T));
 
     // A record as a host or client writes it.
     public RecordBuilder<T> Valid(string name, T value, string? context = null) => AddValid(name, Json(value), context);

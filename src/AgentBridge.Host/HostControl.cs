@@ -134,6 +134,14 @@ public sealed class HostControl
     }
 
     public bool HasAgentReadiness => options.Agents is not null;
+    public DateTimeOffset StartedAt => startedAt;
+
+    // The relay connection as SetRelay last reported it, without the rest of Status (which reads
+    // settings and the account): diagnostics.get projects only its state and time. Not under
+    // gate: Status holds it while it reads config.json and looks at agent-ha-bridge, so a read
+    // that waited on it could outlast diagnostics' deadline. Each change publishes a whole
+    // immutable record (written under gate, read with Volatile.Read), so this is never torn.
+    public RelayStatus RelayNow => Volatile.Read(ref relay);
     public bool HasAgentSetup => options.AgentSetup is not null;
     public bool HasAgentInstall => options.AgentInstall is not null;
     public bool HasAgentVerification => options.AgentVerification is not null;
@@ -186,7 +194,7 @@ public sealed class HostControl
         lock (gate)
         {
             if (relay.State == state && relay.Detail == detail) { return; }
-            relay = new RelayStatus(state, options.Relay()?.ToString(), detail, options.Time.GetUtcNow());
+            Volatile.Write(ref relay, new RelayStatus(state, options.Relay()?.ToString(), detail, options.Time.GetUtcNow()));
         }
         Changed();
     }
@@ -360,7 +368,7 @@ public sealed class HostControl
                 lock (gate)
                 {
                     signIn = new SignInStatus(SignInState.Idle);
-                    relay = new RelayStatus(RelayState.Connecting, relayUri.ToString(), null, options.Time.GetUtcNow());
+                    Volatile.Write(ref relay, new RelayStatus(RelayState.Connecting, relayUri.ToString(), null, options.Time.GetUtcNow()));
                 }
             }
             catch (Exception e)
