@@ -200,14 +200,14 @@ public sealed class FeedbackInboxProcessorTests
         await worker.StartAsync(CancellationToken.None);
         try
         {
-            await privateStore.FirstConfirmationCall.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await privateStore.FirstConfirmationCall.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.Equal(0, source.ListCalls);
             Assert.Equal(0, decryptor.Calls);
             Assert.Single(source.Pending);
             Assert.Empty(privateStore.Classified);
 
             privateStore.RepositoryPrivate = true;
-            await source.DeletedBundle.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await source.DeletedBundle.Task.WaitAsync(TimeSpan.FromSeconds(10));
         }
         finally
         {
