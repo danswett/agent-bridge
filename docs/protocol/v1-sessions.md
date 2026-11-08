@@ -689,7 +689,9 @@ in [#908](https://github.com/danswett/agent-bridge/issues/908) does not remove t
 or enable typing ([host answers](../host-answers.md)).
 
 Accepted by the session is `delivered`, never a stage. A stage a client does not know reads as
-`typed`; an older host sends none. In the same host run, a repeat of a request whose outcome was `unconfirmed`
+`typed`; an older host sends none. In the same host run, and after a restart while the host
+still keeps the answer's words ([host answers](../host-answers.md), step 6: at most a day), a
+repeat of a request whose outcome was `unconfirmed`
 reads the session's record of that same question again, typing nothing: an answer recorded
 since (submitted at the machine, or recorded late) comes back `delivered`, and from then on
 stays so, and one recorded differently comes back `recorded`. It never answers a newer
@@ -705,14 +707,15 @@ into that prompt again, whatever the request and across restarts: nobody can say
 half-typed prompt holds, and a second answer would land on top of the first. Only an
 attempt that typed nothing (the session's console could not be reached) leaves the prompt
 answerable. A host records the attempt and request before the first key, and refuses when it cannot.
-If it restarts with a claim but no recorded outcome, a resend within 15 minutes is `unconfirmed`,
-not `refused`; the question is listed `answerAtMachine`. A planned host stop excludes new
+If it restarts with a claim but no recorded outcome, a resend within 15 minutes by the request's
+own sender is `unconfirmed`, not `refused`; the question is listed `answerAtMachine`. A planned host stop excludes new
 deliveries and waits up to 15 seconds for typing and confirmation; on timeout the host stays
 running rather than leaving a worker to type after it exits.
 
 The same answer sent again for such a prompt under a different request UUID by the **same
 sender** (a phone that was reloaded keeps its UUIDs in memory only) is that request sent
-again, not a second attempt: while the host still has the first answer in memory, it gets the
+again, not a second attempt: while the host still keeps the first answer (as long as the
+prompt's claim, across restarts), it gets the
 first outcome and nothing is typed. An `unconfirmed` one is read again from the session as
 above, however long after, so it becomes `delivered` once the session has recorded it; while
 nothing is recorded it stays `unconfirmed`, with a reason that says only that nothing was
@@ -724,8 +727,15 @@ of its own, and nothing of the first's outcome or progress is given. Only a *dif
 is `refused` for a prompt already typed into, and the two are refused alike, so that no
 sender can learn what a first answer said by guessing it. A sender is the channel's peer (a
 device); the host has no person-level identity, so a second device of the same person gets the
-plain refusal. A host that restarted has forgotten the first answer, and refuses any second
-request for the prompt, as the record of attempts alone does.
+plain refusal. A host keeps the first answer's sender, hash and outcome with its record of
+attempts, so all of this holds across a restart as before it: a known request UUID replayed
+after a restart by another sender, or under another session or question, gets exactly what an
+unknown UUID with the same answer would (the plain refusal, or `stale`), never the first's
+outcome. While an answer is `unconfirmed` the host keeps its words, privately, to read the
+session again; when it cannot keep them safely (it already keeps as many as it may, or its
+private folder could be read by others) it refuses the answer before typing anything, with the
+reason "the machine can't keep this answer safely until it's confirmed, so nothing was typed;
+answer at the machine" (no `code`; a client shows the reason as it shows any refusal's).
 
 What a host answers, by agent. agent-ha-bridge is the baseline; answering Copilot
 permission prompts goes beyond it, at the user's request:

@@ -281,7 +281,7 @@ public sealed class DeliveryGate
 // pending, or settled) and starts nothing. Settled outcomes are forgotten after RememberFor;
 // the contract promises at least 10 minutes.
 internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, DeliveryGate? deliveryGate = null, Func<T>? blocked = null,
-    Func<Guid, (bool Known, T Value)>? remembered = null, Func<Guid, T, T>? remember = null)
+    Func<Guid, (bool Known, T Value)>? remembered = null, Func<Guid, T, object?, T>? remember = null)
 {
     readonly Lock gate = new();
     readonly Dictionary<Guid, Entry> requests = [];
@@ -336,6 +336,8 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
         bool divert = false;
         IDisposable? delivery = null;
         Task<T>? rechecked = null;
+        // An outcome remembered from before a restart (remembered), with nothing in memory for it.
+        (bool Known, T Value) prior = default;
         // A recheck started by this repeat waits for its watch: one that reads the late record
         // and confirms at once would otherwise confirm before the repeat's arrival is taken, and
         // its timings say confirmed 0 (#510 review).
@@ -347,33 +349,35 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
             if (repeat && foreign is not null && !Equals(known!.Owner, owner)) { divert = true; }
             else
             {
-                if (!repeat && remembered is not null)
+                if (!repeat && remembered is not null) { prior = remembered(key); }
+                if (!prior.Known)
                 {
-                    var prior = remembered(key);
-                    if (prior.Known) { return Task.FromResult(prior.Value); }
-                }
-                if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery()) is null)
-                {
-                    // Never remembered: nothing was admitted or typed, and a receipt would refuse the
-                    // same request for RememberFor even after a stop that did not happen.
-                    return Task.FromResult(blocked is null ? throw new InvalidOperationException("no departure refusal was supplied") : blocked());
-                }
-                try { entry = known ?? (requests[key] = new Entry(timeline?.Invoke()) { Owner = owner }); }
-                catch { delivery?.Dispose(); throw; }
-                if (repeat && recheck is not null && entry.Settled is not null)
-                {
-                    var latest = entry.Rechecked ?? entry.Outcome.Task;
-                    // One still reading is the answer to this repeat too; a finished one is read again.
-                    if (latest.IsCompletedSuccessfully)
+                    if (!repeat && deliveryGate is not null && (delivery = deliveryGate.TryEnterDelivery()) is null)
                     {
-                        watching = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                        rechecked = entry.Rechecked = Recheck(recheck, latest.Result, watching.Task);
+                        // Never remembered: nothing was admitted or typed, and a receipt would refuse the
+                        // same request for RememberFor even after a stop that did not happen.
+                        return Task.FromResult(blocked is null ? throw new InvalidOperationException("no departure refusal was supplied") : blocked());
                     }
-                    else { rechecked = entry.Rechecked = latest; }
+                    try { entry = known ?? (requests[key] = new Entry(timeline?.Invoke()) { Owner = owner }); }
+                    catch { delivery?.Dispose(); throw; }
+                    if (repeat && recheck is not null && entry.Settled is not null)
+                    {
+                        var latest = entry.Rechecked ?? entry.Outcome.Task;
+                        // One still reading is the answer to this repeat too; a finished one is read again.
+                        if (latest.IsCompletedSuccessfully)
+                        {
+                            watching = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                            rechecked = entry.Rechecked = Recheck(recheck, latest.Result, watching.Task);
+                        }
+                        else { rechecked = entry.Rechecked = latest; }
+                    }
                 }
             }
         }
         if (divert) { return foreign!(); }
+        // Remembered from before a restart: read again what an unconfirmed one has come to since, as
+        // a repeat in memory is (#1159 slice 0), outside the lock, typing nothing.
+        if (prior.Known) { return recheck is null ? Task.FromResult(prior.Value) : Recheck(recheck, prior.Value, Task.CompletedTask); }
         // Outside the lock: a repeat's watch may hear a stage already reached, at once.
         entry.Timeline?.Watch(watch, first: !repeat);
         watching?.SetResult();
@@ -387,7 +391,7 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
             try
             {
                 var result = await deliver(entry.Timeline);
-                if (remember is not null) { result = remember(key, result); }
+                if (remember is not null) { result = remember(key, result, entry.Owner); }
                 lock (gate) { entry.Settled = time.GetUtcNow(); }
                 settled(result);
                 entry.Timeline?.Settled();
@@ -412,7 +416,7 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor, 
             try { later = await read(first); }
             catch (Exception) { later = default; }
             if (later is null) { return first; }
-            if (remember is not null) { later = remember(key, later); }
+            if (remember is not null) { later = remember(key, later, owner); }
             settled(later);
             return later;
         }

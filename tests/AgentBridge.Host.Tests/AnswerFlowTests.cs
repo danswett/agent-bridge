@@ -1178,6 +1178,87 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal(4, injector.Plans.Count);
     }
 
+    // #1159 slice 0, Trust's condition 6: an answer's words are kept across a restart only in the
+    // private file, and only while the answer is unconfirmed. A canary answer driven through every
+    // turn (unconfirmed, a different answer refused, a delete that fails, a read that settles it,
+    // a restart) is found in no log line, reply, listing, exception, ledger or other file.
+    [Fact]
+    public async Task An_unconfirmed_answer_s_words_are_held_only_in_the_private_file_and_nowhere_else_whatever_happens_to_it()
+    {
+        const string Canary = "canary-7f3a1c55-kept-words";
+        var profile = Path.Combine(f.Root, "profile");
+        var words = Path.Combine(profile, AnswerWords.FolderName, AnswerWords.FileName);
+        void Log(string m) { lock (logged) { logged.Add(m); } }
+        AttemptLedger Ledger() => new(Path.Combine(profile, "answer-attempts.json"), TimeProvider.System, Log, expire: false);
+        AnswerService Host(AttemptLedger attempts) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            ConfirmTimeout = TimeSpan.FromSeconds(2),
+            PollInterval = TimeSpan.FromMilliseconds(25),
+            AttemptLedger = attempts,
+        }, Log);
+        var attempts = Ledger();
+        Serve(Host(attempts));
+        var answer = new { one = Canary, two = "yes" };
+        // What an unkeyed hash of this answer would be, in every form a file could hold it.
+        var plain = AnswerDigest.Of(new AnswerRequest { Id = Id, Question = "q2", Request = Guid.NewGuid().ToString(), Fields = JsonSerializer.SerializeToElement(answer).EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone()) });
+        await AskFieldsAsync(new { one = new { type = "string" }, two = new { type = "string" } }, 2, answer);
+        // The session records nothing: the answer is left unconfirmed.
+        injector.OnInject = null;
+        injector.Screen = () => FieldsScreen(["one", "two"]);
+        var replies = new List<string>();
+        async Task<string> Send(object fields, string request)
+        {
+            var ch = await OpenAsync();
+            var result = await AnswerResultAsync(ch, fields, request);
+            replies.Add(result.GetRawText());
+            replies.Add((await ch.RequestAsync(Ops.SessionsList, new { })).GetRawText());
+            replies.Add((await ch.RequestAsync(Ops.SessionGet, new { id = Id })).GetRawText());
+            return result.GetProperty("outcome").GetString()!;
+        }
+        // Every file the host writes but the words file itself; and no file, that one included, with
+        // a plain hash of the answer anyone could check a guess against.
+        void NowhereElse()
+        {
+            foreach (var file in Directory.EnumerateFiles(profile, "*", SearchOption.AllDirectories))
+            {
+                var bytes = File.ReadAllBytes(file);
+                var text = System.Text.Encoding.UTF8.GetString(bytes);
+                if (file != words) { Assert.DoesNotContain(Canary, text); }
+                Assert.DoesNotContain(Convert.ToBase64String(plain), text);
+                Assert.DoesNotContain(JsonSerializer.Serialize(Convert.ToBase64String(plain))[1..^1], text);
+                Assert.DoesNotContain(Convert.ToHexString(plain), text, StringComparison.OrdinalIgnoreCase);
+                Assert.True(bytes.AsSpan().IndexOf(plain) < 0);
+            }
+        }
+        var request = Guid.NewGuid().ToString();
+
+        Assert.Equal("unconfirmed", await Send(answer, request));
+        Assert.Contains(Canary, File.ReadAllText(words));
+        NowhereElse();
+        Assert.Equal("refused", await Send(new { one = Canary + " again", two = "x" }, Guid.NewGuid().ToString()));
+        NowhereElse();
+
+        // Its record turns up; read again, it settles delivered, and the delete of its words fails.
+        attempts.WordsStore.Failing = () => new IOException(Canary);
+        Fixture.Append(events, Recorded("q2", answer));
+        Assert.Equal("delivered", await Send(answer, request));
+        Assert.False(attempts.HoldsWords(Guid.Parse(request)));
+        NowhereElse();
+
+        // Started again, the words left behind go before anything else is done.
+        attempts.WordsStore.Failing = null;
+        Serve(Host(Ledger()));
+        Assert.Equal("delivered", await Send(answer, Guid.NewGuid().ToString()));
+        Assert.False(File.Exists(words));
+        NowhereElse();
+
+        lock (logged) { Assert.DoesNotContain(logged, l => l.Contains(Canary, StringComparison.Ordinal)); }
+        Assert.DoesNotContain(replies, r => r.Contains(Canary, StringComparison.Ordinal));
+        Assert.Equal(4, injector.Plans.Count);
+    }
+
     [Fact]
     public async Task A_list_after_words_goes_on_its_own_held_to_the_list_never_with_the_words_Enter()
     {
