@@ -498,7 +498,9 @@ swapped or lost and sends again. A rid seen before (the last 50 per session) is 
 host re-acks it with `duplicate: true`. A `refused` rid is forgotten, so the same rid may be retried.
 The history is kept per session in the connector, not on the card, so a pause or restart that rebuilds
 the cards neither empties it nor loses the rid of a delivery still running; a repeat after the rebuild
-is still dropped. `sender` loses control, format and unassigned characters, whitespace is collapsed,
+is still dropped. When a session ends for good its history is dropped with its card (after any
+delivery still running for it finishes); a session that comes back under the same id starts empty.
+`sender` loses control, format and unassigned characters, whitespace is collapsed,
 and the cut at 64 never splits a character. A reply discarded because a question opened gets no ack.
 Publishes without a `rid` behave as before.
 

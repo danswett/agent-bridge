@@ -700,6 +700,9 @@ public sealed partial class HaConnector : IAsyncDisposable
             {
                 published.Remove(id, out was);
                 starting.Remove(id);
+                // An ended session's rid history goes with it, unless a delivery is still running
+                // (RepliesDoneAsync drops it then).
+                if (!underWay.ContainsKey(id)) { ridLogs.TryRemove(id, out _); }
                 retiring.TryAdd(node, new Retiring());
                 // Observed here, so forgotten here: one that comes back starts as the person's.
                 if (!drivers.SourceObserves) { drivers.Forget(id); }

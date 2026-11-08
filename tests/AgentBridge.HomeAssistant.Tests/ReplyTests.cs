@@ -228,16 +228,34 @@ public sealed partial class ReplyTests : IDisposable
     }
 
     [Fact]
+    public async Task An_ended_sessions_rid_history_is_dropped_so_a_new_session_under_that_id_starts_empty()
+    {
+        await using var c = await Ready();
+        await Do(c, ha.SendFromCard(Node, "first life", rid: "r-end", sender: "A"));
+        sessions.End(A);
+        await Pass(c);
+        await Pass(c);
+        sessions.Set(FakeSessions.Copilot(A));
+        await Pass(c);
+        await Pass(c);
+
+        await Do(c, ha.SendFromCard(Node, "second life", rid: "r-end", sender: "A"));
+
+        Assert.Equal(["first life", "second life"], replied.Select(r => r.Text));
+        Assert.False(Ack.TryGetProperty("duplicate", out _));
+    }
+
+    [Fact]
     public async Task A_senders_name_loses_control_characters_and_is_cut_between_whole_characters()
     {
         await using var c = await Ready();
-        var name = "Bu\u202Eil\u0007der " + string.Concat(Enumerable.Repeat("x", 62)) + "\U0001F600\U0001F600";
+        var name = "Bu\u202Eil\u0007der " + string.Concat(Enumerable.Repeat("x", 55)) + "\U0001F600\U0001F600";
 
         await Do(c, ha.SendFromCard(Node, "hi", rid: "r-name", sender: name));
 
         var sender = Ack.GetProperty("sender").GetString()!;
         Assert.StartsWith("Builder x", sender, StringComparison.Ordinal);
-        Assert.DoesNotContain(sender, ch => char.IsControl(ch) || ch == '\u202E' || char.IsSurrogate(ch));
+        Assert.DoesNotContain(sender, ch => char.IsControl(ch) || ch == '\u202E' || char.IsSurrogate(ch) || ch == '\uFFFD');
         Assert.True(sender.Length <= 64);
     }
 

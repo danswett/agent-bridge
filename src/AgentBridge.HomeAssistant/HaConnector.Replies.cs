@@ -206,6 +206,7 @@ public sealed partial class HaConnector
             replies.TryDequeue(out _);
             underWay.TryRemove(new KeyValuePair<string, long>(done.SessionId, done.Delivery));
             if (p is not null) { p.Reply.ReadAgain = true; }
+            else if (!underWay.ContainsKey(done.SessionId) && !source.Snapshot().Any(s => s.Id == done.SessionId)) { ridLogs.TryRemove(done.SessionId, out _); }
         }
     }
 
