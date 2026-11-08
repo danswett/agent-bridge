@@ -966,9 +966,10 @@ function begin(account) {
     feedbackDiagnostics.recordLog(code);
     console.log(line);
   });
-  connection.on('state', ({ state }) => {
+  connection.on('state', ({ state, detail }) => {
     feedbackDiagnostics.recordEvent(`connection.${state}`);
     drawFeedbackAvailability();
+    if (state === 'replaced') { $('replaced-text').textContent = detail; }
     replacedBanner.set(state === 'replaced');
     switch (state) {
       // News, as reconnecting is: the strip shows on a phone, in plain words.
