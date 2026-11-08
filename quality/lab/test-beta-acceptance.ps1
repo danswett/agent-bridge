@@ -55,7 +55,9 @@ Check 'the workflow is dispatch-only, has no cron, and gives secrets only to the
     $y = (Get-Content (Join-Path $PSScriptRoot '..\..\.github\workflows\beta-acceptance.yml') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
     Assert ($y -match '(?m)^on:\s*\n\s+workflow_dispatch:\s*\n\s*\npermissions') 'trigger is not workflow_dispatch alone'
     Assert ($y -notmatch 'pull_request|schedule|cron') 'a forbidden trigger'
-    Assert (([regex]::Matches($y, 'secrets\.ACCEPT_')).Count -eq 3) 'secrets must appear once each, in one step'
+    Assert (([regex]::Matches($y, 'secrets\.ACCEPT_')).Count -eq 3) 'secrets must appear once each'
+    Assert ($y -notmatch '(?s)Run the acceptance steps.*?\{\{ secrets\.') 'the run step must not receive a secret'
+    Assert ((([regex]::Matches($y, 'issues: write')).Count -eq 1) -and $y -match '(?s)report:.*issues: write') 'issues: write only on the reporting job'
     Assert ($y -notmatch 'uses: [^\n]+@(?![0-9a-f]{40}\b)') 'an action is not pinned to a SHA'
 }
 

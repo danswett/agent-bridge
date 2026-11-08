@@ -1,9 +1,9 @@
 # The Beta acceptance run (#1185, #736): the real published Beta installer on a clean Windows
 # runner, as a person would install it. One architecture per invocation; the workflow runs both.
-# Steps are named so a failure says which one broke. This slice does steps 1, 2 and 6
+# Steps are named so a failure says which one broke. This slice does steps 1, 2, 3 and 6
 # (download and verify, install and first run, the simulated agent, uninstall and leftovers);
 # pairing and driving from the PWA are NOT RUN until built and until the test account's secrets
-# exist, and the feedback step is NOT RUN. None is ever reported PASS unrun.
+# exist, and the feedback step is NOT RUN. Nothing unrun is ever reported PASS, and only a full PASS exits 0.
 #
 #   pwsh quality/lab/beta-acceptance.ps1 -Arch x64 -Out out/accept
 #Requires -Version 7
@@ -13,7 +13,9 @@ param(
     [Parameter(Mandatory)][string]$Out,
     [string]$Repo = 'danswett/agent-bridge',
     # A release tag to test instead of the newest Beta release; for rehearsals only.
-    [string]$Tag
+    [string]$Tag,
+    # Names of the test account secrets the workflow found missing (it checks, so no secret reaches here).
+    [string]$MissingSecrets = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -26,7 +28,9 @@ foreach ($n in '1-download', '2-install-first-run', '3-simulated-agent', '4-pair
 }
 $state = @{ Version = $null; Setup = $null; Root = $null; Sim = $null }
 
-function Step([string]$name, [scriptblock]$body) {
+function Step([string]$name, [string[]]$Needs, [scriptblock]$body) {
+    $unmet = @($Needs | Where-Object { $steps[$_].result -ne 'PASS' })
+    if ($unmet) { $steps[$name].detail = "not run: step $($unmet -join ', ') did not pass"; return }
     try {
         & $body
         $steps[$name].result = 'PASS'
@@ -70,7 +74,7 @@ function Read-GetStarted([Diagnostics.Process]$app) {
     throw 'the Get started section did not appear within 90 s'
 }
 
-Step '1-download' {
+Step '1-download' @() {
     $tags = if ($Tag) { @($Tag) } else { @(gh release list --repo $Repo --limit 40 --json tagName --jq '.[].tagName') }
     $manifest = $null
     foreach ($t in $tags) {
@@ -86,26 +90,33 @@ Step '1-download' {
     $d = $manifest.downloads.$key
     if (-not $d) { throw "the manifest has no $key download" }
     $state.Version = $manifest.version
-    $state.Setup = Join-Path $Out $d.fileName
+    $setup = Join-Path $Out $d.fileName
     # The public URL a person gets, not the release API: the download page's own path.
-    Invoke-WebRequest -Uri $d.url -OutFile $state.Setup -MaximumRetryCount 3
-    $file = Get-Item $state.Setup
+    Invoke-WebRequest -Uri $d.url -OutFile $setup -MaximumRetryCount 3
+    $file = Get-Item $setup
     if ($file.Length -ne $d.sizeBytes) { throw "size $($file.Length) differs from the manifest's $($d.sizeBytes)" }
-    $hash = (Get-FileHash $state.Setup -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($hash -ne $d.sha256.ToLowerInvariant()) { throw "sha256 $hash differs from the manifest's $($d.sha256)" }
-    $sig = Get-AuthenticodeSignature $state.Setup
+    $sig = Get-AuthenticodeSignature $setup
+    if ($sig.Status -notin 'Valid', 'NotSigned') { throw "the installer's signature is $($sig.Status)" }
+    # Only a fully verified installer is ever recorded for step 2 to run.
+    $state.Setup = $setup
     $steps['1-download'].detail = "v$($manifest.version) $($d.fileName) $($file.Length) bytes, sha256 verified, signature $($sig.Status)"
 }
 
 $installDir = Join-Path $env:LOCALAPPDATA 'AgentBridgeApp'
-Step '2-install-first-run' {
-    if (-not $state.Setup) { throw 'step 1 did not produce an installer' }
+# The product runs next: it must not inherit the job's tokens or the test account's secrets.
+foreach ($n in 'GH_TOKEN', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACCEPT_GH_USER', 'ACCEPT_GH_PASSWORD', 'ACCEPT_GH_TOTP_SECRET') {
+    [Environment]::SetEnvironmentVariable($n, $null)
+}
+
+Step '2-install-first-run' @('1-download') {
     if (Test-Path $installDir) { throw "$installDir already exists: the runner is not clean" }
+    $state.Root = $installDir
     $p = Start-Process $state.Setup -ArgumentList '--silent' -PassThru -Wait
     if ($p.ExitCode -ne 0) { throw "Setup.exe --silent exited with $($p.ExitCode)" }
     $exe = Join-Path $installDir 'current\AgentBridge.exe'
     if (-not (Test-Path $exe)) { throw "Setup finished but $exe does not exist" }
-    $state.Root = $installDir
     $installed = (Select-String -Path (Join-Path $installDir 'current\sq.version') -Pattern '<version>([^<]+)</version>').Matches[0].Groups[1].Value
     if ($installed -ne $state.Version) { throw "installed $installed, the manifest says $($state.Version)" }
     # Velopack's Setup starts the app itself; take that process, or start it if it did not.
@@ -122,8 +133,7 @@ Step '2-install-first-run' {
     catch { Save-Screenshot 'first-run-failed.png'; throw }
 }
 
-Step '3-simulated-agent' {
-    if (-not $state.Root) { throw 'step 2 did not install the app' }
+Step '3-simulated-agent' @('2-install-first-run') {
     $hook = Get-ChildItem (Join-Path $state.Root 'current') -Filter 'agent-bridge-host-hook.exe' -Recurse | Select-Object -First 1
     if (-not $hook) { throw 'the installed app has no agent-bridge-host-hook.exe' }
     $home3 = Join-Path $Out 'copilot-home'
@@ -137,17 +147,14 @@ Step '3-simulated-agent' {
     $steps['3-simulated-agent'].detail = "session $($sim.SessionId): transcript written, hook replies as contracted. The host reading it is checked in step 5."
 }
 
-# Steps 4 and 5 need the throwaway GitHub test account (#1185): its secrets come from the
-# beta-acceptance environment. With any missing they stay NOT RUN, never PASS. The login and PWA
-# driving are not built in this slice, so they stay NOT RUN either way, and say which.
-. (Join-Path $PSScriptRoot 'accept-secrets.ps1')
-Protect-AcceptSecrets
-$missing = Get-MissingAcceptSecrets
-$why = if ($missing) { "missing secrets: $($missing -join ', ')" } else { 'the device-flow login and PWA driver are not built yet' }
+# Steps 4 and 5 need the throwaway GitHub test account (#1185). The workflow checks its secrets in
+# its own step and passes only the names of any that are missing; this script never sees them. They
+# stay NOT RUN, never PASS, and say why. The device-flow login and PWA driver are not built yet.
+$why = if ($MissingSecrets) { "missing secrets: $MissingSecrets" } else { 'the device-flow login and PWA driver are not built yet' }
 foreach ($n in '4-pair', '5-drive-from-pwa') { $steps[$n].detail = $why }
 
-Step '6-uninstall' {
-    if (-not (Test-Path $installDir)) { throw 'nothing was installed to uninstall' }
+if (-not $state.Root) { $steps['6-uninstall'].detail = 'not run: nothing was installed' }
+else { Step '6-uninstall' @() {
     Get-Process AgentBridge -ErrorAction SilentlyContinue | Stop-Process -Force
     $update = Join-Path $installDir 'Update.exe'
     $p = Start-Process $update -ArgumentList '--uninstall', '--silent' -PassThru -Wait
@@ -166,18 +173,19 @@ Step '6-uninstall' {
     $left += Get-ChildItem $menu -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -like '*Slipgates*' } | ForEach-Object { "shortcut $($_.FullName)" }
     if ($left.Count) { throw "left behind: $($left -join '; ')" }
     $steps['6-uninstall'].detail = 'install folder, processes, Run and Uninstall entries and shortcuts are gone'
-}
+} }
 
 # What the person's data folder holds is kept as evidence, not judged: it is the user's data.
 foreach ($f in Get-ChildItem (Join-Path $env:LOCALAPPDATA 'AgentBridge\app') -Filter '*.log' -ErrorAction SilentlyContinue) {
     Copy-Item $f.FullName (Join-Path $Out $f.Name)
 }
 
-$verdict = if (($steps.Values | Where-Object result -eq 'FAIL')) { 'FAIL' } else { 'PARTIAL' }
+$verdict = if ($steps.Values | Where-Object result -eq 'FAIL') { 'FAIL' } elseif ($steps.Values | Where-Object result -eq 'NOT RUN') { 'PARTIAL' } else { 'PASS' }
 $result = [ordered]@{ arch = $Arch; version = $state.Version; verdict = $verdict; steps = $steps }
 $result | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $Out 'result.json')
 $table = ($steps.GetEnumerator() | ForEach-Object { "| $($_.Key) | $($_.Value.result) | $($_.Value.detail) |" }) -join "`n"
 $summary = "### Beta acceptance, $Arch, v$($state.Version): $verdict`n`n| Step | Result | Detail |`n|---|---|---|`n$table`n"
 Write-Host $summary
 if ($env:GITHUB_STEP_SUMMARY) { Add-Content $env:GITHUB_STEP_SUMMARY $summary }
-if ($verdict -eq 'FAIL') { exit 1 }
+# Only a full pass is green: a run with steps NOT RUN must not look like a pass.
+if ($verdict -ne 'PASS') { exit 1 }
