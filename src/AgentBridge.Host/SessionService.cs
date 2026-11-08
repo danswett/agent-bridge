@@ -138,7 +138,11 @@ public sealed class SessionService
         this.usage = usage;
         this.launcher = launcher;
         this.transfers = transfers;
-        if (push is not null) { push.Watching = Watching; }
+        if (push is not null)
+        {
+            push.Watching = Watching;
+            push.Presences = Presences;
+        }
     }
 
     // How often live changes to the sessions a client does not show go to it, once it has said
@@ -313,7 +317,7 @@ public sealed class SessionService
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("sessions.focus needs visible"); }
         FocusRequest focus;
         try { focus = data.Deserialize<FocusRequest>(ProtocolJson.Options) ?? throw new ArgumentException("sessions.focus needs visible"); }
-        catch (JsonException) { throw new ArgumentException("sessions.focus needs visible, and open only as a session id"); }
+        catch (JsonException) { throw new ArgumentException("sessions.focus needs visible, open and openQuestion only as strings, and idleMs only as a whole number"); }
         var state = StateOf(channel);
         // Each one puts a marker in the feed's queue; a client says it on a page or session change,
         // so more than this in a window is a client gone wrong (#697).
@@ -328,8 +332,29 @@ public sealed class SessionService
             if (++state.FocusCount > FocusesPerWindow) { throw new InvalidOperationException($"sessions.focus is said at most {FocusesPerWindow} times in {FocusWindow.TotalSeconds:0} s"); }
         }
         Volatile.Write(ref state.Focus, focus);
+        Volatile.Write(ref state.Presence, new FocusSaid(focus, LastInput(focus, Time.GetUtcNow())));
         state.Feed?.Refocus();
         return new { };
+    }
+
+    // When the person last gave input on the device, from idleMs, an age (#1190): the host's own
+    // clock minus it, so the two clocks need not agree. Unknown without it, or past a day, which
+    // is stale anyway and would only risk an overflow.
+    static DateTimeOffset? LastInput(FocusRequest focus, DateTimeOffset received) =>
+        focus.IdleMs is { } idle and >= 0 and <= 86_400_000 ? received - TimeSpan.FromMilliseconds(idle) : null;
+
+    // What each of the account's devices with a subscription open says it shows (sessions.focus),
+    // one entry per channel: PushNotifier holds back pushes from a device in use (#1190).
+    public IReadOnlyList<DevicePresence> Presences()
+    {
+        var all = new List<DevicePresence>();
+        foreach (var (channel, state) in subscribers)
+        {
+            if (!channel.IsOpen || state.Feed is null || Volatile.Read(ref state.Presence) is not { } said) { continue; }
+            var f = said.Focus;
+            all.Add(new DevicePresence(channel.PeerId, f.Visible, f.Open, f.Open is null ? null : f.OpenQuestion, said.LastInput));
+        }
+        return all;
     }
 
     // A device of the account that has a subscription open on a channel that says it is on screen
@@ -362,6 +387,8 @@ public sealed class SessionService
         finally { state.Gate.Release(); }
     }
 
+    internal sealed record FocusSaid(FocusRequest Focus, DateTimeOffset? LastInput);
+
     internal sealed class Subscriber
     {
         public readonly SemaphoreSlim Gate = new(1, 1);
@@ -369,6 +396,8 @@ public sealed class SessionService
         public int Registered;
         // Null until the channel says (sessions.focus): every live change then goes at once, as before.
         public FocusRequest? Focus;
+        // The same, with when the person last gave input (#1190), for PushNotifier.
+        public FocusSaid? Presence;
         // sessions.focus said in the window that started at FocusWindow, under lock (this).
         public DateTimeOffset FocusWindow = DateTimeOffset.MinValue;
         public int FocusCount;
