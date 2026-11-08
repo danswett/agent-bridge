@@ -283,6 +283,26 @@ public sealed class SessionHistoryTests
         Assert.Equal(Enumerable.Range(102, HistoryLimits.Kept), Numbers(history));
         Assert.True(history.OldestDropped);
         Assert.False(history.HasOlder);
+
+        var asked = host.Sent(HistoryProtocol.Op).Count;
+        await history.LoadOlderAsync();
+        Assert.Equal(asked, host.Sent(HistoryProtocol.Op).Count);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_older_page_read_after_the_host_grew_by_more_than_a_page_goes_between_not_above_the_held_turns()
+    {
+        await using var host = Serving(45);
+        var history = await OpenAsync(host);
+        await history.LoadNewestAsync();
+        await history.LoadOlderAsync();
+        host.On(HistoryProtocol.Op, d => Page(d, 100));
+        await history.LoadNewestAsync();
+
+        await history.LoadOlderAsync();
+
+        Assert.Equal(Enumerable.Range(6, 40).Concat(Enumerable.Range(61, 40)), Numbers(history));
     }
 
     [Fact]

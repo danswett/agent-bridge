@@ -58,6 +58,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     public async Task LoadOlderAsync(CancellationToken ct = default)
     {
         if (!loadedNewest) { await LoadNewestAsync(ct); return; }
+        if (!HasOlder && State != HistoryLoad.Failed) { return; }
         if (!Begin()) { return; }
         await RunAsync(newest: false, ct);
     }
@@ -170,7 +171,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     }
 
     // Puts the page's turns among those held, each id once: a turn held is replaced where it is;
-    // the rest go above the oldest held (an older page) or by time among the newest (the newest page, v1-history.md
+    // the rest go in by time (v1-history.md
     // Live turns and history 3 to 6). An older page that overfills the cap lets the newest go (H6).
     // Returns how many turns were new.
     int Merge(HistoryResult page, bool atNewestEnd)
@@ -186,19 +187,16 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 else if (fresh.All(t => t.Id != turn.Id)) { fresh.Add(turn); }
             }
             added = fresh.Count;
-            if (atNewestEnd)
+            // By time, not at an end: a live turn already held is newer than the newest page's older turns, and a
+            // newest page that skipped a gap leaves held turns above the older page that comes next.
+            foreach (var turn in fresh)
             {
-                // By time, not at the end: a live turn already held is newer than the page's older turns.
-                foreach (var turn in fresh)
-                {
-                    var after = held.FindIndex(t => t.At > turn.At);
-                    if (after < 0) { held.Add(turn); } else { held.Insert(after, turn); }
-                }
-                TrimOldest();
+                var after = held.FindIndex(t => t.At > turn.At);
+                if (after < 0) { held.Add(turn); } else { held.Insert(after, turn); }
             }
+            if (atNewestEnd) { TrimOldest(); }
             else
             {
-                held.InsertRange(0, fresh);
                 var over = held.Count - HistoryLimits.Kept;
                 if (over > 0)
                 {
