@@ -15,9 +15,7 @@ are.
 
 ## Install on Windows
 
-1. Open the newest pre-release at
-   <https://github.com/danswett/agent-bridge/releases>
-   **[confirm: a stable download link replaces this when #735 lands]**.
+1. Open the download page, <https://slipgates.com/download/>.
 2. Download the installer for your PC:
 
    | PC | Installer |
