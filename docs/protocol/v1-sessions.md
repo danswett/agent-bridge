@@ -525,7 +525,9 @@ field of the wrong type does, and nothing of it is kept: `sessions.focus needs v
 openQuestion only as strings, and idleMs only as a whole number`. `openQuestion` without `open` is
 ignored. The host uses the two only to hold back pushes from a person using one of their devices
 ([While the person uses a device](#while-the-person-uses-a-device-1190)); what it says about the
-channel's live changes is as above.
+channel's live changes is as above. On the local pipe, a process inside an agent session is refused
+`sessions.focus` ([local-pipe.md](local-pipe.md#who-may-manage-the-host)), so it cannot hold back
+the person's pushes; over the relay only the person's paired devices reach it.
 
 **The open session at once, the rest together.** A live `session.upsert` or `session.patch` of the
 `open` session, while `visible`, goes at once. Of every other session (all of them while not
