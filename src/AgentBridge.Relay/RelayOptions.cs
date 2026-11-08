@@ -34,6 +34,11 @@ public sealed class RelayOptions
     // unless asked for, and the product image ships no wwwroot (the spike defaulted to on).
     public bool ServePwa { get; set; }
 
+    // Application Insights connection string for exporting the relay's meter (RelayTelemetry.cs).
+    // Unset (and no APPLICATIONINSIGHTS_CONNECTION_STRING): nothing is exported. It is an app
+    // setting supplied by the deployment, never kept in the repo.
+    public string? ApplicationInsightsConnectionString { get; set; }
+
     // Web Push (spike S5). The relay signs and forwards pushes that hosts have already
     // encrypted to the browser; it cannot read them. Unset key: pushes are refused.
     public string? VapidPrivateKey { get; set; }
