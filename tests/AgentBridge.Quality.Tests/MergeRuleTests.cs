@@ -984,6 +984,54 @@ public class MergeRuleTests
         Assert.Contains("FAST: ${{ vars.FLEET_MERGERULE != 'off' }}", File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml")), StringComparison.Ordinal);
     }
 
+    // A sweep displaced by a scoped run for another head must not leave a stale success: while
+    // main is red, any scoped run judges every open pull request and posts failure on each.
+    [Theory]
+    [InlineData("--sha")]
+    [InlineData("--pr")]
+    public void A_scoped_run_while_main_is_red_replaces_every_stale_success(string scope)
+    {
+        const string Success = "Copilot reviewed abcdef0; every check passed; independent review on file";
+        var a = GraphQLPullRequest(Head, mergeRule: ("success", Success), number: 42);
+        var b = GraphQLPullRequest(Older, mergeRule: ("success", Success), number: 7);
+        var github = new FakeGitHub(a, listed: [a, b], byNumber: new Dictionary<int, string> { [42] = a, [7] = b },
+            mainRuns: MainRuns((5, "completed", "failure", 1), (4, "completed", "success", 1)));
+        var config = WriteConfig();
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run([scope, scope == "--sha" ? Head : "42", "--config", config, "--post"], output, github, OnMain);
+
+            Assert.Equal(2, github.Posted.Count);
+            Assert.All(github.Posted, p => Assert.Contains(" failure merge-rule Main is red", p, StringComparison.Ordinal));
+            Assert.Contains(github.Posted, p => p.StartsWith(Head, StringComparison.Ordinal));
+            Assert.Contains(github.Posted, p => p.StartsWith(Older, StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void A_scoped_run_while_main_is_green_judges_only_its_own_head()
+    {
+        var a = GraphQLPullRequest(Head, number: 42);
+        var b = GraphQLPullRequest(Older, number: 7);
+        var github = new FakeGitHub(a, listed: [a, b], byNumber: new Dictionary<int, string> { [42] = a, [7] = b });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--sha", Head, "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Single(github.Posted);
+            Assert.StartsWith(Head, github.Posted[0], StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
     // Auto-merge doesn't pause while main is red, so the merge rule must: judged by main's CI
     // push run that finished last, at its latest attempt.
     [Fact]

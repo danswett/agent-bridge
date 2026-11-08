@@ -553,7 +553,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      its source, and built (then saved) only when main changed it. Runs go one at a time in one group, a sweep
      included, so an older read of main's CI can't land after a newer verdict; nothing cancels, and a
      burst folds into the one run queued behind the running one (a displaced scoped run leaves its
-     head pending until the next run or the 10 minute sweep). A scoped run costs about 3 points
+     head pending until the next run or the 10 minute sweep). A scoped run that finds main not
+     green judges every open pull request, as `--all` does, so a sweep displaced while main turns
+     red can't leave another pull request's success standing (about 15 points, only while main is
+     red; unchanged verdicts aren't posted again). A scoped run costs about 3 points
      (the open list, the head's pull request, a re-read before a post); at 15 merges an hour,
      about 3 pushes each, 45 bursts of at most 6 runs is 810 points at the very worst and about
      400 at the 3 runs a burst usually folds to, plus the sweeps (6 scheduled and 15 after main's

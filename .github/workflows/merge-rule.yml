@@ -87,7 +87,8 @@ jobs:
     # and post on the same head at once, so an older read of main can never land after a newer
     # verdict (a red main can't be overwritten by a run that saw it green). Nothing cancels, so a
     # sweep is never cut short by a scoped run. GitHub keeps one waiting run per group and a newer
-    # one displaces it; a displaced scoped run only leaves its head's verdict pending until the
+    # one displaces it, so a scoped run that finds main not green judges every open pull request (the
+    # evaluator widens it), and a displaced scoped run's own head waits at most until the
     # next run or the 10 minute sweep, never wrong. On the job, not the workflow: a run whose `if`
     # skips the job (main's own runs) never enters the group, so it can't displace a waiting one.
     concurrency:
