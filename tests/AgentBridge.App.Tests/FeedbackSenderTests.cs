@@ -209,6 +209,9 @@ public class FeedbackSenderTests
     [Theory]
     [InlineData("{\"note\":{\"screenshotPng\":{\"password\":\"hunter2\",\"email\":\"someone@example.com\"}}}")]
     [InlineData("{\"screenshotPng\":{\"password\":\"hunter2\"}}")]
+    [InlineData("[{\"screenshotPng\":{\"password\":\"hunter2\"}}]")]
+    [InlineData("{\"list\":[[{\"screenshotPng\":{\"password\":\"hunter2\"}}]]}")]
+    [InlineData("\"just a string\"")]
     [InlineData("{\"screenshotPng\":\"not a png, mail someone@example.com\"}")]
     [InlineData("{\"screenshotPng\":\"" + "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB" + "\"}")]
     public async Task A_screenshotPng_that_is_not_the_real_top_level_png_is_scanned_and_refused(string bundle)
@@ -244,7 +247,11 @@ public class FeedbackSenderTests
         var cut = await Send(fake, recipient, Bundle("{\"journal\":[\"opened C:\\\\Users\\\\<us…\",\"mail [redac…\"]}"));
         var email = await Send(fake, recipient, Bundle("{\"journal\":[\"write someone@example.com…\"]}"));
         var emailTail = await Send(fake, recipient, Bundle("{\"journal\":[\"write someone@example.com\"]}"));
+        var angle = await Send(fake, recipient, Bundle("{\"journal\":[\"<someone@example.com…\"]}"));
+        var square = await Send(fake, recipient, Bundle("{\"journal\":[\"[bob@example.com…\"]}"));
 
+        Assert.IsType<FeedbackSendResult.Failed>(angle);
+        Assert.IsType<FeedbackSendResult.Failed>(square);
         Assert.IsType<FeedbackSendResult.Sent>(cut);
         Assert.IsType<FeedbackSendResult.Failed>(email);
         Assert.IsType<FeedbackSendResult.Failed>(emailTail);

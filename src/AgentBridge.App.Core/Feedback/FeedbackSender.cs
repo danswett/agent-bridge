@@ -109,6 +109,8 @@ public sealed class FeedbackSender(IFeedbackUplink uplink, FeedbackRecipient? re
         try
         {
             using var doc = JsonDocument.Parse(text);
+            // An S1 bundle is always an object; anything else could hide a screenshotPng the redactor skips.
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) { return true; }
             var scanned = WithoutRealScreenshot(doc.RootElement, text);
             if ((bundleScan ?? FeedbackRedactor.BundleHasSecret)(scanned)) { return true; }
             using var scannedDoc = JsonDocument.Parse(scanned);
@@ -176,13 +178,22 @@ public sealed class FeedbackSender(IFeedbackUplink uplink, FeedbackRecipient? re
 
     static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
-    // S1 redacts and then truncates with an ellipsis, so a line can end in a cut placeholder such as "<us…". Drop that tail before checking.
+    static readonly string[] Placeholders = [FeedbackRedactor.Mark, FeedbackRedactor.EscapedMark, "[redacted: truncated]", "<user>", "<host>"];
+
+    // S1 redacts and then truncates with an ellipsis, so a line can end in a cut placeholder such as "<us…". Drop that tail,
+    // and only a real prefix of a placeholder S1 emits, before checking; any other '<' or '[' fragment stays in the scan.
     static string WithoutTruncationTail(string s)
     {
         if (!s.EndsWith('…')) { return s; }
         s = s[..^1];
         var open = s.LastIndexOfAny(['<', '[']);
-        return open >= 0 && s.AsSpan(open).IndexOfAny('>', ']') < 0 ? s[..open] : s;
+        if (open < 0) { return s; }
+        var fragment = s.AsSpan(open);
+        foreach (var p in Placeholders)
+        {
+            if (fragment.Length < p.Length && p.AsSpan().StartsWith(fragment, StringComparison.Ordinal)) { return s[..open]; }
+        }
+        return s;
     }
 
     // The bundle constructor is public, so an email or profile path S1 would have redacted also refuses.
