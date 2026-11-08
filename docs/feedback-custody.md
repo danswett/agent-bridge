@@ -38,6 +38,51 @@ public-key distribution, rotation, old-key recovery window covering unprocessed
 retained uploads, recovery drill, revocation and compromise response. Do not
 publish private-key values. Managed identity is not the feedback decryption key.
 
+### Production recipient-key handoff for Windows
+
+The Windows production recipient key is a reviewed, compiled-in public constant,
+not a value learned from the relay ready message. Its matching private key must
+be the Customer Feedback worker's production key in the dedicated vault. Do not
+generate a separate sender-only key, reuse the staging key or use the VM3
+certificate as production custody. Until the evidence below is complete, the
+production defaults remain empty and sending remains unavailable; staging
+configuration must not supply a production fallback.
+
+Feedback Inbox owns the handoff; SRE owns actual provisioning, effective access
+and deployment evidence, Trust reviews the key binding, and Quality verifies
+the synthetic proof. These assignments do not grant the supervising agent
+secret access or authorize changes to host setup or permissions. Generation or
+import must use the owner-approved provisioning path within the approved
+custody boundary. Never return private material through an agent tool, terminal
+output, a shell transcript or a generated patch. Secret-store writes must
+suppress secret-bearing responses, not just hide the input command.
+
+Record one nonsecret handoff packet in this document when the actual worker and
+key exist. Do not fill missing fields with sample or staging values.
+
+| Evidence | Required value or proof |
+|---|---|
+| Recipient key ID | A production-only ID matching `[A-Za-z0-9._-]{1,64}`; never remap an existing ID to different key material. |
+| Public key | Canonical, unpadded base64url encoding of exactly 32 X25519 public-key bytes, derived from the retained production private key. |
+| Private-key custody | Actual vault name, secret name and immutable secret version, without the secret value, credentials or a secret-retrieval command. |
+| Worker binding | Deployed worker revision, managed-identity principal and effective secret-read scope; confirm relay, supervisor and staging identities cannot read the key. |
+| Matching-key proof | Quality seals a synthetic envelope with the proposed public constant; the deployed worker reads the recorded private-key version and verifies the expected synthetic content internally. Output is fixed pass/fail only. |
+| Negative and output proof | Wrong recipient ID or key is refused, unavailable vault access does not process a report, and private material or synthetic canary text does not appear in worker, supervisor or provider outputs. |
+| Reviewed sender head | Exact Windows commit containing both constants, with independent review and Quality's proof bound to that key ID, public key and worker secret version. |
+
+No production packet has been verified here. SRE's resource and access evidence,
+the public key and key ID, Trust's binding review and Quality's matching-key
+proof remain pending. A filled packet is not Compliance clearance to process
+real reports, nor proof that production collection is enabled.
+
+For rotation, record the old and new key IDs and vault versions, supported
+senders, retained-upload recovery window, approved custodians and revocation
+route before changing the compiled default. Keep each supported key ID bound
+to its original private-key version through the reviewed recovery window; do
+not remove an old version merely because a newer sender was published.
+Compromise response must explicitly cover both sender rollout and retained
+uploads. Removing a key does not delete already filed plaintext.
+
 ## Standing access and audit
 
 **SRE: actual assignments, audit and evidence pending.** The worker's managed
