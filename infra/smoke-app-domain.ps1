@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param(
   [string] $Origin = 'https://app.slipgates.com',
-  [string] $Relay = 'https://relay.bad-duck.com',
+  [string] $Relay = 'https://relay.slipgates.com',
   # Only the relay's CORS answer for -Origin's site: the check that says the relay is ready, before the address exists.
   [switch] $RelayOnly
 )
