@@ -58,24 +58,47 @@ What you lose and what to do is in [the address move notes](app-domain.md#if-you
 
 ## What we collect
 
-**[confirm: the facts box below needs operator-approved facts before invitations go out
-(Compliance, #744 comment 6711271803): (1) the legal operator or controller's name, a private
-privacy and support contact, and the first cohort's countries and age scope; (2) each purpose,
-lawful basis, recipient, provider and storage or processing country, covering GitHub sign-in and
-hosting, account and device records, relay metadata, enabled content, blob and push paths, and
-support email or Teams; (3) actual retention or deletion criteria, access roles, and who handles
-access and deletion requests. Do not send invitations until this is filled in, and link the
-published privacy notice and beta conditions.]**
+**Who runs this beta**
+
+- Operator: Dan Swett, an individual.
+- Contact for privacy and support requests: support@slipgates.com.
+- First beta cohort: invited adults in the United States only.
+- Getting help: reply in the email or Teams conversation your invitation came in.
+- Privacy notice and beta terms: [confirm: links to the published privacy notice and terms].
+
+**What we keep, and for how long**
+
+These are the retention and expiry settings as configured. They are not a promise that data is
+erased from every copy, and a request to delete is handled separately (see below).
+
+- The identified Azure resources are in West US 2.
+- The account and device roster expires after 180 days untouched.
+- Operational logs are kept 30 days (Log Analytics) and application telemetry 90 days
+  (Application Insights).
+- Temporary delivery files (`blobs/`) are set to expire one day after they are created.
+- Feedback storage (`feedback/`) is locked for a minimum of 30 days, then a lifecycle rule applies
+  from day 31. The 30 days is a minimum hold, not a maximum.
+
+**Still to confirm before invitations go out**
+
+- [confirm: what sign-in data GitHub and the relay handle, who can see it, and how long it is kept]
+- [confirm: whether delivery between your own devices is restricted to those devices, and the
+  fields stored for each account and device]
+- [confirm: which connection details the relay logs (for example IP addresses or identifiers),
+  and who can read them]
+- [confirm: who can read your session content, and which copies are kept in transit or on disk]
+- [confirm: whether push notifications are active, and what they carry]
+- [confirm: that support@slipgates.com is monitored, who answers, and how privacy requests are
+  handled]
+- [confirm: whether in-app feedback sending is switched on, and how real reports would be handled]
 
 Slipgates connects the coding sessions on your PC to your own devices. Normal use sends prompts,
-replies and approvals between those devices, encrypted end to end so the relay cannot read them.
-That content does leave your PC to reach your phone. The relay handles connection details,
-including which devices are online, when they connect and how much they send.
+replies and approvals from your PC to your other devices through a relay, so that content does
+leave your PC. How the relay handles it is one of the points to confirm above.
 
-Optional automatic diagnostics are not enabled in this beta and cannot be turned on yet. Their
-design excludes session content; they must pass technical and privacy reviews before any uploads
-are enabled. Any future optional diagnostics will require your separate opt-in. You can use
-Slipgates without agreeing to them.
+Optional diagnostics are always opt-in: they are off unless you choose to turn them on, and this
+applies to everyone, worldwide. Their design excludes session content. You can use Slipgates
+without agreeing to them. This build does not yet send diagnostics.
 
 Your choices and rights depend on the law that applies. Use the private privacy contact above to
 request access, correction, deletion, restriction or portability, or to object where those rights
