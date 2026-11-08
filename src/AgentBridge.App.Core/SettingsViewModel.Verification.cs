@@ -162,5 +162,5 @@ public sealed class AgentVerificationRow(AgentVerificationReport report, bool ca
         + (report.ProviderObservedAt is { } response ? $"\nProvider reply observed: {At(response)}" : "")
         + (report.HookReceivedAt is { } hook ? $"\nHook received: {At(hook)}" : "");
     public bool CanStopObserving => canAct && report.State == VerificationState.Running;
-    static string At(DateTimeOffset time) => $"{TimeZoneInfo.ConvertTimeBySystemTimeZoneId(time, "America/Los_Angeles"):g} PT";
+    static string At(DateTimeOffset time) => $"{time.ToLocalTime():g}";
 }
