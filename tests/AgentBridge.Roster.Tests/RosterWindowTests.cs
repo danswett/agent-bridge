@@ -40,6 +40,34 @@ public sealed class RosterWindowTests
         Assert.DoesNotContain("D1", w.Active(v));
     }
 
+    // G adds S; S adds T; S removes T on a branch quarantined by the window; G then removes S
+    // keeping T. T stays removed however early the host read its state.
+    [Fact]
+    public void A_quarantined_removal_that_applied_stays_applied_after_its_signer_is_revoked()
+    {
+        var w = new World();
+        w.Genesis();
+        w.Add("+S", "G", "S", "G");
+        w.Add("+T", "S", "T", "+S");
+        var last = "+T";
+        for (var i = 0; i < RosterVerifier.Window + 1; i++) { w.Add($"+D{i}", "G", $"D{i}", last); last = $"+D{i}"; }
+        w.Add("+X", "G", "X", "+T");
+        w.Remove("S-T", "S", "+T", "+X");
+        w.Remove("G-S", "G", "+S", last, keep: ["+T"]);
+        var labels = w.Labels.ToList();
+
+        var early = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        var offered = w.Feed(early, [.. labels.Take(labels.IndexOf("G-S"))]);
+        Assert.Equal(Verdict.Quarantined, offered[^1].Verdict);
+        Assert.DoesNotContain("T", w.Active(early));
+        w.Feed(early, "G-S");
+        Assert.DoesNotContain("T", w.Active(early));
+
+        var late = w.Verifier();
+        Assert.DoesNotContain("T", w.Active(late));
+        Assert.Equal(w.Active(early), w.Active(late));
+    }
+
     // 64 active: G, A, H and 61 more; A's ten adds conflict with H's copies of them on a sibling
     // branch, G approves ten replacements, then removes H.
     static World PastTheCap()

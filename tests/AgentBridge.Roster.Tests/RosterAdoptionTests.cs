@@ -70,4 +70,44 @@ public sealed class RosterAdoptionTests
         Assert.True(v.State.IsRevoked(Index(w, v, "+J")));
         Assert.Equal(["G"], w.Active(v));
     }
+
+    // G adds S; S adds T; T adds J. A far-off add Q is quarantined by the window. J's adopt merge
+    // over Q is past the entry cap, so only a candidate; S's removal of T on it makes it evidence.
+    // Evidence is never accepted, so it adopts nothing: Q stays quarantined, as in a control that
+    // removes T on the line instead.
+    [Fact]
+    public void A_merge_that_became_evidence_adopts_nothing()
+    {
+        World Build(bool viaMerge)
+        {
+            var w = new World();
+            w.Genesis();
+            w.Add("+S", "G", "S", "G");
+            w.Add("+T", "S", "T", "+S");
+            w.Add("+J", "T", "J", "+T");
+            var last = "+J";
+            for (var i = 0; i < RosterVerifier.Window + 1; i++) { w.Add($"+D{i}", "G", $"D{i}", last); last = $"+D{i}"; }
+            w.Add("+Q", "G", "Q", "+S");
+            if (viaMerge)
+            {
+                w.Merge("M", "J", [last, "+Q"], adopt: true);
+                w.Remove("S-T", "S", "+T", "M");
+            }
+            else { w.Remove("S-T", "S", "+T", last); }
+            return w;
+        }
+
+        var cap = 4 + RosterVerifier.Window + 1 + 1;
+        var wm = Build(true);
+        var v = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => wm.Now) { EntryCap = cap };
+        wm.Feed(v, [.. wm.Labels]);
+        var wc = Build(false);
+        var control = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => wc.Now) { EntryCap = cap };
+        wc.Feed(control, [.. wc.Labels]);
+
+        Assert.True(v.Graph[Index(wm, v, "M")].Evidence);
+        Assert.True(v.IsQuarantined(Index(wm, v, "+Q")));
+        Assert.Equal(wc.Active(control), wm.Active(v));
+        Assert.DoesNotContain("Q", wm.Active(v));
+    }
 }

@@ -181,6 +181,9 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
         node.QuarantinedOnArrival = arrival;
         if (node.IsAdd) { _firstAccepted.TryAdd(node.Index, clock()); }
         Count(node);
+        // Recorded now, not when State is first read, so which removals applied does not depend
+        // on read timing.
+        _ = State;
         return new(e.Hash, Quarantined()[node.Index] ? Verdict.Quarantined : Verdict.Accepted);
     }
 
@@ -459,9 +462,11 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     public void Adopt(byte[] head)
     {
         if (_g.Find(head) is not { } i || _candidate[i]) { return; }
+        _ = State;
         AdoptClosure(i);
         _quarantined = null;
         _applied = null;
+        _ = State;
     }
 
     // The state this verifier applies: unquarantined entries, and quarantined removals valid in
