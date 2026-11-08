@@ -291,6 +291,13 @@ public class FeedbackBundleTests
         "key AAAAB3NzaC1yc2EAAAADAQABAAABAQC7vbqajDhA9bP8f0dQ1c2e3f4g5h6i7j8k9l0m",
         "{\"msg\":\"{\\u0022password\\u0022:\\u0022hunter2\\u0022}\"}",
         "{\"msg\":\"--password\\u0020hunter2\"}",
+        "{\"msg\":\"password\\u003Dhunter2\"}",
+        "{\"msg\":\"--token\\u0020hunter2zz\"}",
+        "\\u005cu0070assword=hunter2",
+        "\\u005cu005cu0070assword=hunter2",
+        "\\u005c\\u0075\\u0030\\u0030\\u0037\\u0030assword=hunter2",
+        "password=\\u0022hun\\u0022ter2",
+        "caf\\u00e9 and plain text",
     };
 
     [Theory]
@@ -404,19 +411,49 @@ public class FeedbackBundleTests
         finally { FeedbackRedactor.SecretPassOverride = null; }
     }
 
-    [Fact]
-    public void Truncation_never_leaves_text_the_sender_would_refuse()
+    public static TheoryData<string, string> SecretKindsToCut => new()
     {
-        var token = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789";
-        var line = "start " + new string('x', 40) + " password=hunter2 then Authorization: Basic dXNlcjpwYXNzd29yZA== and " + @"C:\Users\alice\x" + " mail bob@example.com tok " + token + " " + new string('y', 150) + " token=zzz999 end";
+        { "password=hunter2", "hunter2" },
+        { "Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNz" },
+        { "tok ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789", "abcdefghij" },
+        { "jwt eyJhbGciOiJIUzI1" + "NiJ9.eyJzdWIiOiIxMjM0NTY3ODkw.SflKxwRJSMeKKF2QT4fwpM", "SflKxwRJ" },
+        { "mail bob@example.com", "bob@" },
+        { @"at C:\Users\alice\x", "alice" },
+        { "connection_string: Server=db;Pwd=hunter2;AccountKey=acckey9z", "acckey9z" },
+        { "run --token abcd1234efgh now", "abcd1234efgh" },
+        { "{\"msg\":\"{\\u0022password\\u0022:\\u0022hunter2\\u0022}\"}", "hunter2" },
+        { "{\"msg\":\"password\\u003Dhunter2\"}", "hunter2" },
+        { "{\"msg\":\"--token\\u0020hunter2zz\"}", "hunter2zz" },
+        { "\\u005cu0070assword=hunter2", "hunter2" },
+    };
+
+    [Theory]
+    [MemberData(nameof(SecretKindsToCut))]
+    public void Truncation_never_leaves_text_the_sender_would_refuse(string secret, string leak)
+    {
+        var line = "start " + new string('x', 40) + " " + secret + " " + new string('y', 150) + " token=zzz999 end";
         var source = new FeedbackBundleSource(new Fake(), null, null, ["zzzzzz"]);
         for (var max = 1; max < line.Length; max++)
         {
             var cleaned = source.Clean(line, max);
             Assert.False(FeedbackRedactor.ContainsSecret(cleaned), $"{max}: {cleaned}");
             Assert.False(FeedbackRedactor.BundleHasSecret(System.Text.Json.JsonSerializer.Serialize(new { journal = new[] { cleaned } })), $"{max}: {cleaned}");
-            foreach (var leak in new[] { "hunter2", "dXNlcjpwYXNz", "alice", "bob@", "abcdefghij", "zzz999" }) { Assert.DoesNotContain(leak, cleaned); }
+            Assert.DoesNotContain(leak, cleaned);
+            Assert.DoesNotContain("zzz999", cleaned);
         }
+    }
+
+    [Fact]
+    public void Two_MiB_runs_of_a_backslash_escape_and_a_letter_escape_stay_fast()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var unit in new[] { "a", "\\u005c", "\\u0061" })
+        {
+            var big = string.Concat(Enumerable.Repeat(unit, 2 * 1024 * 1024 / unit.Length));
+            FeedbackRedactor.Redact(big);
+            FeedbackRedactor.ContainsSecret(big);
+        }
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(15), sw.Elapsed.ToString());
     }
 
     [Fact]
