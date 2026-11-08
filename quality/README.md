@@ -550,9 +550,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    - Fast path (#1251): an event about one pull request or head judges only that head
      (`--pr N` for `pull_request_target`, `--sha` for `status`, `check_suite` and `workflow_run`),
      with no 45 second wait and no build: the evaluator is restored from a cache keyed by a hash of
-     its source, and built (then saved) only when main changed it. Runs go one at a time per head
-     (a sweep, from the schedule, dispatch or main's CI finishing, has a group of its own), and a
-     burst folds into the one run queued behind the running one. A scoped run costs about 3 points
+     its source, and built (then saved) only when main changed it. Runs go one at a time in one group, a sweep
+     included, so an older read of main's CI can't land after a newer verdict; nothing cancels, and a
+     burst folds into the one run queued behind the running one (a displaced scoped run leaves its
+     head pending until the next run or the 10 minute sweep). A scoped run costs about 3 points
      (the open list, the head's pull request, a re-read before a post); at 15 merges an hour,
      about 3 pushes each, 45 bursts of at most 6 runs is 810 points at the very worst and about
      400 at the 3 runs a burst usually folds to, plus the sweeps (6 scheduled and 15 after main's

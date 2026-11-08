@@ -976,7 +976,8 @@ public class MergeRuleTests
         YamlMappingNode Step(string name) => steps.Single(s => s.Children.ContainsKey(new YamlScalarNode("name")) && Scalar(s, "name") == name);
         var concurrency = (YamlMappingNode)job.Children[new YamlScalarNode("concurrency")];
 
-        Assert.StartsWith("${{ vars.FLEET_MERGERULE == 'off' && 'merge-rule' ||", Scalar(concurrency, "group"), StringComparison.Ordinal);
+        Assert.Equal("merge-rule", Scalar(concurrency, "group"));
+        Assert.Equal("false", Scalar(concurrency, "cancel-in-progress"));
         Assert.Contains("vars.FLEET_MERGERULE == 'off'", Scalar(Step("Let a burst of events settle"), "if"), StringComparison.Ordinal);
         Assert.Contains("vars.FLEET_MERGERULE != 'off'", Scalar(Step("Restore main's built evaluator"), "if"), StringComparison.Ordinal);
         Assert.Contains("vars.FLEET_MERGERULE == 'off'", Scalar(Step("Build main's evaluator"), "if"), StringComparison.Ordinal);

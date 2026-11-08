@@ -83,23 +83,15 @@ jobs:
     # A Dependabot-triggered run gets neither the environment's secret nor a writable token, so it
     # can't mint the App's token; that mustn't turn the run red when the schedule posts in its place.
     continue-on-error: ${{ github.actor == 'dependabot[bot]' }}
-    # Fast path (repo variable FLEET_MERGERULE not "off"): one evaluation at a time per head, so no
-    # two read and post on the same head at once and an older read can't land after a newer one;
-    # a newer one waits rather than cancelling, and GitHub keeps one waiting per group, which is
-    # safe because a run judges its whole head whatever event started it. Heads are independent,
-    # so a pull request's events can't displace another's. A sweep (schedule, dispatch, main's CI
-    # finishing, a run from a fork's "main") shares one group and judges every pull request. Kill
-    # switch ("off"): the single group of old, where every run judges every pull request. On the
-    # job, not the workflow: a run whose `if` skips the job (main's own runs) then never enters a
-    # group, so it can't displace a waiting evaluation and leave nothing to run.
+    # One group for every writer, fast path or kill switch alike: no two evaluations read main's CI
+    # and post on the same head at once, so an older read of main can never land after a newer
+    # verdict (a red main can't be overwritten by a run that saw it green). Nothing cancels, so a
+    # sweep is never cut short by a scoped run. GitHub keeps one waiting run per group and a newer
+    # one displaces it; a displaced scoped run only leaves its head's verdict pending until the
+    # next run or the 10 minute sweep, never wrong. On the job, not the workflow: a run whose `if`
+    # skips the job (main's own runs) never enters the group, so it can't displace a waiting one.
     concurrency:
-      group: >-
-        ${{ vars.FLEET_MERGERULE == 'off' && 'merge-rule'
-        || (github.event_name == 'pull_request_target' && format('merge-rule-{0}', github.event.pull_request.head.sha))
-        || (github.event_name == 'status' && format('merge-rule-{0}', github.event.sha))
-        || (github.event_name == 'check_suite' && github.event.check_suite.head_branch != 'main' && format('merge-rule-{0}', github.event.check_suite.head_sha))
-        || (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch != 'main' && format('merge-rule-{0}', github.event.workflow_run.head_sha))
-        || 'merge-rule-sweep' }}
+      group: merge-rule
       cancel-in-progress: false
     steps:
       # Kill switch: FLEET_MERGERULE=off (repository variable, read on every run) restores the
