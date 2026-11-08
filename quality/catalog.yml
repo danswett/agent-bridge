@@ -76,6 +76,7 @@ no_test_paths:
   - ops/**                      # SRE plan, runbooks, KQL and read-only operator probes; nothing ships from it
   - .github/dependabot.yml      # schedules update PRs; each PR's own changes select its tests
   - .github/CODEOWNERS          # who reviews what; CI's plan runs the whole ring for .github/ anyway
+  - .github/ISSUE_TEMPLATE/**   # issue forms; GitHub renders them, nothing builds or tests from them
 
 suites:
   # ---------------------------------------------------------------- .NET unit and component
