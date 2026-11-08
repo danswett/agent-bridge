@@ -882,6 +882,38 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(Tone.None, row.StatusTone);
     }
 
+    // #1221: QA saw Agency and Copilot CLI read "Not tested yet" after the host had handled their hooks.
+    // Agency has no hooks of its own; the host reports the shared Copilot CLI hook on its row.
+    [Theory]
+    [InlineData("claude", "Claude Code")]
+    [InlineData("codex", "Codex")]
+    [InlineData("copilot", "Copilot CLI")]
+    [InlineData("agency", "Agency")]
+    public void A_handled_hook_flips_a_set_up_agent_from_not_tested_yet_to_ready_and_no_hook_leaves_it_untested(string id, string label)
+    {
+        var none = Agent(id, label, ReadinessState.Unknown, hooksDetail: RecordIntakeOn);
+        var seen = none with { LastHookHandledAt = DateTimeOffset.UtcNow.AddHours(-30) };
+
+        var untested = new AgentReadinessRow(none, canManage: true);
+        var ready = new AgentReadinessRow(seen, canManage: true);
+
+        Assert.True(untested.NotTested);
+        Assert.Equal("Not tested yet", untested.Status);
+        Assert.False(ready.NotTested);
+        Assert.True(ready.HooksWorking);
+        Assert.Equal("Ready", ready.Status);
+        Assert.Null(ready.SetUpVerb);
+    }
+
+    [Fact]
+    public void A_handled_hook_does_not_say_Ready_on_a_row_that_is_not_installed_or_needs_repair()
+    {
+        var heard = DateTimeOffset.UtcNow;
+        Assert.NotEqual("Ready", new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Unknown, installation: ReadinessState.Missing, hooksDetail: RecordIntakeOn) with { LastHookHandledAt = heard }).Status);
+        Assert.NotEqual("Ready", new AgentReadinessRow(Agent("codex", "Codex", ReadinessState.Failed, hooksDetail: DidNotComplete) with { LastHookHandledAt = heard }, canManage: true).Status);
+        Assert.Equal("Hook ownership couldn't be checked · couldn't read", new AgentReadinessRow(FromWire("failed", UnknownRecord, "unknown") with { LastHookHandledAt = heard }, canManage: true).Status);
+        Assert.Equal(OlderHost, new AgentReadinessRow(FromWire("unknown", RecordIntakeOn, "unknown") with { LastHookHandledAt = heard }, canManage: true).Status);
+    }
     // The host's `hookSetup` (#705 review r4474869190), on the wire beside the hooks state its host
     // sends with it. Until this build's AgentReadiness carries the field, the adapter reads it as
     // missing, and the fixture's value is handed to the row as the adapter will hand it then.

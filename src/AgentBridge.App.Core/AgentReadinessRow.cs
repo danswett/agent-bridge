@@ -87,7 +87,8 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     };
     // Set up, with nothing to do until a new session shows the hooks work. Never "Ready": a finished
     // setup isn't evidence that hooks work (#783 D2).
-    public bool NotTested => Installed && agent.Hooks.State == ReadinessState.Unknown && Setup == HookSetup.Completed;
+    // A hook the host handled since it began is its evidence the hooks work, so the row is no longer untested (#1221).
+    public bool NotTested => Installed && agent.Hooks.State == ReadinessState.Unknown && Setup == HookSetup.Completed && agent.LastHookHandledAt is null;
 
     // An agent installed after the bridge (#231), from the host's typed evidence alone (never its
     // Detail text): installed, and its profile's hook setup says it was never set up. A removal
@@ -127,6 +128,7 @@ public sealed class AgentReadinessRow(AgentReadiness agent, bool canManage = fal
     // polite live region in the view.
     public string Status => note?.Text
         ?? (NotTested && SetUpVerb is null ? "Not tested yet"
+            : Installed && Setup == HookSetup.Completed && !Blocked && !CannotRepair && !OlderHost && SetUpVerb is null && agent.LastHookHandledAt is not null ? "Ready"
             : Blocked ? AgentWords.ReadOnly(agent.Hooks.Detail)
             : CannotRepair ? AgentWords.HooksProblem(agent.Hooks.Detail)
             : OlderHost ? AgentWords.OlderHost

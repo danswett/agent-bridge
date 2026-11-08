@@ -42,7 +42,7 @@ through one adapter, `HookSetups`, which reads a missing field as `unknown`): **
 they aren't set up (`notSetUp`, or this profile's intake off), **Repair** only for `incomplete`, a
 setup that failed after the host saved its record, across fresh checks, and none when nothing
 needs doing: set up (`completed`) but not yet tested by a new session, which the host can't do
-yet, says "Not tested yet" (#705), never "Ready". Removing Copilot CLI's connection can leave its
+yet, says "Not tested yet" (#705) until the host has handled one of its hooks, then "Ready" (#1221; a row with failed hooks, an unknown setup or an older host keeps its own words). Removing Copilot CLI's connection can leave its
 owned record when other entries share the file, which the host reads as a setup that didn't
 finish; that row keeps its removal and offers **Set up** through a fresh check. Agency runs on
 Copilot CLI's hooks (the host sets them up as Copilot's), so what a setup or removal on either row

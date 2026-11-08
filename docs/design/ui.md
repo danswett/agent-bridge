@@ -2001,7 +2001,7 @@ verbs). Every state is words on the row, with at most one verb:
   categorised set, never the installer's own text, and the row shows no output lines and no
   Copy details.
 - **Set up, not yet tested:** an agent whose hooks are set up but that no new session has
-  tested yet reads "Not tested yet" (#705), never Ready.
+  tested yet reads "Not tested yet" (#705). Once the host has handled one of its hooks (Agency: the shared Copilot CLI hooks), it reads "Ready" (#1221); a row with failed hooks, an unknown setup or an older host keeps its own words instead.
 - **A host the app can't act on:** "Read-only · *reason*" when the host reports `blocked`
   (for example "Read-only · this machine's bridge is older": a person never sees "host", #959,
     #1022);  "Hook ownership couldn't be checked · *reason*" (or "Hook intake couldn't be
