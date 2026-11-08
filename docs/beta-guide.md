@@ -180,10 +180,12 @@ participants can read what you send; send only the minimum needed. Do not post s
 personal information in public GitHub issues. Screenshots, logs and attachments can contain names,
 paths, prompts, code, tokens or other private information; check them before sharing.
 
-The privacy email address is live. The actual mailbox hosting provider, Teams support context and
-operational details, other participants, delegates and administrators, processing locations,
-retention and holds, forwarding and exports, recipient copies and actual deletion-execution limits
-have not yet been confirmed. There is no blanket 30-day support-message deletion promise.
+The privacy email address is live. support@slipgates.com uses Cloudflare Email Routing, which
+forwards mail to the owner's personal inbox. Whether anyone else can read that inbox, which
+provider hosts it, how long mail is kept there, Teams support context, Cloudflare's own retention
+and processing locations, other participants, delegates and administrators, exports, recipient
+copies and actual deletion-execution limits have not yet been confirmed. There is no blanket
+30-day support-message deletion promise.
 
 The owner has confirmed:
 
@@ -196,6 +198,13 @@ The acknowledgement is an operational aim, not a legal response deadline or a pr
 a request or erase data within three days. Requests will be handled as required by applicable
 law. Request coordination does not itself establish each service's ability or procedure to delete
 records.
+
+For the beta, Slipgates does not promise manual deletion. Records age out on their own schedules:
+roster entries 180 days after they were last used, connection and fault logs 30 days in Log
+Analytics and 90 days in Application Insights, temporary transfer blobs after one day, and feedback
+under the 30-day plaintext policy described below. You can revoke Slipgates' authorization in
+GitHub at any time. There is no account-erasure feature and no promise that a request removes every
+copy. The privacy address still receives and answers requests.
 
 ### In-app feedback, the preview and the redactor
 
