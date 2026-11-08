@@ -80,6 +80,11 @@ static partial class SelfTest
             var came = await Until(() => Verb() is { Content: "Sign in" }, TimeSpan.FromSeconds(20));
             check(came, $"draws the sign-in banner for the captures{where}");
             if (!came) { return; }
+            if (contrast && Verb() is { } signIn)
+            {
+                var signInPlate = await AccentPlate(signIn);
+                check(signInPlate is null, $"draws the banner's Sign in in Highlight and HighlightText only{where} ({signInPlate})");
+            }
             // The banner as it first comes: its line names its sessions, each a link (ui.md §6.13).
             var linked = await Until(() => Banner() is { } fresh && Find<TextBlock>(fresh).Any(t => AutomationProperties.GetAutomationId(t) == "SignInAffected" && t.ActualHeight > 0 && t.Inlines.OfType<Hyperlink>().Count() == 3), TimeSpan.FromSeconds(5));
             check(linked, $"captures the banner with its sessions as links in its line{where} ({Line()})");

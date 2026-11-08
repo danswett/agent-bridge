@@ -79,6 +79,11 @@ static partial class SelfTest
             var accent = (Style)Application.Current.Resources["AccentButtonStyle"];
             await Bar("ready", "Version 0.1.999 is ready. Restart to update.");
             check(Action() is { } atRest && atRest.Style == accent && AutomationProperties.GetName(atRest) == "Restart to update", $"draws the update bar's Restart to update as the accent action at rest{where}");
+            if (contrast && Action() is { } plain)
+            {
+                var atRestPlate = await AccentPlate(plain);
+                check(atRestPlate is null, $"draws Restart to update in Highlight and HighlightText only{where} ({atRestPlate})");
+            }
             var restarting = update.RestartAsync(_ => Task.FromResult(true));
             await Bar("restarting", "Restarting to update\u2026");
             // Creative on #719 (6675195544): the button that started it shows its progress ring,
@@ -92,6 +97,11 @@ static partial class SelfTest
             await Bar("failed", "The update didn't install because another bridge profile is running from this installation.");
             check(bar is { Severity: InfoBarSeverity.Warning } && !bar.Message.Any(char.IsDigit) && Action() is { } retry && AutomationProperties.GetName(retry) == "Try again" && retry.Style == accent,
                 $"draws a failed install as a warning with Try again and no machine detail{where}");
+            if (contrast && Action() is { } again)
+            {
+                var againPlate = await AccentPlate(again);
+                check(againPlate is null, $"draws Try again in Highlight and HighlightText only{where} ({againPlate})");
+            }
 
             // #1167: the Updating screen, the open window's while the release is handed to
             // Velopack, and the new version's Updated bar, and an install that didn't take.
