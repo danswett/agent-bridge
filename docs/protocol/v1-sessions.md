@@ -630,7 +630,8 @@ nothing records no answer, and blank text might be recorded trimmed to nothing.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>", "stage": "<stage>", "code": "<code>" }`,
 with `reason` present for anything but `delivered`, `stage` only on `unconfirmed` (below),
-`code` only on a `refused` whose reason is one of the [answer reasons](#answer-reasons), and
+`code` only on a `refused` whose reason is one of the [answer reasons](#answer-reasons), or on a
+`stale` from a part-answered form the host reset (`formReset`), and
 `timings` for a request that asked for progress ([Progress](#progress)):
 
 | `outcome` | Meaning | Typed? |
@@ -656,12 +657,14 @@ An `unconfirmed` answer also carries `stage`, how far it is known to have got
 
 Some reasons a client says in fixed words of its own, the same in every client: on a field, as
 `otherUnavailable`, and on a refusal, as its `code` beside a `reason` that is the same
-sentence (so a client that knows neither still says why). A client that doesn't know a code
-reads it as absent: no disabled Other, and the `reason` as usual.
+sentence (so a client that knows neither still says why). `formReset` is said only on a
+`stale` answer, beside a `reason` that is the host's own account of it, never on a field. A
+client that doesn't know a code reads it as absent: no disabled Other, and the `reason` as usual.
 
 | Code | Sentence | A client shows |
 |---|---|---|
 | `otherNotSendable` | "Your own answer can't be sent from here yet. Pick an option, or answer at the machine." | On a field: Other, its label unchanged, disabled, and the sentence as one muted line under the choices and as their accessible description. On a refusal: "Not sent · " and the sentence |
+| `formReset` | "The session moved on from this question. Your answer was not delivered." | On a `stale` answer only: the host had left the form part answered, cancelled it (one Esc), and the session asked something else or nothing again, so none of the answer reached the agent ([#1123](https://github.com/danswett/agent-bridge/issues/1123)). "Not sent: " and the sentence, never "answered elsewhere" |
 
 `otherNotSendable` is a **temporary exception to #876** ("offer Other exactly when the CLI
 does"), decided by Product for #510: Copilot CLI 1.0.105 offers Other on a lone option list,

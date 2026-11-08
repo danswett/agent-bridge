@@ -283,7 +283,10 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     it afresh, once, for the same card and request, every check made again from its first
     field; that one is never reset again. A different question retires the card, and so does
     none within 60 s once the old call is positively closed: `stale`, "this question is out
-    of date: ...", with nothing typed into whatever the session shows next. A form not seen
+    of date: ...", with `code` `formReset` (so a client says in its own words that the answer
+    was never delivered: "Not sent: the session moved on from this question. Your answer was
+    not delivered."), with nothing typed into whatever the session shows next. Only these two
+    carry the code; a redo that itself ends stale says why in its own words. A form not seen
     to close (still asked after 60 s, a permission prompt drawn over it, or a transcript that
     cannot say) leaves it `unconfirmed` (`resume=uncancelled`), for the person to finish at
     the machine. `ResumeWait` zero turns all of this off.

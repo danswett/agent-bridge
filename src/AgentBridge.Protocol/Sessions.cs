@@ -734,8 +734,10 @@ public sealed record AnswerRequest
 
 public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null, AnswerStage? Stage = null)
 {
-    // Why, as a code a client says in its own fixed words (AnswerReasons), beside Reason; absent
-    // for every other reason. A client that does not know the code shows Reason.
+    // Why, as a code a client says in its own fixed words (AnswerReasons), beside Reason: on a
+    // refused whose Reason is the code's sentence, or on a stale from a part-answered form the
+    // host reset (FormReset); absent for every other reason. A client that does not know the code
+    // shows Reason.
     public string? Code { get; init; }
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }

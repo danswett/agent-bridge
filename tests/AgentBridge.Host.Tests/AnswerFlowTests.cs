@@ -3303,6 +3303,8 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal("stale", result.GetProperty("outcome").GetString());
         Assert.Contains("this question is out of date", result.GetProperty("reason").GetString());
         Assert.Contains(other is null ? "did not ask it again" : "asked something else since", result.GetProperty("reason").GetString());
+        // Said in every client's own words: the answer was never delivered.
+        Assert.Equal(AnswerReasons.FormReset, result.GetProperty("code").GetString());
         Assert.Empty(AfterEscape());
         Assert.Contains($"resume={(other is null ? "stale" : "replaced")}", await AttemptLineAsync());
     }
@@ -3385,6 +3387,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         var result = await answering;
 
         Assert.Equal("stale", result.GetProperty("outcome").GetString());
+        Assert.Equal(AnswerReasons.FormReset, result.GetProperty("code").GetString());
         // The first list's keys and Enter, the second's keys cut short, then the Esc, no sooner
         // than the wait allows.
         TimeSpan gap;
@@ -3418,8 +3421,24 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Equal("unconfirmed", result.GetProperty("outcome").GetString());
         Assert.Contains("finish it at the machine", result.GetProperty("reason").GetString());
         Assert.DoesNotContain("out of date", result.GetProperty("reason").GetString());
+        // Not said to be undelivered: the form may still be answered at the machine.
+        Assert.False(result.TryGetProperty("code", out _));
         Assert.Empty(AfterEscape());
         Assert.Contains("resume=uncancelled", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task An_answer_to_a_question_answered_elsewhere_is_stale_without_the_form_reset_code()
+    {
+        var ch = await OpenAsync();
+        Fixture.Append(events, Recorded("q1", new { pick = "a" }));
+
+        var result = await AnswerResultAsync(ch, new { pick = "b" }, Guid.NewGuid().ToString(), question: "q1");
+
+        // Stale for a reason of its own: nothing was reset, so it is not said to be undelivered.
+        Assert.Equal("stale", result.GetProperty("outcome").GetString());
+        Assert.False(result.TryGetProperty("code", out _));
+        Assert.Empty(injector.Plans);
     }
 
     sealed class FakeProbe : IAgentHaBridgeProbe
