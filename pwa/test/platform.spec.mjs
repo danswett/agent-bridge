@@ -183,6 +183,48 @@ test.describe('safe areas on an iPad or an iPhone on its side', () => {
   });
 });
 
+// The top edge (app.css, "The top edge"): no engine here draws the iOS blur, so this proves what
+// WebKit is reported to need, a real, fixed, opaque, full-width element at the very top, and that
+// it moves nothing.
+test.describe('the top edge of an installed app', () => {
+  test.use({ viewport: { width: 1024, height: 768 }, hasTouch: true });
+
+  const edge = (page) => page.evaluate(() => {
+    const box = (q) => { const r = document.querySelector(q).getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
+    const style = (q) => { const s = getComputedStyle(document.querySelector(q)); return { display: s.display, position: s.position, bg: s.backgroundColor, pointerEvents: s.pointerEvents }; };
+    return { strip: { ...style('.top-edge'), ...box('.top-edge') }, bar: { ...style('#appbar'), ...box('#appbar') }, nav: box('#nav'), main: box('#main'), innerWidth };
+  });
+
+  for (const [name, insets] of [['with no inset, as a window on an iPad reports', { top: 0, right: 0, bottom: 0, left: 0 }], ['under the status bar', IPAD_INSETS]]) {
+    test(`installed on an iPad ${name}, the app bar is fixed and opaque, a strip in its colour fills the inset above it, and nothing moves`, async ({ page }) => {
+      await on(page, AS.ipadosInstalled);
+      await reported(page, insets);
+      const e = await edge(page);
+      expect(e.bar).toMatchObject({ position: 'fixed', x: insets.left, y: insets.top, width: e.innerWidth - insets.left - insets.right, height: 56 });
+      expect(e.bar.bg).not.toMatch(/rgba\(.*,\s*0\)$|transparent/);
+      expect(e.strip).toMatchObject({ display: 'block', position: 'fixed', pointerEvents: 'none', bg: e.bar.bg, x: 0, y: 0, width: e.innerWidth, height: insets.top });
+      await page.locator('#appbar').evaluate((el) => { el.style.position = 'static'; });
+      const before = await edge(page);
+      expect({ bar: e.bar, nav: e.nav, main: e.main }).toEqual({ bar: { ...before.bar, position: 'fixed' }, nav: before.nav, main: before.main });
+    });
+  }
+
+  test('in the phone layout, even installed, nothing changes: the app bar is sticky and there is no strip', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await on(page, AS.iosInstalled);
+    const e = await edge(page);
+    expect([e.bar.position, e.strip.display]).toEqual(['sticky', 'none']);
+  });
+
+  for (const [name, as] of [['in Safari on an iPhone', AS.iosSafari], ['on a Mac', AS.macos], ['on Windows', AS.windows]]) {
+    test(`${name}, the app bar stays in the grid and there is no strip`, async ({ page }) => {
+      await on(page, as);
+      const e = await edge(page);
+      expect([e.bar.position, e.strip.display]).toEqual(['static', 'none']);
+    });
+  }
+});
+
 test.describe('the system\'s Back on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 

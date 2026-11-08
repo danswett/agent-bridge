@@ -3343,6 +3343,11 @@ they are un-parked.
     and the reply box keep clear of them. Everywhere else the browser keeps the page out of them,
     so a platform taken for another still has its safe areas kept clear. Installed on iOS or
     iPadOS, a tap doesn't wait for a double tap.
+  - **The top edge:** iOS and iPadOS 26.1 and later blur the top of an installed web app unless
+    a fixed, opaque, full-width element is there. On a phone the sticky app bar is that element.
+    In the wide layout, installed on iOS or iPadOS, the app bar is fixed in the same place it
+    already had, and a strip in its colour fills the status-bar inset above it. No padding is
+    added and nothing moves.
   - **Back:** on a phone, a delegate opened in a pushed session is a step of its own. The
     system's Back (Android's button and gesture, iOS's edge swipe in an installed app, the
     browser's) goes delegate → session → list, then leaves the app; the header's Back is

@@ -19,6 +19,9 @@
   <title>Slipgates</title>
 </head>
 <body>
+  <!-- The page's own top edge in an app installed on iOS or iPadOS (app.css, "The top edge"). A
+       real element, not a pseudo-element: WebKit only counts an element. Hidden everywhere else. -->
+  <div class="top-edge" aria-hidden="true"></div>
   <a class="skip" href="#main">Skip to content</a>
   <!-- The shell (docs/design/ui.md §7, PWA): on a desktop, the Windows layout with a 56 px web
        app bar and a rail; on a phone, a title row per page and a bottom navigation bar. One nav
