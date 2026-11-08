@@ -1,7 +1,7 @@
 # The Beta acceptance run (#1185, #736): the real published Beta installer on a fresh hosted
 # Windows runner, x64 and native Arm64. Dispatch only: no pull_request trigger, no cron, no secrets.
 # See quality/lab/beta-acceptance.ps1 for the steps.
-name: beta-acceptance
+name: Beta acceptance
 
 on:
   workflow_dispatch:

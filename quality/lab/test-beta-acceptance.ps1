@@ -23,7 +23,7 @@ Check 'the simulated agent writes a transcript with the question and runs the ho
         }
         else {
             $stand = Join-Path $scratch 'hook.sh'
-            Set-Content $stand "#!/bin/sh`nif [ `"`$2`" = ask_user ]; then echo '{`"permissionDecision`":`"allow`"}'; else echo '{}'; fi"
+            Set-Content $stand "#!/bin/sh`ncat >/dev/null`nif [ `"`$2`" = ask_user ]; then echo '{`"permissionDecision`":`"allow`"}'; else echo '{}'; fi"
             chmod +x $stand
         }
         $r = & (Join-Path $PSScriptRoot 'agent-sim.ps1') -Hook $stand -CopilotHome (Join-Path $scratch 'home') -Question 'Q-marker?'
