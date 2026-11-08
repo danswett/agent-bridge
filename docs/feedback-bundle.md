@@ -30,3 +30,19 @@ promise to catch every secret, which is why the person sees the exact bytes firs
 
 
 `FeedbackRedactor.ContainsSecret` and `BundleHasSecret` use the same credential patterns, so the sender's last check before upload cannot disagree with the redactor. `BundleHasSecret` also joins each JSON name with its string, number or boolean value (also inside nested objects and arrays), so `{"password":"hunter2"}` and `{"token":true}` are caught. Every text is checked twice: as written, and with escapes decoded repeatedly (up to 4 passes). A credential visible only in the decoded form, or escapes still left after the cap, replaces the whole text with `[redacted: escaped secret]`. A bare word such as `token hunter2` is prose and is not treated as a credential. A source that fails or ignores cancellation is cut off at the 10 s bound; a failing session source refuses with `SessionUnavailable`.
+
+## Sending (Windows)
+`FeedbackSender` implements `IFeedbackSender`: it re-scans the bundle with the same redactor (JSON values decoded, so `{"password":"..."}` is caught; a leftover email or profile path is refused too; malformed JSON and any scan error are refused) as `BadRequest`, with no network request, seals `CanonicalBytes` into this envelope using the bundle id, requests a `feedback-put` slot and uploads the sealed bytes. The whole send is bounded by 60 seconds; a timeout that is not the caller cancelling is `Unreachable`.
+
+| Outcome | Result |
+| --- | --- |
+| Uploaded | `Sent(now)` |
+| No connection | `Failed(Offline, WhenOnline)` |
+| 429 / relay `rate-limited` | `Failed(RateLimited, AfterDelay, 1 min)` |
+| relay `quota` | `Failed(Quota, AfterDelay, 1 h)` |
+| 500 / 502 / 503 / 504 / 408 / timeout | `Failed(Unreachable, Now)` |
+| Relay or storage refuses | `Failed(UploadRejected, Never)` |
+| No recipient key | `Failed(KeyUnavailable, Never)` |
+| Caller cancels | `Failed(Cancelled, Now)` |
+
+There is no offline queue and nothing is written to disk. The window keeps the note and the reviewed preview in memory for a manual Try again (the bundle is sealed again with a fresh key) and clears them on close. Failure results carry no report content.
