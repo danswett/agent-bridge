@@ -74,6 +74,18 @@ public sealed class AppFeedbackSourcesTests : IDisposable
     }
 
     [Fact]
+    public async Task A_crash_log_cut_mid_record_drops_the_partial_head_and_keeps_whole_records()
+    {
+        var old = "2026-10-01T10:00:00.0000000-07:00 System.Exception: old\n" + string.Concat(Enumerable.Repeat("   at Old.Frame()\n", 20_000));
+        File.WriteAllText(Path.Combine(dir, "crash.log"), old + "2026-11-03T10:00:00.0000000-07:00 System.Exception: new\n   at New()\n");
+
+        var records = await Sources().CrashRecordsAsync(5, default);
+
+        var only = Assert.Single(records);
+        Assert.Contains("new", only);
+    }
+
+    [Fact]
     public async Task Config_has_the_settings_scalars_and_the_update_channel()
     {
         File.WriteAllText(Settings, "{\"toasts\":true,\"relay\":\"https://r\",\"nested\":{\"x\":1},\"prereleases\":false}");
@@ -154,6 +166,12 @@ public sealed class FeedbackSenderFactoryTests
     public void A_bad_key_is_the_same_as_no_key()
     {
         Assert.Equal(FeedbackAvailability.NoRecipientKey, Factory(Ready() with { FeedbackPublicKey = "short" }, null).Availability);
+    }
+
+    [Fact]
+    public void The_staging_override_needs_both_the_id_and_the_key()
+    {
+        Assert.Equal(FeedbackAvailability.NoRecipientKey, Factory(Ready() with { FeedbackKeyId = null }, null).Availability);
     }
 
     [Fact]

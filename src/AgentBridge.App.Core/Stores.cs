@@ -132,8 +132,8 @@ public sealed record AppPreferences
     public string? UpdateInstallAsked { get; init; }
     public string? UpdateCheckAsked { get; init; }
     public string? Relay { get; init; }
-    // Send feedback (#738): the feedback public key (base64url, 32 bytes) and its id that bundles
-    // are sealed to. Unset means feedback is unavailable; the app ships no default key yet.
+    // Send feedback (#738): a staging override of the compiled-in recipient (key id and base64url
+    // public key), used only when both are set; otherwise FeedbackSenderFactory's production key applies.
     public string? FeedbackKeyId { get; init; }
     public string? FeedbackPublicKey { get; init; }
     // Turning this off makes feedback unavailable, whatever else is set.
