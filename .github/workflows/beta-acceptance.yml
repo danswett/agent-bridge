@@ -1,0 +1,55 @@
+# The Beta acceptance run (#1185, #736): the real published Beta installer on a fresh hosted
+# Windows runner, x64 and native Arm64. Dispatch only: no pull_request trigger, no cron, no secrets
+# beyond the default token. See quality/lab/beta-acceptance.ps1 for the steps.
+name: beta-acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: beta-acceptance
+  cancel-in-progress: false
+
+jobs:
+  accept:
+    name: accept (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: windows-latest }
+          - { arch: arm64, runner: windows-11-arm }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Run the acceptance steps
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./quality/lab/beta-acceptance.ps1 -Arch ${{ matrix.arch }} -Out "$env:RUNNER_TEMP/accept" -Repo ${{ github.repository }}
+      - name: Upload logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: beta-acceptance-${{ matrix.arch }}
+          path: ${{ runner.temp }}/accept
+          if-no-files-found: warn
+      - name: File an issue for a failure
+        if: failure()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $failed = @((Get-Content "$env:RUNNER_TEMP/accept/result.json" -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json).steps.PSObject.Properties |
+              Where-Object { $_.Value.result -eq 'FAIL' } | ForEach-Object { "$($_.Name): $($_.Value.detail)" })
+          $body = "Beta acceptance failed on ${{ matrix.arch }}.`n`n$($failed -join "`n")`n`nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue create --repo ${{ github.repository }} --title "Beta acceptance failed on ${{ matrix.arch }}" --body $body
