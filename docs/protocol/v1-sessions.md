@@ -108,6 +108,7 @@ with the wrong type):
 | `TransferResult` | | `blob`, `size`, `sha256`, `agent`, `launcher`, `files` |
 | `ManageCommand` (#801) | | `command` |
 | `ManageHaTokenRequest` (#801, held until #55) | | `command`, `secret` |
+| `UpdateCommand` ([v1-update.md](v1-update.md), #1159) | | `now` |
 | `HistoryResult` ([v1-history.md](v1-history.md)) | `before`, `start` | |
 | `HistoryTurn` | `id` | `prompt` |
 | `HistoryPrompt` | | `from` |
@@ -1322,7 +1323,7 @@ machine that became busier meanwhile keeps the download and installs at its next
 Product, #1161), lives at most 15 minutes from its signature (then it is dropped, spending no
 restart and cancelling no sign-in), is still never forced past the lease, and has its own
 allowance of 1 restart in 6 hours (owner, #1161), spent first, then counts against the same cap
-below ([v1-update.md](v1-update.md#update-now-1159-design-not-built-yet); design, not built).
+below ([v1-update.md](v1-update.md#update-now-1159); the host's half built, the app's not yet).
 At most **2 committed restarts
 every 6 hours** per machine until #55 (`rate-limited`), and 3 presses of each kind per device
 every 10 minutes. Once committed, the result is `accepted` with the planned-state

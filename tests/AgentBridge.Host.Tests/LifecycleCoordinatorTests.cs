@@ -2,6 +2,7 @@ using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -108,6 +109,46 @@ public sealed class LifecycleCoordinatorTests
         restart.Dispose();
         guard.Dispose();
         Assert.Null(gate.TryEnterDelivery());
+    }
+
+    // SRE's settled decision 2 on #1161: until #815's planned announcement is negotiated, an Update
+    // now a person signed leaves the old way, as a remote restart does; an automatic update never.
+    [Fact]
+    public async Task A_person_signed_Update_departure_uses_the_Legacy_path_as_a_remote_restart_does_and_an_automatic_one_never_does()
+    {
+        var time = new FakeTimeProvider();
+        var gate = new DeliveryGate(time);
+        var coordinator = new LifecycleCoordinator(gate, Conditions(), time: time);
+        using var automatic = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update, signedBy: null)).Value!;
+        Assert.Equal(QuietBlockedReason.AnnounceUnavailable, (await coordinator.AnnouncePlanned(automatic)).Reason);
+
+        using var pressed = (await coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.Update, PersonsPress())).Value!;
+        Assert.True((await coordinator.AnnouncePlanned(pressed)).Value!.Legacy);
+        Assert.NotNull(coordinator.CommitDeparture(pressed).Guard);
+        Assert.Null(gate.TryEnterDelivery());
+    }
+
+    [Fact]
+    public async Task Only_an_Update_departure_carries_a_persons_press()
+    {
+        var coordinator = new LifecycleCoordinator(new DeliveryGate(), Conditions());
+        await Assert.ThrowsAsync<ArgumentException>(() => coordinator.TryAcquireQuiet(TimeSpan.Zero, DeparturePurpose.RemoteRestart, PersonsPress()));
+    }
+
+    // A press only SignedPress makes, from a command that verifies for this machine.
+    static SignedPress PersonsPress()
+    {
+        var machine = P256KeyPair.Generate();
+        var phone = P256KeyPair.Generate();
+        var at = DateTimeOffset.UtcNow;
+        var body = new CommandBody
+        {
+            V = 1, Action = UpdateProtocol.NowAction, Request = Guid.NewGuid().ToString(),
+            Principal = new CommandPrincipal { Kind = "user", Device = Wire.DeviceId(phone.Public) },
+            Target = new CommandTarget { Machine = Wire.DeviceId(machine.Public) }, To = Wire.DeviceId(machine.Public),
+            IssuedAt = at.ToUnixTimeSeconds(), ExpiresAt = at.AddSeconds(60).ToUnixTimeSeconds(),
+        };
+        return SignedPress.Reverify(machine, SignedCommands.Sign(phone, machine.Public, body), UpdateProtocol.NowAction, "pwa 00000000")!;
     }
 
     [Fact]

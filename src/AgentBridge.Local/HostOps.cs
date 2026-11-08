@@ -51,15 +51,23 @@ public sealed record ProbeHoldResult(bool Busy, string? Why = null);
 
 // A device's press of Check or Install, waiting for this machine's app: carried in the host's
 // status, which the app follows, until the app says it has taken it (UpdateReport.Taken). By:
-// the device, as the host's log names it ("pwa 1a2b3c4d").
-public sealed record UpdateAsk(string Request, UpdateAskKind Kind, string By, DateTimeOffset At);
+// the device, as the host's log names it ("pwa 1a2b3c4d"). Now: an Update now (#1159), an Install
+// that skips the app's wait for a quiet machine; it is handed only to an app that says it carries
+// one (UpdateReport.CarriesUpdateNow), so an older app never reads it as a plain Install.
+public sealed record UpdateAsk(string Request, UpdateAskKind Kind, string By, DateTimeOffset At, UpdateNowAsk? Now = null);
+
+// An Update now's terms, as the person signed them: the release they were shown, what they
+// confirmed it may go over (absent on a quiet machine), and the end of the press's life (15 minutes
+// from its signature), after which the app drops it expired.
+public sealed record UpdateNowAsk(string Release, UpdateBusy? Accept, DateTimeOffset Until);
 
 // An unknown kind reads as Check, which changes nothing on the machine.
 [UnknownAs(Check)]
 public enum UpdateAskKind { Check, Install }
 
-// host.update.report: the app's updater now, and the asks it has taken on.
-public sealed record UpdateReport(UpdateState State, IReadOnlyList<string>? Taken = null);
+// host.update.report: the app's updater now, and the asks it has taken on. CarriesUpdateNow: the app
+// can carry an Update now (#1159); an older one says nothing, and the devices are told old-app.
+public sealed record UpdateReport(UpdateState State, IReadOnlyList<string>? Taken = null, bool CarriesUpdateNow = false);
 
 // host.relay.account: the relay that issued the account, and the account. Token is a bearer
 // credential for that relay, as private as the device key.

@@ -243,9 +243,13 @@ const READS = {
   LaunchedTransfer: { read: (j) => readLaunchResult({ launched: { agent: 'claude', transfer: j } }).launched.transfer },
   TrustQuestion: { read: readTrustQuestion },
   TrustAnswerResult: { read: readTrustResult },
-  UpdateState: { read: readUpdateState },
-  UpdateResult: { read: (j) => readUpdateState({ last: j }).last },
-  UpdateCommandResult: { read: readUpdateCommandResult },
+  // Update now's fields (#1159) are read from its client slice (3) on.
+  UpdateState: { read: readUpdateState, unread: ['canUpdateNow', 'updateNowWhy', 'updateNowAt', 'busy', 'requestNow', 'waitingCode', 'last.code'] },
+  UpdateResult: { read: (j) => readUpdateState({ last: j }).last, unread: ['code'] },
+  UpdateCommandResult: {
+    read: readUpdateCommandResult,
+    unread: ['code', 'state.canUpdateNow', 'state.updateNowWhy', 'state.updateNowAt', 'state.busy', 'state.requestNow', 'state.waitingCode', 'state.last.code'],
+  },
   SignInDevices: { read: readSignInDevices },
   SignInDevice: { read: (j) => readSignInDevices({ state: 'ready', devices: [j] })?.devices[0] ?? null },
   UsageReport: { read: readUsage },
@@ -427,7 +431,10 @@ const NOT_REPLAYED = {
   CommandTarget: 'replayed by signing signed-command.json\'s commands again',
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
-  UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it',
+  UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it; Update now\'s is #1159\'s client slice (3)',
+  UpdateNowArgs: 'the PWA does not offer Update now yet (#1159 slice 3)',
+  UpdateBusy: 'the PWA does not offer Update now yet (#1159 slice 3)',
+  UpdateBusySession: 'the PWA does not offer Update now yet (#1159 slice 3)',
   // #801 slice A is the host's half; the PWA's controls wait for ui.md's spec.
   ManageCommand: 'the PWA does not manage machines yet (#801)',
   ManageRepairArgs: 'the PWA does not manage machines yet (#801)',

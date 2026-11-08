@@ -850,21 +850,50 @@ public static class ProtocolVectors
         f.Record<UpdateResult>(Host)
             .Valid("updated", last)
             .Valid("refused", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "a session is busy", At = T0 })
+            // Update now (#1159): how it ended as a code, which a client words itself.
+            .Valid("an-update-now-refused-with-a-code", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "Update now has used its restarts", Request = Request, Code = UpdateCode.RestartCap, At = T0 })
             .Reads("an-unknown-outcome-reads-as-failed", """{"outcome":"rolledBack","at":"2026-10-28T04:22:43.182Z"}""");
+        // What Update now would go over (#1159): ids and states only, approvals first; past 32, how
+        // many of each kind were left out.
+        var approval = new UpdateBusySession(SessionId, UpdateBusyState.Approval);
+        f.Record<UpdateBusySession>(Host)
+            .Valid("an-approval", approval)
+            .Valid("a-turn", new UpdateBusySession("s-2", UpdateBusyState.Working));
+        var busy = new UpdateBusy { Working = 1, Waiting = 1, Sessions = [approval, new UpdateBusySession("s-2", UpdateBusyState.Working)] };
+        f.Record<UpdateBusy>(Host)
+            .Valid("quiet", new UpdateBusy())
+            .Valid("an-approval-and-a-turn", busy)
+            .Valid("past-32", new UpdateBusy
+            {
+                Working = 2, Waiting = 32, Sessions = [.. Enumerable.Range(0, UpdateProtocol.BusyListed).Select(i => new UpdateBusySession($"s-{i}", UpdateBusyState.Approval))],
+                MoreApprovals = 0, MoreOther = 2,
+            })
+            .Valid("cant-tell", new UpdateBusy { Unknown = true });
+        f.Record<UpdateNowArgs>(Client)
+            .Valid("one-press", new UpdateNowArgs { Now = true, Release = "0.1.201" })
+            .Valid("confirmed", new UpdateNowArgs { Now = true, Release = "0.1.201", Accept = busy });
         var state = new UpdateState
         {
             Current = "0.1.200", Installer = true, Available = "0.1.201", Notes = "Fixes the flaky reconnect.", CheckedAt = T0, Phase = UpdatePhase.Downloading, Progress = 40,
             Request = Request, Automatic = true, Last = last,
         };
+        var offered = state with { Phase = UpdatePhase.Idle, Progress = null, Request = null, CanUpdateNow = true, Busy = busy };
         f.Record<UpdateState>(Host)
             .Valid("downloading", state)
             .Valid("waiting", state with { Phase = UpdatePhase.Waiting, Progress = null, Waiting = "a session is busy" })
             .Valid("no-app", new UpdateState { Unavailable = "the Windows app is not running" })
+            .Valid("update-now-offered", offered)
+            .Valid("update-now-held-by-the-restart-cap", offered with { CanUpdateNow = false, Busy = null, UpdateNowWhy = UpdateNowWhy.RestartCap, UpdateNowAt = T0.AddHours(6) })
+            .Valid("an-update-now-waiting-for-a-turn", state with { Phase = UpdatePhase.Waiting, Progress = null, RequestNow = true, WaitingCode = UpdateWaitingCode.TurnRunning })
             .Reads("an-unknown-phase-reads-as-idle", """{"current":"0.1.200","installer":true,"phase":"verifying","automatic":false}""");
-        f.Record<UpdateCommand>(Client).Valid("a-press", new UpdateCommand(Request));
+        f.Record<UpdateCommand>(Client)
+            .Valid("a-press", new UpdateCommand(Request))
+            .Valid("an-update-now", new UpdateCommand { Now = Signed });
         f.Record<UpdateCommandResult>(Host)
             .Valid("accepted", new UpdateCommandResult(UpdateAck.Accepted) { State = state with { Phase = UpdatePhase.Checking, Progress = null } })
             .Valid("refused", new UpdateCommandResult(UpdateAck.Refused, "the machine is read-only"))
+            .Valid("an-update-now-refused-with-a-code", new UpdateCommandResult(UpdateAck.Refused, "the release offered here is no longer the one the person was shown") { Code = UpdateCode.ReleaseChanged })
+            .Valid("confirm", new UpdateCommandResult(UpdateAck.Confirm, "more is busy here than the confirmation covered") { State = offered })
             .Reads("an-unknown-outcome-reads-as-refused", """{"outcome":"maybe"}""");
     }
 

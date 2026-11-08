@@ -70,7 +70,8 @@ read-only. The pipe never offers it.
 
 `request` is the device's UUID for one press; the same press sent again is the same ask.
 `update.check` and `update.install` without one fail with an error. `now` is **Update now**
-([below](#update-now-1159-design-not-built-yet)): designed, not built. Its press carries the
+([below](#update-now-1159)): the host's half is built (slice 1), the app's, the PWA's and the
+Windows app's are not yet. Its press carries the
 request **only inside the signed command**, never beside it, so a host that doesn't know `now`
 finds no `request` and refuses the press with that error: it can never fall back to a plain
 Install (Connection, settled decision 6). A client never sends both: a host that knows `now`
@@ -94,12 +95,12 @@ review, Low). A client sends it only to a machine whose state says `canUpdateNow
 | `request` | string? | The press being carried out now, if one is |
 | `automatic` | bool | Whether the app installs updates without being asked. From #516 on, `true` only on a machine set to "Install between turns" (#689), whose phase is then `waiting` while a release waits for a gap between turns |
 | `last` | `UpdateResult`? | How the last update asked for, or installed by itself, ended |
-| `canUpdateNow` | bool | **#1159, not built.** Whether Update now can be pressed here: the app running, installed and new enough to carry it out, `permissions.remoteManage` on, the machine not read-only, no agent sign-in under way, no other Update now downloading or leaving, and a restart slot free (its own allowance or the shared cap, settled Q7). Absent reads as false |
-| `updateNowWhy` | string? | **#1159, not built.** With `available` set and `canUpdateNow` false: why, as a code (`disabled`, `read-only`, `old-app`, `unavailable`, `sign-in`, `busy`, `restart-cap`), which a client words itself ([What the person sees](#what-the-person-sees)). A read-only machine serves no `update.*` at all; `read-only` is for a state a client already holds when the machine turns read-only, or one served in the moment before it notices |
-| `updateNowAt` | time? | **#1159, not built.** With `updateNowWhy` `restart-cap`: when the first slot frees, of its own allowance or the shared cap |
-| `busy` | `UpdateBusy`? | **#1159, not built.** Only with `canUpdateNow`: what Update now would go over, from the host's own session snapshot ([What the phone sees](#what-the-phone-sees-before-the-press)) |
-| `requestNow` | bool | **#1159, not built.** The press in `request` is an Update now |
-| `waitingCode` | string? | **#1159, not built.** With phase `waiting`: why, as a code a client words itself (`turn-running`, `question-waiting`, `unknown`, `usage-check`), never showing `waiting`'s text ([The confirmation](#the-confirmation)) |
+| `canUpdateNow` | bool | **#1159, the host's.** Whether Update now can be pressed here: the app running, installed and new enough to carry it out (it says so in `host.update.report`'s `carriesUpdateNow`), `permissions.remoteManage` on, the machine not read-only, no agent sign-in under way, no other Update now downloading or leaving, and a restart slot free (its own allowance or the shared cap, settled Q7). Absent reads as false. Whatever the app puts here is dropped |
+| `updateNowWhy` | string? | **#1159, the host's.** With `available` set and `canUpdateNow` false: why, as a code (`disabled`, `read-only`, `old-app`, `unavailable`, `sign-in`, `busy`, `restart-cap`), which a client words itself ([What the person sees](#what-the-person-sees)). A read-only machine serves no `update.*` at all; `read-only` is for a state a client already holds when the machine turns read-only, or one served in the moment before it notices |
+| `updateNowAt` | time? | **#1159, the host's.** With `updateNowWhy` `restart-cap`: when the first slot frees, of its own allowance or the shared cap |
+| `busy` | `UpdateBusy`? | **#1159, the host's.** Only with `canUpdateNow`: what Update now would go over, from the host's own session snapshot ([What the phone sees](#what-the-phone-sees-before-the-press)); sent again when a session changes, at most every 2 s |
+| `requestNow` | bool | **#1159, the app's; not sent yet (slice 2).** The press in `request` is an Update now |
+| `waitingCode` | string? | **#1159, the app's; not sent yet (slice 2).** With phase `waiting`: why, as a code a client words itself (`turn-running`, `question-waiting`, `unknown`, `usage-check`), never showing `waiting`'s text ([The confirmation](#the-confirmation)) |
 
 An unknown `phase` reads as `idle`. Text fields are cut to 64 bytes (versions), 512 (reasons)
 and 4 KiB (notes).
@@ -112,7 +113,7 @@ and 4 KiB (notes).
 | `from`, `to` | string? | The releases |
 | `reason` | string? | |
 | `request` | string? | The press it answers; absent for one the person started at the machine (Restart to update), or an automatic one before #516 |
-| `code` | string? | **#1159, not built.** For an Update now, as in `UpdateCommandResult` |
+| `code` | string? | **#1159, the app's; not sent yet (slice 2).** For an Update now, as in `UpdateCommandResult` |
 | `at` | time | |
 
 An install restarts the app and host, so its outcome is reported by the new version: the app
@@ -130,10 +131,10 @@ again": an install pressed hours before must not go ahead on sessions never watc
 
 | Field | Type | |
 |---|---|---|
-| `outcome` | `accepted` `refused` `confirm` | `confirm` (#1159, not built): an Update now that would go over more than the person accepted; nothing was asked, and `state.busy` says what is busy now. An unknown outcome reads as `refused`. `accepted`: the machine's app has been asked, and how it goes is in the state (`request`, then `last` with this request). A Check that finds a newer release ends instead with `request` gone and `available` and `checkedAt` set (`last` stays how the last update, or a check finding nothing, ended). `refused`: nothing was asked |
+| `outcome` | `accepted` `refused` `confirm` | `confirm` (#1159): an Update now that would go over more than the person accepted; nothing was asked, and `state.busy` says what is busy now. An unknown outcome reads as `refused`. `accepted`: the machine's app has been asked, and how it goes is in the state (`request`, then `last` with this request). A Check that finds a newer release ends instead with `request` gone and `available` and `checkedAt` set (`last` stays how the last update, or a check finding nothing, ended). `refused`: nothing was asked |
 | `reason` | string? | Why it was refused |
 | `state` | `UpdateState`? | The state as the press found it |
-| `code` | string? | **#1159, not built.** Only for a press with `now`: why it was refused or needs confirming, as a code: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`release-changed`, `other-profile`, `old-app`, `restart-cap`, `sign-in`, `usage-check`). Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
+| `code` | string? | **#1159.** Only for a press with `now`: why it was refused or needs confirming, as a code: `manage.*`'s reason codes (`ManageReason`) and Update now's own (`release-changed`, `other-profile`, `old-app`, `restart-cap`, `sign-in`, `usage-check`). Clients word it themselves ([What the person sees](#what-the-person-sees)); `reason` stays for the log and older clients. An unknown code reads as a refusal |
 
 The host refuses a device that is not connected to the relay now, one that is not a person's,
 and a press with no app to carry it out. The app's refusals (another profile running, the host
@@ -142,10 +143,25 @@ answered `accepted` by then. A press the app has not taken within ten minutes la
 host, and an app that comes to it later (from a status it was slow to read) refuses it, with
 `last` saying so, rather than carrying it out late.
 
-## Update now (#1159): design, not built yet
+## Update now (#1159)
 
-Everything in this section is a design for review. No host, app or client carries it yet, and
-the fields marked #1159 above are not sent.
+**Where it stands.** Slice 1, the host and the protocol, is built: the press, its signed-command
+gate (shared with `manage.*`), the durable record of presses (`update-now.json`), `busy`,
+`canUpdateNow` and `updateNowWhy`, the confirm outcome, the restart allowance, the `Update`
+purpose's conditions and the host's half of the departure (`UpdateService.DepartAsync`). Not yet:
+the app-only pipe op that calls the departure (proposed `host.update.depart`, #870's lane, which
+owns that step's contract; until it lands the host's half is reached only by its tests), the
+app's half (slice 2: it takes no `now` ask, reports no `requestNow`, `waitingCode` or `last.code`,
+and says nothing of `carriesUpdateNow`, so every host answers `updateNowWhy` `old-app` until it
+does), and the clients (slices 3 and 4). Everything below is the design all slices follow.
+
+**The bound on the press's size.** A signed command's `body` is at most 2048 base64url
+characters for every action ([v1-transfer.md](v1-transfer.md#the-signed-command)) but
+`update.install.now`, whose bound is **4096**, checked before the MAC as every bound is. This is
+deliberate and per action: the press's signed `accept` lists up to 32 busy sessions by id and
+state, and 32 UUIDs with the envelope and every count at its largest come to 3,476 characters
+(`signed-command.json`'s `an-update-now-at-its-longest`), where 2048 holds only 17. No other
+action reads a body past 2048, so the same body signed for another action is refused malformed.
 
 **Why.** The owner, 2026-11-07 10:33 PT: *"I need a way to force updates to happen from my
 phone. When machines are really active they can't find a gap in turns to update, and I want to
@@ -214,12 +230,18 @@ command lives at most **2 minutes** from `issuedAt`, as a manage command does; t
 starts lives at most **15 minutes** from that `issuedAt` ([After the press](#the-confirmation)).
 
 **Replay, durably** (security review, Medium 3). The host records each `request` it verifies in
-its profile folder (proposed `update-now.json`, as `manage.json` keeps `manage.*`'s), written
+its profile folder (`update-now.json`, as `manage.json` keeps `manage.*`'s), written
 through **before** the ask is handed to the app, and keeps it for the press's longest life, 15
 minutes from `issuedAt` plus `Skew`; the record survives the host's own restart. A command whose
 `request` is recorded is the same press: it gets that press's answer and is never acted on
-again, whether the first was handed to the app, was still being verified, or was taken by a host
-that has restarted since. The app's own record of the last 32 presses stays as a second line,
+again, whether the first was handed to the app, was still being verified (refused `busy`, or
+`changed` once the host that was verifying it has restarted), or was taken by a host
+that has restarted since. An accepted press keeps its signed command there, so its departure
+(step 3 of [Going](#going-the-lease-and-the-departure)) verifies the signature again, on this host
+or one that restarted meanwhile, and leaves only once: the record marks it done when it has left
+or been refused there. A record that can't be read fails closed: presses signed before it was
+found unreadable are refused `changed`; one that can't be written, or that already holds 256
+presses inside their life, refuses the press. The app's own record of the last 32 presses stays as a second line,
 not the authority. Its `args`, signed with the rest:
 
 | Arg | | |
@@ -476,6 +498,19 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
    two. Any step failing ends it there, with `announce-failed`,
    `changed` (a lease that ran out), `restart-cap` or the eligibility's reason, and the host
    serves on.
+
+   **Built (slice 1):** the host's half is `UpdateService.DepartAsync(request)`, answering
+   committed, waiting (with the waiting code) or refused (with the code); the pipe op that calls
+   it is #870's and not wired yet. It acts only on a press this host, or one before it, recorded
+   as accepted and not yet gone ([Replay, durably](#the-press)), its signature verified again,
+   else refuses `changed`; and on a release still offered, else `release-changed`. The `Update`
+   purpose's conditions are registered once, where the host composes remote management
+   (`ManageComposition`): the remote restart's eligibility (not read-only, `permissions.remoteManage`
+   on, no sign-in entrypoint on) and no other profile's host running from the installation
+   (`other-profile`). A purpose is registered only once, so #819's and #870's `Update`
+   conditions join this registration rather than register beside it; the conditions of a purpose
+   apply to every departure of it, so one an Update now must not meet (#819's "app running", say,
+   where the app is what leaves) needs that lane's decision ([host-lifecycle.md](../host-lifecycle.md)).
 4. Committed, the host refuses new deliveries until it exits (`DepartureGuard`), answers the app
    `committed`, and waits up to 3 s (`ManageService.LeaveAnyway`) for its replies to be sent.
    The app stops the host and hands the checked copy to `Update.exe`, as today. If the host has
@@ -865,5 +900,5 @@ once-a-minute look at the others, every ten seconds instead while an update ther
 The Windows app follows it on each other machine's connection, and lists them on the Sessions
 page; its own machine's updates are in Settings, and its Check all checks this machine too.
 Neither offers Install on a machine that is read-only, whose app is not running, or that has
-nothing newer. Update now (#1159, not built) is offered beside Install only where `canUpdateNow`
+nothing newer. Update now (#1159; the host serves it, no client offers it yet) is offered beside Install only where `canUpdateNow`
 is true.
