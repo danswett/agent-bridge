@@ -909,6 +909,48 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   mono, age). Below three panes Tools is a tab beside Conversation, and Details takes the
   conversation's place until pressed again. Delegates (#176) join the inspector and the tabs: a
   delegate chosen takes the inspector in place of Details and Tools (§6.3).
+- **Model, effort and context on a running session** (#1142, planned; Product accepted
+  2026-11-07). Not built: the table above and `session-details.json` don't change until the
+  host reports these per session (#1142 PR 2). Then Effort and Context join Model in the who
+  group, and switching (#1142 PR 3) works as follows.
+  - **What the host sends, per axis:** the current value; the allowed values, each with `value`,
+    display `label`, cost `tier` and `isDefault`; `applies` (`live`, `nextTurn`, `launch` or
+    `resume`); any `pending` change (`value`, `by`, `at`); and a refusal's reason. The UI
+    offers nothing the host didn't list. The host builds those lists by interrogating the
+    agent live, never from remembered or cached values, so the UI offers only what the agent
+    reported as supported now.
+  - **Rows:** a value shows its `label` in the text face (§4.2), and the raw value only when there
+    is no label. A value the host didn't send is left out, as for any row; one the agent can't
+    report reads "Not reported", never a guess. These rows never appear on a session row
+    (§6.1) or in the header.
+  - **Changeable or not:** an axis this session can switch is a button, named "Model, Sonnet
+    5.5, change". One it can't is a plain row with the reason in secondary text, "Set at
+    launch" or "Changes on resume". The row stays visible so nobody hunts for a missing
+    control.
+  - **The chooser:** a sheet below 760, inline in the inspector at three panes, a RadioButtons
+    flyout in the Windows app. It lists only this session's allowed values, the current one
+    checked and the agent's default marked "Default". A costly value carries a "Higher cost"
+    tag in words, never colour alone. The new-session sheet uses the same chooser, labels and
+    tags, fed from the machine's launch options (#1142 PR 1), so launching and switching look
+    the same.
+  - **Costly change:** only a move to a higher cost tier asks first: "Switch to Opus 5.5? It
+    costs more per turn than Sonnet 5.5." The buttons are Switch and Cancel, with focus on
+    Cancel. A same-tier or cheaper move doesn't ask. An agent caller must pass the same confirm
+    flag. Every change is audited, whoever made it (owner decision, 2026-11-07).
+  - **States, in words on the row and announced politely:**
+
+    | State | Row reads |
+    |---|---|
+    | Requested | "Switching to Opus 5.5…"; the value stays the old one |
+    | Mid-turn | "Opus 5.5 from next turn" |
+    | Applied | The new value, only once the session's own reading shows it; never on faith |
+    | Refused | The old value and "Not changed: {reason}" |
+    | Unconfirmed after the host's timeout | "Couldn't confirm the switch. Still showing Sonnet 5.5." |
+    | Machine away (§2.2) | The button is disabled: "Machine offline" |
+    | Another device's pending change | Shown on every device, so two people don't race |
+
+  - **Attribution:** each applied change adds one event line to the conversation, "Model
+    changed to Opus 5.5 by {device or agent}", with the "Higher cost" tag when it applies.
 - **An `ask_user` call in Tools** (#253) is one line without its summary. While its question
   (Question `id` is the call's id) waits, it reads "Waiting on you", a link to the question.
   After, it reads the call's reported status ("Done", "Failed"), since a call can end without
