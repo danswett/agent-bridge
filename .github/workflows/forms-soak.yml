@@ -1,0 +1,113 @@
+name: Forms soak (hosted runner, manual)
+
+# DRAFT until a Copilot-entitled lab token exists (#915). The Copilot CLI cannot start without a
+# login or COPILOT_GITHUB_TOKEN, and no such token is provisioned as a secret for this repository.
+# This workflow reads the secret COPILOT_LAB_TOKEN, which does not exist yet; with it empty the
+# first step fails by design. Nothing here invents or stores a token.
+#
+# Manual dispatch only: it runs tools/lab/forms-soak (screen-only mode) on a fresh GitHub-hosted
+# Windows VM, so nothing of anyone's machine, sessions or host is touched. It tests the screen
+# reader and the injector, not session.answer.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cli_version:
+        description: 'Copilot CLI version to install from npm (pinned, for example 1.0.107)'
+        required: true
+        type: string
+      sizes:
+        description: 'Console sizes, comma separated'
+        default: '120x30,120x50,200x50,250x40'
+        type: string
+      shapes:
+        description: 'Form shapes, comma separated'
+        default: 'choice,choice-text,choice-yesno-text,number,long-title,tall,other'
+        type: string
+      iterations:
+        description: 'Passes over the whole matrix'
+        default: '1'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_LAB_TOKEN }}
+      CLI_VERSION: ${{ inputs.cli_version }}
+      SIZES: ${{ inputs.sizes }}
+      SHAPES: ${{ inputs.shapes }}
+      ITERATIONS: ${{ inputs.iterations }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Require the lab token
+        shell: pwsh
+        run: |
+          if (-not $env:COPILOT_GITHUB_TOKEN) {
+            Write-Error 'No Copilot-entitled lab token (secret COPILOT_LAB_TOKEN, #915) is provisioned, so the Copilot CLI cannot start. Nothing was run.'
+            exit 1
+          }
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install PowerShell 7.6 (the host's assemblies need .NET 10)
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'pwsh.zip'
+          Invoke-WebRequest 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/PowerShell-7.6.9-win-x64.zip' -OutFile $zip
+          Expand-Archive $zip (Join-Path $env:RUNNER_TEMP 'pwsh76')
+
+      - name: Install the pinned Copilot CLI
+        shell: pwsh
+        run: |
+          npm install -g "@github/copilot@$env:CLI_VERSION"
+          $cmd = (Get-Command copilot.cmd).Source
+          "COPILOT_EXE=$cmd" | Add-Content $env:GITHUB_ENV
+          copilot --version
+
+      - name: Publish the host's delivery code and the injector
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'host'
+          dotnet publish src/AgentBridge.Host.Delivery -c Release -o $out --nologo
+          dotnet publish src/AgentBridge.Injector -c Release -r win-x64 -o $out --nologo
+          "AGENT_BRIDGE_HOST_DIR=$out" | Add-Content $env:GITHUB_ENV
+
+      - name: Run the soak
+        shell: pwsh
+        run: |
+          $pwsh76 = Join-Path $env:RUNNER_TEMP 'pwsh76\pwsh.exe'
+          & $pwsh76 -NoProfile -File tools/lab/forms-soak/Invoke-FormsSoak.ps1 `
+            -CopilotPath $env:COPILOT_EXE -Sizes $env:SIZES -Shapes $env:SHAPES `
+            -Iterations ([int]$env:ITERATIONS) -OutDir (Join-Path $env:RUNNER_TEMP 'soak-results')
+          exit $LASTEXITCODE
+
+      - name: Summarize
+        if: always()
+        shell: pwsh
+        run: |
+          $csv = Join-Path $env:RUNNER_TEMP 'soak-results\results.csv'
+          if (Test-Path $csv) { Import-Csv $csv | Group-Object outcome | ForEach-Object { "- $($_.Name): $($_.Count)" } | Add-Content $env:GITHUB_STEP_SUMMARY }
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: forms-soak-results
+          path: |
+            ${{ runner.temp }}/soak-results/results.csv
+            ${{ runner.temp }}/soak-results/results.md
+          if-no-files-found: ignore
