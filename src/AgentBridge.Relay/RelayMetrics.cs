@@ -8,16 +8,16 @@ namespace AgentBridge.Relay;
 public sealed class RelayMetrics
 {
     public const string MeterName = "AgentBridge.Relay";
-    public static readonly IReadOnlySet<string> AllowedTags = new HashSet<string> { "kind", "outcome", "code" };
+    public static readonly IReadOnlySet<string> AllowedTags = new HashSet<string> { "kind", "outcome", "code", "site" };
 
     readonly Histogram<double> forwardLatency, connectTime;
     readonly Counter<long> connects, disconnects, refusals, frames, bytes, undeliverable, pushes, signIns, blobs, blobBytes, roster;
 
-    public RelayMetrics(IMeterFactory factory, Func<int> online, Func<IEnumerable<KeyValuePair<string, int>>>? onlineByKind = null)
+    public RelayMetrics(IMeterFactory factory, Func<int> online, Func<IEnumerable<(string Kind, string Site, int Count)>>? onlineByKind = null)
     {
         var meter = factory.Create(MeterName);
         meter.CreateObservableGauge("relay.connections", online, description: "Admitted sockets on this replica");
-        meter.CreateObservableGauge("relay.sockets.live", () => (onlineByKind?.Invoke() ?? []).Select(k => new Measurement<int>(k.Value, new KeyValuePair<string, object?>("kind", k.Key))), description: "Admitted sockets on this replica, by device kind");
+        meter.CreateObservableGauge("relay.sockets.live", () => (onlineByKind?.Invoke() ?? []).Select(k => new Measurement<int>(k.Count, new KeyValuePair<string, object?>("kind", k.Kind), new KeyValuePair<string, object?>("site", k.Site))), description: "Admitted sockets on this replica, by device kind and the configured hostname they arrived on (or other)");
         forwardLatency = meter.CreateHistogram<double>("relay.forward.latency", unit: "ms", description: "Data frame received to written to its target, by the sender's device kind");
         connectTime = meter.CreateHistogram<double>("relay.connect.duration", unit: "ms", description: "Socket opened to admitted (ready sent), by device kind");
         connects = meter.CreateCounter<long>("relay.connects", description: "Admitted sockets, by device kind");
@@ -33,7 +33,7 @@ public sealed class RelayMetrics
         roster = meter.CreateCounter<long>("relay.roster", description: "Machine roster loads, writes and forgets, by kind and outcome");
     }
 
-    public void Connected(string kind) => connects.Add(1, new KeyValuePair<string, object?>("kind", kind));
+    public void Connected(string kind, string site) => connects.Add(1, new KeyValuePair<string, object?>("kind", kind), new KeyValuePair<string, object?>("site", site));
     public void Disconnected(string outcome) => disconnects.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
     public void Refused(int code) => refusals.Add(1, new KeyValuePair<string, object?>("code", code));
     public void Forwarded(int length) { frames.Add(1); bytes.Add(length); }

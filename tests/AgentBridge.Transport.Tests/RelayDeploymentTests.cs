@@ -200,14 +200,14 @@ public class RelayDeploymentTests
         // account, device, session, address or user is added to the allow-list.
         string[] idLike = ["id", "account", "device", "session", "user", "login", "name", "address", "ip", "token", "payload"];
         Assert.All(RelayMetrics.AllowedTags, k => Assert.DoesNotContain(idLike, w => k.Contains(w, StringComparison.OrdinalIgnoreCase)));
-        Assert.Equal(["code", "kind", "outcome"], RelayMetrics.AllowedTags.Order());
+        Assert.Equal(["code", "kind", "outcome", "site"], RelayMetrics.AllowedTags.Order());
     }
 
     [Fact]
     public void Latency_and_connect_histograms_and_the_live_gauge_are_dimensioned_by_kind_only()
     {
         var factory = new ServiceCollection().AddMetrics().BuildServiceProvider().GetRequiredService<IMeterFactory>();
-        var metrics = new RelayMetrics(factory, () => 3, () => [new("host", 2), new("app", 1)]);
+        var metrics = new RelayMetrics(factory, () => 3, () => [("host", "relay.slipgates.com", 2), ("app", "other", 1)]);
         var seen = new List<(string Instrument, double Value, string[] Keys, object? Kind)>();
         using var listener = new MeterListener();
         // Relays in other tests share the meter name and run in parallel: listen to this factory only.
@@ -225,8 +225,53 @@ public class RelayDeploymentTests
             Assert.Contains(seen, s => s.Instrument == "relay.forward.latency" && s.Value == 12 && (string?)s.Kind == "app");
             Assert.Contains(seen, s => s.Instrument == "relay.connect.duration" && s.Value == 40 && (string?)s.Kind == "host");
             Assert.Contains(seen, s => s.Instrument == "relay.sockets.live" && s.Value == 2 && (string?)s.Kind == "host");
-            Assert.All(seen.Where(s => s.Instrument is "relay.forward.latency" or "relay.connect.duration" or "relay.sockets.live"), s => Assert.Equal(["kind"], s.Keys));
+            Assert.All(seen.Where(s => s.Instrument is "relay.forward.latency" or "relay.connect.duration" or "relay.sockets.live"), s => Assert.Equal(s.Instrument == "relay.sockets.live" ? ["kind", "site"] : ["kind"], s.Keys));
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Healthz_counts_live_sockets_by_configured_hostname_and_kind_and_nothing_else()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(1, "octo");
+        await using var host = await relay.ConnectAsync(token, "host-a", "host");
+        await using var app = await relay.ConnectAsync(token, "app-b", "app");
+        var hub = relay.App.Services.GetRequiredService<RelayHub>();
+
+        var sockets = hub.OnlineByKind().ToList();
+        Assert.Contains(sockets, s => s is { Kind: "host", Site: "other", Count: 1 });
+        Assert.Contains(sockets, s => s is { Kind: "app", Site: "other", Count: 1 });
+
+        var body = await new HttpClient().GetStringAsync(new Uri(relay.Url, "/healthz"));
+        Assert.Contains("\"sockets\"", body);
+        foreach (var identity in new[] { "octo", "host-a", "app-b", host.Id[..8] }) { Assert.DoesNotContain(identity, body); }
+
+        // A hostname nobody is on is listed with 0, not missing, so it reads differently from a relay that is down.
+        Assert.Contains(sockets, s => s is { Kind: "host", Site: "relay.bad-duck.com", Count: 0 });
+        Assert.Contains(sockets, s => s is { Kind: "pwa", Site: "other", Count: 0 });
+
+        // Closing a socket takes it back out of the count.
+        await app.DisposeAsync();
+        for (var i = 0; i < 100 && hub.OnlineByKind().Any(s => s is { Kind: "app", Site: "other", Count: > 0 }); i++) { await Task.Delay(50); }
+        Assert.Contains(hub.OnlineByKind(), s => s is { Kind: "app", Site: "other", Count: 0 });
+        Assert.Contains(hub.OnlineByKind(), s => s is { Kind: "host", Site: "other", Count: 1 });
+    }
+
+    [Theory]
+    [InlineData("relay.slipgates.com", "relay.slipgates.com")]
+    [InlineData("RELAY.BAD-DUCK.COM", "relay.bad-duck.com")]
+    [InlineData("relay.bad-duck.com.", "relay.bad-duck.com")]
+    [InlineData("relay.slipgates.com:443", "relay.slipgates.com")]
+    [InlineData("127.0.0.1", "other")]
+    [InlineData("evil.example", "other")]
+    [InlineData("", "other")]
+    [InlineData(null, "other")]
+    public async Task A_socket_is_counted_under_a_configured_hostname_or_other_never_free_text(string? host, string expected)
+    {
+        await using var relay = await TestRelay.StartAsync();
+
+        Assert.Equal(expected, relay.App.Services.GetRequiredService<RelayHub>().SiteOf(host));
     }
 
     [Fact]
