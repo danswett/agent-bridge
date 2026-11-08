@@ -506,6 +506,10 @@ to 4 s, and with the app open the radio barely rested (#610: the largest battery
 |---|---|
 | `visible` | Required. Whether the app is on screen now (the page is visible, the window not minimised) |
 | `open` | The session it shows, if any. Absent or `null` on the list, or another machine's session |
+| `openQuestion` | Optional string: the id of the question the card of the `open` session shows, if it has one on screen. Absent means none, or unknown, and is never read as "every question". Only with `open`. A host holding a question push for that id may treat it as read, and must not treat any other question's as read |
+| `idleMs` | Optional integer ≥ 0: milliseconds since the person's last input in the app (pointer, key, touch, wheel), measured when the request is sent. An age, not a time, so the clocks of phone and host need not agree: the host keeps `receivedAt - idleMs`. Absent means unknown, and a host must treat it as **not active**, never as 0 |
+
+A client sends the focus when its page's visibility, open session or `openQuestion` changes (once with `"visible": false` when it goes out of sight), and after every `sessions.subscribe`. While `visible` it also says it again on the first input after a spell without any, and about once a minute while input goes on, so a host's window of recent input stays fresh; never more than once in 2 s on input alone, and nothing periodic while idle or hidden (#1190).
 
 Result: `{}`. A request without `visible`, or with a field of the wrong type, fails as a request, as does one past 20 on a channel in 10 s: a client says it when its page or session changes, not more.
 It is for a person's devices: a pinned `service` or `host` peer is neither offered nor allowed it.
