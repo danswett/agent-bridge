@@ -1224,6 +1224,12 @@ summary {
   border: 1px solid var(--ab-needs); background: var(--ab-needs-fill);
 }
 .question-head { margin: 8px 0 0; font-size: .95rem; color: var(--ab-needs-head); }
+/* A question that is no longer waiting (ui.md §7): the same words, in neutral stroke and text, with
+   nothing in the amber that says it needs you. */
+.question.resolved { border-color: var(--ab-stroke2); background: transparent; }
+.question.resolved .question-head { color: var(--ab-text2); }
+.question.resolved :is(.badge, .badge.req) { color: var(--ab-text2); }
+.question.resolved > .answer-receipt { margin-top: 0; }
 .question[data-kind="approval"] .question-head::before { content: "🔒 "; }
 .fields { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 12px; }
 .field-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
@@ -1389,7 +1395,7 @@ summary {
 :is(form.reply, form.answer) > .answer-status:not(:empty) { display: flow-root; }
 :is(form.reply, form.answer) > .answer-status::before { content: ""; float: left; padding-top: clamp(0px, (639.5px - 100%) * 1000, 2.8em); }
 :is(form.reply, form.answer) > .answer-status.room:empty { display: flow-root; visibility: hidden; }
-.answer-status.progress, .answer-receipt.progress, .answer-status.done, .answer-receipt.done { color: var(--ab-text2); }
+.answer-status.progress, .answer-receipt.progress, .answer-status.done, .answer-receipt.done, .answer-status.closed, .answer-receipt.closed { color: var(--ab-text2); }
 .answer-status.warn, .answer-receipt.warn { color: var(--ab-needs-text); }
 .answer-status.bad, .answer-receipt.bad { color: var(--ab-danger-text); }
 .answer-receipt { padding: 8px 0; }
@@ -1442,14 +1448,16 @@ summary {
 @media (forced-colors: active) {
   /* Every word is CanvasText, so every failure says itself in words. Send's ring and check take
      Send's own colours (currentColor, as its arrow does), a still ring too: it stands still. */
-  :is(.answer-status, .answer-receipt, .needs-status):is(.progress, .done, .warn, .bad), :is(.answer-status, .answer-receipt, .needs-status) .receipt-more { color: CanvasText; }
+  :is(.answer-status, .answer-receipt, .needs-status):is(.progress, .done, .closed, .warn, .bad), :is(.answer-status, .answer-receipt, .needs-status) .receipt-more { color: CanvasText; }
   .reply .button.send[aria-busy="true"]::after,
   .answer[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after,
   .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
   .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after { forced-color-adjust: none; border-color: currentColor; border-right-color: transparent; }
 }
-.question-changed { margin: 8px 0; padding: 4px 12px 10px; border: 1px dashed var(--ab-needs); border-radius: 10px; }
+.question-changed { margin: 8px 0; padding: 4px 12px 10px; border: 1px dashed var(--ab-stroke2); border-radius: 10px; }
 .question-changed .button { margin-top: 8px; }
+.answer-kept { margin: 0 0 8px; }
+.answer-kept .button { margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) {
   .reply .button.send[aria-busy="true"]::after,
   .answer[aria-busy="true"]:not(:has(.choice[aria-pressed="true"])) .button.send:not([hidden])::after,

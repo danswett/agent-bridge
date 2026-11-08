@@ -2811,6 +2811,40 @@ question, as choosing its row does.
   push an hour at most, with a count and no text ("3 agent messages are waiting"), which opens
   Needs you.
 
+**Lines that outlive their cause, on every client (#1193):** a line says something about a
+cause: a question waiting, a press counting down, a machine busy. When the cause is gone, an
+amber or red line becomes a neutral closed line, or goes. It never sits. The rule, and what each
+line does:
+- **A closed line stays at least 5 s** (`LINGER_READ_MS`, as an entry in the Needs you lane,
+  §6.1), so it can be read, and then goes unless it is part of the conversation (below).
+- **A question that has left the session's list** is shown as the question as it was asked, kept
+  in the conversation, with "No longer waiting" in neutral words (§6.4, Resolved): never amber,
+  never red, never Try again, and never "Your answer:" (only the words of an answer the person
+  gave say that: one in flight, or one that may have gone in). It stays through the next question
+  and the next turn. The host cannot tell a question the agent withdrew from one answered at
+  the machine or on another device, so no cause is said: there is no "Cancelled" and no
+  "Answered on another device". A stale answer that carries the host's reason for a form it
+  cancelled part answered (`formReset`) is the exception: it says the answer was **not delivered**,
+  keeps what was typed to read and copy, and offers Try again while the question is still listed.
+- **Not confirmed** keeps its words: amber while the question is live, neutral once it is in the
+  history. If a later check says it was delivered, it reads "You answered".
+- **Typed text kept for a question that went** is a neutral note with Dismiss, not amber. It
+  stays through the next turn, and goes on Dismiss or once that text is sent.
+- **"Try again in a moment"** (busy, for an answer, reply, End session or launch) goes when the
+  2 s pause ends, as the control comes back.
+- **A reply's** not-sent, refused and cancelled lines go with the next edit of the box or the
+  next turn; "not confirmed" goes with the next turn, when the conversation shows whether it
+  went in. A line with Try again (could not send) stays while it can be tried.
+- **A lapsed "End session NOT confirmed"** is neutral, and goes after 5 s.
+- **A launch's own complaint about what is picked** ("Not launched: pick a workspace…") stays
+  until the setting it names changes, not until the machine's next list redraws the page.
+- **A folder-trust question the machine stops listing** is one neutral line, "*Machine* no longer
+  lists this question.", for 5 s, and then goes. What the person's own answer did (started,
+  declined, not confirmed) keeps its words.
+
+Windows follows the same rule in its own words for the same lines (#1195); the PWA is checked by
+`test/answer.spec.mjs`, `reply.spec.mjs`, `stop.spec.mjs` and `launch.spec.mjs`.
+
 **Coming back to the app, on every client (#950):** §6.1's "Coming back to the app" rules hold
 where each client comes back: the PWA first, on returning to the screen or a network change; the
 Windows app, rules 1–5, on waking from sleep, with the same 3 s grace and the slot and strip in

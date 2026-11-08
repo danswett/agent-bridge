@@ -785,7 +785,7 @@ export class DemoHost {
     // With the code a host sends for a reason that has one, as AnswerService does.
     if (problem) { const code = answerReasonCode(problem); return { outcome: 'refused', reason: problem, ...(code ? { code } : {}) }; }
     const { outcome } = scripted;
-    if (outcome === 'stale') { return { outcome, reason: scripted.reason ?? 'answered at the machine' }; }
+    if (outcome === 'stale') { return { outcome, reason: scripted.reason ?? 'answered at the machine', ...(scripted.code ? { code: scripted.code } : {}) }; }
     if (outcome === 'busy') { return { outcome, reason: scripted.reason ?? 'another answer or reply to this session is being delivered' }; }
     if (outcome === 'refused') { return { outcome, reason: scripted.reason ?? 'the session is running elevated', ...(scripted.code ? { code: scripted.code } : {}) }; }
     // Typed: the question goes, and the session works on the answer.

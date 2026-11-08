@@ -41,6 +41,10 @@ export const ReceiptTiming = Object.freeze({
   followMs: 10 * 60 * 1000,
 });
 
+// How long a line stays once its cause is gone, so it can be read: a closed question's line in the
+// conversation, the Needs you lane's entry for an answer's outcome, a lapsed End session (ui.md §7).
+export const LINGER_READ_MS = 5000;
+
 const machine = (name) => name || 'the machine';
 const uploading = (entry) => !!entry.progress && entry.progress.total > 0 && entry.progress.sent < entry.progress.total;
 
@@ -321,8 +325,10 @@ export class ReceiptClock {
   #check = null;
   #epoch = epoch;
 
-  constructor({ describe, draw, say = () => {}, heard = () => true, delivered = null, now = () => Date.now(), timing = ReceiptTiming, follow = null, page = sayOnPage, fallback = false }) {
-    Object.assign(this, { describe, draw, say, heard, delivered: delivered ?? (() => {}), checks: !!delivered, now, timing, follow, page, fallback });
+  // followDescribe: what a request followed past this view's going says, where that differs from
+  // describe (a question that left: its answer is only closed, not amber).
+  constructor({ describe, draw, say = () => {}, heard = () => true, delivered = null, now = () => Date.now(), timing = ReceiptTiming, follow = null, page = sayOnPage, fallback = false, followDescribe = null }) {
+    Object.assign(this, { describe, draw, say, heard, delivered: delivered ?? (() => {}), checks: !!delivered, now, timing, follow, page, fallback, followDescribe });
   }
 
   show(entry) {
@@ -339,7 +345,7 @@ export class ReceiptClock {
     this.#voice(null);
     const entry = this.#entry;
     if (this.follow && inFlight(entry) && this.#epoch === epoch) {
-      followToOutcome(entry, { describe: this.describe, follow: this.follow, timing: this.timing, now: this.now, page: this.page });
+      followToOutcome(entry, { describe: this.followDescribe ?? this.describe, follow: this.follow, timing: this.timing, now: this.now, page: this.page });
     }
   }
 

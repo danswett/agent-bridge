@@ -309,15 +309,22 @@ as unconfirmed rather than sent again. Outcomes:
 | Outcome | Shown | Then |
 |---|---|---|
 | `delivered` | The check on the control that sent it for about a second, then You answered · *value* | The host's upsert takes the question away; the card keeps the line |
-| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again |
-| `unconfirmed`, stage `typed` | Typed into the prompt, but not confirmed as submitted. Check the conversation. | The same, but on a reconnect the same request is sent once more, which the host answers from the session's record without typing: delivered if it was submitted since (#467) |
+| `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again. Once its question has left the session's list the card keeps the question as it was asked, with *Your answer: Sent, but not confirmed…* in neutral words |
+| `unconfirmed`, stage `typed` | Typed into the prompt, but not confirmed as submitted. Check the conversation. | The same, but on a reconnect the same request is sent once more, which the host answers from the session's record without typing: delivered if it was submitted since (#467), and then it reads You answered |
 | `unconfirmed`, stage `recorded` | The session recorded something for this question, but not confirmed as this answer. Check the conversation. The reason says what it recorded, or the error. | As `typed` |
-| `stale` | Already answered or gone | Final |
-| `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request |
-| `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request |
+| `stale`, with no reason code | Already answered or gone, while the question is still listed | Once the question has left the list: the question as it was asked, kept in the conversation, with **No longer waiting** in neutral words (no cause: the host cannot tell a question the agent withdrew from one answered elsewhere) |
+| `stale`, code `formReset` | Not delivered: the form could not take your answer at the machine. The words typed stay, and Try again sends them as a new request while the question is listed | Once the question has left the list: the same line, neutral, with what was typed in a read-only box with Copy |
+| `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request. Once the question has left the list: **No longer waiting** |
+| `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request. Once the question has left the list: **No longer waiting** |
+| `failed` (could not send), with Try again | Couldn't send it: *reason* | Once the question has left the list: **No longer waiting**, with nothing to try again |
+
+A closed question stays in the conversation, through the next question and the next turn, up
+to 20 a card. Only the words of an answer the person gave (in flight, or that may have gone in)
+say *Your answer:*. The rule for every line that outlives its cause is in
+[`docs/design/ui.md` §7](../docs/design/ui.md).
 
 If the question changes or goes while something typed hasn't been sent, the card says so
-and keeps the text, read-only, to copy. A card that moves while its form is in use keeps
+and keeps the text, read-only, to copy, in a neutral note with Dismiss. It stays through the next turn and goes on Dismiss, or once that text is sent. A card that moves while its form is in use keeps
 focus and the caret. On a desktop, everything is reachable by Tab in order, radios move
 with the arrow keys, and Ctrl+Enter (Cmd+Enter) sends from a text box.
 
@@ -345,10 +352,10 @@ what was sent (anything typed meanwhile stays), and every other outcome keeps th
 | Outcome | Shown | Then |
 |---|---|---|
 | `delivered` | Send's check for about a second; no line | The session's upsert shows it as your last message |
-| `unconfirmed`, or unknown | Sent, but not confirmed. Check the conversation before sending it again. | The words stay; sending them again is a new reply |
-| `stale` | Not sent: the session has ended. | |
-| `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s |
-| `refused` | The machine refused this reply: *reason* (a question pending, an agent it can't reply to yet) | |
+| `unconfirmed`, or unknown | Sent, but not confirmed. Check the conversation before sending it again. | The words stay; sending them again is a new reply. The line goes when the session's next turn starts |
+| `stale` | Not sent: the session has ended. | The line goes with the next edit of the box, or the next turn |
+| `busy` | Not sent: an answer or another reply is being delivered. | Send comes back after 2 s, and the line goes with it |
+| `refused` | The machine refused this reply: *reason* (a question pending, an agent it can't reply to yet) | The line goes with the next edit of the box, or the next turn |
 
 A host waits up to a minute for a working session to take a reply, so the request waits
 90 s for its response before it counts as lost. Demo mode replies as a host would
