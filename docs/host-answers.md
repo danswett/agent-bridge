@@ -210,6 +210,20 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     nor a window at this field is refused (`bar`) as "this window is too narrow, or the
     question's titles too long, to check which field is open", not as the form gone: with
     the question's heading and message above it, it seldom is.
+    A form taller than the session's window shows only its bottom: the CLI draws the question
+    whole, so a long one pushes the heading ("Copilot needs information.") and the top rule
+    above the window, and the screen read takes the visible rows alone. With no heading, the
+    rows are named as such a form (`tall`) when the last row drawn is a rule no row above
+    repeats (a form's top rule would) and above it is one of this question's field headings
+    over the hints that field draws; the answer is refused before any key, and no Esc, with
+    "This question is taller than the session window, so Slipgates cannot check it. Make the
+    window taller, or answer it at the machine." A 120 by 30 console showed so live, a
+    choice, a Yes/No and a text field under a long question, refused as the form gone
+    (#1123, #1193); the same form, read with the injector on another machine, is the test's
+    screen. Naming it lets no key go: what asked, and which question, are above the window.
+    Past the first field (a later field's box growing the form off the window), its reason is
+    "the question's form grew taller than the session window, so Slipgates could not check its
+    next field", inside the unconfirmed answer's reason, which says to finish at the machine.
     What cannot be known beforehand (a permission prompt opening over a later field, or a
     long field scrolling the form's heading off a short window) still stops the keys there:
     the answer is then `unconfirmed`, and its reason names the fields that were answered,
@@ -230,7 +244,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     the rows the write was held to: what changed was elsewhere on the screen, and the keys do
     the same there. A field drawn otherwise gets nothing more. Each refusal logs which check
     failed (`heading`, `bottom-rule`, `under`, `message`, `bar`, `bar-window`, `field`,
-    `field-heading`, `hints` or `prompted`, with the row) and the screen's outline (its row count, widest
+    `field-heading`, `hints`, `prompted` or `tall`, with the row) and the screen's outline (its row count, widest
     row, blank rows, where its rules and form headings are), never what any row says.
   * A form left part answered is not left so if the host can help it (#1123; design #1135,
     section 4). The delivery waits, holding no keys and not the typing slot, while the screen

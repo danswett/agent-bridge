@@ -71,6 +71,10 @@ public enum FormCheck
     Hints,
     // A permission prompt drawn in the form's place or against it.
     Prompted,
+    // No heading because the form is taller than the window: only its bottom shows, closed by
+    // its rule on the last row, this form's field heading and hints above it, and neither its
+    // heading nor its top rule anywhere on screen (#1123, #1193). Refused all the same.
+    Tall,
 }
 
 public static partial class CopilotFormScreen
@@ -165,6 +169,7 @@ public static partial class CopilotFormScreen
         FormCheck.Field => "field",
         FormCheck.FieldHeading => "field-heading",
         FormCheck.Hints => "hints",
+        FormCheck.Tall => "tall",
         _ => "prompted",
     };
 
@@ -344,9 +349,47 @@ public static partial class CopilotFormScreen
     const string Unchecked = "this window is too narrow, or the question's titles too long, to check which field is open; answer at the machine";
     const string Under = "something other than the question's form was drawn under it on the session's screen";
 
+    // A form taller than the session's window (Tall): the CLI shows only its bottom, so the
+    // heading that says who asks and the start of the question are off the screen, and nothing
+    // on it says the form is this question. Copilot CLI drew a three-field form under a
+    // 24-row question so in a 120 by 30 console, read with the injector (#1123, #1193); the
+    // owner's answers were refused as the form gone. A taller window shows it whole.
+    static string Tall =>
+        $"This question is taller than the session window, so {Product.Name} cannot check it. Make the window taller, or answer it at the machine.";
+
+    // Tall past the first field: earlier fields are already entered, and the reason is set
+    // inside a sentence that says so and to finish at the machine.
+    static string TallLater => $"the question's form grew taller than the session window, so {Product.Name} could not check its next field";
+
+    // The row of this form's field heading when the rows read as the bottom of a form whose
+    // top is off the window: the last row drawn is a rule, no row above repeats it (the form's
+    // top rule would), and above it one of this form's field headings over the hints that
+    // field draws. -1 otherwise. It only names a refusal, never lets a key go: the question
+    // the rows belong to cannot be read.
+    static int Clipped(IReadOnlyList<string> rows, CopilotForm form)
+    {
+        var last = rows.Count - 1;
+        while (last >= 0 && rows[last].Trim(' ').Length == 0) { last--; }
+        if (last < 0 || !IsRule(rows[last])) { return -1; }
+        var rule = rows[last].TrimEnd(' ');
+        if (rows.Take(last).Any(r => r.TrimEnd(' ') == rule)) { return -1; }
+        var frame = rows.Take(last).ToList();
+        for (var r = 0; r < frame.Count; r++)
+        {
+            for (var i = 0; i < form.Fields.Count; i++)
+            {
+                var field = form.Fields[i];
+                if (field.Label is null || frame[r].Trim(' ') != Headed(field)) { continue; }
+                if (Hints(frame, r + 1, i, form.Fields.Count, field.Kind is CopilotFieldKind.Text or CopilotFieldKind.Number) is not null) { return r; }
+            }
+        }
+        return -1;
+    }
+
     static string? Find(IReadOnlyList<string> rows, CopilotForm form, int index, Found found)
     {
         var headed = Enumerable.Range(0, rows.Count).Where(r => Heads(rows, r)).ToList();
+        if (headed.Count == 0 && !CopilotPermissionScreen.Ends(rows, rows.Count) && Clipped(rows, form) is >= 0 and var clipped) { return found.Fail(FormCheck.Tall, clipped, index > 0 ? TallLater : Tall); }
         if (headed.Count != 1) { return found.Fail(FormCheck.Heading, headed.Count > 1 ? headed[1] : -1, CopilotPermissionScreen.Ends(rows, rows.Count) ? Prompted : NotForm); }
         // The form's frame closes with the top's own rule again (`MIo`), and the frame is the
         // last thing drawn: the CLI draws a prompt (`ekn`, an elicitation among them) in place of

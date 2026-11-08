@@ -1682,6 +1682,83 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
     }
 
+    // A form taller than its window, as Copilot CLI drew one in a 120 by 30 console on VM3, read
+    // with agent-bridge-injector --screen (#1123, #1193): a question of twelve long paragraphs
+    // over a list, a Yes/No and a text field. Only the form's bottom shows, its rule on the last
+    // row; its heading and top rule, and the first three paragraphs, are above the window.
+    const string TallParagraph = "This is a long question drawn the way an agent asks one when it explains its reasoning at length before it asks, so that the form grows taller than the console window that shows it.";
+
+    static readonly string TallMessage = string.Join("\n", Enumerable.Range(1, 12).Select(n => $"{n}. {TallParagraph}"));
+
+    static List<string> TallScreen()
+    {
+        List<string> rows = [" [Current]  Sessions   Issues   Pull requests   Gists", ""];
+        foreach (var n in Enumerable.Range(4, 9))
+        {
+            var line = $"{n}. {TallParagraph}";
+            var cut = n < 10 ? "asks, so" : "asks,";
+            var end = line.IndexOf(cut, StringComparison.Ordinal) + cut.Length;
+            rows.AddRange([$" {line[..end]}", $" {line[end..].TrimStart(' ')}"]);
+        }
+        rows.AddRange(["", " [Which approach]  Proceed now   Notes", "", " Which approach:", " \u276F first", "   second", "   third", "",
+            " \u2191/\u2193 select \u00B7 enter accept \u00B7 tab next \u00B7 ctrl+d decline \u00B7 esc cancel", new string('\u2500', 120)]);
+        return rows;
+    }
+
+    async Task AskTallAsync(string firstTitle = "Which approach") => await AskFieldsAsync(new
+    {
+        approach = new { type = "string", title = firstTitle, @enum = new[] { "first", "second", "third" } },
+        proceed = new { type = "boolean", title = "Proceed now" },
+        notes = new { type = "string", title = "Notes" },
+    }, 3, new { approach = "second", proceed = true, notes = "Go" }, TallMessage);
+
+    [Fact]
+    public async Task A_form_taller_than_the_sessions_window_gets_no_key_and_is_named_as_too_tall_for_the_machine()
+    {
+        await AskTallAsync();
+        injector.Screen = TallScreen;
+        Assert.Equal(30, TallScreen().Count);
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { approach = "second", proceed = true, notes = "Go" }, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains($"This question is taller than the session window, so {Product.Name} cannot check it. Make the window taller, or answer it at the machine.", reason);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=tall@", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task The_bottom_of_a_form_whose_fields_are_not_the_questions_is_not_named_as_too_tall()
+    {
+        await AskTallAsync("Which plan");
+        injector.Screen = TallScreen;
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { approach = "second", proceed = true, notes = "Go" }, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("no longer showed the question's form", reason);
+        Assert.Empty(injector.Attempts);
+        Assert.Contains("check=heading", await AttemptLineAsync());
+    }
+
+    [Fact]
+    public async Task A_form_whose_top_rule_shows_without_its_own_heading_is_not_named_as_too_tall()
+    {
+        // An MCP server's form, whole on screen: its heading is not Copilot's, but its top rule
+        // shows, so it is not a form clipped by the window.
+        await AskTallAsync();
+        injector.Screen = () => [new string('\u2500', 120), " github needs information.", .. TallScreen().Skip(2)];
+        var ch = await OpenAsync();
+
+        var (outcome, reason) = await AnswerAsync(ch, new { approach = "second", proceed = true, notes = "Go" }, question: "q2");
+
+        Assert.Equal("refused", outcome);
+        Assert.Contains("no longer showed the question's form", reason);
+        Assert.Empty(injector.Attempts);
+    }
+
     [Fact]
     public async Task A_form_that_differs_from_the_question_only_in_a_title_its_tab_bar_hides_gets_no_keys()
     {
