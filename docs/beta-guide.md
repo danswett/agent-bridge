@@ -105,7 +105,8 @@ fact we do not yet know, not one we are leaving out.
   devices. Azure service identities and operators also have administrative access paths. The
   complete effective reader-role set and processing outside the identified regional resources have
   not yet been confirmed.
-- **Retention and requests.** Roster expiry is configured after 180 days untouched. Soft delete,
+- **Retention and requests.** A roster is configured to be deleted after all of its hosts have been
+  offline for 180 days; an active account keeps its older entries. Soft delete,
   versioning and change feed are off in the reviewed account. Regional replication is not an
   absence of copies; other provider and downstream copies have not yet been confirmed. Forgetting
   a machine is not account erasure, and recently forgotten IDs and times remain in the roster.
@@ -143,8 +144,8 @@ fact we do not yet know, not one we are leaving out.
   The subscription review reported a human Owner and relay-deployment identities; it did not
   establish the complete telemetry reader set or inherited and provider access. Processing outside
   the identified resources remains unconfirmed.
-- **Retention and requests.** Log Analytics is configured for 30 days and Application Insights for
-  90 days. Default Application Insights IP masking was reported; it does not prove that no IP is
+- **Retention and requests.** Log Analytics is configured for 30 days. Application Insights is
+  deployed into that workspace; a separate 90-day setting has not been confirmed. Default Application Insights IP masking was reported; it does not prove that no IP is
   received or recorded elsewhere. Other copies and provider residuals are unconfirmed. No
   per-person telemetry deletion procedure is currently established in the supplied operational
   record. The privacy contact coordinates requests; scheduled ageing is not proof of
@@ -197,11 +198,12 @@ a request or erase data within three days. Requests will be handled as required 
 law. Request coordination does not itself establish each service's ability or procedure to delete
 records.
 
-The beta does not offer an account-erasure feature or promise manual deletion. Roster records have
-a configured expiry after 180 days untouched. Log Analytics is configured for 30 days and
-Application Insights for 90 days. Temporary transfer blobs have lifecycle deletion configured one
-day after creation. These are the specified schedules, not a guarantee of erasure from every copy;
-support-mail and other provider-copy retention are not yet fully confirmed.
+The beta does not offer an account-erasure feature or promise manual deletion. A roster is
+configured to be deleted after all of its hosts have been offline for 180 days. Log Analytics is
+configured for 30 days, and Application Insights is deployed into that workspace; a separate
+90-day setting has not been confirmed. Temporary transfer blobs have lifecycle deletion configured
+one day after creation. These are the specified schedules, not a guarantee of erasure from every
+copy; support-mail and other provider-copy retention are not yet fully confirmed.
 
 You can revoke Slipgates' authorization in GitHub. That does not delete Slipgates records or
 guarantee immediate invalidation of already-issued Slipgates account tokens. For privacy questions
