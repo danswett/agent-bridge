@@ -478,19 +478,24 @@ public sealed partial class QuestionViewModel : Observable
             SetCheck(true);
             checkTimer = deliveries.Time.CreateTimer(_ => deliveries.Ui.Post(() => SetCheck(false)), null, ReceiptTiming.SendCheckHold, Timeout.InfiniteTimeSpan);
         }
-        receipt.Show(e, !current() && (Unsent(e) || e!.State == DeliveryState.Failed)
+        // A busy refusal is a moment's news (the pause below): once it has passed, the line goes.
+        var shown = e is { State: DeliveryState.Done, Outcome: "busy" } && e.Request == busyGone ? null : e;
+        receipt.Show(shown, !current() && (Unsent(e) || e!.State == DeliveryState.Failed)
             ? new ReceiptLine("offline", $"Waiting for the {Product.HostName}{at}. Answer once it is back.", null, Tone.Progress, ReceiptMark.None, null)
             // An answer to what the question said before (Reworded) is not sent again: a fresh one is asked for.
             : e is { State: DeliveryState.Failed } && e.Request == earlier
             ? Changed(Describe(e, machine))
             : null);
-        if (e is { State: DeliveryState.Done, Outcome: "busy" } && !pausedAfterBusy)
+        if (e is { State: DeliveryState.Done, Outcome: "busy" } && !pausedAfterBusy && e.Request != busyGone)
         {
+            var request = e.Request;
             pausedAfterBusy = true;
-            _ = Task.Delay(2000).ContinueWith(_ => deliveries.Ui.Post(() => { pausedAfterBusy = false; RaiseControls(); }), TaskScheduler.Default);
+            _ = Task.Delay(2000).ContinueWith(_ => deliveries.Ui.Post(() => { pausedAfterBusy = false; busyGone = request; Refresh(); }), TaskScheduler.Default);
         }
         RaiseControls();
     }
+
+    string? busyGone;
 
     void RaiseControls()
     {
@@ -525,6 +530,13 @@ public sealed partial class QuestionViewModel : Observable
         var at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
         return new[] { "unconfirmed", "stale", "busy", "refused" }.Select(o => OutcomeText[o](at)).MaxBy(t => t.Length)!;
     }
+
+    // Whether what became of an answer is still worth saying once its question has gone: what was
+    // sent and what came of it is; a line that says why it could not go (not connected, busy, the
+    // session no longer asks, refused, failed) is not, for its cause is over with the question (#1193).
+    internal static bool OutlivesQuestion(Delivery e) =>
+        e.State is DeliveryState.Sending or DeliveryState.Waiting
+        || e is { State: DeliveryState.Done, Outcome: not ("stale" or "busy" or "refused") };
 
     static ReceiptLine Changed(ReceiptLine failed) =>
         new("changed", $"{failed.Text} The question changed since, so answer it again.", null, Tone.Bad, ReceiptMark.None, $"Answer: {failed.Text} The question changed since, so answer it again.");

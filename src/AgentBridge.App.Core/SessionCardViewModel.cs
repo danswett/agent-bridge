@@ -410,6 +410,8 @@ public sealed partial class SessionCardViewModel : Observable
     void UpdateReceipt()
     {
         var e = receiptKey is null ? null : ctx.Deliveries.Get(receiptKey);
+        // The question is gone, so a line about why an answer could not go has no cause left (#1193).
+        if (e is not null && !QuestionViewModel.OutlivesQuestion(e)) { receiptKey = null; e = null; }
         if (e is null)
         {
             receipt?.Dispose();

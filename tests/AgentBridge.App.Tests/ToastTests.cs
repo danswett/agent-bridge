@@ -849,6 +849,39 @@ public sealed class ToastTests
         Assert.Equal("s7", opened);
     }
 
+    // #1193: a toast saying an answer did not go outlived the question it was about.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_outcome_toast_that_says_an_answer_did_not_go_is_withdrawn_when_the_question_closes_or_the_session_ends(bool sessionEnds)
+    {
+        var responder = new ToastResponder(_ => null, sink, (_, _) => { });
+        var planner = new ToastPlanner(sink, clock) { QuestionClosed = id => responder.QuestionClosed(null, id) };
+        planner.Upsert(Make.Session(question: Make.Choice("q1")));
+        var other = ToastXml.Args(("action", "answer"), ("session", "s1"), ("question", "q1"), ("kind", "other"), ("field", "answer"), (ToastXml.AnswerVersionKey, ToastXml.AnswerVersion));
+        await responder.HandleAsync(other, new Dictionary<string, string> { ["other"] = " " });
+        Assert.Equal("s1~a", Assert.Single(sink.Shown).Tag);
+
+        if (sessionEnds) { planner.Remove("s1"); }
+        else { planner.Upsert(Make.Session()); }
+
+        Assert.Contains("s1~a", sink.Withdrawn);
+    }
+
+    [Fact]
+    public async Task An_outcome_toast_stays_while_its_question_is_still_asked()
+    {
+        var responder = new ToastResponder(_ => null, sink, (_, _) => { });
+        var planner = new ToastPlanner(sink, clock) { QuestionClosed = id => responder.QuestionClosed(null, id) };
+        planner.Upsert(Make.Session(question: Make.Choice("q1")));
+        var other = ToastXml.Args(("action", "answer"), ("session", "s1"), ("question", "q1"), ("kind", "other"), ("field", "answer"), (ToastXml.AnswerVersionKey, ToastXml.AnswerVersion));
+        await responder.HandleAsync(other, new Dictionary<string, string> { ["other"] = " " });
+
+        planner.Upsert(Make.Session(question: Make.Choice("q1")));
+
+        Assert.DoesNotContain("s1~a", sink.Withdrawn);
+    }
+
     // #625 cr2-625d (6676595964): the words were taken after waiting for the machine, so an option
     // relabelled meanwhile gave its new label, or a question the app didn't know at the click its later one.
     [Theory]

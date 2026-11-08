@@ -72,15 +72,33 @@ public sealed class ToastResponder
         foreach (var tag in tags ?? []) { sink.Withdraw(tag); }
     }
 
-    void Show(string? machine, string tag, string xml)
+    // The outcome toasts that say why an answer could not go: their cause ends with the question.
+    readonly HashSet<string> causeBound = new(StringComparer.Ordinal);
+
+    // The question closed (answered elsewhere, cancelled, its session ended): a toast saying an
+    // answer to it did not go has nothing left to say, and goes. What an answer came to stays (#1193).
+    public void QuestionClosed(string? machine, string session)
     {
-        if (machine is not null)
+        var tag = ToastPlanner.OutcomeTag(session, machine);
+        bool bound;
+        lock (shownFor)
         {
-            lock (shownFor)
+            bound = causeBound.Remove(tag);
+            if (bound && machine is not null && shownFor.TryGetValue(machine, out var tags)) { tags.Remove(tag); }
+        }
+        if (bound) { sink.Withdraw(tag); }
+    }
+
+    void Show(string? machine, string tag, string xml, bool outlives = false)
+    {
+        lock (shownFor)
+        {
+            if (machine is not null)
             {
                 if (!shownFor.TryGetValue(machine, out var tags)) { shownFor[machine] = tags = new(StringComparer.Ordinal); }
                 tags.Add(tag);
             }
+            if (outlives) { causeBound.Remove(tag); } else { causeBound.Add(tag); }
         }
         sink.Show(new ToastNotice(tag, xml, Quiet: true));
     }
@@ -139,7 +157,7 @@ public sealed class ToastResponder
             }
             if (Gone()) { return; }
             var text = QuestionViewModel.Describe(result, null).Whole;
-            Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, text, action.Machine));
+            Show(action.Machine, tag, ToastXml.Outcome(action.Session, title, text, action.Machine), QuestionViewModel.OutlivesQuestion(result));
         }
         finally { deliveries.Changed -= Watch; }
     }
