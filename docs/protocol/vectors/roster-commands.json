@@ -511,6 +511,30 @@
       "refusal": "value"
     },
     {
+      "name": "request-with-a-trailing-lf",
+      "about": "a request with a line feed after the UUID, which a $ in a regex would accept",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlXG4iLCJieSI6IjBkNzhlNmY1ZGUwOGNmZTFlMmJmYTZhNGU1MDY1MDI0IiwidGFyZ2V0Ijp7Im1hY2hpbmUiOiJjNjljODM0NzRkYTJhYzM5OWIxOTYyM2IyNjQ3OWY0NCJ9LCJub25jZSI6IkhULXZMdFRsa0d5S3BSVzkxWVJUb19UWFV6UkxBU1NTMzhmNXB4NTlMblUiLCJpc3N1ZWRBdCI6IjIwMjYtMTEtMDRUMTE6NTk6MDBaIiwiZXhwaXJlc0F0IjoiMjAyNi0xMS0wNFQxMjowNDowMFoiLCJoZWFkcyI6WyJERXdMekxKVldoUzRkMTFDVGwxRlQ3RGlkamhPcGdycFBKYWVoem1YTFFjIl19\",\"sig\":\"MEUCIQDGQCg5nVxqrNJioMoMPfmWEayJJj86rOnhIqmW7SO14gIgIUw3DDIfV29t-kUsyuwN2k2XUnq6YHdxHrq9uyW8zVI\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "update",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "value"
+    },
+    {
+      "name": "question-with-a-trailing-lf",
+      "about": "a question id with a line feed after it",
+      "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJmb2xkZXItdHJ1c3QtYW5zd2VyIiwicmVxdWVzdCI6IjBmOGZhZDViLWQ5Y2ItNDY5Zi1hMTY1LTcwODY3NzI4OTUwZSIsImJ5IjoiMGQ3OGU2ZjVkZTA4Y2ZlMWUyYmZhNmE0ZTUwNjUwMjQiLCJ0YXJnZXQiOnsibWFjaGluZSI6ImM2OWM4MzQ3NGRhMmFjMzk5YjE5NjIzYjI2NDc5ZjQ0IiwicXVlc3Rpb24iOiJ0cnVzdC0xXG4ifSwiY2hvaWNlIjoib25jZSIsIm5vbmNlIjoiSFQtdkx0VGxrR3lLcFJXOTFZUlRvX1RYVXpSTEFTU1MzOGY1cHg1OUxuVSIsImlzc3VlZEF0IjoiMjAyNi0xMS0wNFQxMTo1OTowMFoiLCJleHBpcmVzQXQiOiIyMDI2LTExLTA0VDEyOjA0OjAwWiIsImhlYWRzIjpbIkRFd0x6TEpWV2hTNGQxMUNUbDFGVDdEaWRqaE9wZ3JwUEphZWh6bVhMUWMiXX0\",\"sig\":\"MEUCIQCCcTKCjdohgFsCPoehyUU1mmxEU2egkAs9QUX7BFHFXAIgB_0IQ-aUfxLBKVQmP6zL-uLOin2lW66o26BfzhVvrmE\"}",
+      "context": {
+        "host": "c69c83474da2ac399b19623b26479f44",
+        "action": "folder-trust-answer",
+        "now": "2026-11-04T12:00:00Z",
+        "nonce": "HT-vLtTlkGyKpRW91YRTo_TXUzRLASSS38f5px59LnU"
+      },
+      "refusal": "value"
+    },
+    {
       "name": "five-heads",
       "about": "more than four heads",
       "wrapper": "{\"body\":\"eyJ2IjoxLCJhY3Rpb24iOiJ1cGRhdGUiLCJyZXF1ZXN0IjoiMGY4ZmFkNWItZDljYi00NjlmLWExNjUtNzA4Njc3Mjg5NTBlIiwiYnkiOiIwZDc4ZTZmNWRlMDhjZmUxZTJiZmE2YTRlNTA2NTAyNCIsInRhcmdldCI6eyJtYWNoaW5lIjoiYzY5YzgzNDc0ZGEyYWMzOTliMTk2MjNiMjY0NzlmNDQifSwibm9uY2UiOiJIVC12THRUbGtHeUtwUlc5MVlSVG9fVFhVelJMQVNTUzM4ZjVweDU5TG5VIiwiaXNzdWVkQXQiOiIyMDI2LTExLTA0VDExOjU5OjAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTEtMDRUMTI6MDQ6MDBaIiwiaGVhZHMiOlsiQ0VfdENMbDRyMDE5R1dwMFJxaHJXQUNlWTJ0aEhiRmlFYlphbXEzX0tjVSIsIlNfVVNMelJGVk1VNzNpNjdqTkszNDlGZ0N0WXh3NFdsMTh6aVBIZUZSWm8iLCJialFMblAtemVwaWNwVVRtdTNnS0xIaVFIVC16TnpoMmhSR2pCaGV2b0IwIiwiMjhHMHlRRF81STFYVzEybHhqZ0VBU1gyWGJELVBpUkpTM2JxbUdSWDJZWSIsIjVTMmNVSXhRSTBjMFRZd0hyWkhMMWdhS19IWF9ZcEx3WXFDY280SElubkUiXX0\",\"sig\":\"MEQCIA69vMu4K37xN4zytVnbSsCjAyRUi5qbpeU-zgrMzbP0AiAMKy94S-YO9YZeTx4l0RBRYOGZwvvQlUPzJsqJEgOdcg\"}",
