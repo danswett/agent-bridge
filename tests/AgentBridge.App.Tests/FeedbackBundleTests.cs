@@ -342,6 +342,24 @@ public class FeedbackBundleTests
     }
 
     [Theory]
+    [InlineData("{\"password\":\"hun\\u0022ter2\"}", "ter2")]
+    [InlineData("{\"password\":\"abc\\u0022tail-secret\"}", "tail-secret")]
+    [InlineData("'password':'x\\u0027y-secret'", "y-secret")]
+    [InlineData("{\"password\":\"hun\\u000ater2 more\"}", "more")]
+    [InlineData("{\"password\":\"hun\\u005cter2 more\"}", "more")]
+    public void An_escaped_quote_or_control_char_inside_a_value_does_not_end_it(string input, string gone)
+    {
+        var r = FeedbackRedactor.Redact(input);
+        Assert.DoesNotContain(gone, r);
+        Assert.DoesNotContain('\n', r);
+        Assert.False(FeedbackRedactor.ContainsSecret(r));
+    }
+
+    [Fact]
+    public void Ordinary_escapes_are_not_rewritten()
+        => Assert.Equal("caf\\u00e9 \\u0041", FeedbackRedactor.Redact("caf\\u00e9 \\u0041"));
+
+    [Theory]
     [InlineData("password='hunter2", "hunter2")]
     [InlineData("password=\"hunter2", "hunter2")]
     public void An_unterminated_quote_still_redacts_the_value(string input, string gone)

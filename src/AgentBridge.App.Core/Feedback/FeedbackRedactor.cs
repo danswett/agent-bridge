@@ -39,7 +39,13 @@ public static partial class FeedbackRedactor
 
     // Credentials only, the patterns that must never be sent. S2's pre-send refusal uses these same
     // patterns through ContainsSecret, so there is one list.
-    static string RedactSecrets(string text) => Pass(DecodeEscapes(text));
+    static string RedactSecrets(string text)
+    {
+        var decoded = DecodeEscapes(text);
+        var redacted = Pass(decoded);
+        // Text with nothing to redact comes back as it was written, escapes included.
+        return string.Equals(redacted, decoded, StringComparison.Ordinal) ? text : redacted;
+    }
 
     // Test seam: lets a test force the timeout path, which real patterns only reach on hostile text.
     [ThreadStatic] internal static Func<string, string>? SecretPassOverride;
@@ -49,7 +55,13 @@ public static partial class FeedbackRedactor
     // A journal line can hold JSON with its keys written as \uXXXX, which the patterns would not
     // see as a word; matching runs on the decoded text.
     static string DecodeEscapes(string text) => text.Contains("\\u", StringComparison.Ordinal)
-        ? UnicodeEscape().Replace(text, m => ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString())
+        ? UnicodeEscape().Replace(text, m =>
+        {
+            // Only characters a credential word is spelled with; quotes, backslashes, control and
+            // non-ASCII characters stay escaped so they cannot change where a value ends.
+            var c = (char)Convert.ToInt32(m.Groups[1].Value, 16);
+            return c < 128 && (char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.') ? c.ToString() : m.Value;
+        })
         : text;
 
     static string RedactDecoded(string text)
