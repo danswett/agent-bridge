@@ -555,8 +555,9 @@ into one folder with one version. An app update is a host update, so they never 
     granting this user alone, nothing inherited, `PrivateFolder`), and the copy is checked against
     the same checksum again from a handle that keeps it open, read-only to everyone else, until
     the app exits. The app then starts `Update.exe` itself,
-    as Velopack's `ApplyUpdatesAndRestart` would (`apply --waitPid … --rootDir …`), but with
-    `--package` naming the copy; `--packageDir` stays the shared packages folder, where
+    as Velopack's `ApplyUpdatesAndRestart` would (`--silent apply --waitPid … --rootDir …`), but with
+    `--package` naming the copy, and silent (#1167), so Velopack's own "Installing Update" window
+    never shows: the app's Updating screen stands in for it (below); `--packageDir` stays the shared packages folder, where
     `Update.exe` takes its install lock (`packages\.velopack_lock`), so profiles still can't
     install over each other. The copy goes at the app's next start. What remains: `Update.exe`
     checks nothing itself when it opens the copy (it takes no checksum), so a process running as
@@ -580,8 +581,31 @@ into one folder with one version. An app update is a host update, so they never 
     starts the host again and keeps the release offered, to be tried again only when the person
     presses again. Then the host is stopped over the pipe, and `Update.exe` started with the
     checked copy and `--background --profile <profile>` (above), whose new version
-    starts the host again, and whose first start shows a toast: the version it came from, and the
-    release's notes. The banner's and Settings' take the same path (`AutoUpdater.RestartToUpdateAsync`),
+    starts the host again. **What the person sees** (#1167): with the window open (on screen,
+    neither hidden in the tray nor minimised) as the install begins, its content becomes one
+    centred state while the host stops and `Update.exe` takes over: an indeterminate progress ring,
+    "Updating to version *v*" (a heading, which takes keyboard focus so a screen reader reads it,
+    and a polite live region should focus not be had) and "*Product*
+    closes for a moment and opens again by itself. Your agents keep running.", with no buttons,
+    on the page's layer (the window colour in high contrast). The rail and the pages under it are
+    collapsed meanwhile, out of reach of the pointer, Tab and a screen reader, and search is
+    disabled; should the install not go ahead, they come back and focus returns where it was.
+    It adds no wait. A window hidden in the tray stays hidden, so an update from another
+    device shows nothing on a machine no one is looking at (#1159). The app records, before it
+    hands over, the version it is installing and whether the window was open, and once
+    `Update.exe` has started, that it did (`updateHandedOver`). The new version's
+    first start then opens the window again if it was open and shows "Updated to version *v*." as
+    a closable success bar with **What's new** (the release's notes); otherwise a toast says the
+    version it came from and the release's notes, as before. **A failed install is never
+    silent**: `Update.exe`, silent, shows nothing when it fails and starts the old version again,
+    so a start still on the old version after `Update.exe` started shows the update bar as a
+    warning, "Couldn't install
+    version *v*. *Product* is still on *old*.", with **Try again** while the release is still
+    ready, and a toast as well when the window wasn't open; the words come from the versions,
+    never an error's text, which goes to the log. A newer release ready, or the next press, clears
+    it. Where `Update.exe` never started (the app quit or ended between recording the install and
+    handing it over), nothing was attempted: the log says so, the devices see it as not
+    installed, and the person is told nothing. The banner's and Settings' take the same path (`AutoUpdater.RestartToUpdateAsync`),
     which refuses while another profile's app or host runs from this installation (below), asking
     the host for its own pid first. The banner offers only a release the updater has ready: while a
     newer one found since is still downloading, or held after a failed download, it offers nothing.

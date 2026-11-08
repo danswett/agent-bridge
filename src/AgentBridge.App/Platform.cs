@@ -180,7 +180,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     // Only the release named, downloaded here from the source selected now (Ready, which the mark
     // vouches for): anything else throws, before anything is replaced. A check or a download from
     // Settings may have replaced the one the person chose while the host stopped (r4487830884).
-    public void ApplyAndRestart(string version)
+    public void ApplyAndRestart(string version, Action? handedOverTo = null)
     {
         if (Ready is not { } ready) { throw new InvalidOperationException("no downloaded update to install; check for updates again"); }
         if (ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded ({ready} is); nothing was installed"); }
@@ -189,7 +189,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         // Not Velopack's ApplyUpdatesAndRestart, which names the shared packages folder's file to
         // Update.exe (#984): the bytes verified and marked, copied into this profile's own folder
         // and checked again from the handle that keeps them until this process ends, then
-        // Update.exe started as ApplyUpdatesAndRestart starts it, with --package naming the copy
+        // Update.exe started as ApplyUpdatesAndRestart starts it, but silent (#1167), with --package naming the copy
         // and the shared --packageDir, where its install lock is.
         Manager();
         var handoff = Handoff ?? throw new InvalidOperationException("this copy of the app has no profile folder to hand an update over from; nothing was installed");
@@ -205,6 +205,10 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         var copy = handoff.Prepare(file, version, source!);
         handedOver = handoff.Launch(copy, (uint)Environment.ProcessId, root, packages, ["--background", "--profile", profile],
             args => locator.Process.StartProcess(updateExe, args, Path.GetDirectoryName(updateExe)!, false));
+        // Update.exe has started: the next start may say the install didn't take (#1167). Best
+        // effort; it must not keep this process from exiting.
+        try { handedOverTo?.Invoke(); }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { log?.Invoke($"update: the hand-over could not be recorded: {e.Message}"); }
         // As ApplyUpdatesAndRestart ends: Update.exe waits for this process to exit (--waitPid).
         locator.Process.Exit(0);
     }

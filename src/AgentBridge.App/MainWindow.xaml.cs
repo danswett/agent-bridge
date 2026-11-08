@@ -124,13 +124,70 @@ public sealed partial class MainWindow : Window
     AppUpdateViewModel? announcing;
     void FollowAppUpdate()
     {
-        if (announcing is not null) { announcing.Announced -= AnnounceUpdate; }
+        if (announcing is not null)
+        {
+            announcing.Announced -= AnnounceUpdate;
+            announcing.PropertyChanged -= FollowUpdating;
+        }
         announcing = ViewModel.AppUpdate;
         announcing.Announced += AnnounceUpdate;
+        announcing.PropertyChanged += FollowUpdating;
+        FollowUpdating(null, null);
     }
 
-    void AnnounceUpdate() =>
-        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(UpdateReady)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
+    void AnnounceUpdate() => AnnounceLive(UpdateReady);
+
+    void AnnounceLive(UIElement region) =>
+        DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(region)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
+
+    // The Updating screen (#1167) takes the window's content: the rail and the pages under it are
+    // collapsed, out of reach of Tab and a screen reader as well as the pointer, and search is
+    // disabled. Its heading takes focus, so its line is read; failing that (the window not in front),
+    // its polite live region says it. Should the install not go ahead (InstallAsync clears
+    // installing on every way out), all of it comes back and focus goes where it was (the bar's
+    // button, now Try again, ui.md §9.1 A4). The Updated bar is said once as it opens.
+    bool showingUpdating;
+    bool showingUpdated;
+    Control? focusBeforeUpdating;
+    void FollowUpdating(object? sender, System.ComponentModel.PropertyChangedEventArgs? e)
+    {
+        var update = ViewModel.AppUpdate;
+        if (update.IsUpdating != showingUpdating)
+        {
+            showingUpdating = update.IsUpdating;
+            if (showingUpdating)
+            {
+                focusBeforeUpdating = Root.XamlRoot is { } x ? FocusManager.GetFocusedElement(x) as Control : null;
+                Nav.Visibility = Visibility.Collapsed;
+                SearchBox.IsEnabled = false;
+                // Shown here too, not only by its binding, which may follow this handler: focus
+                // needs the heading on screen.
+                UpdatingPane.Visibility = Visibility.Visible;
+                UpdatingPane.UpdateLayout();
+                UpdatingHeading.IsTabStop = true;
+                if (!UpdatingHeading.Focus(FocusState.Programmatic)) { UpdatingHeading.IsTabStop = false; AnnounceLive(UpdatingHeading); }
+            }
+            else
+            {
+                Nav.Visibility = Visibility.Visible;
+                UpdatingPane.Visibility = Visibility.Collapsed;
+                SearchBox.IsEnabled = true;
+                UpdatingHeading.IsTabStop = false;
+                var back = focusBeforeUpdating;
+                focusBeforeUpdating = null;
+                if (back is { IsLoaded: true, IsEnabled: true, Visibility: Visibility.Visible }) { Root.UpdateLayout(); back.Focus(FocusState.Programmatic); }
+            }
+        }
+        if (update.HasUpdated != showingUpdated)
+        {
+            showingUpdated = update.HasUpdated;
+            if (showingUpdated) { AnnounceLive(UpdatedBar); }
+        }
+    }
+
+    void OnUpdatingHeadingLostFocus(object sender, RoutedEventArgs e) => UpdatingHeading.IsTabStop = false;
+
+    void OnCloseUpdated(InfoBar sender, object args) => ViewModel.AppUpdate.CloseUpdated();
 
     public MainViewModel ViewModel { get; }
     public LaunchViewModel Launch { get; }
@@ -287,12 +344,19 @@ public sealed partial class MainWindow : Window
     // a window that is neither hidden in the tray nor minimised.
     void SyncSessionsOnScreen()
     {
+        var shown = AppWindow.IsVisible && AppWindow.Presenter is not OverlappedPresenter { State: OverlappedPresenterState.Minimized };
+        open = shown;
         if (SessionsView.Layout is { } layout)
         {
-            layout.OnScreen = SessionsView.Visibility == Visibility.Visible && AppWindow.IsVisible
-                && AppWindow.Presenter is not OverlappedPresenter { State: OverlappedPresenterState.Minimized };
+            layout.OnScreen = SessionsView.Visibility == Visibility.Visible && shown;
         }
     }
+
+    // On screen, neither hidden in the tray nor minimised; read off the UI thread, by the updater
+    // as it begins an install (#1167): the Updating screen, and the window again afterwards, are
+    // only for a window someone could be looking at.
+    volatile bool open;
+    public bool IsOpen => open;
     // A toast, the tray or the search box asked for a session: it is MainViewModel.Selected
     // already, so the Sessions page shows it, its row scrolled into view.
     void Reveal(SessionCardViewModel card) => Nav.SelectedItem = SessionsItem;

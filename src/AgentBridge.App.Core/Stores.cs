@@ -107,6 +107,13 @@ public sealed record AppPreferences
     // announces it: the version updated from, and the new one's release notes.
     public string? UpdatedFrom { get; init; }
     public string? UpdateNotes { get; init; }
+    // The window was open when that update was handed over (#1167): the next start opens it again,
+    // with Updated or why it couldn't install there rather than a toast. Never set by an update
+    // started while the window was closed, so an unattended machine never gets a window (#1159).
+    public bool UpdateWindowOpen { get; init; }
+    // Update.exe started for that update (AutoUpdater.HandedOver): an install was attempted. Unset,
+    // a next start still on this version says nothing to the person (#1167).
+    public bool UpdateHandedOver { get; init; }
     // The press from another device that update answers, if one asked for it (#51), and how the
     // last update asked for or installed ended, for the host to tell the account's devices.
     public string? UpdateRequest { get; init; }

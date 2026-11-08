@@ -250,6 +250,17 @@ public sealed class AutoUpdater
     // The release found and downloaded, waiting for a person to install it.
     public string? Pending { get; private set; }
 
+    // Whether the app's window is open now (#1167): an install begun while it is shows the Updating
+    // screen there, and the next start opens it again. Never one that is closed: an update a device
+    // started on an unattended machine pops no window (#1159). Read off the UI thread.
+    public Func<bool> WindowOpen { get; init; } = () => false;
+
+    // The release being installed, while the window that was open when the install began shows the
+    // Updating screen (#1167); null otherwise. Nothing waits for it: the screen stays as long as
+    // the host's stop and the hand-over to Update.exe take, and goes if the install fails.
+    public string? Updating => installing ? updatingIn : null;
+    string? updatingIn;
+
     // The release downloaded and waiting for the person (the banner's and Settings'
     // Restart to update), or null while there is none, it is being installed, or the updater no
     // longer has it ready (a later check found a newer one, still downloading or held after a
@@ -1079,18 +1090,22 @@ public sealed class AutoUpdater
         var source = updater.Source;
         var request = Asked(UpdateAskKind.Install);
         log($"auto-update: installing {to}, as {because}");
+        bool open;
+        try { open = WindowOpen(); }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { open = false; }
+        updatingIn = open ? to : null;
         installing = true;
         Changed();
         // The host comes back from a failed install, or from the app quitting mid-way (HostManager).
         try
         {
-            await manager.StopAndApplyAsync(() => Record(prefs, save, updater, request), () =>
+            await manager.StopAndApplyAsync(() => Record(prefs, save, updater, request, open), () =>
             {
                 // Settings' checks and downloads do not wait for this one: one may have replaced the
                 // package while the host stopped, and Velopack applies whatever is ready. Only the
                 // release chosen, from the source it was chosen on, is applied (Copilot, r4487830884).
                 if (updater.Ready != to || updater.Source != source) { throw new PackageReplacedException(); }
-                updater.ApplyAndRestart(to);
+                updater.ApplyAndRestart(to, HandedOver(prefs, save));
             }, preflight);
             return null;
         }
@@ -1098,7 +1113,7 @@ public sealed class AutoUpdater
         // is ready now is offered instead, with its own notes when it is installed.
         catch (PackageReplacedException)
         {
-            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null });
+            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
             installing = false;
             Pending = null;
             checkedAt = null;
@@ -1123,12 +1138,13 @@ public sealed class AutoUpdater
         {
             // Still this version: nothing to announce. Still offered while the updater has it
             // downloaded, for the person to try again when they choose; never tried again by itself.
-            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null });
+            save(prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false });
             if (updater.Ready != to) { Pending = null; }
             checkedAt = time.GetUtcNow();
             save(UpdateBackoff.Failed(prefs(), checkedAt.Value, to, out var retryAt));
             log($"auto-update: installing {to} failed: {e.Message}; update failed, retrying at {retryAt.ToLocalTime():t}");
             installing = false;
+            Changed();
             // Kept for the devices whether a device asked for it or the person here did: the old
             // release still runs, and no later start would say so.
             if (request is null) { Remember(UpdateOutcome.Failed, e.Message, to, null); }
@@ -1141,8 +1157,20 @@ public sealed class AutoUpdater
     // announces, and the press from another device it answers, if one asked for it. From Settings,
     // that is the Install a device pressed and the app has not yet carried out: Settings installs
     // the release it would have.
-    public static void Record(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, string? request = null) =>
-        save(UpdateBackoff.Attempting(prefs(), updater.Ready) with { UpdatedFrom = updater.InstalledVersion, UpdateNotes = updater.PendingNotes, UpdateRequest = request ?? prefs().UpdateInstallAsked });
+    public static void Record(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, string? request = null, bool windowOpen = false) =>
+        save(UpdateBackoff.Attempting(prefs(), updater.Ready) with
+        {
+            UpdatedFrom = updater.InstalledVersion,
+            UpdateNotes = updater.PendingNotes,
+            UpdateRequest = request ?? prefs().UpdateInstallAsked,
+            UpdateWindowOpen = windowOpen,
+            UpdateHandedOver = false,
+        });
+
+    // Once Update.exe has started (IUpdater.ApplyAndRestart's handedOver): an install was attempted,
+    // so a next start still on this version says it couldn't install (#1167).
+    public static Action HandedOver(Func<AppPreferences> prefs, Action<AppPreferences> save) =>
+        () => save(prefs() with { UpdateHandedOver = true });
 
     // Settings' Update and restart failed, the old release still running: kept for the devices as
     // an automatic install that fails is. The press a device made, if Settings took it on, is left
@@ -1153,35 +1181,52 @@ public sealed class AutoUpdater
         TimeProvider? time = null)
     {
         var result = new UpdateResult { Outcome = UpdateOutcome.Failed, From = updater.InstalledVersion, To = to, Reason = reason, At = (time ?? TimeProvider.System).GetUtcNow() };
-        save(recorded ? prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, LastUpdate = result } : prefs() with { LastUpdate = result });
+        save(recorded ? prefs() with { UpdatedFrom = null, UpdateNotes = null, UpdateRequest = null, UpdateWindowOpen = false, UpdateHandedOver = false, LastUpdate = result } : prefs() with { LastUpdate = result });
         (updater as ObservedUpdater)?.Noted();
     }
 
-    // The first start after an update: a toast saying what changed, once, and how it went kept for
-    // the account's other devices (State.Last), the press it answers with it.
-    public static void Announce(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, IToastSink sink, Action<string> log,
+    // The first start after an update: what it came to, once, and how it went kept for the
+    // account's other devices (State.Last), the press it answers with it. Where the window was open
+    // when the update was handed over, the app opens it again and says it there (the Updated bar,
+    // or why it couldn't install, with Try again); otherwise a toast does (#1167). A failed install
+    // is never silent: Update.exe, silent, says nothing itself, and restarts this old version.
+    public static UpdateAnnouncement? Announce(Func<AppPreferences> prefs, Action<AppPreferences> save, IUpdater updater, IToastSink sink, Action<string> log,
         TimeProvider? time = null, Func<string?>? blockers = null)
     {
-        if (prefs().UpdatedFrom is not { } from) { return; }
+        if (prefs().UpdatedFrom is not { } from) { return null; }
         var notes = prefs().UpdateNotes;
+        var open = prefs().UpdateWindowOpen;
+        var attempted = prefs().UpdateFailedRelease;
+        var handedOver = prefs().UpdateHandedOver;
         var now = updater.InstalledVersion;
         var took = now is not null && now != from;
         var at = (time ?? TimeProvider.System).GetUtcNow();
+        // Still this version, and Update.exe never started (the app quit or ended between recording
+        // the install and handing it over): no install was attempted, so there is nothing to tell
+        // the person (Creative on #1181), only the log and the devices.
+        var aborted = !took && !handedOver;
         save(prefs() with
         {
             UpdatedFrom = null,
             UpdateNotes = null,
             UpdateRequest = null,
+            UpdateWindowOpen = false,
+            UpdateHandedOver = false,
             LastUpdate = new UpdateResult
             {
                 Outcome = took ? UpdateOutcome.Updated : UpdateOutcome.Failed,
                 From = from,
                 To = now,
-                Reason = took ? null : $"the update did not take: still {now ?? "not installed"}",
+                Reason = took ? null : aborted ? "the update was not handed to the installer: the app ended first" : $"the update did not take: still {now ?? "not installed"}",
                 Request = prefs().UpdateRequest,
                 At = at,
             },
         });
+        if (aborted)
+        {
+            log($"the update from {from}{(attempted is null ? "" : $" to {attempted}")} was not handed to the installer: the app ended first; nothing was installed");
+            return null;
+        }
         if (!took)
         {
             // Update.exe failed after this app's earlier run ended (error 5 moving a held file, say)
@@ -1192,10 +1237,26 @@ public sealed class AutoUpdater
             try { held = blockers?.Invoke(); }
             catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { }
             log($"the update from {from} did not take: still {now ?? "not installed"}{(held is null ? "" : $"; {UpdateBlockedException.Prefix}{held}")}; update failed, retrying at {retryAt.ToLocalTime():t}");
-            return;
+            var failed = new UpdateAnnouncement(false, from, now ?? from, attempted, open);
+            if (!open && prefs().Toasts) { sink.Show(new ToastNotice("agent-bridge-updated", ToastXml.CouldNotInstall(failed.Message), Quiet: true)); }
+            return failed;
         }
         save(UpdateBackoff.Cleared(prefs()));
         log($"updated from {from} to {now}");
-        if (prefs().Toasts) { sink.Show(new ToastNotice("agent-bridge-updated", ToastXml.Updated(now!, from, notes), Quiet: true)); }
+        if (!open && prefs().Toasts) { sink.Show(new ToastNotice("agent-bridge-updated", ToastXml.Updated(now!, from, notes), Quiet: true)); }
+        return new UpdateAnnouncement(true, from, now!, attempted, open);
     }
+}
+
+// What the first start after an update came to (AutoUpdater.Announce). Took: the version changed.
+// Now: the version running; Attempted: the one being installed, when known. WindowOpen: the
+// window was open when the update was handed over, so the app opens it again and says it there.
+public sealed record UpdateAnnouncement(bool Took, string From, string Now, string? Attempted, bool WindowOpen)
+{
+    // The failure in the person's words (#1167), from versions alone: never an error's own text.
+    public string Message => Took
+        ? $"Updated to version {Now}."
+        : Attempted is { } v && v != Now
+            ? $"Couldn't install version {v}. {Product.Name} is still on {Now}."
+            : $"Couldn't install the update. {Product.Name} is still on {Now}.";
 }

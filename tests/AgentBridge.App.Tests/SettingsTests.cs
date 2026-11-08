@@ -43,12 +43,13 @@ public sealed class SettingsTests : IAsyncLifetime
             Ready = "0.2.0";
             return Task.CompletedTask;
         }
-        public void ApplyAndRestart(string version)
+        public void ApplyAndRestart(string version, Action? handedOver = null)
         {
             OnApply?.Invoke();
             if (ApplyFails is { } e) { throw e; }
             if (Ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded"); }
             Applied = true;
+            handedOver?.Invoke();
         }
     }
 

@@ -54,6 +54,7 @@ public sealed class AppUpdateViewModel : Observable
 {
     readonly Func<string?> ready;
     readonly Func<Func<string, Task<bool>>?, Task<string?>> restart;
+    readonly Func<string?> updating;
     string? problem;
     bool restarting;
 
@@ -61,30 +62,69 @@ public sealed class AppUpdateViewModel : Observable
     public AppUpdateViewModel() : this(() => null, _ => Task.FromResult<string?>(AutoUpdater.NotInstalled)) { }
 
     // restart(confirm): AutoUpdater.RestartToUpdateAsync, which asks confirm(warning) itself, last,
-    // when a session here is busy.
-    public AppUpdateViewModel(Func<string?> ready, Func<Func<string, Task<bool>>?, Task<string?>> restart)
+    // when a session here is busy. updating: the release the Updating screen names (AutoUpdater
+    // .Updating), while there is one.
+    public AppUpdateViewModel(Func<string?> ready, Func<Func<string, Task<bool>>?, Task<string?>> restart, Func<string?>? updating = null)
     {
         this.ready = ready;
         this.restart = restart;
+        this.updating = updating ?? (() => null);
     }
 
-    public static AppUpdateViewModel For(AutoUpdater auto) => new(() => auto.Ready, auto.RestartToUpdateAsync);
+    public static AppUpdateViewModel For(AutoUpdater auto) => new(() => auto.Ready, auto.RestartToUpdateAsync, () => auto.Updating);
+
+    // The Updating screen (#1167): the window's content while the release is handed to Velopack,
+    // only where the window was open when the install began. Its words are the screen's whole say:
+    // no buttons, nothing to do but wait.
+    public string? UpdatingTo => updating();
+    public bool IsUpdating => UpdatingTo is not null;
+    public string UpdatingTitle => UpdatingTo is { } v ? $"Updating to version {v}" : "";
+    public static string UpdatingBody { get; } = $"{Product.Name} closes for a moment and opens again by itself. Your agents keep running.";
+
+    // The new version's first start, where the window was open for the update (#1167): a success
+    // bar the person can close, with What's new.
+    public string? UpdatedTo { get; private set; }
+    public bool HasUpdated => UpdatedTo is not null;
+    public string UpdatedMessage => UpdatedTo is { } v ? $"Updated to version {v}." : "";
+    public Uri? ReleaseNotes => UpdatedTo is { } v ? ReleaseNotesFor(v) : null;
+    public static Uri ReleaseNotesFor(string version) => new($"{AgentBridge.Host.Core.Updates.ReleaseDiscovery.Repository}/releases/tag/v{Uri.EscapeDataString(version)}");
+
+    // What the first start after an update came to (AutoUpdater.Announce): Updated, or, still on the
+    // old version, why it couldn't install, as the bar's failed state with Try again while the
+    // release is still ready (#1167).
+    public void Show(UpdateAnnouncement what)
+    {
+        if (what.Took) { UpdatedTo = what.Now; }
+        else { couldNot = what.Message; couldNotWith = what.Attempted; }
+        Notify();
+    }
+
+    public void CloseUpdated()
+    {
+        if (UpdatedTo is null) { return; }
+        UpdatedTo = null;
+        RaiseAll();
+    }
+
+    string? couldNot;
+    string? couldNotWith;
 
     public string? Version => ready();
-    public bool Shown => restarting || Version is not null || problem is not null;
+    public bool Shown => restarting || Version is not null || problem is not null || couldNot is not null;
     public bool CanRestart => !restarting && Version is not null;
     // The button stays while a restart is being checked, so it keeps keyboard focus, and the
     // confirmation dialog has it to return to (ui.md §9.1 A4); RestartAsync ignores a second press.
     public bool Offered => restarting || Version is not null;
     public string Message => restarting ? "Restarting to update\u2026"
         : problem is { } p ? DidNotInstall(p, Version is not null)
+        : couldNot is { } c ? c
         : Version is { } v ? Ready(v)
         : "";
     // The bar's state, for its severity and its button (Creative on #719, 6675195544): a failed
     // install is a warning, and its button is Try again; while restarting, the button shows its
     // progress ring and says so to a screen reader, ignores presses, and keeps focus.
     public bool Restarting => restarting;
-    public bool Failed => !restarting && problem is not null;
+    public bool Failed => !restarting && (problem is not null || couldNot is not null);
     public string ActionLabel => Failed && Version is not null ? "Try again" : "Restart to update";
     public string ActionStatus => restarting ? "Restarting\u2026" : "";
 
@@ -145,6 +185,7 @@ public sealed class AppUpdateViewModel : Observable
         if (restarting) { return "an update is already being installed"; }
         restarting = true;
         problem = null;
+        couldNot = null;
         Notify();
         string? why = null;
         try
@@ -178,6 +219,8 @@ public sealed class AppUpdateViewModel : Observable
     public void Changed()
     {
         if (problem is not null && Version is { } now && now != problemWith) { problem = null; }
+        // A newer release ready than the one that couldn't install: its offer says what to do now.
+        if (couldNot is not null && Version is { } next && couldNotWith is not null && next != couldNotWith) { couldNot = null; }
         Notify();
     }
     string? problemWith;

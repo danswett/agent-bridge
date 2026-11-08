@@ -457,6 +457,11 @@ public static partial class ToastXml
         return End(Start(Args(("action", "open")), $"{Product.Name} updated to {version}", $"from {from}", body.Length > 0 ? body : null));
     }
 
+    // An install that didn't take, its words from versions alone (#1167): opening it shows the
+    // window, which says the same with Try again.
+    public static string CouldNotInstall(string message) =>
+        End(Start(Args(("action", "open")), $"{Product.Name} couldn't update", message, null));
+
     // What became of an answer given on a toast, replacing that toast.
     public static string Outcome(string sessionId, string title, string text, string? machineKey = null) =>
         End(Start(Args(machineKey, ("action", "open"), ("session", sessionId)), title, text, null));
