@@ -297,6 +297,40 @@ refused, #67):
 Restart. A value that is not `true` or `false` turns every permission off and is said in the log.
 Devices cannot change it yet; that waits for #801's settings path.
 
+## Notifications in the log
+
+Each push the host makes leaves one line in `logs\host.log` for each try, so the time a
+notification takes can be split between the host and the push service (#1190):
+
+```
+push question session=3f2a9c1d device=a1b2c3d4 queued=2026-11-08T00:47:55.165Z decided=+2003ms sent=+2004ms response=+2391ms status=201 attempt=1 outcome=delivered
+```
+
+- `queued`: when the host first saw what the notice says (the question asked, the turn finished,
+  the answer given), in UTC. The other times are milliseconds after it.
+- `decided`: when the host made the notice. It waits on purpose: 2 s for a question and its
+  answer (`QuestionDelay`), 3 s for a finished turn (`FinishedDelay`).
+- `sent`: when it was handed to the relay. Later than `decided` while the relay was down, the
+  limit of 20 a minute was reached, or a retry waited.
+- `response`: when the relay said how the push service took it; `status` is the push service's
+  HTTP status (0: the relay's own, such as unreachable). `outcome` is `delivered`, `retrying`,
+  `gone` (the subscription ended), `refused`, `not-allowed` (the device lost its grant meanwhile),
+  or `relay-down` (kept for the next connection).
+
+A notice that waits or never goes says so on a line of its own: `held=collapse until=+…ms` for a
+finished turn held back because the device had one for that session in the last 10 minutes
+(`FinishedCollapse`), and `dropped=…` with `at=+…ms` for one that will not go: `on-screen` (the
+device has the app open and sees it), `collapse-moved-on`, `turn-failed`, `answered`,
+`signed-in`, `expired`, `unsubscribed`, `not-allowed` or `unencryptable`. While the person uses a
+device (#1190; the rule is in [v1-sessions.md](protocol/v1-sessions.md#when-a-host-notifies)), a
+finished turn is `dropped=in-use`, and a question whose card a device in use shows
+`dropped=card-on-screen`; on the other devices the same reason ends in `-elsewhere by=` and the
+device in use.
+
+Sessions and devices are named by the first 8 characters of their ids; the grouped, sign-in,
+restore and machine notices by their own keys. No line has the notice's text, an endpoint or a
+whole id.
+
 ## Approving a workspace at the machine
 
 ```

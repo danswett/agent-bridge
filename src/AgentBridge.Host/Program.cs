@@ -5,6 +5,7 @@ using AgentBridge.Hooks;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.DevBox;
+using AgentBridge.Host.Core.Diagnostics;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Restore;
@@ -564,6 +565,19 @@ async Task<int> ServeAsync(HostHandover handover)
         push, name, Log, watchdog: departureWatchdog);
     handingOver = manage.HandingOver;
     manage.Start();
+    // The content-free journal (#737), one per host, and "Diagnose this machine" (#802,
+    // docs/protocol/v1-diagnostics.md): only a device pinned here as a person's reads it, with a
+    // closed snapshot of this host's health, through the relay. The journal names only Host.Core's
+    // and the hook contract's frames (listed by DiagnosticsJournal), which the Windows app reading a
+    // snapshot lists too; this executable's own read as <external> where they are captured. G5
+    // there is only reported, from the last look something else made, never a look of its own
+    // (RemoteDiagnostics.AgentHaBridge).
+    var diagnosticsJournal = new DiagnosticsJournal(TimeProvider.System, Path.Combine(identity.Folder, "diagnostics-journal.jsonl"));
+    var diagnostics = new RemoteDiagnostics(trustedPeers.IsPinnedPerson, diagnosticsJournal, HostVersion(), IsDevBuild(),
+        () => source.Held,
+        () => settings.ReadOnly ? (settingsProblem is null ? DiagnosticsReadOnly.ConfigReadOnly : DiagnosticsReadOnly.ConfigProblem, null)
+            : RemoteDiagnostics.AgentHaBridge(g5),
+        log: Log);
     var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         Drivers = drivers,
@@ -578,6 +592,7 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInEntrypointApproved = signIn is not null,
         SignInDevices = self => PersonDevices.View(personRoster, rosterAccount(), self),
         Manage = manage,
+        Diagnostics = diagnostics,
     };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
@@ -597,7 +612,7 @@ async Task<int> ServeAsync(HostHandover handover)
     {
         Log(refreshed);
     }
-    await using var intake = StartIntake(haProbe, () => restore.JudgingEndings, stop.Token);
+    await using var intake = StartIntake(haProbe, () => restore.JudgingEndings, diagnosticsJournal, stop.Token);
     runningIntake = intake;
 
     // The desktop app's way in (docs/protocol/local-pipe.md): the same sessions ops, and the
@@ -725,6 +740,7 @@ async Task<int> ServeAsync(HostHandover handover)
         HoldProbes = () => usageMonitor?.HoldProbes(TimeSpan.FromMinutes(15)) == true
             ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null,
     }, Log);
+    diagnostics.Bind(() => control.RelayNow, () => agentReadiness.Snapshot, control.StartedAt);
     agentReadiness.Start();
     // A pass, or keep-awake turned on or off, changes what the app's Settings shows.
     if (keepAwake is not null) { keepAwake.Changed += control.Refresh; }
@@ -974,7 +990,7 @@ void RestartSelf()
 // Hook intake (docs/host-hooks.md): only for a profile that has migrated from agent-ha-bridge,
 // and only where agent-ha-bridge's daemon can be seen, since the intake must stand back
 // whenever it runs (G5). Null when off.
-HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, CancellationToken cancellationToken)
+HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, IDiagnosticsJournal journal, CancellationToken cancellationToken)
 {
     if (intakeProblem is not null) { Log(intakeProblem); }
     if (intakeState is null) { return null; }
@@ -990,6 +1006,8 @@ HookIntake? StartIntake(AgentHaBridgeProbe? probe, Func<bool> keepEndings, Cance
         ClaudeHome = options.ClaudeHome,
         AgentHaBridgeActive = active,
         KeepEndings = keepEndings,
+        // The one journal diagnostics.get reads (#737, #802).
+        Journal = journal,
     }, new SystemProcessInspector(), log: Log);
     intake.Start(cancellationToken);
     var owner = intakeState.Standalone ? "this fresh installation" : $"agent-ha-bridge installation {intakeState.InstallationId}";

@@ -1,0 +1,1089 @@
+{
+  "about": "Diagnosing a machine from a person's device: its health and its content-free journal (#737).",
+  "spec": "v1-diagnostics.md",
+  "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
+  "contexts": {},
+  "records": {
+    "JournalEntry": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-relay-connect",
+          "json": {
+            "schema": 1,
+            "seq": 41,
+            "at": "2026-10-28T04:22:43.182Z",
+            "family": "RelayConnect",
+            "kind": "RelayConnected",
+            "outcome": "Ok",
+            "version": "0.1.200",
+            "ms": 160,
+            "stages": [
+              {
+                "name": "Connect",
+                "ms": 120
+              },
+              {
+                "name": "Handshake",
+                "ms": 40
+              }
+            ]
+          }
+        },
+        {
+          "name": "a-crash",
+          "json": {
+            "schema": 1,
+            "seq": 42,
+            "at": "2026-10-28T04:25:43.182Z",
+            "family": "Crash",
+            "kind": "UnhandledException",
+            "outcome": "Failed",
+            "version": "0.1.200",
+            "exception": {
+              "type": "System.InvalidOperationException",
+              "frames": [
+                {
+                  "type": "AgentBridge.Protocol.JournalCodec",
+                  "method": "Write"
+                },
+                {
+                  "type": "<external>",
+                  "method": "<external>"
+                }
+              ]
+            },
+            "omitted": 64
+          }
+        },
+        {
+          "name": "a-closed-relay-with-its-code",
+          "json": {
+            "schema": 1,
+            "seq": 43,
+            "at": "2026-10-28T04:25:43.182Z",
+            "family": "RelayDrop",
+            "kind": "RelayClosed",
+            "outcome": "Failed",
+            "code": 1006,
+            "omitted": 1
+          }
+        },
+        {
+          "name": "an-exception-type-not-the-journals-reads-as-unrecognized",
+          "json": {
+            "schema": 1,
+            "seq": 44,
+            "at": "2026-10-28T04:25:43.182Z",
+            "family": "Crash",
+            "kind": "UnhandledException",
+            "outcome": "Failed",
+            "exception": {
+              "type": "System.ghp_CANARY",
+              "frames": [
+                {
+                  "type": "Contoso.Secrets",
+                  "method": "ghp_CANARY"
+                }
+              ]
+            }
+          },
+          "reads": {
+            "schema": 1,
+            "seq": 44,
+            "at": "2026-10-28T04:25:43.182Z",
+            "family": "Crash",
+            "kind": "UnhandledException",
+            "outcome": "Failed",
+            "exception": {
+              "type": "<unrecognized>",
+              "frames": [
+                {
+                  "type": "<external>",
+                  "method": "<external>"
+                }
+              ]
+            },
+            "omitted": 66
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "a-message",
+          "json": {
+            "schema": 1,
+            "seq": 41,
+            "at": "2026-10-28T04:22:43.182Z",
+            "family": "RelayConnect",
+            "kind": "RelayConnected",
+            "outcome": "Ok",
+            "version": "0.1.200",
+            "ms": 160,
+            "stages": [
+              {
+                "name": "Connect",
+                "ms": 120
+              },
+              {
+                "name": "Handshake",
+                "ms": 40
+              }
+            ],
+            "message": "the user's prompt"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-kind-by-number",
+          "json": {
+            "schema": 1,
+            "seq": 41,
+            "at": "2026-10-28T04:22:43.182Z",
+            "family": "RelayConnect",
+            "kind": 0,
+            "outcome": "Ok",
+            "version": "0.1.200",
+            "ms": 160,
+            "stages": [
+              {
+                "name": "Connect",
+                "ms": 120
+              },
+              {
+                "name": "Handshake",
+                "ms": 40
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-kind-of-another-family",
+          "json": {
+            "schema": 1,
+            "seq": 41,
+            "at": "2026-10-28T04:22:43.182Z",
+            "family": "Crash",
+            "kind": "RelayConnected",
+            "outcome": "Ok",
+            "version": "0.1.200",
+            "ms": 160,
+            "stages": [
+              {
+                "name": "Connect",
+                "ms": 120
+              },
+              {
+                "name": "Handshake",
+                "ms": 40
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-version-with-letters",
+          "json": {
+            "schema": 1,
+            "seq": 41,
+            "at": "2026-10-28T04:22:43.182Z",
+            "family": "RelayConnect",
+            "kind": "RelayConnected",
+            "outcome": "Ok",
+            "version": "0.1.200-octocat",
+            "ms": 160,
+            "stages": [
+              {
+                "name": "Connect",
+                "ms": 120
+              },
+              {
+                "name": "Handshake",
+                "ms": 40
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-time-with-an-offset",
+          "json": {
+            "schema": 1,
+            "seq": 41,
+            "at": "2026-10-27T21:22:43.182-07:00",
+            "family": "RelayConnect",
+            "kind": "RelayConnected",
+            "outcome": "Ok",
+            "version": "0.1.200",
+            "ms": 160,
+            "stages": [
+              {
+                "name": "Connect",
+                "ms": 120
+              },
+              {
+                "name": "Handshake",
+                "ms": 40
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-time-on-a-day-there-is-not",
+          "json": {
+            "schema": 1,
+            "seq": 41,
+            "at": "2025-02-30T00:00:00.000Z",
+            "family": "RelayConnect",
+            "kind": "RelayConnected",
+            "outcome": "Ok",
+            "version": "0.1.200",
+            "ms": 160,
+            "stages": [
+              {
+                "name": "Connect",
+                "ms": 120
+              },
+              {
+                "name": "Handshake",
+                "ms": 40
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-version",
+          "json": {
+            "schema": 1,
+            "seq": 41,
+            "at": "2026-10-28T04:22:43.182Z",
+            "family": "RelayConnect",
+            "kind": "RelayConnected",
+            "outcome": "Ok",
+            "version": 42,
+            "ms": 160,
+            "stages": [
+              {
+                "name": "Connect",
+                "ms": 120
+              },
+              {
+                "name": "Handshake",
+                "ms": 40
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "JournalStage": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "connect",
+          "json": {
+            "name": "Connect",
+            "ms": 120
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "a-stage-not-the-journals",
+          "json": {
+            "name": "Thinking",
+            "ms": 1
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-ms",
+          "json": {
+            "name": "Connect",
+            "ms": "many"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "JournalException": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "the-runtimes-with-the-products-frame",
+          "json": {
+            "type": "System.InvalidOperationException",
+            "frames": [
+              {
+                "type": "AgentBridge.Protocol.JournalCodec",
+                "method": "Write"
+              }
+            ]
+          }
+        },
+        {
+          "name": "unrecognized",
+          "json": {
+            "type": "<unrecognized>",
+            "frames": [
+              {
+                "type": "<external>",
+                "method": "<external>"
+              }
+            ]
+          }
+        },
+        {
+          "name": "a-type-not-the-journals-reads-as-unrecognized",
+          "json": {
+            "type": "Contoso.SecretException",
+            "frames": []
+          },
+          "reads": {
+            "type": "<unrecognized>",
+            "frames": []
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-type",
+          "json": {
+            "type": 42,
+            "frames": [
+              {
+                "type": "AgentBridge.Protocol.JournalCodec",
+                "method": "Write"
+              }
+            ]
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "JournalFrame": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "the-products",
+          "json": {
+            "type": "AgentBridge.Protocol.JournalCodec",
+            "method": "Write"
+          }
+        },
+        {
+          "name": "external",
+          "json": {
+            "type": "<external>",
+            "method": "<external>"
+          }
+        },
+        {
+          "name": "a-frame-outside-the-product-reads-as-external",
+          "json": {
+            "type": "Contoso.Secrets",
+            "method": "ghp_CANARY"
+          },
+          "reads": {
+            "type": "<external>",
+            "method": "<external>"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-type",
+          "json": {
+            "type": 42,
+            "method": "Write"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "DiagnosticsHost": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-release",
+          "json": {
+            "version": "0.1.200",
+            "dev": false,
+            "startedAt": "2026-10-28T02:22:43.182Z",
+            "uptimeSeconds": 7200
+          }
+        },
+        {
+          "name": "a-version-not-recorded",
+          "json": {
+            "version": null,
+            "dev": true,
+            "startedAt": "2026-10-28T02:22:43.182Z",
+            "uptimeSeconds": 7200,
+            "versionMissing": "notRecorded"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "a-version-left-out",
+          "json": {
+            "dev": false,
+            "startedAt": "2026-10-28T02:22:43.182Z",
+            "uptimeSeconds": 7200
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-dev",
+          "json": {
+            "version": "0.1.200",
+            "dev": "yes",
+            "startedAt": "2026-10-28T02:22:43.182Z",
+            "uptimeSeconds": 7200
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "DiagnosticsRestart": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "this-process",
+          "json": {
+            "at": "2026-10-28T02:22:43.182Z",
+            "causeMissing": "notRecorded"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "DiagnosticsRelay": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "connected",
+          "json": {
+            "state": "connected",
+            "since": "2026-10-28T03:22:43.182Z"
+          }
+        },
+        {
+          "name": "not-started",
+          "json": {
+            "state": "unknown",
+            "since": null,
+            "missing": "notStarted"
+          }
+        },
+        {
+          "name": "a-newer-state-reads-as-unknown",
+          "json": {
+            "state": "teleporting",
+            "since": null
+          },
+          "reads": {
+            "state": "unknown",
+            "since": null
+          }
+        }
+      ],
+      "refused": []
+    },
+    "DiagnosticsHolds": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "none",
+          "json": {
+            "readOnly": "none",
+            "discoveryHeld": []
+          }
+        },
+        {
+          "name": "read-only-and-held",
+          "json": {
+            "readOnly": "configReadOnly",
+            "discoveryHeld": [
+              "claude"
+            ]
+          }
+        },
+        {
+          "name": "read-only-not-known",
+          "json": {
+            "readOnly": null,
+            "discoveryHeld": [],
+            "readOnlyMissing": "notStarted"
+          }
+        },
+        {
+          "name": "read-only-could-not-be-checked",
+          "json": {
+            "readOnly": null,
+            "discoveryHeld": [
+              "copilot"
+            ],
+            "readOnlyMissing": "failed"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "DiagnosticsAgent": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "working",
+          "json": {
+            "id": "copilot",
+            "version": "1.0.12",
+            "installation": "working",
+            "versionCheck": "working",
+            "hooks": "working",
+            "authentication": "working",
+            "activation": "working",
+            "lastHookHandledAt": "2026-10-28T04:17:43.182Z"
+          }
+        },
+        {
+          "name": "a-version-withheld",
+          "json": {
+            "id": "claude",
+            "version": null,
+            "installation": "working",
+            "versionCheck": "needsAction",
+            "hooks": "missing",
+            "authentication": "unknown",
+            "activation": "blocked",
+            "lastHookHandledAt": null,
+            "versionMissing": "invalid"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "DiagnosticsReadiness": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "checked",
+          "json": {
+            "checkedAt": "2026-10-28T04:21:43.182Z",
+            "agents": [
+              {
+                "id": "copilot",
+                "version": "1.0.12",
+                "installation": "working",
+                "versionCheck": "working",
+                "hooks": "working",
+                "authentication": "working",
+                "activation": "working",
+                "lastHookHandledAt": "2026-10-28T04:17:43.182Z"
+              }
+            ],
+            "omitted": 0
+          }
+        },
+        {
+          "name": "not-started",
+          "json": {
+            "checkedAt": null,
+            "agents": [],
+            "omitted": 0,
+            "missing": "notStarted"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-agents",
+          "json": {
+            "checkedAt": "2026-10-28T04:21:43.182Z",
+            "agents": "wrong",
+            "omitted": 0
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "DiagnosticsJournalPart": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "two-entries",
+          "json": {
+            "entries": [
+              {
+                "schema": 1,
+                "seq": 42,
+                "at": "2026-10-28T04:25:43.182Z",
+                "family": "Crash",
+                "kind": "UnhandledException",
+                "outcome": "Failed",
+                "version": "0.1.200",
+                "exception": {
+                  "type": "System.InvalidOperationException",
+                  "frames": [
+                    {
+                      "type": "AgentBridge.Protocol.JournalCodec",
+                      "method": "Write"
+                    },
+                    {
+                      "type": "<external>",
+                      "method": "<external>"
+                    }
+                  ]
+                },
+                "omitted": 64
+              },
+              {
+                "schema": 1,
+                "seq": 41,
+                "at": "2026-10-28T04:22:43.182Z",
+                "family": "RelayConnect",
+                "kind": "RelayConnected",
+                "outcome": "Ok",
+                "version": "0.1.200",
+                "ms": 160,
+                "stages": [
+                  {
+                    "name": "Connect",
+                    "ms": 120
+                  },
+                  {
+                    "name": "Handshake",
+                    "ms": 40
+                  }
+                ]
+              }
+            ],
+            "omittedByLimit": 3,
+            "omittedBySize": 0,
+            "invalid": 0,
+            "evictedByCount": 12,
+            "evictedByAge": 0,
+            "evictedByBytes": 0,
+            "rejectedOversized": 0,
+            "rejectedMalformed": 1,
+            "droppedOnLoad": 0,
+            "loadFailed": false,
+            "persistFailures": 0
+          }
+        },
+        {
+          "name": "not-configured",
+          "json": {
+            "entries": [],
+            "omittedByLimit": 0,
+            "omittedBySize": 0,
+            "invalid": 0,
+            "evictedByCount": 0,
+            "evictedByAge": 0,
+            "evictedByBytes": 0,
+            "rejectedOversized": 0,
+            "rejectedMalformed": 0,
+            "droppedOnLoad": 0,
+            "loadFailed": false,
+            "persistFailures": 0,
+            "missing": "notConfigured"
+          }
+        },
+        {
+          "name": "its-file-unreadable-at-start",
+          "json": {
+            "entries": [],
+            "omittedByLimit": 0,
+            "omittedBySize": 0,
+            "invalid": 0,
+            "evictedByCount": 0,
+            "evictedByAge": 0,
+            "evictedByBytes": 0,
+            "rejectedOversized": 0,
+            "rejectedMalformed": 0,
+            "droppedOnLoad": 2,
+            "loadFailed": true,
+            "persistFailures": 0
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-entries",
+          "json": {
+            "entries": "wrong",
+            "omittedByLimit": 3,
+            "omittedBySize": 0,
+            "invalid": 0,
+            "evictedByCount": 12,
+            "evictedByAge": 0,
+            "evictedByBytes": 0,
+            "rejectedOversized": 0,
+            "rejectedMalformed": 1,
+            "droppedOnLoad": 0,
+            "loadFailed": false,
+            "persistFailures": 0
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "DiagnosticsSnapshot": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-machine",
+          "json": {
+            "schema": 1,
+            "at": "2026-10-28T04:22:43.182Z",
+            "host": {
+              "version": "0.1.200",
+              "dev": false,
+              "startedAt": "2026-10-28T02:22:43.182Z",
+              "uptimeSeconds": 7200
+            },
+            "lastRestart": {
+              "at": "2026-10-28T02:22:43.182Z",
+              "causeMissing": "notRecorded"
+            },
+            "relay": {
+              "state": "connected",
+              "since": "2026-10-28T03:22:43.182Z"
+            },
+            "holds": {
+              "readOnly": "none",
+              "discoveryHeld": []
+            },
+            "readiness": {
+              "checkedAt": "2026-10-28T04:21:43.182Z",
+              "agents": [
+                {
+                  "id": "copilot",
+                  "version": "1.0.12",
+                  "installation": "working",
+                  "versionCheck": "working",
+                  "hooks": "working",
+                  "authentication": "working",
+                  "activation": "working",
+                  "lastHookHandledAt": "2026-10-28T04:17:43.182Z"
+                }
+              ],
+              "omitted": 0
+            },
+            "journal": {
+              "entries": [
+                {
+                  "schema": 1,
+                  "seq": 42,
+                  "at": "2026-10-28T04:25:43.182Z",
+                  "family": "Crash",
+                  "kind": "UnhandledException",
+                  "outcome": "Failed",
+                  "version": "0.1.200",
+                  "exception": {
+                    "type": "System.InvalidOperationException",
+                    "frames": [
+                      {
+                        "type": "AgentBridge.Protocol.JournalCodec",
+                        "method": "Write"
+                      },
+                      {
+                        "type": "<external>",
+                        "method": "<external>"
+                      }
+                    ]
+                  },
+                  "omitted": 64
+                },
+                {
+                  "schema": 1,
+                  "seq": 41,
+                  "at": "2026-10-28T04:22:43.182Z",
+                  "family": "RelayConnect",
+                  "kind": "RelayConnected",
+                  "outcome": "Ok",
+                  "version": "0.1.200",
+                  "ms": 160,
+                  "stages": [
+                    {
+                      "name": "Connect",
+                      "ms": 120
+                    },
+                    {
+                      "name": "Handshake",
+                      "ms": 40
+                    }
+                  ]
+                }
+              ],
+              "omittedByLimit": 3,
+              "omittedBySize": 0,
+              "invalid": 0,
+              "evictedByCount": 12,
+              "evictedByAge": 0,
+              "evictedByBytes": 0,
+              "rejectedOversized": 0,
+              "rejectedMalformed": 1,
+              "droppedOnLoad": 0,
+              "loadFailed": false,
+              "persistFailures": 0
+            }
+          }
+        },
+        {
+          "name": "little-known",
+          "json": {
+            "schema": 1,
+            "at": "2026-10-28T04:22:43.182Z",
+            "host": {
+              "version": null,
+              "dev": false,
+              "startedAt": "2026-10-28T04:22:43.182Z",
+              "uptimeSeconds": 0,
+              "versionMissing": "notRecorded"
+            },
+            "lastRestart": {
+              "at": "2026-10-28T02:22:43.182Z",
+              "causeMissing": "notRecorded"
+            },
+            "relay": {
+              "state": "unknown",
+              "since": null,
+              "missing": "notStarted"
+            },
+            "holds": {
+              "readOnly": null,
+              "discoveryHeld": [],
+              "readOnlyMissing": "notStarted"
+            },
+            "readiness": {
+              "checkedAt": null,
+              "agents": [],
+              "omitted": 0,
+              "missing": "notStarted"
+            },
+            "journal": {
+              "entries": [],
+              "omittedByLimit": 0,
+              "omittedBySize": 0,
+              "invalid": 0,
+              "evictedByCount": 0,
+              "evictedByAge": 0,
+              "evictedByBytes": 0,
+              "rejectedOversized": 0,
+              "rejectedMalformed": 0,
+              "droppedOnLoad": 0,
+              "loadFailed": false,
+              "persistFailures": 0,
+              "missing": "notConfigured"
+            }
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "a-section-left-out",
+          "json": {
+            "schema": 1,
+            "at": "2026-10-28T04:22:43.182Z",
+            "host": {
+              "version": "0.1.200",
+              "dev": false,
+              "startedAt": "2026-10-28T02:22:43.182Z",
+              "uptimeSeconds": 7200
+            },
+            "lastRestart": {
+              "at": "2026-10-28T02:22:43.182Z",
+              "causeMissing": "notRecorded"
+            },
+            "relay": {
+              "state": "connected",
+              "since": "2026-10-28T03:22:43.182Z"
+            },
+            "readiness": {
+              "checkedAt": "2026-10-28T04:21:43.182Z",
+              "agents": [
+                {
+                  "id": "copilot",
+                  "version": "1.0.12",
+                  "installation": "working",
+                  "versionCheck": "working",
+                  "hooks": "working",
+                  "authentication": "working",
+                  "activation": "working",
+                  "lastHookHandledAt": "2026-10-28T04:17:43.182Z"
+                }
+              ],
+              "omitted": 0
+            },
+            "journal": {
+              "entries": [
+                {
+                  "schema": 1,
+                  "seq": 42,
+                  "at": "2026-10-28T04:25:43.182Z",
+                  "family": "Crash",
+                  "kind": "UnhandledException",
+                  "outcome": "Failed",
+                  "version": "0.1.200",
+                  "exception": {
+                    "type": "System.InvalidOperationException",
+                    "frames": [
+                      {
+                        "type": "AgentBridge.Protocol.JournalCodec",
+                        "method": "Write"
+                      },
+                      {
+                        "type": "<external>",
+                        "method": "<external>"
+                      }
+                    ]
+                  },
+                  "omitted": 64
+                },
+                {
+                  "schema": 1,
+                  "seq": 41,
+                  "at": "2026-10-28T04:22:43.182Z",
+                  "family": "RelayConnect",
+                  "kind": "RelayConnected",
+                  "outcome": "Ok",
+                  "version": "0.1.200",
+                  "ms": 160,
+                  "stages": [
+                    {
+                      "name": "Connect",
+                      "ms": 120
+                    },
+                    {
+                      "name": "Handshake",
+                      "ms": 40
+                    }
+                  ]
+                }
+              ],
+              "omittedByLimit": 3,
+              "omittedBySize": 0,
+              "invalid": 0,
+              "evictedByCount": 12,
+              "evictedByAge": 0,
+              "evictedByBytes": 0,
+              "rejectedOversized": 0,
+              "rejectedMalformed": 1,
+              "droppedOnLoad": 0,
+              "loadFailed": false,
+              "persistFailures": 0
+            }
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-schema",
+          "json": {
+            "schema": "many",
+            "at": "2026-10-28T04:22:43.182Z",
+            "host": {
+              "version": "0.1.200",
+              "dev": false,
+              "startedAt": "2026-10-28T02:22:43.182Z",
+              "uptimeSeconds": 7200
+            },
+            "lastRestart": {
+              "at": "2026-10-28T02:22:43.182Z",
+              "causeMissing": "notRecorded"
+            },
+            "relay": {
+              "state": "connected",
+              "since": "2026-10-28T03:22:43.182Z"
+            },
+            "holds": {
+              "readOnly": "none",
+              "discoveryHeld": []
+            },
+            "readiness": {
+              "checkedAt": "2026-10-28T04:21:43.182Z",
+              "agents": [
+                {
+                  "id": "copilot",
+                  "version": "1.0.12",
+                  "installation": "working",
+                  "versionCheck": "working",
+                  "hooks": "working",
+                  "authentication": "working",
+                  "activation": "working",
+                  "lastHookHandledAt": "2026-10-28T04:17:43.182Z"
+                }
+              ],
+              "omitted": 0
+            },
+            "journal": {
+              "entries": [
+                {
+                  "schema": 1,
+                  "seq": 42,
+                  "at": "2026-10-28T04:25:43.182Z",
+                  "family": "Crash",
+                  "kind": "UnhandledException",
+                  "outcome": "Failed",
+                  "version": "0.1.200",
+                  "exception": {
+                    "type": "System.InvalidOperationException",
+                    "frames": [
+                      {
+                        "type": "AgentBridge.Protocol.JournalCodec",
+                        "method": "Write"
+                      },
+                      {
+                        "type": "<external>",
+                        "method": "<external>"
+                      }
+                    ]
+                  },
+                  "omitted": 64
+                },
+                {
+                  "schema": 1,
+                  "seq": 41,
+                  "at": "2026-10-28T04:22:43.182Z",
+                  "family": "RelayConnect",
+                  "kind": "RelayConnected",
+                  "outcome": "Ok",
+                  "version": "0.1.200",
+                  "ms": 160,
+                  "stages": [
+                    {
+                      "name": "Connect",
+                      "ms": 120
+                    },
+                    {
+                      "name": "Handshake",
+                      "ms": 40
+                    }
+                  ]
+                }
+              ],
+              "omittedByLimit": 3,
+              "omittedBySize": 0,
+              "invalid": 0,
+              "evictedByCount": 12,
+              "evictedByAge": 0,
+              "evictedByBytes": 0,
+              "rejectedOversized": 0,
+              "rejectedMalformed": 1,
+              "droppedOnLoad": 0,
+              "loadFailed": false,
+              "persistFailures": 0
+            }
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    }
+  },
+  "knownDifferences": []
+}

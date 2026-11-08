@@ -30,10 +30,11 @@ import { accountStore, startDeviceFlow } from './signin.js';
 import { BridgeConnection } from './connection.js';
 import { ALL, HostSession } from './host-session.js';
 import { ReturnGrace } from './return-grace.js';
+import { Reading } from './reading.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
 import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
-import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
+import { PushRegistrar, closeMachineNotices, closeNotices, closeReadNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
 import { offlineMachines } from './ui/views.js';
 import { Shell } from './ui/shell.js';
@@ -42,6 +43,7 @@ import { UsageBook } from './usage.js';
 import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
+import { DiagnoseControl } from './diagnostics.js';
 import { ReleaseWatch } from './release-watch.js';
 import { LastingBanner } from './banner-rule.js';
 import { UsageView } from './ui/usage-view.js';
@@ -410,7 +412,8 @@ async function startDemo() {
   // ?confirmDelay=: how long after typing an answer or reply the machine confirms it, to see Typed.
   host.confirmDelayMs = Number(params.get('confirmDelay')) || 0;
   // ?machines=2 or 3: the account's other machines, after this one.
-  const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
+  // ?diagnose=1: the laptop offers its diagnostics (#802); the others are hosts from before.
+  const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs, diagnosing: params.get('diagnose') === '1' })];
   // With ?signin=1, each other machine that takes answers needs a sign-in too (#800).
   if (params.get('signin') === '1') {
     for (const m of machines.slice(1).filter((x) => x.capabilities.includes('sessions.answer'))) {
@@ -461,6 +464,8 @@ async function startDemo() {
     });
   }
   const demoUpdates = new UpdateControl({ fleet });
+  // ?diagnose=1: each machine's Diagnose (#802), as a person's device has it.
+  const demoDiagnose = params.get('diagnose') === '1' ? new DiagnoseControl({ fleet }) : null;
   const transfers = new Map();
   for (const m of machines) {
     if (m.capabilities.includes(TRANSFER.capability)) { transfers.set(m.machine.id, await demoTransfers(m, m.machine.id)); }
@@ -484,11 +489,13 @@ async function startDemo() {
     forget: demoForget,
     updates: demoUpdates,
     signInDevices: (id) => fleet.signIns(id),
+    diagnose: demoDiagnose,
     storage: demoStorage,
     onRendered: () => focusLinked(),
   });
   demoForget.onChange(() => page.drawMachines());
   demoUpdates.onChange(() => page.drawMachines());
+  demoDiagnose?.onChange(() => page.drawMachines());
   fleet.onChange(() => page.drawMachines());
   $('machines').hidden = false;
   hosts.restoreTarget(page.routedHost ?? null);
@@ -777,10 +784,13 @@ function begin(account) {
   // subscription is on that machine, which is gone; the notices it left here are closed.
   // Each machine's updates (#51): Check and Install, from a person's device, which this is.
   const updates = new UpdateControl({ fleet });
+  // Each machine's Diagnose (#802): read here, copied only after review.
+  const diagnose = new DiagnoseControl({ fleet });
   const dropMachine = (id) => {
     hosts.dropMachine(id);
     fleet.forget(id);
     updates.forget(id);
+    diagnose.forget(id);
     if (hosts.targetId === id) { hosts.select(ALL); }
     worker().then((r) => closeMachineNotices(r, id)).catch(() => {});
   };
@@ -789,8 +799,12 @@ function begin(account) {
   // channel to it is open now: after a reconnect, one still waiting for its outcome is resent
   // with the same request. Large files go through the blob store of the relay this page is
   // connected to, when it has one and the machine fetches from it (sessions.attach.blob).
+  // What this page shows is told to each machine (sessions.focus) and its notices taken down
+  // while it is read (#1190). worker() is defined below; it is only called once a session is open.
+  const reading = new Reading({ hosts, close: (hostId, sessionId, question) => worker().then((r) => closeReadNotices(r, hostId, sessionId, question)) });
   page = new SessionsPage({
     $, hosts, connection, me: identity.deviceId, shell,
+    opened: (open) => reading.open(open),
     blobs: () => (connection.relay ? new RelayBlobs(connection.relay) : null),
     relayMax: () => connection.relay?.blobs?.max ?? 0,
     // The account's other machines' sessions, each signed for when picked.
@@ -825,6 +839,7 @@ function begin(account) {
     forget: forgets,
     updates,
     signInDevices: (id) => fleet.signIns(id),
+    diagnose,
     onRendered: () => focusLinked(),
   });
   const { answers, replies, stops, launches } = page;
@@ -926,6 +941,7 @@ function begin(account) {
   fleet.onChange(() => page.drawMachines());
   forgets.onChange(() => page.drawMachines());
   updates.onChange(() => page.drawMachines());
+  diagnose.onChange(() => page.drawMachines());
   hosts.restoreTarget(link?.host ?? page.routedHost ?? null);
   fleet.start();
   // "last seen 5m ago" moves on with nothing else to redraw the list: every machine may be offline.
@@ -976,8 +992,11 @@ function begin(account) {
     fleet.clear();
     forgets.clear();
     updates.clear();
+    diagnose.clear();
     lastKnown = null;
     page.clear();
+    // Its listeners go with the account: the next sign-in begins afresh with a Reading of its own.
+    reading.stop();
     $('feedback').hidden = true;
     if (feedbackDialog.open) { feedbackDialog.close(); }
     // A session's address names this account's machine: the next sign-in, perhaps another
@@ -1002,6 +1021,7 @@ function begin(account) {
     hosts.forget();
     fleet.clear();
     page.clear();
+    reading.stop();
     $('feedback').hidden = true;
     if (feedbackDialog.open) { feedbackDialog.close(); }
     accountStore.clear();

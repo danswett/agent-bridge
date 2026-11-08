@@ -8,6 +8,7 @@
 // answer it would refuse for its shape; ../answer-service.js sends it and resends it, with
 // the same request, until there is an outcome.
 import { h } from './dom.js';
+import { BRAND } from '../brand.js';
 import { UPDATING, holdKey, holdOf } from './hold.js';
 import { renderMarkdown } from '../markdown.js';
 import { ReceiptClock, answeredValue, describeInFlight, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
@@ -130,23 +131,23 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
   // A prompt only the machine could answer anyway still says why the machine is read-only.
   if (readOnly && why !== 'machine') {
     section.append(h('p', { class: 'note warn read-only-machine', role: 'note' },
-      `This machine is read-only from the phone: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`));
+      `This machine is read-only from ${BRAND.name}: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`));
   }
   section.append(why === 'truncated'
     ? h('p', { class: 'note warn read-only-why', role: 'note' },
       `Part of this question didn't fit in the message from the machine, so it can't be answered from here. Answer at the machine${at}.`)
     : why === 'approvalOff'
       ? h('p', { class: 'note warn read-only-why', role: 'note' },
-        `Approving permission prompts from the phone is turned off on this machine. Answer at the machine${at}.`)
+        `Approving permission prompts from ${BRAND.name} is turned off on this machine. Answer at the machine${at}.`)
       : why === 'atMachine'
         ? h('p', { class: 'note warn read-only-why', role: 'note' },
           shape ? `Answer at the machine${machineName ? ` · ${machineName}` : ''}` : `This prompt can only be answered at the machine${at}.`)
         : readOnly
           // The machine said why (agent-ha-bridge runs there): its words say where to answer.
           ? h('p', { class: 'note warn read-only-why', role: 'note' },
-            `This machine is read-only from the phone: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`)
+            `This machine is read-only from ${BRAND.name}: ${readOnly}${/[.!?]$/.test(readOnly) ? '' : '.'}`)
           : h('p', { class: 'note read-only-why', role: 'note' },
-            `This machine doesn't take answers from the phone yet. Answer at the machine${at}.`));
+            `This machine doesn't take answers from ${BRAND.name} yet. Answer at the machine${at}.`));
   if (shape) {
     section.append(h('p', { class: 'note warn at-machine-explanation' },
       'This kind of question can only be answered at the machine.'));

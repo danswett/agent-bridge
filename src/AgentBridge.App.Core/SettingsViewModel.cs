@@ -24,7 +24,9 @@ public interface IUpdater
     // Exits the app, replaces it, and starts the new version: only the release named, the one the
     // person or the updater chose, and only while it is the one ready. Anything else throws before
     // anything is replaced (a check or download meanwhile may have replaced it; r4487830884).
-    void ApplyAndRestart(string version);
+    // handedOver: called once the installer has started, just before the app exits, so the next
+    // start knows an install was attempted (#1167); never when anything threw first.
+    void ApplyAndRestart(string version, Action? handedOver = null);
     // Where releases come from now (the feed, and Include pre-releases): what a check found, or a
     // download fetched, belongs to it.
     string Source => "";
@@ -1048,7 +1050,7 @@ public sealed partial class SettingsViewModel : Observable
             await manager.StopAndApplyAsync(() => AutoUpdater.Record(prefs, savePrefs, updater), () =>
             {
                 UpdateStatus = "Restarting…";
-                updater.ApplyAndRestart(updateVersion!);
+                updater.ApplyAndRestart(updateVersion!, AutoUpdater.HandedOver(prefs, savePrefs));
             });
         }
         // The automatic update got there first, and is installing (and recorded) it.

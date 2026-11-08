@@ -691,11 +691,15 @@ public sealed record SubscribeSince
 
 // sessions.focus (Capabilities.SessionsFocus): whether the client is on screen now, and the session
 // it shows, if any. Live changes to the others then come together at most every 12 s, and a
-// visible device is not notified of a finished turn it can see (#610).
+// visible device is not notified of a finished turn it can see (#610). OpenQuestion and IdleMs say
+// which question's card is on screen and how long ago the person last gave input, so the host can
+// hold back pushes from a device in use (#1190); absent, both are unknown.
 public sealed record FocusRequest
 {
     public required bool Visible { get; init; }
     public string? Open { get; init; }
+    public string? OpenQuestion { get; init; }
+    public long? IdleMs { get; init; }
 }
 
 // sessions.subscribe's result; the sessions themselves follow as session.upsert events,
@@ -734,8 +738,10 @@ public sealed record AnswerRequest
 
 public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null, AnswerStage? Stage = null)
 {
-    // Why, as a code a client says in its own fixed words (AnswerReasons), beside Reason; absent
-    // for every other reason. A client that does not know the code shows Reason.
+    // Why, as a code a client says in its own fixed words (AnswerReasons), beside Reason: on a
+    // refused whose Reason is the code's sentence, or on a stale from a part-answered form the
+    // host reset (FormReset); absent for every other reason. A client that does not know the code
+    // shows Reason.
     public string? Code { get; init; }
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }

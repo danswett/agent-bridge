@@ -853,6 +853,26 @@ public sealed class LocalApiTests : IAsyncLifetime
         lock (logged) { Assert.Contains("local pipe: refused session.history from pid 4242, inside the copilot session 77777777", logged); }
     }
 
+    // #1190: a device that says it is in use holds back the person's pushes, so an agent on the pipe
+    // saying so would silence their finished turns and questions; the app still says it.
+    [Fact]
+    public async Task An_agent_on_the_pipe_is_refused_sessions_focus_so_it_cannot_hold_back_pushes_but_the_app_is_not()
+    {
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.Agent, "pid 4242, inside the copilot session 77777777"));
+        var agent = await ConnectAsync();
+        await agent.CallAsync<SubscribeResult>(Ops.SessionsSubscribe);
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => agent.CallAsync(Ops.SessionsFocus, new { visible = true, open = Id, openQuestion = "q1", idleMs = 0 }));
+        Assert.Equal("refused: this connection is from pid 4242, inside the copilot session 77777777; telling the host the person is using the app is for the person, from the app or a phone", refused.Message);
+        lock (logged) { Assert.Contains("local pipe: refused sessions.focus from pid 4242, inside the copilot session 77777777", logged); }
+        Assert.Empty(service.Presences());
+
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.App, "the app"));
+        var app = await ConnectAsync();
+        await app.CallAsync<SubscribeResult>(Ops.SessionsSubscribe);
+        await app.CallAsync(Ops.SessionsFocus, new { visible = true, open = Id, idleMs = 0 });
+        Assert.True(Assert.Single(service.Presences()).Visible);
+    }
+
     [Fact]
     public async Task The_hosts_own_command_line_may_restart_it_to_migrate_but_manage_nothing_else()
     {

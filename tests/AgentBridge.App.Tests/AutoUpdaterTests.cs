@@ -45,6 +45,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     IUiDispatcher? updaterUi;
     // What the installation's blockers are, when a test makes a file there held (the preflight).
     Func<string?>? preflight;
+    // What the updater reads of the window as an install begins (#1167): open, or hidden in the tray.
+    bool windowOpen;
     sealed class Updater : IUpdater
     {
         public int Checks;
@@ -90,12 +92,13 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         }
         public string? AppliedVersion;
         // As VelopackUpdater: only the release named, while it is the one ready.
-        public void ApplyAndRestart(string version)
+        public void ApplyAndRestart(string version, Action? handedOver = null)
         {
             OnApply?.Invoke();
             if (ApplyFails is { } e) { throw e; }
             if (Ready != version) { throw new InvalidOperationException($"{version} is no longer the update downloaded"); }
             (Applied, AppliedVersion) = (true, version);
+            handedOver?.Invoke();
         }
     }
 
@@ -139,7 +142,10 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             Elevated = () => false,
             Time = held,
         };
-        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, () => preflight?.Invoke());
+        auto = new AutoUpdater((IUpdater?)shared ?? updater, connection, manager, () => prefs, p => prefs = p, log.Add, pid => { othersAskedFor = pid; return othersProbe is { } probe ? probe() : others; }, time, updaterUi, () => preflight?.Invoke())
+        {
+            WindowOpen = () => windowOpen,
+        };
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Status is not null && connection.Sessions.All.Count == sessions.Length && connection.Sessions.Complete, "the connection");
     }
 
@@ -1215,7 +1221,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             return answer;
         }
         public Task DownloadAsync(Action<int> progress) => Task.CompletedTask;
-        public void ApplyAndRestart(string version) { }
+        public void ApplyAndRestart(string version, Action? handedOver = null) { }
     }
     // The host back from a failed install is a gap: without a pause, every gap stopped it again.
     [Fact]
@@ -1379,7 +1385,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     [Fact]
     public void An_update_that_did_not_take_is_counted_and_names_what_holds_the_installation_and_one_that_took_clears_the_count()
     {
-        prefs = prefs with { UpdatedFrom = "0.1.0" };
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateHandedOver = true };
         AutoUpdater.Announce(() => prefs, p => prefs = p, updater, new Toasts(), log.Add, time, () => "svchost.exe (DiagTrack, pid 4242)");
 
         Assert.Equal(1, prefs.UpdateFailures);
@@ -2388,16 +2394,85 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Null(prefs.UpdatedFrom);
     }
 
+    // #1167: Update.exe, silent, says nothing when it fails and starts this old version again, so
+    // the first start says it, from versions alone: in the window, with Try again while the release
+    // is still ready, and as a toast too where the window wasn't open.
     [Fact]
-    public void An_update_that_did_not_take_announces_nothing()
+    public void A_start_still_on_the_old_version_says_the_update_couldnt_install_with_Try_again()
     {
         var toasts = new Toasts();
-        prefs = prefs with { UpdatedFrom = "0.1.0" };
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateFailedRelease = "0.2.0", UpdateHandedOver = true };
 
-        AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add, time);
+        var said = AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add, time);
 
+        const string words = $"Couldn't install version 0.2.0. {Product.Name} is still on 0.1.0.";
+        Assert.Equal((false, words), (said!.Took, said.Message));
+        Assert.Contains(words, System.Net.WebUtility.HtmlDecode(Assert.Single(toasts.Shown).Xml));
+        var bar = new AppUpdateViewModel(() => "0.2.0", _ => Task.FromResult<string?>(null));
+        bar.Show(said);
+        Assert.Equal((true, true, words, "Try again"), (bar.Shown, bar.Failed, bar.Message, bar.ActionLabel));
+        Assert.Null(prefs.UpdatedFrom);
+    }
+
+    // Creative on #1181: "Couldn't install" only when an install was attempted. Recorded, then the
+    // app quit or ended before Update.exe started: the next start, still on this version, says
+    // nothing to the person, only the log.
+    [Fact]
+    public void A_start_after_a_hand_over_that_never_reached_the_installer_says_nothing()
+    {
+        var toasts = new Toasts();
+        updater.Ready = "0.2.0";
+        AutoUpdater.Record(() => prefs, p => prefs = p, updater, windowOpen: true);
+
+        var said = AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add, time);
+
+        Assert.Null(said);
         Assert.Empty(toasts.Shown);
         Assert.Null(prefs.UpdatedFrom);
+        Assert.Contains(log, l => l.Contains("was not handed to the installer", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_start_on_the_new_version_with_the_window_open_for_it_says_Updated_in_the_window_and_no_failure()
+    {
+        var toasts = new Toasts();
+        prefs = prefs with { UpdatedFrom = "0.1.0", UpdateFailedRelease = "0.2.0", UpdateWindowOpen = true, UpdateHandedOver = true };
+        updater.InstalledVersion = "0.2.0";
+
+        var said = AutoUpdater.Announce(() => prefs, p => prefs = p, updater, toasts, log.Add, time);
+
+        Assert.Equal((true, true), (said!.Took, said.WindowOpen));
+        Assert.Empty(toasts.Shown);
+        var bar = new AppUpdateViewModel(() => null, _ => Task.FromResult<string?>(null));
+        bar.Show(said);
+        Assert.Equal(("Updated to version 0.2.0.", false, false), (bar.UpdatedMessage, bar.Failed, bar.Shown));
+        Assert.Equal("https://github.com/danswett/agent-bridge/releases/tag/v0.2.0", bar.ReleaseNotes!.ToString());
+        Assert.False(prefs.UpdateWindowOpen);
+    }
+
+    // #1167: the Updating screen is the open window's, while the release is handed over; a window
+    // hidden in the tray stays hidden, and nothing shows on a machine no one is looking at (#1159).
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Restart_to_update_shows_the_Updating_screen_only_while_the_window_is_open(bool open)
+    {
+        windowOpen = open;
+        await StartAsync();
+        string? updating = "not read";
+        bool? handedOverBefore = null;
+        updater.OnApply = () => (updating, handedOverBefore) = (auto.Updating, prefs.UpdateHandedOver);
+        await auto.TickAsync();
+
+        Assert.Null(auto.Updating);
+        Assert.Null(await auto.RestartToUpdateAsync(_ => Task.FromResult(true)));
+
+        Assert.True(updater.Applied);
+        Assert.Equal(open ? "0.2.0" : null, updating);
+        Assert.Equal(open, prefs.UpdateWindowOpen);
+        // The attempt is marked only once the installer has started (Creative on #1181).
+        Assert.Equal(((bool?)false, true), (handedOverBefore, prefs.UpdateHandedOver));
     }
 
     // Asked from another device (#51): the press stands in for the switch, for that release, and
@@ -3017,7 +3092,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             }
             finally { running = false; }
         }
-        public void ApplyAndRestart(string version) { }
+        public void ApplyAndRestart(string version, Action? handedOver = null) { }
     }
 
     [Fact]

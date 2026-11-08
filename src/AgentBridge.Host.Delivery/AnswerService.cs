@@ -756,7 +756,7 @@ public sealed class AnswerService : ISessionAnswerer
                     return new(went, null, redone, true);
                 }
                 trace.Resume(CopilotAnswerTrace.ResumeReplaced);
-                return new(went, null, Stale(Retired("the session has asked something else since")), false);
+                return new(went, null, Retired("the session has asked something else since"), false);
             }
             // Out of date only once the form is positively gone; a form still asked, or one a
             // permission prompt is drawn over, or one the host cannot tell closed, was not
@@ -767,7 +767,7 @@ public sealed class AnswerService : ISessionAnswerer
                 return new(went, null, Unconfirmed($"the answer was typed into the prompt but not submitted whole: {progress.Said(form)}; the host pressed Esc to cancel it and it was not seen to close, so nothing more is pressed; finish it at the machine"), false);
             }
             trace.Resume(CopilotAnswerTrace.ResumeStale);
-            return new(went, null, Stale(Retired("the session did not ask it again")), false);
+            return new(went, null, Retired("the session did not ask it again"), false);
         }
 
         // What keeps a part-answered form from being resumed or reset now: AnotherPrompt while
@@ -828,8 +828,10 @@ public sealed class AnswerService : ISessionAnswerer
     // After the Esc that cancels a part-answered form, before anything else is read.
     const int EscapePauseMs = 200;
 
-    static string Retired(string why) =>
-        $"this question is out of date: the answer was left part answered at the machine, so the host cancelled the form there, and {why}";
+    // A part-answered form the host reset, not taken afresh: stale, the reason the host's own
+    // account, and the code a client says in fixed words that the answer was never delivered.
+    static AnswerResult Retired(string why) =>
+        Stale($"this question is out of date: the answer was left part answered at the machine, so the host cancelled the form there, and {why}") with { Code = AnswerReasons.FormReset };
 
     // Whether two question arguments are the same in every detail and in order (#1123 review):
     // an object's properties are its form's fields, in the order the form asks them, so a re-ask

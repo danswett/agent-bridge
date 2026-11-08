@@ -293,7 +293,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.history` | `session.history`: a session's earlier turns, a page at a time, for the conversation pane ([v1-history.md](v1-history.md)). Offered to a person's devices and the app; never to the HA connector or an agent on the pipe |
 | `sessions.patch` | `sessions.subscribe` takes `patch` and `since`: live changes as `session.patch`, only what changed ([Patches](#patches-sessionpatch)), and a reconnect to the same run of the host sent only the sessions that changed meanwhile ([Resuming](#resuming-without-a-snapshot)). Without it, or without asking, a client gets whole upserts and whole snapshots as before |
 | `hello.changed` | `hello` takes `{ "changes": true }`, and the host then sends `hello.changed` on that channel when its `readOnly` or capabilities change ([Changes](#hello)). Without it, a client asks hello again to see a change |
-| `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). Without it, or until a client says, every change goes at once |
+| `sessions.focus` | `sessions.focus`: the client says whether it is on screen and which session it shows. Live changes to the others then come together at most every 12 s, and a device on screen is not notified of finished turns ([sessions.focus](#sessionsfocus)). With `openQuestion` and `idleMs` it also says which question's card it shows and how long since the person's last input, and while the person uses a device the host holds back some pushes ([While the person uses a device](#while-the-person-uses-a-device-1190)). Without it, or until a client says, every change goes at once |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
 | `sessions.progress` | `session.reply` and `session.answer` take `"progress": true`, and then report `received` and `typed` before their result, which carries `timings` ([Progress](#progress)). Offered with `sessions.reply` or `sessions.answer` |
@@ -313,6 +313,7 @@ once whenever `machine.readOnly`, `machine.restore` or `capabilities` would diff
 | `sessions.restore.run` | **Proposed, not built (#948).** `restore.run`: a person's device restores the sessions `machine.restore` offers, after a confirmation ([restore-run.md](restore-run.md)). Offered with `sessions.restore` and `sessions.launch`, only to a person's device (through the relay as `pwa` or `app`, or the app on the pipe), and never on a read-only machine (G5). Without it, a client says the sessions can be restored at the machine |
 | `update` | `update.get`, `update.subscribe`, `update.check`, `update.install`: the machine's updates, seen and asked for from a person's other devices, installed by its Windows app ([v1-update.md](v1-update.md)). Through the relay only, and never by a read-only machine |
 | `manage` | `manage.get`, `manage.subscribe`, `manage.restart`: a person's device restarts this host, each press a command it signed for this machine, leaving only through #805's quiet lease ([host-lifecycle.md](../host-lifecycle.md)); with `manage.hooks`, `manage.hooks.repair` repairs the hooks of an agent this installation set up (#801). Through the relay only, to a `pwa` or `app` device that is not this machine's own app, never by a read-only machine or one with `permissions.remoteManage` off. `manage.stop`, `manage.config.*` and `manage.haToken.set` are defined but refused `needs-roster` until the signed device roster (#55), and their capabilities are never offered. See [Managing a machine](#managing-a-machine) |
+| `diagnostics` | `diagnostics.get`: "Diagnose this machine", the content-free journal and a closed health snapshot, reviewed before it is copied ([v1-diagnostics.md](v1-diagnostics.md)). Through the relay only, and only to a device pinned here as a person |
 
 ### `sessions.list`
 
@@ -498,13 +499,17 @@ to 4 s, and with the app open the radio barely rested (#610: the largest battery
 `sessions.focus`, a client says what it shows, and says it again whenever that changes:
 
 ```json
-{ "visible": true, "open": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b" }
+{ "visible": true, "open": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b", "openQuestion": "toolu_01Hx7", "idleMs": 4200 }
 ```
 
 | Field | Notes |
 |---|---|
 | `visible` | Required. Whether the app is on screen now (the page is visible, the window not minimised) |
 | `open` | The session it shows, if any. Absent or `null` on the list, or another machine's session |
+| `openQuestion` | Optional string: the id of the question the card of the `open` session shows, if it has one on screen. Absent means none, or unknown, and is never read as "every question". Only with `open`. A host holding a question push for that id may treat it as read, and must not treat any other question's as read |
+| `idleMs` | Optional integer ≥ 0: milliseconds since the person's last input in the app (pointer, key, touch, wheel), measured when the request is sent. An age, not a time, so the clocks of phone and host need not agree: the host keeps `receivedAt - idleMs`. Absent means unknown, and a host must treat it as **not active**, never as 0 |
+
+A client sends the focus when its page's visibility, open session or `openQuestion` changes (once with `"visible": false` when it goes out of sight), and after every `sessions.subscribe`. While `visible` it also says it again on the first input after a spell without any, and about once a minute while input goes on, so a host's window of recent input stays fresh; never more than once in 2 s on input alone, and nothing periodic while idle or hidden (#1190).
 
 Result: `{}`. A request without `visible`, or with a field of the wrong type, fails as a request, as does one past 20 on a channel in 10 s: a client says it when its page or session changes, not more.
 It is for a person's devices: a pinned `service` or `host` peer is neither offered nor allowed it.
@@ -512,6 +517,17 @@ What it says holds for the channel, across `sessions.subscribe` on it, until it 
 the channel closes; a new channel starts with nothing said, and a client says it again after
 subscribing (it may send both at once). Until a channel has said anything, nothing below applies
 and every live change goes at once, as without the capability.
+
+**How a host reads `openQuestion` and `idleMs` (#1190).** `idleMs` is a whole number of
+milliseconds; the host takes 0 to 86,400,000 (a day), and reads any other whole number, negative or
+larger, as unknown. One that is not a whole number (`1.5`) fails the whole request, as any
+field of the wrong type does, and nothing of it is kept: `sessions.focus needs visible, open and
+openQuestion only as strings, and idleMs only as a whole number`. `openQuestion` without `open` is
+ignored. The host uses the two only to hold back pushes from a person using one of their devices
+([While the person uses a device](#while-the-person-uses-a-device-1190)); what it says about the
+channel's live changes is as above. On the local pipe, a process inside an agent session is refused
+`sessions.focus` ([local-pipe.md](local-pipe.md#who-may-manage-the-host)), so it cannot hold back
+the person's pushes; over the relay only the person's paired devices reach it.
 
 **The open session at once, the rest together.** A live `session.upsert` or `session.patch` of the
 `open` session, while `visible`, goes at once. Of every other session (all of them while not
@@ -630,7 +646,8 @@ nothing records no answer, and blank text might be recorded trimmed to nothing.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>", "stage": "<stage>", "code": "<code>" }`,
 with `reason` present for anything but `delivered`, `stage` only on `unconfirmed` (below),
-`code` only on a `refused` whose reason is one of the [answer reasons](#answer-reasons), and
+`code` only on a `refused` whose reason is one of the [answer reasons](#answer-reasons), or on a
+`stale` from a part-answered form the host reset (`formReset`), and
 `timings` for a request that asked for progress ([Progress](#progress)):
 
 | `outcome` | Meaning | Typed? |
@@ -656,12 +673,14 @@ An `unconfirmed` answer also carries `stage`, how far it is known to have got
 
 Some reasons a client says in fixed words of its own, the same in every client: on a field, as
 `otherUnavailable`, and on a refusal, as its `code` beside a `reason` that is the same
-sentence (so a client that knows neither still says why). A client that doesn't know a code
-reads it as absent: no disabled Other, and the `reason` as usual.
+sentence (so a client that knows neither still says why). `formReset` is said only on a
+`stale` answer, beside a `reason` that is the host's own account of it, never on a field. A
+client that doesn't know a code reads it as absent: no disabled Other, and the `reason` as usual.
 
 | Code | Sentence | A client shows |
 |---|---|---|
 | `otherNotSendable` | "Your own answer can't be sent from here yet. Pick an option, or answer at the machine." | On a field: Other, its label unchanged, disabled, and the sentence as one muted line under the choices and as their accessible description. On a refusal: "Not sent · " and the sentence |
+| `formReset` | "The session moved on from this question. Your answer was not delivered." | On a `stale` answer only: the host had left the form part answered, cancelled it (one Esc), and the session asked something else or nothing again, so none of the answer reached the agent ([#1123](https://github.com/danswett/agent-bridge/issues/1123)). "Not sent: " and the sentence, never "answered elsewhere" |
 
 `otherNotSendable` is a **temporary exception to #876** ("offer Other exactly when the CLI
 does"), decided by Product for #510: Copilot CLI 1.0.105 offers Other on a lone option list,
@@ -1323,7 +1342,9 @@ person's carries no `state`.
 
 A host with `push` notifies every subscribed device when one of its sessions needs the
 person or has something to say, whether or not the app is open, the same moments
-agent-ha-bridge notifies a phone through Home Assistant.
+agent-ha-bridge notifies a phone through Home Assistant. While the person uses one of their
+devices, it holds back a finished turn, and a question whose card a device in use shows
+([While the person uses a device](#while-the-person-uses-a-device-1190)).
 
 ### Notification class (#913)
 
@@ -1467,7 +1488,7 @@ silently (ui.md §7.0; later #913 work).
 | `kind` | When | Once per |
 |---|---|---|
 | `question` | A session has a pending `question`, still pending 2 s later. A question already pending when the host starts is notified too, as agent-ha-bridge's daemon does after a restart. Within a burst it goes in the `group` instead. Still pending 15 minutes after the session's first question notice of the episode, it goes once more with `data.reminder` ([Bursts and the reminder](#bursts-and-the-reminder-913)) | Question `id`, for the life of the session: further upserts, or the question briefly reading as pending again after an answer is typed, do not repeat it. The reminder: once per episode |
-| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified. Nor is a turn that ended on an error or a failed sign-in (`attention` `error` or `signInNeeded`): it is idle with the previous turn's answer still beside it, which a `finished` would quote as the new one's; one already due or held for the session is withdrawn while that attention lasts. A `finished` that would have replaced an answered question and does not go (withdrawn so, or refused by a device) sends that question's `resolved` instead to the devices still showing it, unless it is asked again | Finished turn: the same `turnCount` and response seen ending again is not repeated |
+| `finished` | A session went from `working` or `waiting` to `idle` with a non-empty response of the main agent's own (a delegate's latest text does not count), and is still idle 3 s later. Not to a device that is on screen now, subscribed to the host on a channel whose [`sessions.focus`](#sessionsfocus) last said `"visible": true`, unless a question notice of that session is still on it (the `finished` replaces it). Nor, while the person uses any of their devices, to any of them, with the same exception ([While the person uses a device](#while-the-person-uses-a-device-1190)). Waiting on a sub-agent's question (`waitingOn`) counts if the main agent's turn was running when that wait began, or its own response changed from before the wait (for a session the host found already waiting, from what it read at startup): answering a delegate while the main agent stayed idle ends no turn. A turn that carries on within that (the person is at the machine) is not notified. A session already idle when the host starts is not news. A sub-agent finishing is never notified. Nor is a turn that ended on an error or a failed sign-in (`attention` `error` or `signInNeeded`): it is idle with the previous turn's answer still beside it, which a `finished` would quote as the new one's; one already due or held for the session is withdrawn while that attention lasts. A `finished` that would have replaced an answered question and does not go (withdrawn so, or refused by a device) sends that question's `resolved` instead to the devices still showing it, unless it is asked again | Finished turn: the same `turnCount` and response seen ending again is not repeated |
 | `restored` | With `sessions.restore`: the host started again after a reboot or a crash took sessions with it ([What went](#hello)). Sent once every session it saw live is judged and those that died are restored, or 10 minutes after it started if some are still being judged then; not at all if none of them died. It says how many were restored and counts those offered, naming only the sessions that went mid-turn or with a question waiting and leaving the rest to Launch; sessions an earlier start already offered stay in `machine.restore` but are not notified again. To every subscribed device | Start of the host
 | `resolved` | A question that was notified is no longer pending: answered anywhere, or the session ended. Sent only to devices that were shown the question, and not to the device that answered it with `session.answer` (it was there). A `finished` that follows within 2 s is sent instead. Also withdraws a `group` once none of its questions is pending | Question |
 | `group` | **New (#913 rule 3).** A question of another session comes due within 30 s of one that went as itself, while that one (or one already grouped) is still pending: see [Bursts and the reminder](#bursts-and-the-reminder-913) | Burst |
@@ -1479,6 +1500,28 @@ still idle with no question then and the device is not on screen; a `question` o
 replaces it at once, as always. Answering or replying to the session from a device (with
 `session.answer` or `session.reply`) ends this wait for that device: the person is waiting for the
 turn they started. Agents that finish turn after turn on their own sent 88% of all pushes (#610).
+
+#### While the person uses a device (#1190)
+
+A device is in use while a channel of it subscribed
+to the host last said in [`sessions.focus`](#sessionsfocus) that it is `visible`, with an `idleMs`
+that puts its last input (the host's clock when it was received, less `idleMs`) under 2 minutes
+before the push would go. Then:
+
+- a `finished` goes to none of the person's devices, the one in use or any other, unless it
+  replaces a question notice still on that device;
+- a `question` (its reminder too) still goes, since the person may be in another session, unless
+  a device in use shows its very card (`open` is its session and `openQuestion` its id): then it
+  goes to none of them but a device still showing an earlier question's notice of that session,
+  which it replaces. Its reminder still comes due 15 minutes on and is judged the same way;
+- `resolved`, `group`, `signIn` and `restored` go as before.
+
+This is judged as each push goes, not when it was made, and no delay is added to wait for a
+`sessions.focus`: one that reaches the host first wins. A device that never said, gave no
+`idleMs`, or is hidden, is not in use, and is sent what it was before. Nothing already shown is
+withdrawn for this. The host's log names each push held back so: `dropped=in-use`,
+`dropped=card-on-screen`, or with `-elsewhere by=<device>` when another device was the one in use
+([Notifications in the log](../host-config.md#notifications-in-the-log)).
 
 A question answered before its 2 s are up is never notified. A notice that cannot be sent
 because the host's relay connection is down is sent when it is back; a newer notice about

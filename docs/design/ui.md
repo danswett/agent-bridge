@@ -1690,6 +1690,20 @@ machine, online ones first, then the account's offline machines (#213):
   the press. The restart
   reads "Restarting to update…", never "Updating…" (#950); the result reads "Updated to *v*" or
   "Not updated: *reason*", the reason fixed by its code, never the machine's text (#826).
+- **The machine's own window while it updates** (#1167; [app-windows.md](../app-windows.md)):
+  not a row on another device, so "Updating" is right here. With the window open as the install
+  begins, its content becomes one centred state, with no buttons: an indeterminate progress ring,
+  "Updating to version *v*" (a heading that takes keyboard focus, so it is read) and "*Product* closes
+  for a moment and opens again by itself. Your agents keep running.", on the page's layer, the
+  window colour in high contrast. Nothing under it is in reach: the rail and pages are out of the
+  tab order and the automation tree, and search is disabled; if the install doesn't go ahead,
+  they come back and focus returns where it was. Velopack's own window never shows (the apply is silent). The new
+  version opens the window again and shows "Updated to version *v*." as a closable success bar
+  with **What's new**; with the window closed, the toast as before. A start still on the old
+  version after the installer started shows the update bar as a warning, "Couldn't install
+  version *v*. *Product* is still on *old*.", with **Try again**, and a toast too when the window
+  was closed: never silent, never an error's own text. Where the installer never started, nothing
+  was attempted, and nothing is said.
 - **When an update is ready** (owner decision on #689, 6674007815; Product, 6674016765; Creative,
   6674096426): a per-machine setting, a two-choice picker, never a toggle. Each choice carries its
   note.
@@ -1724,6 +1738,22 @@ machine, online ones first, then the account's offline machines (#213):
   keeps no roster lists it so only while its rows are kept.
 - **A machine whose bridge isn't running (§6.14, proposed):** still "Offline" on line 1, and
   line 2 says "Bridge isn't running · since *time*" in place of "Last seen…".
+- **Diagnose (#802, v1-diagnostics.md):** in another connected machine's row, after its updates,
+  a quiet small secondary **Diagnose** when its host offers it. A host that does not offer it
+  shows, in that place, the passive line "Can't be diagnosed from this device · update Slipgates
+  on <machine>", never a button that cannot act. This machine's own row has neither. The
+  states, the same on both clients except where said:
+  - **Asking:** Diagnose does nothing more until the answer (the PWA's reads "Diagnosing…"; the
+    app's is disabled).
+  - **Review:** the snapshot as plain monospace text, headed with the product, the machine and the
+    Pacific time. The PWA wraps it within the row, so a 400 px phone never scrolls sideways; the
+    app keeps lines whole in a read-only box that scrolls within 360 px. Under it the box "I have
+    read this and it is fine to share", and **Copy**, disabled until the box is ticked, beside
+    **Close** (the PWA's Diagnose reads "Diagnose again"). Close is the default: Escape anywhere
+    in the report, on its Copy and Close too, closes it, and Close and Escape both put focus back
+    on Diagnose.
+  - **Refused or unreadable:** one line in the row's error style, in the person's words
+    (v1-diagnostics.md "In the clients"), never the host's text; Diagnose stays pressable.
 
 ### 6.7 Collaborators (#519)
 

@@ -185,8 +185,16 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     too, and refused there. A bar too wide for the console shows only the labels around the
     field being answered, between arrows ("←" when labels are hidden before them, "→" when
     after, `Da`'s `Hfn` window). Read as exactly such a window at that field, it is refused
-    with nothing typed and named (`bar-window`), telling the person the window is too narrow
-    for phone answers (widen it, or answer at the machine): a form
+    with nothing typed and named (`bar-window`). Its reason says how wide the window must be
+    for the whole bar ("its titles need a window at least N columns wide"; N each title's
+    characters, two columns around each, one between and the four `$fn` leaves, a lower
+    bound as a wide character takes two), and to widen it or make its font smaller, or answer
+    at the machine. Where N
+    is more than the 250 columns the host launches sessions with, widening is no advice (a
+    maximized window, its buffer then as wide as the screen allows, was still too narrow
+    live, #1123): "this question's titles are too long for Slipgates to check which field is
+    open; answer it at the machine, or ask with shorter titles". Reasons say "Slipgates",
+    never "phone": a browser or the Windows app answers the same way. A form
     that differs from the question only in a hidden title reads the same, and each field's
     own heading is read only once the keys reach it, after earlier fields are already filled
     (#1137 review). A six-field form with long titles at 102 columns showed two labels and
@@ -283,7 +291,10 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     it afresh, once, for the same card and request, every check made again from its first
     field; that one is never reset again. A different question retires the card, and so does
     none within 60 s once the old call is positively closed: `stale`, "this question is out
-    of date: ...", with nothing typed into whatever the session shows next. A form not seen
+    of date: ...", with `code` `formReset` (so a client says in its own words that the answer
+    was never delivered: "Not sent: the session moved on from this question. Your answer was
+    not delivered."), with nothing typed into whatever the session shows next. Only these two
+    carry the code; a redo that itself ends stale says why in its own words. A form not seen
     to close (still asked after 60 s, a permission prompt drawn over it, or a transcript that
     cannot say) leaves it `unconfirmed` (`resume=uncancelled`), for the person to finish at
     the machine. `ResumeWait` zero turns all of this off.
