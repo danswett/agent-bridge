@@ -223,4 +223,101 @@ public sealed class SessionHistoryTests
         Assert.Equal(Enumerable.Range(81, HistoryLimits.Kept), Numbers(history));
         Assert.True(history.NewestDropped);
     }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_load_before_the_hosts_hello_asks_nothing_and_the_next_one_after_it_loads_the_turns()
+    {
+        await using var host = Serving(5);
+        host.Start();
+        var connection = host.Connect(start: false);
+        var history = new SessionHistory(connection, "s1");
+
+        await history.LoadNewestAsync();
+
+        Assert.NotEqual(HistoryLoad.NoHistory, history.State);
+        Assert.Empty(host.Sent(HistoryProtocol.Op));
+
+        connection.Start();
+        await connection.WhenConnectedAsync().WaitAsync(FakeHost.Patience);
+        await history.LoadNewestAsync();
+
+        Assert.Equal(Enumerable.Range(1, 5), Numbers(history));
+        Assert.Equal(HistoryLoad.StartReached, history.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_stale_cursor_that_leaves_the_newest_page_inside_the_held_turns_keeps_reading_back_to_an_older_one()
+    {
+        await using var host = Serving(45);
+        var history = await OpenAsync(host);
+        await history.LoadNewestAsync();
+        await history.LoadOlderAsync();
+        Assert.Equal(Enumerable.Range(6, 40), Numbers(history));
+        var stale = true;
+        host.On(HistoryProtocol.Op, d =>
+        {
+            if (stale && d.TryGetProperty("before", out var b) && b.GetString() == "b5") { stale = false; return HistoryResult.StaleCursor; }
+            return Page(d, 45, "c");
+        });
+
+        await history.LoadOlderAsync();
+
+        Assert.Equal(Enumerable.Range(1, 45), Numbers(history));
+        Assert.Equal(HistoryLoad.StartReached, history.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_live_turn_past_five_hundred_lets_the_oldest_go_and_nothing_older_is_asked_for()
+    {
+        await using var host = Serving(600);
+        var history = await OpenAsync(host);
+        await history.LoadNewestAsync();
+        for (var i = 0; i < 24; i++) { await history.LoadOlderAsync(); }
+        Assert.Equal(HistoryLimits.Kept, history.Turns.Count);
+
+        Assert.True(history.AddLive(Turn(601)));
+
+        Assert.Equal(Enumerable.Range(102, HistoryLimits.Kept), Numbers(history));
+        Assert.True(history.OldestDropped);
+        Assert.False(history.HasOlder);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_newest_page_that_brings_turns_past_five_hundred_lets_the_oldest_go()
+    {
+        await using var host = Serving(600);
+        var history = await OpenAsync(host);
+        await history.LoadNewestAsync();
+        for (var i = 0; i < 24; i++) { await history.LoadOlderAsync(); }
+        host.On(HistoryProtocol.Op, d => Page(d, 620));
+
+        await history.LoadNewestAsync();
+
+        Assert.Equal(Enumerable.Range(121, HistoryLimits.Kept), Numbers(history));
+        Assert.True(history.OldestDropped);
+        Assert.False(history.NewestDropped);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_load_asked_for_while_one_runs_sends_nothing_more_and_leaves_its_result()
+    {
+        await using var host = Serving(5);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HistoryProtocol.Op, async d => { await release.Task; return Page(d, 5); });
+        var history = await OpenAsync(host);
+
+        var first = history.LoadNewestAsync();
+        await Task.Delay(100);
+        await history.LoadNewestAsync();
+        release.SetResult();
+        await first;
+
+        Assert.Single(host.Sent(HistoryProtocol.Op));
+        Assert.Equal(Enumerable.Range(1, 5), Numbers(history));
+    }
 }

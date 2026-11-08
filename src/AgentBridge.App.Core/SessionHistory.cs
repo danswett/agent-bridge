@@ -22,6 +22,8 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     const int MaxRestartPages = HistoryLimits.Kept / HistoryLimits.DefaultTurns + 5;
     string? before;
     bool loadedNewest;
+    // The host said "unavailable": it is not asked again. A machine only lacking the capability is asked again, since hello may not have listed it yet.
+    bool unavailable;
 
     // Raised on the thread that finished a load or added a live turn, once the change is held.
     public event Action? Changed;
@@ -37,13 +39,15 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
     public HistoryStart? Start { get; private set; }
     // Turns at the newest end were let go to stay within HistoryLimits.Kept; scrolling forward would need them again.
     public bool NewestDropped { get; private set; }
+    // Turns at the oldest end were let go for a live or newest turn past HistoryLimits.Kept; nothing older is asked for after.
+    public bool OldestDropped { get; private set; }
     // Whether a turn was read in part or not at all (a page's `partial`), for a line above it (H5).
     public bool AnyPartial { get { lock (gate) { return held.Any(t => t.Unreadable == true || t.Truncated == true); } } }
 
-    // Opens the session: the newest page. Without the machine's capability nothing is sent.
+    // Opens the session: the newest page. Nothing is sent before the host's hello (its capabilities are not known
+    // yet, so a later call, e.g. on the connection's Changed, asks), nor without the capability once hello is read.
     public async Task LoadNewestAsync(CancellationToken ct = default)
     {
-        if (!host.Can(HistoryProtocol.Capability)) { Settle(HistoryLoad.NoHistory); return; }
         if (!Begin()) { return; }
         await RunAsync(newest: true, ct);
     }
@@ -66,6 +70,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
         {
             if (held.Any(t => t.Id == turn.Id)) { return false; }
             held.Add(turn);
+            TrimOldest();
         }
         Changed?.Invoke();
         return true;
@@ -73,23 +78,39 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
 
     bool Begin()
     {
+        var noCapability = false;
         lock (gate)
         {
-            if (State == HistoryLoad.Loading || State is HistoryLoad.NoHistory or HistoryLoad.Gone) { return false; }
-            if (State == HistoryLoad.StartReached) { return false; }
-            State = HistoryLoad.Loading;
-            return true;
+            if (State is HistoryLoad.Loading or HistoryLoad.Gone or HistoryLoad.StartReached || (State == HistoryLoad.NoHistory && unavailable)) { return false; }
+            if (host.Hello is null) { return false; }
+            if (host.Can(HistoryProtocol.Capability)) { State = HistoryLoad.Loading; Reason = null; return true; }
+            noCapability = State != HistoryLoad.NoHistory;
+            State = HistoryLoad.NoHistory;
         }
+        if (noCapability) { Changed?.Invoke(); }
+        return false;
     }
 
-    void Settle(HistoryLoad state, string? reason = null)
+    void Settle(HistoryLoad state, string? reason = null, bool unavailable = false)
     {
         lock (gate)
         {
             State = state;
             Reason = reason;
+            this.unavailable = unavailable;
         }
         Changed?.Invoke();
+    }
+
+    // Keeps at most HistoryLimits.Kept turns by letting the oldest go (the live end is what is read). Their cursor
+    // went with them, so nothing older is asked for after. Call with the gate held.
+    void TrimOldest()
+    {
+        var over = held.Count - HistoryLimits.Kept;
+        if (over <= 0) { return; }
+        held.RemoveRange(0, over);
+        before = null;
+        OldestDropped = true;
     }
 
     async Task RunAsync(bool newest, CancellationToken ct)
@@ -104,7 +125,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
             {
                 var result = await host.ReadAsync<HistoryResult>(HistoryProtocol.Op, new HistoryRequest { Id = sessionId, Before = asked }, ct: ct);
                 if (result.Missing == true) { Settle(HistoryLoad.Gone); return; }
-                if (result.Unavailable is { } why) { Settle(HistoryLoad.NoHistory, why); return; }
+                if (result.Unavailable is { } why) { Settle(HistoryLoad.NoHistory, why, unavailable: true); return; }
                 if (result.Stale == true)
                 {
                     // The cursor can't be continued from: keep what is held and read the newest page
@@ -120,7 +141,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 lock (gate)
                 {
                     loadedNewest = true;
-                    before = result.Before;
+                    if (!OldestDropped) { before = result.Before; }
                     if (result.Before is null) { Start = result.Start; }
                 }
                 if (result.Before is null) { Settle(HistoryLoad.StartReached); return; }
@@ -164,7 +185,7 @@ public sealed class SessionHistory(HostConnection host, string sessionId)
                 else if (fresh.All(t => t.Id != turn.Id)) { fresh.Add(turn); }
             }
             added = fresh.Count;
-            if (atNewestEnd) { held.AddRange(fresh); }
+            if (atNewestEnd) { held.AddRange(fresh); TrimOldest(); }
             else
             {
                 held.InsertRange(0, fresh);
