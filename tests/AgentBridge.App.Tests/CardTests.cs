@@ -156,7 +156,7 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_cards_line_that_said_the_session_no_longer_asked_goes_when_its_question_goes()
+    public async Task The_cards_line_that_said_the_session_no_longer_asked_becomes_a_neutral_closed_line_that_goes_after_five_seconds()
     {
         host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Stale));
         var card = new SessionCardViewModel(Make.Session(question: Make.Choice()), Context());
@@ -166,8 +166,31 @@ public sealed class CardTests : IAsyncLifetime
         card.Update(Make.Session());
 
         Assert.Null(card.Question);
+        Assert.True(card.HasReceipt);
+        Assert.Equal("No longer waiting", card.ReceiptText);
+        Assert.Equal(Tone.None, card.ReceiptTone);
+        clock.Advance(TimeSpan.FromSeconds(4.9));
+        Assert.Equal("No longer waiting", card.ReceiptText);
+        clock.Advance(TimeSpan.FromSeconds(0.2));
         Assert.False(card.HasReceipt);
         Assert.Equal("", card.ReceiptText);
+        card.Detach();
+    }
+
+    [Fact]
+    public async Task A_refusal_that_arrives_after_the_question_closed_shows_the_neutral_line_and_not_your_answer()
+    {
+        var gate = new TaskCompletionSource();
+        host.OnAsync(Ops.SessionAnswer, async _ => { await FakeHost.Until(gate.Task); return new AnswerResult(AnswerOutcome.Refused, "the prompt changed"); });
+        var card = new SessionCardViewModel(Make.Session(question: Make.Choice()), Context());
+        card.Question!.Choose(card.Question.Fields[0].Options[0]);
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count() == 1, "sent");
+        card.Update(Make.Session());
+
+        gate.SetResult();
+
+        await Wait.UntilAsync(() => card.ReceiptText == "No longer waiting", "the neutral line");
+        Assert.Equal(Tone.None, card.ReceiptTone);
         card.Detach();
     }
 

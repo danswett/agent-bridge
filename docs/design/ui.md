@@ -2818,6 +2818,13 @@ the list pane's header row, never in the title bar; Apple and Android when
 they are un-parked.
 
 **Windows (WinUI 3):**
+- **Lines that outlive their cause (#1193, #1195):** an error or warning line lasts only
+  while its cause stands. When the question it was about closes, a refused, stale or failed
+  answer line becomes the neutral "No longer waiting" (no tone, never prefixed "Your answer:"),
+  is kept 5 s so it can be read, then goes; a busy line goes with its 2 s pause. Only
+  delivered and unconfirmed ("Sent, but not confirmed") lines stay. A toast that says an
+  answer did not go is withdrawn when its question closes, and one that would arrive after is
+  not shown.
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
   and a centred search box. System caption buttons.
 - **Search:** finds sessions on every machine by the words of their title, repository, branch,

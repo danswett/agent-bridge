@@ -60,6 +60,7 @@ public sealed partial class SessionCardViewModel : Observable
     // answer left at Passed to the agent still stalls here, a handoff inside the quiet window or a
     // dwell still waits it out, and nothing is said twice or more than once a second.
     Receipt? receipt;
+    ITimer? closedTimer;
     string? lastHistoryAt;
     bool historyLoading;
     string historyNote = "";
@@ -242,7 +243,7 @@ public sealed partial class SessionCardViewModel : Observable
     public string ReceiptText { get; private set; } = "";
     public Tone ReceiptTone { get; private set; }
     public ReceiptMark ReceiptMark { get; private set; }
-    public bool HasReceipt => receipt is not null;
+    public bool HasReceipt => receipt is not null || closedTimer is not null;
     // What a screen reader is to hear of the receipt now (Receipt); the view raises it.
     public string ReceiptAnnouncement { get; private set; } = "";
     // Whether that is a failure or a refusal, said assertively; set before ReceiptAnnouncement.
@@ -410,15 +411,23 @@ public sealed partial class SessionCardViewModel : Observable
     void UpdateReceipt()
     {
         var e = receiptKey is null ? null : ctx.Deliveries.Get(receiptKey);
-        // The question is gone, so a line about why an answer could not go has no cause left (#1193).
-        if (e is not null && !QuestionViewModel.OutlivesQuestion(e)) { receiptKey = null; e = null; }
+        // A line about why an answer could not go has no cause once its question is gone (#1193,
+        // #1195): busy goes with its pause, the rest become one neutral closed line for a few seconds.
+        if (e is not null && !QuestionViewModel.OutlivesQuestion(e))
+        {
+            receiptKey = null;
+            if (question is null && e.Outcome != "busy") { ShowClosed(); return; }
+            e = null;
+        }
         if (e is null)
         {
+            if (closedTimer is not null) { return; }
             receipt?.Dispose();
             receipt = null;
             DrawReceipt(ReceiptLine.None);
             return;
         }
+        EndClosed();
         if (receipt is null)
         {
             receipt = new Receipt(ctx.Deliveries.Time, ctx.Deliveries.Ui, (d, stalled) => QuestionViewModel.Describe(d, ctx.MachineName(), stalled), DrawReceipt, SayReceipt);
@@ -427,10 +436,29 @@ public sealed partial class SessionCardViewModel : Observable
         receipt.Show(e);
     }
 
+    // Long enough to read, as the other lingering lines are (#1195).
+    static readonly TimeSpan ClosedLinger = TimeSpan.FromSeconds(5);
+
+    void ShowClosed()
+    {
+        receipt?.Dispose();
+        receipt = null;
+        closedTimer?.Dispose();
+        DrawReceipt(new ReceiptLine("closed", "No longer waiting", null, Tone.None, ReceiptMark.None, null));
+        closedTimer = ctx.Deliveries.Time.CreateTimer(_ => ctx.Deliveries.Ui.Post(() => { EndClosed(); UpdateReceipt(); }), null, ClosedLinger, Timeout.InfiniteTimeSpan);
+        Raise(nameof(HasReceipt));
+    }
+
+    void EndClosed()
+    {
+        closedTimer?.Dispose();
+        closedTimer = null;
+    }
+
     void DrawReceipt(ReceiptLine line)
     {
         // "You answered · value" says whose answer it is; anything else says it is about the answer.
-        (ReceiptText, ReceiptTone, ReceiptMark) = (line.Text.Length == 0 || line.Key == "delivered" ? line.Whole : $"Your answer: {line.Whole}", line.Tone, line.Mark);
+        (ReceiptText, ReceiptTone, ReceiptMark) = (line.Text.Length == 0 || line.Key is "delivered" or "closed" ? line.Whole : $"Your answer: {line.Whole}", line.Tone, line.Mark);
         Raise(nameof(ReceiptText));
         Raise(nameof(ReceiptTone));
         Raise(nameof(ReceiptMark));
@@ -520,5 +548,6 @@ public sealed partial class SessionCardViewModel : Observable
         reply?.Detach();
         end?.Dispose();
         receipt?.Dispose();
+        EndClosed();
     }
 }
