@@ -146,7 +146,9 @@ public class FeedbackBundleTests
     [Fact]
     public async Task A_source_that_ignores_cancellation_cannot_hang_gathering()
     {
-        await Assert.ThrowsAsync<TimeoutException>(() => Gather(new Fake { IgnoreCancel = true }, timeout: TimeSpan.FromMilliseconds(100)));
+        var gather = Gather(new Fake { IgnoreCancel = true }, timeout: TimeSpan.FromMilliseconds(100));
+        Assert.Same(gather, await Task.WhenAny(gather, Task.Delay(5000)));
+        await Assert.ThrowsAsync<TimeoutException>(() => gather);
     }
 
     [Fact]
@@ -207,7 +209,12 @@ public class FeedbackBundleTests
     [InlineData(@"opened C:\Users\Dan Swett\x", "Swett")]
     [InlineData("file:///home/dan/x", "dan")]
     [InlineData("sent Bearer opaque.session-value1 to server", "opaque.session")]
-    [InlineData("connection_string: Server=db;User=sa;Password=p4ss;Pooling=true", "p4ss")]
+    [InlineData("connection_string: Server=db;Pwd=hunter2;AccountKey=acckey9z", "acckey9z")]
+    [InlineData("--access-token tok99abc and --client-secret sec88xyz", "tok99abc")]
+    [InlineData("--client-secret sec88xyz", "sec88xyz")]
+    [InlineData("Pwd=hunter2", "hunter2")]
+    [InlineData("{\"p\":\"C:\\\\Users\\\\Dan Swett\\\\x\"}", "Swett")]
+    [InlineData("{\"p\":\"\\\\\\\\FILESRV01\\\\share\"}", "FILESRV01")]
     [InlineData("-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQdGBF\n-----END PGP PRIVATE KEY BLOCK-----", "lQdGBF")]
     [InlineData(@"open \\FILESRV01\share\x", "FILESRV01")]
     [InlineData("/mnt/c/Users/alice/y", "alice")]
@@ -234,6 +241,88 @@ public class FeedbackBundleTests
         Assert.DoesNotContain("abc123def", r);
         Assert.DoesNotContain("zzz999", r);
         Assert.Contains("page=2", r);
+    }
+
+    [Fact]
+    public void Redaction_is_case_insensitive_under_the_turkish_culture()
+    {
+        var before = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("tr-TR");
+            var r = FeedbackRedactor.Redact("API_KEY=zzz111 AUTHORIZATION: qqq222");
+            Assert.DoesNotContain("zzz111", r);
+            Assert.DoesNotContain("qqq222", r);
+            Assert.DoesNotContain("SILVIA", FeedbackRedactor.Redact("SILVIA broke it", ["silvia"]));
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = before; }
+    }
+
+    [Fact]
+    public void Hostile_long_input_finishes_quickly()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var s in new[] { string.Concat(Enumerable.Repeat("a-", 40_000)), string.Concat(Enumerable.Repeat("connection_string", 5000)), new string('a', 80_000) + "@", string.Concat(Enumerable.Repeat("a://", 20_000)) })
+        {
+            FeedbackRedactor.Redact(s);
+            FeedbackRedactor.ContainsSecret(s);
+        }
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8), sw.Elapsed.ToString());
+    }
+
+    public static TheoryData<string> OneSamplePerRule => new()
+    {
+        "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789",
+        "eyJhbGciOiJIUzI1" + "NiJ9.eyJzdWIiOiIxMjM0NTY3ODkw.SflKxwRJSMeKKF2QT4fwpM",
+        "sent Bearer opaque.session-value1 to server",
+        "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+        "password: \"horse battery staple\"",
+        "run --token abcd1234efgh now",
+        "connection_string: Server=db;Password=secret",
+        "connection_string: Server=db;Pwd=hunter2;AccountKey=acckey9z",
+        "https://h/x?token=abc123def&page=2&password=zzz999",
+        "https://user:pw1234@example.com/x",
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQdGBF\n-----END PGP PRIVATE KEY BLOCK-----",
+        @"open \\FILESRV01\share\x",
+        @"opened C:\Users\Dan Swett\x",
+        @"{""p"":""C:\\Users\\Dan Swett\\x""}",
+        "see /home/dan/.ssh and file:///home/dan/x",
+        "/mnt/c/Users/alice/y",
+        "mail bob@example.com",
+        "API_KEY=zzz111 AUTHORIZATION=qqq222",
+        "{\\\"password\\\":\\\"hunter2\\\"}",
+    };
+
+    [Theory]
+    [MemberData(nameof(OneSamplePerRule))]
+    public void Redaction_is_idempotent_and_leaves_nothing_for_the_sender_to_refuse(string sample)
+    {
+        var once = FeedbackRedactor.Redact(sample);
+        Assert.Equal(once, FeedbackRedactor.Redact(once));
+        Assert.False(FeedbackRedactor.ContainsSecret(once), once);
+        Assert.False(FeedbackRedactor.BundleHasSecret(System.Text.Json.JsonSerializer.Serialize(new { text = once })), once);
+    }
+
+    [Fact]
+    public void BundleHasSecret_only_flags_exact_credential_names_and_unredacted_values()
+    {
+        Assert.False(FeedbackRedactor.BundleHasSecret("{\"tokenCount\":5,\"max_tokens\":100,\"secretsEnabled\":\"yes\",\"password\":\"see [redacted]\",\"apiKey\":\"[redacted]\"}"));
+        Assert.True(FeedbackRedactor.BundleHasSecret("{\"apiKey\":\"abc\"}"));
+        Assert.True(FeedbackRedactor.BundleHasSecret("{\"password\":\"'hunter2\"}"));
+        Assert.True(FeedbackRedactor.BundleHasSecret("{\"password\":\",x\"}"));
+        Assert.True(FeedbackRedactor.BundleHasSecret("{\"token\":[\"abc\"]}"));
+    }
+
+    [Fact]
+    public void A_clean_bundle_with_credential_named_keys_and_partly_redacted_values_round_trips()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["password"] = FeedbackRedactor.Mark,
+            ["tokenCount"] = 3,
+            ["note"] = FeedbackRedactor.Redact("password=hunter2 and tokenCount=3 see Authorization: Basic dXNlcjpwYXNz"),
+        });
+        Assert.False(FeedbackRedactor.BundleHasSecret(json), json);
     }
 
     [Fact]
