@@ -43,7 +43,27 @@ public static class HostOps
     // running or in its grace. The app waits until none is before it stops the host. For the app
     // alone, like every management op. An older host answers "unknown op": it runs no such probe.
     public const string ProbeHold = "host.probes.hold";
+    // Update now's departure (#1159, docs/protocol/v1-update.md, Going, step 3): the app, its
+    // download checked and its probe hold over, asks the host to leave for the press it carries.
+    // The host takes #805's quiet lease as purpose Update, compares what is busy with what the
+    // person confirmed, announces and commits (UpdateService.DepartAsync), and answers committed
+    // (the app then stops it and installs), waiting (the download kept for the next quiet moment)
+    // or refused. For the app alone, like every management op. This is the departure step #870's
+    // lane owns: wired here, minimally, to the contract the design gives it. An older host answers
+    // "unknown op", and the press ends refused.
+    public const string UpdateDepart = "host.update.depart";
 }
+
+// host.update.depart's request: the press (an Update now's request) the app is carrying.
+public sealed record UpdateDepartRequest(string Request);
+
+// host.update.depart's answer: Committed (the host is fenced until it exits; Transition names the
+// departure), Waiting (Code is the waiting code: turn-running, question-waiting or unknown) or
+// Refused (Code says why, as UpdateCommandResult.Code). An unknown outcome reads as Refused.
+[UnknownAs(Refused)]
+public enum UpdateDepartOutcome { Committed, Waiting, Refused }
+
+public sealed record UpdateDepartResult(UpdateDepartOutcome Outcome, string? Code = null, string? Transition = null);
 
 // host.probes.hold's answer. Busy: a probe whose process goes with the host is running or in its
 // grace; Why says which, for the app's log.

@@ -39,7 +39,7 @@ public static class LocalApi
             if (!Reads.Contains(op) && callers.Classify(channel, fresh: true) is { Kind: not CallerKind.App } caller
                 && !(caller.Kind == CallerKind.HostCli && op == HostOps.Restart))
             {
-                throw Refuse(op, caller, op == HostOps.UpdateReport
+                throw Refuse(op, caller, op is HostOps.UpdateReport or HostOps.UpdateDepart
                     ? $"only the {Product.App} beside this host reports its updates, and takes other devices' presses of Install"
                     : caller.Kind == CallerKind.Agent
                     ? $"stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the {Product.App}"

@@ -30,7 +30,8 @@ namespace AgentBridge.Host;
 // its sessions. Leaving is DepartAsync, the host's half of the app-only departure step #870 owns:
 // it takes #805's lease as purpose Update, compares what is busy with the confirmation again with
 // the lease held, announces, and commits with Update now's own allowance or a slot of the shared
-// cap spent under ManageService's lock. The pipe op that calls it is not wired yet (#870).
+// cap spent under ManageService's lock. The app calls it over the pipe (host.update.depart), the
+// departure step #870's lane owns, wired here minimally to the design's contract.
 public sealed class UpdateService
 {
     // The relay's kinds for a person's device.
@@ -490,8 +491,8 @@ public sealed class UpdateService
     }
 
     // The host's half of an Update now's departure (docs/protocol/v1-update.md, Going, step 3): the
-    // app-only op #870 owns (proposed host.update.depart, { request }) calls it once the download
-    // is checked; that op is not wired yet. The press must be one this host, or one before it,
+    // app-only op host.update.depart ({ request }, DepartForAppAsync) calls it once the download
+    // is checked; #870's lane owns that step's contract, wired here minimally to the design's. The press must be one this host, or one before it,
     // verified and handed to the app (its signed command, from UpdateNowRecord, verified again),
     // within its 15 minutes, and not gone already. #805's lease is taken as purpose Update, with the person's
     // press (so it may announce the old way, Legacy, as a remote restart does), waiting DepartWait,
@@ -539,6 +540,20 @@ public sealed class UpdateService
         log($"update now {request[..8]}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Code is { } c ? $": {c}" : "")}");
         Changed();
         return result;
+    }
+
+    // host.update.depart (LocalApi lets only the app send it): DepartAsync, answered on the pipe.
+    // A request that isn't a UUID is the app's mistake, an error rather than an outcome.
+    public async Task<UpdateDepartResult> DepartForAppAsync(string request)
+    {
+        if (!UpdateProtocol.IsRequest(request)) { throw new ArgumentException($"{HostOps.UpdateDepart} needs the press's request (a UUID)"); }
+        var d = await DepartAsync(request);
+        return new UpdateDepartResult(d.Outcome switch
+        {
+            UpdateDepartureOutcome.Committed => UpdateDepartOutcome.Committed,
+            UpdateDepartureOutcome.Waiting => UpdateDepartOutcome.Waiting,
+            _ => UpdateDepartOutcome.Refused,
+        }, d.Code, d.Transition);
     }
 
     // Something Decorate reads changed outside the app's report: subscribers are sent the state again.
