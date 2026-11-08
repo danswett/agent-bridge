@@ -29,6 +29,11 @@ public sealed class RelayOptions
     // Web origins allowed to call the sign-in API and open sockets, such as the PWA on
     // GitHub Pages. Native clients send no Origin and are unaffected.
     public string[] AllowedOrigins { get; set; } = [];
+    // Hostnames this relay is served under. A socket is counted under the Host it arrived
+    // on if it is listed here, else under "other", so the label set stays small and fixed.
+    // The relay cannot otherwise tell which name a device used; this is how the retirement of
+    // relay.bad-duck.com is measured.
+    public string[] KnownHostnames { get; set; } = ["relay.slipgates.com", "relay.bad-duck.com"];
     // Production serves no app code: a relay that could change the PWA it serves could
     // read what the PWA decrypts. A dev stack can serve one same-origin from wwwroot. Off
     // unless asked for, and the product image ships no wwwroot (the spike defaulted to on).
