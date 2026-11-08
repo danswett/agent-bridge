@@ -23,6 +23,7 @@ public sealed class EndSessionViewModel : Observable
     Tone statusTone;
     bool pausedAfterBusy;
     string? busyFor;
+    string? busyGone;
     ITimer? tick;
 
     // current: whether the machine's rows are its host's word now (Machine.Current, #269).
@@ -101,11 +102,13 @@ public sealed class EndSessionViewModel : Observable
         }
         if (e is { State: DeliveryState.Done, Outcome: "busy" } && !pausedAfterBusy && busyFor != e.Request)
         {
-            busyFor = e.Request;
+            var request = e.Request;
+            busyFor = request;
             pausedAfterBusy = true;
-            _ = Task.Delay(2000).ContinueWith(_ => deliveries.Ui.Post(() => { pausedAfterBusy = false; Refresh(); }), TaskScheduler.Default);
+            _ = Task.Delay(2000).ContinueWith(_ => deliveries.Ui.Post(() => { pausedAfterBusy = false; busyGone = request; Refresh(); }), TaskScheduler.Default);
         }
-        (StatusText, StatusTone) = e is null ? ("", Tone.None) : Describe(e);
+        // A busy refusal is a moment's news: once the pause has passed, the line goes (#1193).
+        (StatusText, StatusTone) = e is null || (e is { State: DeliveryState.Done, Outcome: "busy" } && e.Request == busyGone) ? ("", Tone.None) : Describe(e);
         Raise(nameof(CanPress));
         Raise(nameof(ShowResend));
         Raise(nameof(SecondsLeft));

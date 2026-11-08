@@ -139,6 +139,7 @@ public partial class App : Application
                 Capabilities = () => conn.Capabilities,
                 MachineName = () => m?.Name,
                 MachineKey = key == Machine.LocalKey ? null : key,
+                QuestionClosed = id => responder?.QuestionClosed(key == Machine.LocalKey ? null : key, id),
             };
             return m = new Machine(key, conn, cards, planner);
         }
