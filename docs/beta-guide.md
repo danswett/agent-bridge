@@ -76,29 +76,61 @@ erased from every copy, and a request to delete is handled separately (see below
 - Operational logs are kept 30 days (Log Analytics) and application telemetry 90 days
   (Application Insights).
 - Temporary delivery files (`blobs/`) are set to expire one day after they are created.
-- Feedback storage (`feedback/`) is locked for a minimum of 30 days, then a lifecycle rule applies
-  from day 31. The 30 days is a minimum hold, not a maximum.
+- Feedback storage (`feedback/`) exists but production feedback uploads are off today. It is
+  locked for a minimum of 30 days, then a lifecycle rule applies from day 31. The 30 days is a
+  minimum hold, not a maximum.
+
+**What happens when you use it**
+
+Slipgates connects the coding sessions on your PC to your own devices. These are the paths in use
+in the beta today.
+
+- **Signing in.** The app uses GitHub's device sign-in. The relay asks GitHub who you are and
+  keeps your GitHub account number and login name in a sign-in token that is valid for 30 days.
+  The relay does not store or log your GitHub access token. It does not revoke that token
+  automatically, so you can revoke the app yourself in your GitHub settings. Signing out or
+  revoking is separate from asking us to erase relay records.
+- **Your devices.** The relay keeps a list for each account: each device's id, name, kind and
+  last-seen time, up to 64 devices, plus ids of devices you recently removed. The relay's code
+  returns a device only to the account that owns it. An entry expires after 180 days untouched.
+- **Session content.** Prompts, replies and approvals leave your PC and pass through the relay to
+  your other devices. The relay forwards them from memory and its code has no step that saves
+  them. We can't confirm from the relay that your devices encrypt them, so we don't promise that
+  the relay can't read them. Copies on your own devices are outside this list.
+- **Larger items.** Items too big to send directly go through temporary Azure Blob Storage links
+  that work for 30 minutes and are set to expire one day after they are created.
+- **Connection records.** The relay's logs record a connection tag, device kind, how long a
+  connection lasted, how many frames and bytes it carried, sign-in completions and, for
+  notifications, the push host, result and size, not the message. Other details collected
+  automatically may also appear in these records.
+- **Push notifications.** Push is switched on in production. The relay signs the notification and
+  forwards it to the push service your device uses, and it may be one of up to four: Apple,
+  Google, Mozilla or Windows. The payload is encrypted by your device, and the relay sees the
+  address, size and time. The relay keeps no push subscriptions.
+- **Feedback.** Sending feedback from the app is not available in production, because the
+  production build has no feedback code. Use the support route below. A testing environment
+  accepts reports from any signed-in account, so do not send anything real there.
 
 **Still to confirm before invitations go out**
 
-- [confirm: what sign-in data GitHub and the relay handle, who can see it, and how long it is kept]
-- [confirm: whether delivery between your own devices is restricted to those devices, and the
-  fields stored for each account and device]
-- [confirm: which connection details the relay logs (for example IP addresses or identifiers),
-  and who can read them]
-- [confirm: who can read your session content, and which copies are kept in transit or on disk]
-- [confirm: whether push notifications are active, and what they carry]
-- [confirm: that support@slipgates.com is monitored, who answers, and how privacy requests are
-  handled]
-- [confirm: whether in-app feedback sending is switched on, and how real reports would be handled]
-
-Slipgates connects the coding sessions on your PC to your own devices. Normal use sends prompts,
-replies and approvals from your PC to your other devices through a relay, so that content does
-leave your PC. How the relay handles it is one of the points to confirm above.
+- [confirm: where GitHub, Cloudflare and the push services process data, and what Cloudflare
+  handles for the app's address]
+- [confirm: which other details the relay's logs can hold, for example IP addresses, and who can
+  read them]
+- [confirm: whether anyone besides your own devices can decrypt session content, and what copies
+  exist on devices or with push services]
+- [confirm: which push services are actually used, and who can open a temporary item link]
+- [confirm: who runs the support mailbox and Teams conversations, how long messages are kept, and
+  who can read them]
+- [confirm: the written procedure and the person responsible for access, correction and deletion
+  requests, including relay records, which has no automatic erasure today]
 
 Optional diagnostics are always opt-in: they are off unless you choose to turn them on, and this
 applies to everyone, worldwide. Their design excludes session content. You can use Slipgates
 without agreeing to them. This build does not yet send diagnostics.
+
+Logs and telemetry on the relay are separate from that: operational logs are kept 30 days and
+application telemetry 90 days, as configured above.
 
 Your choices and rights depend on the law that applies. Use the private privacy contact above to
 request access, correction, deletion, restriction or portability, or to object where those rights
@@ -125,8 +157,8 @@ conditions do not take away rights those licences grant or mandatory rights the 
 ## Getting help and sending feedback
 
 For help today, reply privately in the email or Teams conversation your invitation came in. The
-support team can read what you send. How that channel handles and keeps it will be stated in the
-privacy notice once the facts above are published. Send only the minimum needed. Remove names, paths, prompts, code, tokens and sign-in
+support team can read what you send. How that channel handles and keeps it is still to be
+confirmed (see the list above). Send only the minimum needed. Remove names, paths, prompts, code, tokens and sign-in
 codes, and review any screenshot or log before sending it. Do not post support content or
 personal information in public GitHub issues. We are not promising an in-app report preview in
 this build. If something fails, tell us the first step that failed. If it all worked, tell us
