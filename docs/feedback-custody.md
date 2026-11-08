@@ -7,7 +7,8 @@ and Compliance review, original-upload-time removal and deletion procedures,
 and Quality's synthetic proof are complete. Requirements below are not evidence
 of deployed controls.
 Feedback Inbox owns this document; SRE supplies the infrastructure and access
-sections. This is the single custody document for [#740](https://github.com/danswett/agent-bridge/issues/740).
+sections. This is the single custody document for
+[#740](https://github.com/danswett/agent-bridge/issues/740).
 
 ## Hosting and security boundary
 
@@ -60,15 +61,22 @@ suppress secret-bearing responses, not just hide the input command.
 Record one nonsecret handoff packet in this document when the actual worker and
 key exist. Do not fill missing fields with sample or staging values.
 
-| Evidence | Required value or proof |
-|---|---|
-| Recipient key ID | A production-only ID matching `[A-Za-z0-9._-]{1,64}`; never remap an existing ID to different key material. |
-| Public key | Canonical, unpadded base64url encoding of exactly 32 X25519 public-key bytes, derived from the retained production private key. |
-| Private-key custody | Actual vault name, secret name and immutable secret version, without the secret value, credentials or a secret-retrieval command. |
-| Worker binding | Deployed worker revision, managed-identity principal and effective secret-read scope; confirm relay, supervisor and staging identities cannot read the key. |
-| Matching-key proof | Quality seals a synthetic envelope with the proposed public constant; the deployed worker reads the recorded private-key version and verifies the expected synthetic content internally. Output is fixed pass/fail only. |
-| Negative and output proof | Wrong recipient ID or key is refused, unavailable vault access does not process a report, and private material or synthetic canary text does not appear in worker, supervisor or provider outputs. |
-| Reviewed sender head | Exact Windows commit containing both constants, with independent review and Quality's proof bound to that key ID, public key and worker secret version. |
+- **Recipient key ID:** a production-only ID matching `[A-Za-z0-9._-]{1,64}`; never remap an
+  existing ID to different key material.
+- **Public key:** canonical, unpadded base64url encoding of exactly 32 X25519 public-key
+  bytes, derived from the retained production private key.
+- **Private-key custody:** actual vault name, secret name and immutable secret version,
+  without the secret value, credentials or a secret-retrieval command.
+- **Worker binding:** deployed worker revision, managed-identity principal and effective
+  secret-read scope; confirm relay, supervisor and staging identities cannot read the key.
+- **Matching-key proof:** Quality seals a synthetic envelope with the proposed public
+  constant; the deployed worker reads the recorded private-key version and verifies the
+  expected synthetic content internally. Output is fixed pass/fail only.
+- **Negative and output proof:** wrong recipient ID or key is refused, unavailable vault
+  access does not process a report, and private material or synthetic canary text does not
+  appear in worker, supervisor or provider outputs.
+- **Reviewed sender head:** exact Windows commit containing both constants, with independent
+  review and Quality's proof bound to that key ID, public key and worker secret version.
 
 No production packet has been verified here. SRE's resource and access evidence,
 the public key and key ID, Trust's binding review and Quality's matching-key
