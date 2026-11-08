@@ -33,13 +33,26 @@ export async function generateSigningKey() {
 
 // The key this device keeps, made the first time. `store` is IndexedDB's (identity.js) unless a
 // test passes its own { get, put, delete }.
-export async function loadSigningKey(store = browserStore) {
-  let rec = await store.get(SIGNING_RECORD);
-  if (!rec) {
-    rec = await generateSigningKey();
-    await store.put(SIGNING_RECORD, rec);
-  }
-  return new SigningKey(rec.privateKey, new Uint8Array(rec.public));
+// Check-then-create must be one step: two first uses at once (two tabs, or two calls) would each
+// generate a key and the later put would replace the earlier, leaving the roster naming a key
+// nobody holds. Web Locks serialise across tabs; the in-page chain covers where they are absent.
+let chain = Promise.resolve();
+const exclusive = (fn) => {
+  const run = () => (globalThis.navigator?.locks ? navigator.locks.request(SIGNING_RECORD, fn) : fn());
+  const next = chain.then(run, run);
+  chain = next.catch(() => {});
+  return next;
+};
+
+export function loadSigningKey(store = browserStore) {
+  return exclusive(async () => {
+    let rec = await store.get(SIGNING_RECORD);
+    if (!rec) {
+      rec = await generateSigningKey();
+      await store.put(SIGNING_RECORD, rec);
+    }
+    return new SigningKey(rec.privateKey, new Uint8Array(rec.public));
+  });
 }
 
 // Forgetting the device: the key goes with it.

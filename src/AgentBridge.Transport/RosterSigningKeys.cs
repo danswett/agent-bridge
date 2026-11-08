@@ -53,6 +53,7 @@ public static class RosterSigningKeys
 {
     const string RefFile = "signing-key.json";
     const string DpapiFile = "signing-key.dpapi";
+    const string LockFile = "signing-key.lock";
     static readonly byte[] DpapiEntropy = "agent-bridge-roster-signing-key-v1"u8.ToArray();
 
     sealed record KeyRef(string Storage, string? Name);
@@ -64,6 +65,27 @@ public static class RosterSigningKeys
     public static RosterSigningKey LoadOrCreate(string folder, KeyStorage? prefer = null)
     {
         Directory.CreateDirectory(folder);
+        // Two first uses at once (two processes, or two threads) must not each make a key and the
+        // later one replace the earlier: the roster would name a key nobody holds. The lock file
+        // makes check-then-create one step; the loser waits, then opens the winner's key.
+        using var guard = Lock(Path.Combine(folder, LockFile));
+        return LoadOrCreateLocked(folder, prefer);
+    }
+
+    static FileStream Lock(string path)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (true)
+        {
+            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) when (DateTime.UtcNow < deadline) { Thread.Sleep(20); }
+            catch (UnauthorizedAccessException) when (DateTime.UtcNow < deadline) { Thread.Sleep(20); }
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    static RosterSigningKey LoadOrCreateLocked(string folder, KeyStorage? prefer)
+    {
         var refPath = Path.Combine(folder, RefFile);
         if (File.Exists(refPath))
         {
@@ -115,6 +137,7 @@ public static class RosterSigningKeys
         }
         File.Delete(Path.Combine(folder, DpapiFile));
         File.Delete(refPath);
+        File.Delete(Path.Combine(folder, LockFile));
     }
 
     [SupportedOSPlatform("windows")]
