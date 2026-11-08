@@ -108,26 +108,95 @@ public sealed class FeedbackSender(IFeedbackUplink uplink, FeedbackRecipient? re
         // Every scan or parse error (malformed JSON included) refuses; a text fallback could miss escaped names.
         try
         {
-            if ((bundleScan ?? FeedbackRedactor.BundleHasSecret)(text)) { return true; }
             using var doc = JsonDocument.Parse(text);
-            return HasUnsanitizedString(doc.RootElement);
+            var scanned = WithoutRealScreenshot(doc.RootElement, text);
+            if ((bundleScan ?? FeedbackRedactor.BundleHasSecret)(scanned)) { return true; }
+            using var scannedDoc = JsonDocument.Parse(scanned);
+            return HasUnsanitizedString(scannedDoc.RootElement);
         }
         catch (Exception) { return true; }
     }
 
-    // The bundle constructor is public, so an email or profile path S1 would have redacted also refuses. The screenshot is skipped.
+    // The redactor skips any property named screenshotPng, at any depth. Only the top-level one holding valid base64 PNG data may
+    // be skipped: it is dropped here, and every other property with that name is renamed so it is scanned like any other value.
+    static string WithoutRealScreenshot(JsonElement root, string original)
+    {
+        if (root.ValueKind != JsonValueKind.Object || !ContainsName(root)) { return original; }
+        using var ms = new MemoryStream();
+        using (var w = new Utf8JsonWriter(ms))
+        {
+            w.WriteStartObject();
+            foreach (var p in root.EnumerateObject())
+            {
+                if (p.NameEquals(ScreenshotName) && IsPng(p.Value)) { continue; }
+                w.WritePropertyName(p.Name == ScreenshotName ? "screenshotPng_" : p.Name);
+                Write(p.Value, w);
+            }
+            w.WriteEndObject();
+        }
+        return StrictUtf8.GetString(ms.ToArray());
+
+        static void Write(JsonElement e, Utf8JsonWriter w)
+        {
+            switch (e.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    w.WriteStartObject();
+                    foreach (var p in e.EnumerateObject()) { w.WritePropertyName(p.Name == ScreenshotName ? "screenshotPng_" : p.Name); Write(p.Value, w); }
+                    w.WriteEndObject();
+                    break;
+                case JsonValueKind.Array:
+                    w.WriteStartArray();
+                    foreach (var item in e.EnumerateArray()) { Write(item, w); }
+                    w.WriteEndArray();
+                    break;
+                default: e.WriteTo(w); break;
+            }
+        }
+    }
+
+    const string ScreenshotName = "screenshotPng";
+
+    static bool ContainsName(JsonElement e)
+    {
+        if (e.ValueKind == JsonValueKind.Array) { foreach (var i in e.EnumerateArray()) { if (ContainsName(i)) { return true; } } return false; }
+        if (e.ValueKind != JsonValueKind.Object) { return false; }
+        foreach (var p in e.EnumerateObject()) { if (p.NameEquals(ScreenshotName) || ContainsName(p.Value)) { return true; } }
+        return false;
+    }
+
+    static bool IsPng(JsonElement e)
+    {
+        if (e.ValueKind != JsonValueKind.String) { return false; }
+        var b64 = e.GetString()!;
+        if (b64.Length == 0 || b64.Length > 12 * 1024 * 1024) { return false; }
+        var buffer = new byte[b64.Length / 4 * 3 + 3];
+        return Convert.TryFromBase64String(b64, buffer, out var n) && n >= PngSignature.Length && buffer.AsSpan(0, PngSignature.Length).SequenceEqual(PngSignature);
+    }
+
+    static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+    // S1 redacts and then truncates with an ellipsis, so a line can end in a cut placeholder such as "<us…". Drop that tail before checking.
+    static string WithoutTruncationTail(string s)
+    {
+        if (!s.EndsWith('…')) { return s; }
+        s = s[..^1];
+        var open = s.LastIndexOfAny(['<', '[']);
+        return open >= 0 && s.AsSpan(open).IndexOfAny('>', ']') < 0 ? s[..open] : s;
+    }
+
+    // The bundle constructor is public, so an email or profile path S1 would have redacted also refuses.
     static bool HasUnsanitizedString(JsonElement e)
     {
         switch (e.ValueKind)
         {
-            case JsonValueKind.String: return FeedbackRedactor.WouldRedact(e.GetString()!);
+            case JsonValueKind.String: return FeedbackRedactor.WouldRedact(WithoutTruncationTail(e.GetString()!));
             case JsonValueKind.Array:
                 foreach (var item in e.EnumerateArray()) { if (HasUnsanitizedString(item)) { return true; } }
                 return false;
             case JsonValueKind.Object:
                 foreach (var p in e.EnumerateObject())
                 {
-                    if (p.NameEquals("screenshotPng")) { continue; }
                     if (FeedbackRedactor.WouldRedact(p.Name) || HasUnsanitizedString(p.Value)) { return true; }
                 }
                 return false;

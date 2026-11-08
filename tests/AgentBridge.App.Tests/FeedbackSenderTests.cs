@@ -204,11 +204,57 @@ public class FeedbackSenderTests
         Assert.Equal(0, fake.Slots);
     }
 
+    static string FakePng() => Convert.ToBase64String([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, .. new byte[300]]);
+
+    [Theory]
+    [InlineData("{\"note\":{\"screenshotPng\":{\"password\":\"hunter2\",\"email\":\"someone@example.com\"}}}")]
+    [InlineData("{\"screenshotPng\":{\"password\":\"hunter2\"}}")]
+    [InlineData("{\"screenshotPng\":\"not a png, mail someone@example.com\"}")]
+    [InlineData("{\"screenshotPng\":\"" + "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB" + "\"}")]
+    public async Task A_screenshotPng_that_is_not_the_real_top_level_png_is_scanned_and_refused(string bundle)
+    {
+        var (recipient, _) = NewRecipient();
+        var fake = new Fake();
+
+        var result = await Send(fake, recipient, Bundle(bundle));
+
+        Assert.Equal(new FeedbackSendResult.Failed(FeedbackFailureReason.BadRequest, FeedbackRetry.Never), result);
+        Assert.Equal(0, fake.Slots);
+    }
+
+    [Fact]
+    public async Task A_screenshotPng_at_the_wrong_path_is_scanned_and_a_real_one_at_the_top_is_not()
+    {
+        var (recipient, _) = NewRecipient();
+        var fake = new Fake();
+
+        var wrong = await Send(fake, recipient, Bundle("{\"note\":{\"screenshotPng\":\"" + FakePng() + "\"}}"));
+        var right = await Send(fake, recipient, Bundle("{\"note\":\"hi\",\"screenshotPng\":\"" + FakePng() + "\"}"));
+
+        Assert.IsType<FeedbackSendResult.Failed>(wrong);
+        Assert.IsType<FeedbackSendResult.Sent>(right);
+    }
+
+    [Fact]
+    public async Task A_line_cut_inside_a_placeholder_is_sent_but_a_real_email_at_the_end_still_refuses()
+    {
+        var (recipient, _) = NewRecipient();
+        var fake = new Fake();
+
+        var cut = await Send(fake, recipient, Bundle("{\"journal\":[\"opened C:\\\\Users\\\\<us…\",\"mail [redac…\"]}"));
+        var email = await Send(fake, recipient, Bundle("{\"journal\":[\"write someone@example.com…\"]}"));
+        var emailTail = await Send(fake, recipient, Bundle("{\"journal\":[\"write someone@example.com\"]}"));
+
+        Assert.IsType<FeedbackSendResult.Sent>(cut);
+        Assert.IsType<FeedbackSendResult.Failed>(email);
+        Assert.IsType<FeedbackSendResult.Failed>(emailTail);
+    }
+
     [Fact]
     public async Task Redaction_markers_and_the_attached_screenshot_are_not_mistaken_for_secrets()
     {
         var (recipient, _) = NewRecipient();
-        var text = "{\"password\":\"[redacted]\",\"token\":\"[redacted]\",\"path\":\"C:\\\\Users\\\\<user>\\\\x\",\"note\":\"mail [redacted] Bearer [redacted]\",\"screenshotPng\":\"" + new string('A', 200) + "\"}";
+        var text = "{\"password\":\"[redacted]\",\"token\":\"[redacted]\",\"path\":\"C:\\\\Users\\\\<user>\\\\x\",\"note\":\"mail [redacted] Bearer [redacted]\",\"screenshotPng\":\"" + FakePng() + "\"}";
 
         var result = await Send(new Fake(), recipient, Bundle(text));
 
