@@ -165,7 +165,7 @@ else { Step '6-uninstall' @() {
     $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
     $left += $run.PSObject.Properties | Where-Object { $_.Value -is [string] -and $_.Value -like '*AgentBridgeApp*' } | ForEach-Object { "Run entry $($_.Name)" }
     # The host's logon task is ours alone (HostManager.TaskName); the uninstaller only logs a failure to delete it.
-    $left += Get-ScheduledTask -TaskName 'AgentBridgeHost_*' -ErrorAction SilentlyContinue | ForEach-Object { "scheduled task $($_.TaskName)" }
+    $left += Get-ScheduledTask -TaskName 'AgentBridgeHost_*' -ErrorAction Stop | ForEach-Object { "scheduled task $($_.TaskName)" }
     $unKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
     $left += Get-ChildItem $unKey -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -like '*AgentBridgeApp*' } | ForEach-Object { "Uninstall entry $($_.PSChildName)" }
     $menu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'

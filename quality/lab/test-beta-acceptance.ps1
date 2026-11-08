@@ -36,11 +36,28 @@ Check 'the simulated agent writes a transcript with the question and runs the ho
     finally { Remove-Item $scratch -Recurse -Force }
 }
 
+Check 'a batch hook in a path with a space runs, and one with a cmd metacharacter is refused' {
+    if (-not $IsWindows) { return }
+    $scratch = Join-Path ([IO.Path]::GetTempPath()) "accept sim $([guid]::NewGuid().ToString('N'))"
+    $bad = Join-Path ([IO.Path]::GetTempPath()) "accept&sim-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory $scratch, $bad | Out-Null
+    try {
+        foreach ($d in $scratch, $bad) { Set-Content (Join-Path $d 'hook.cmd') "@echo off`r`necho {}" }
+        $r = & (Join-Path $PSScriptRoot 'agent-sim.ps1') -Hook (Join-Path $scratch 'hook.cmd') -CopilotHome (Join-Path $scratch 'home') -Question 'Q?'
+        Assert (($r.Hooks.Exit | Select-Object -Unique) -eq 0 -and $r.Hooks[0].Output -eq '{}') 'a spaced path did not run'
+        $refused = $false
+        try { & (Join-Path $PSScriptRoot 'agent-sim.ps1') -Hook (Join-Path $bad 'hook.cmd') -CopilotHome (Join-Path $bad 'home') -Question 'Q?' | Out-Null } catch { $refused = $true }
+        Assert $refused 'a path with & was not refused'
+    }
+    finally { Remove-Item $scratch, $bad -Recurse -Force }
+}
+
 Check 'the uninstall step checks the host logon task under the name the product registers' {
     $harness = Get-Content ([IO.Path]::Combine($PSScriptRoot, 'beta-acceptance.ps1')) -Raw
     $product = Get-Content ([IO.Path]::Combine($PSScriptRoot, '..', '..', 'src', 'AgentBridge.App.Core', 'HostManager.cs')) -Raw
     Assert ($product -match '\$"(AgentBridgeHost)_\{profile\}') 'the product task name prefix changed'
     Assert ($harness -match "Get-ScheduledTask -TaskName 'AgentBridgeHost_\*'") 'uninstall does not look for the host task'
+    Assert ($harness -notmatch 'Get-ScheduledTask[^\r\n]*SilentlyContinue') 'the task check must fail closed'
     Assert ($harness -match '(?s)\$left \+= Get-ScheduledTask.*if \(\$left\.Count\) \{ throw') 'the task is not part of the leftovers'
 }
 

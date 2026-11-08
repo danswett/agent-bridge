@@ -30,9 +30,15 @@ function Add-Event([string]$type, [hashtable]$data) {
 function Invoke-Hook([string]$name, [hashtable]$event) {
     $json = $event | ConvertTo-Json -Depth 6 -Compress
     # A batch file cannot be started directly without the shell; the real hook is an .exe.
-    if ($Hook -match '\.(cmd|bat)$') { $psi = [Diagnostics.ProcessStartInfo]::new($env:ComSpec); foreach ($a in '/c', $Hook) { $psi.ArgumentList.Add($a) } }
-    else { $psi = [Diagnostics.ProcessStartInfo]::new($Hook) }
-    foreach ($a in 'copilot', $name) { $psi.ArgumentList.Add($a) }
+    if ($Hook -match '\.(cmd|bat)$') {
+        if ($Hook -match '[&|<>^%!"()]') { throw "a batch hook path must not contain cmd metacharacters: $Hook" }
+        $psi = [Diagnostics.ProcessStartInfo]::new($env:ComSpec)
+        $psi.Arguments = "/d /s /c `"`"$Hook`" copilot $name`""
+    }
+    else {
+        $psi = [Diagnostics.ProcessStartInfo]::new($Hook)
+        foreach ($a in 'copilot', $name) { $psi.ArgumentList.Add($a) }
+    }
     $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.UseShellExecute = $false
     $p = [Diagnostics.Process]::Start($psi)
     $p.StandardInput.Write($json); $p.StandardInput.Close()
