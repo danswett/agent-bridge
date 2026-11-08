@@ -521,6 +521,9 @@ public sealed class RelayFleetLink : IFleetLink
     public int Account => Volatile.Read(ref accountGeneration);
     public string? AccountId => current?.AccountId;
 
+    // The connected relay client, or null while there is none (Send feedback's sender).
+    public RelayClient? Relay => current?.Relay;
+
     public IReadOnlyList<FleetHost> Hosts => current is { } c ? HostsOf(c, c.Relay.Presence) : [];
 
     static IReadOnlyList<FleetHost> HostsOf(Current c, IReadOnlyList<PresenceEntry> presence) =>

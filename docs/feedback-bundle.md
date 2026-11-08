@@ -46,3 +46,8 @@ promise to catch every secret, which is why the person sees the exact bytes firs
 | Caller cancels | `Failed(Cancelled, Now)` |
 
 There is no offline queue and nothing is written to disk. The window keeps the note and the reviewed preview in memory for a manual Try again (the bundle is sealed again with a fresh key) and clears them on close. Failure results carry no report content.
+## Sources and availability (Windows)
+
+`AppFeedbackSources` reads what the bundle holds: the last 200 lines of `app.log` (with `app.log.1` before it), the last five records of `crash.log` (newest first, stack lines kept), the app's settings scalars, the host's agent report, and a session's `session.history`. Reads are read-only and share the files with the running app; a missing, locked or malformed file leaves that part empty. An unknown session reads as not found; a host that cannot answer reads as unavailable.
+
+`FeedbackSenderFactory.Availability` says whether sending is possible: `Available`, `UploadOff`, `NoRecipientKey`, `NoRelay` or `RelayNotAccepting`. The feedback key id and public key are the app settings `feedbackKeyId` and `feedbackPublicKey` (unset by default, so feedback stays unavailable until set); `feedbackUpload` turns it off. When unavailable the dialog is read-only with Send disabled and shows "Sending feedback isn't available right now". There is no plaintext or email fallback.

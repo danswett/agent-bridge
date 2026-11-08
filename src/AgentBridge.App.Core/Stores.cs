@@ -132,6 +132,12 @@ public sealed record AppPreferences
     public string? UpdateInstallAsked { get; init; }
     public string? UpdateCheckAsked { get; init; }
     public string? Relay { get; init; }
+    // Send feedback (#738): the feedback public key (base64url, 32 bytes) and its id that bundles
+    // are sealed to. Unset means feedback is unavailable; the app ships no default key yet.
+    public string? FeedbackKeyId { get; init; }
+    public string? FeedbackPublicKey { get; init; }
+    // Turning this off makes feedback unavailable, whatever else is set.
+    public bool FeedbackUpload { get; init; } = true;
     // The installed app's first run turned on starting at sign-in (the host's logon task and
     // the app's Run entry); after that they are the person's to turn off and stay off.
     public bool SetUp { get; init; }
