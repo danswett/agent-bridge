@@ -399,6 +399,8 @@ public class FeedbackBundleTests
     [InlineData("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----", "abc")]
     [InlineData("password=hunter2hunter2", "hunter2")]
     [InlineData("{\\\"password\\\":\\\"hunter2\\\"}", "hunter2")]
+    [InlineData("{\"password\":\"ab\\\"cdSECRET\"}", "SECRET")]
+    [InlineData("password='it\\'sSECRET'", "SECRET")]
     [InlineData("https://user:pw1234@example.com/x", "pw1234")]
     [InlineData("key AAAAB3NzaC1yc2EAAAADAQABAAABAQC7vbqajDhA9bP8f0dQ1c2e3f4g5h6i7j8k9l0m", "AAAAB3NzaC1")]
     public void Redaction_removes_these_shapes(string input, string gone)
@@ -464,6 +466,8 @@ public class FeedbackBundleTests
         "key AAAAB3NzaC1yc2EAAAADAQABAAABAQC7vbqajDhA9bP8f0dQ1c2e3f4g5h6i7j8k9l0m",
         "{\"msg\":\"{\\u0022password\\u0022:\\u0022hunter2\\u0022}\"}",
         "{\"msg\":\"--password\\u0020hunter2\"}",
+        "{\"password\":\"ab\\\"cdSECRET\"}",
+        "password='it\\'sSECRET'",
         "{\"msg\":\"password\\u003Dhunter2\"}",
         "{\"msg\":\"--token\\u0020hunter2zz\"}",
         "\\u005cu0070assword=hunter2",
@@ -759,6 +763,15 @@ public class FeedbackBundleTests
         }
         // Generous on purpose: CI coverage is slow, and a quadratic redactor on 2 MiB would take far longer than this.
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(90), sw.Elapsed.ToString());
+    }
+
+    [Fact]
+    public async Task A_private_key_spread_over_journal_lines_is_hidden_to_its_end_marker()
+    {
+        var f = new Fake { Journal = ["start", "-----BEGIN RSA PRIVATE KEY-----", "MIIEowIBAAKCAQEAxampleOnly", "shortTailKEYMATERIAL", "-----END RSA PRIVATE KEY-----", "after"] };
+        var text = Encoding.UTF8.GetString(Ready(await Gather(f)).CanonicalBytes.Span);
+        Assert.DoesNotContain("KEYMATERIAL", text);
+        Assert.DoesNotContain("xampleOnly", text);
     }
 
     [Fact]

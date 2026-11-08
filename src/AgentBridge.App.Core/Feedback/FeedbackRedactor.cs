@@ -249,7 +249,7 @@ public static partial class FeedbackRedactor
 
     // The value is a quoted string to its closing quote (also when the JSON is escaped inside a log
     // line) or one bare token.
-    [GeneratedRegex(@"((?<![\w.-])[\w.-]{0,64}(?:password|passwd|pwd|secret|token|api[_ -]?key|authorization|private[_ -]?key|credential|connection[_ -]?string)[\w.-]{0,64}(?:\\*[""'])?\s*[:=]\s*)(?!\s*\[redacted\])(?:\\*""[^""\r\n]*""|'[^'\r\n]*'|(?:\\*[""'])?(?:[^\s""',;}&\\]|\\(?![""']))+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
+    [GeneratedRegex(@"((?<![\w.-])[\w.-]{0,64}(?:password|passwd|pwd|secret|token|api[_ -]?key|authorization|private[_ -]?key|credential|connection[_ -]?string)[\w.-]{0,64}(?:\\*[""'])?\s*[:=]\s*)(?!\s*\[redacted\])(?:\\+""[^""\r\n]*""|""(?:[^""\\\r\n]|\\.)*""|'(?:[^'\\\r\n]|\\.)*'|(?:\\*[""'])?(?:[^\s""',;}&\\]|\\(?![""']))+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
     private static partial Regex Assignment();
 
     const string SensitiveFieldPattern = @"(?:password|passwd|pwd|secret|token|api[_ -]?key|access[_ -]?key|authorization|private[_ -]?key|credentials?|connection[_ -]?string)";
