@@ -2043,7 +2043,7 @@ up / Repair and Remove connection. You can't tell whether anything is needed. No
 | State | Mark (§2.1) | Headline | Verb |
 |---|---|---|---|
 | Ready | `done` in `ready` | "Ready · last hook 3:01 PM" (or "· test session passed 3:01 PM") | None |
-| Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Run test session** (#716). Until it ships: no button, and a hint. Copilot CLI and Claude Code: "Start a session in it to confirm". Agency, whose hooks can't confirm it: "Agency can't be checked yet" |
+| Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Run test session** (#716). Until it ships: no button, and a hint. "Start a session in it to confirm" |
 | Not set up | `needs` | "Not set up" | **Set up** |
 | Needs repair | `failed`, Danger | "Setup didn't finish" | **Repair hooks** |
 | Managed elsewhere | None; neutral secondary text, no status colour | "Read-only · *why*" ("another bridge profile owns its hooks", "this machine's bridge is older" or "set in this bridge's settings") | None |
@@ -2057,8 +2057,7 @@ up / Repair and Remove connection. You can't tell whether anything is needed. No
     or Repair; or
   - a test session passed (#716).
 
-  Agency shares Copilot CLI's hooks, so its hooks prove nothing about Agency. Agency is Ready
-  only from a passed test session.
+  Agency runs on Copilot CLI's hooks, so a handled Copilot CLI hook counts for Agency too (#1221).
 - **The other states also need evidence.** A bridge setup record, with this profile's hook
   intake on and nothing heard yet, is Not tested yet, never Needs repair, so a healthy machine
   never shows Repair on its rows. No setup record, or intake off for this profile, is Not set
