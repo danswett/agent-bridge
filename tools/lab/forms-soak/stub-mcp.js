@@ -58,7 +58,7 @@ process.stdin.on('data', d => {
     } else if (m.method === 'tools/list') {
       send({ jsonrpc: '2.0', id: m.id, result: { tools: [] } });
     } else if (m.id === 'ask1') {
-      log('answer ' + JSON.stringify(m.result ?? m.error).slice(0, 300));
+      log('answer ' + JSON.stringify(m.result ?? m.error ?? null).slice(0, 300));
     } else if (m.id !== undefined && m.method) {
       send({ jsonrpc: '2.0', id: m.id, result: {} });
     }

@@ -1089,6 +1089,8 @@ jobs:
     #    jobs rather than before them (#457);
     #  - pwa-site-csp: the Pages build's CSP;
     #  - lab-scripts: the clean-VM lab's provisioning and runner-interface drafts, offline;
+    #  - forms-soak-scripts: the forms soak rig's redaction checks and a syntax check of its stub
+    #    server, offline (tools/lab/forms-soak);
     #  - playwright-apt: the download of Playwright's system packages leaves a slow apt mirror only
     #    when it should (.github/actions/playwright-system-packages);
     #  - lab-release-verify: the held lab release verification's gate, verdict and workflow shape,
@@ -1123,6 +1125,14 @@ jobs:
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'lab-scripts')) }}
         shell: pwsh
         run: pwsh -NoProfile -File quality/lab/test-scripts.ps1
+      - name: The forms soak rig's redaction masks every secret shape
+        # Offline: no CLI, console, token or model.
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'forms-soak-scripts')) }}
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/lab/forms-soak/Test-Redaction.ps1
+      - name: The forms soak rig's stub server parses
+        if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'forms-soak-scripts')) }}
+        run: node --check tools/lab/forms-soak/stub-mcp.js
       - name: Beta download metadata accepts only complete published pre-releases
         if: ${{ !cancelled() && (env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'beta-release-manifest')) }}
         shell: pwsh

@@ -1,5 +1,6 @@
-# Checks Get-Redacted. Exits 1 on the first value that comes through unmasked. The values are
-# made up, shaped like real ones.
+# Checks Get-Redacted. Exits 1 if any value comes through unmasked, or if the function is missing
+# or throws. The values are made up, shaped like real ones.
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Redaction.ps1')
 
 $secret = 'abcDEF0123456789abcDEF0123456789'
@@ -24,6 +25,7 @@ $cases = @(
 $failed = 0
 foreach ($c in $cases) {
     $out = Get-Redacted $c.In
+    if ($out -isnot [string] -or -not $out) { Write-Host "NO OUTPUT: '$($c.In)'"; $failed++; continue }
     if ($out.Contains($c.Must)) { Write-Host "NOT MASKED: '$($c.In)' -> '$out'"; $failed++ }
 }
 if ($failed) { exit 1 }

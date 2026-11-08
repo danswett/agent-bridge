@@ -46,7 +46,7 @@ param(
     # How long to wait for the form to be drawn, and for the CLI to report after the keys.
     [int]$FormTimeoutSeconds = 45,
     # Run folders (CLI home and logs, config, stub log) kept under -OutDir\work; older ones are deleted.
-    [int]$KeepRuns = 30,
+    [ValidateRange(0, [int]::MaxValue)][int]$KeepRuns = 30,
     [int]$SettleSeconds = 20,
     # Extra arguments for every CLI start (for example a model-free or trusted-folder flag).
     [string[]]$CopilotArguments = @(),
@@ -60,6 +60,7 @@ $OutDir = [IO.Path]::GetFullPath($OutDir)
 # powershell -File passes "a,b" as one value.
 $Shapes = @($Shapes | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $Sizes = @($Sizes | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$CopilotPath = @($CopilotPath | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
 # Per shape: the answer typed, and the fields the CLI should then have been given.
 $answers = @{
@@ -185,12 +186,15 @@ function Invoke-OneRun {
         }
         $after = Read-Rows $Injector $consoleId
         if ($got) {
-            $reply = $got.Matches[0].Groups[1].Value | ConvertFrom-Json
-            $match = $reply.action -eq 'accept'
+            # An MCP error, bad JSON or a reply without action/content is a wrong answer, not "nothing reported".
+            $reply = try { $got.Matches[0].Groups[1].Value | ConvertFrom-Json } catch { $null }
+            $action = if ($reply -and $reply.PSObject.Properties['action']) { $reply.action } else { $null }
+            $content = if ($reply -and $reply.PSObject.Properties['content']) { $reply.content } else { $null }
+            $match = $action -eq 'accept' -and $null -ne $content
             if ($match) {
                 foreach ($p in ([Text.Json.JsonDocument]::Parse($answers[$Run.Shape]).RootElement.EnumerateObject())) {
                     $want = if ($p.Value.ValueKind -eq 'Object') { $p.Value.GetProperty('other').GetString() } else { $p.Value.ToString() }
-                    $have = $reply.content.PSObject.Properties[$p.Name]
+                    $have = $content.PSObject.Properties[$p.Name]
                     if ($null -eq $have -or "$($have.Value)" -ne $want) { $match = $false }
                 }
             }
@@ -218,11 +222,11 @@ function Invoke-OneRun {
 # --- setup -----------------------------------------------------------------------------------
 if ($Mode -eq 'full') { Invoke-FullPathAnswer $null }
 if (-not $HostDir -or -not (Test-Path (Join-Path $HostDir 'AgentBridge.Host.Delivery.dll'))) {
-    Write-Error 'Set -HostDir (or AGENT_BRIDGE_HOST_DIR) to a folder with AgentBridge.Host.Delivery.dll, AgentBridge.Host.Core.dll, AgentBridge.Protocol.dll and agent-bridge-injector.exe.'
+    [Console]::Error.WriteLine('Set -HostDir (or AGENT_BRIDGE_HOST_DIR) to a folder with AgentBridge.Host.Delivery.dll, AgentBridge.Host.Core.dll, AgentBridge.Protocol.dll and agent-bridge-injector.exe.')
     exit 2
 }
 $injectorPath = Join-Path $HostDir 'agent-bridge-injector.exe'
-if (-not (Test-Path $injectorPath)) { Write-Error "agent-bridge-injector.exe is not in $HostDir"; exit 2 }
+if (-not (Test-Path $injectorPath)) { [Console]::Error.WriteLine("agent-bridge-injector.exe is not in $HostDir"); exit 2 }
 foreach ($n in 'AgentBridge.Protocol', 'AgentBridge.Host.Core', 'AgentBridge.Host.Delivery') { [void][Reflection.Assembly]::LoadFrom((Join-Path $HostDir "$n.dll")) }
 $injector = [AgentBridge.Host.Delivery.Windows.WorkerInjector]::new($injectorPath, $null)
 
@@ -233,7 +237,9 @@ if (-not (Test-Path $csv)) { 'time_utc,cli_version,shape,size,pass,outcome,detai
 if (-not (Test-Path $md)) { "# Forms soak results`n`nScreen-only mode: tests the host's screen reader and injector, not session.answer.`nScreen rows are shown for every run that was not delivered, with names, paths and tokens removed.`n" | Set-Content $md -Encoding utf8 }
 
 $clis = foreach ($c in $CopilotPath) {
-    $v = try { ((& $c --version 2>&1 | Select-Object -First 1) -replace '[^\d.]', '').Trim('.') } catch { 'unknown' }
+    $v = try { ((& $c --version 2>&1 | Select-Object -First 1) -replace '[^\d.]', '').Trim('.') } catch { '' }
+    # A CLI that cannot run would only look like refused runs, so stop before the matrix.
+    if (-not $v) { [Console]::Error.WriteLine("Cannot run '$c --version'. Check -CopilotPath (separate several with commas)."); exit 2 }
     [pscustomobject]@{ Path = $c; Version = $v }
 }
 
