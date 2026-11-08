@@ -129,7 +129,9 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
 
     private protected static async Task<JsonElement> RequestAsync(SecureChannel ch, string op, object data)
     {
-        var response = await ch.RequestAsync(op, data);
+        // A launch runs git (worktree remove, add) inside the request; on a loaded Arm runner that
+        // outran the channel's 15 s default (run 42518861981).
+        var response = await ch.RequestAsync(op, data, TimeSpan.FromSeconds(60));
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
         return response.GetProperty("result");
     }
