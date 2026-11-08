@@ -338,6 +338,17 @@ const BUILDS = {
       return sentBy(LaunchService, 'launch', j.request, (s) => s.submit({ hostId: 'h', launch }));
     },
   },
+  FocusRequest: {
+    build: async (j) => {
+      const t = fakeTransport();
+      const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0 });
+      client.capabilities = ['sessions.focus'];
+      client.setFocus({ visible: j.visible, open: j.open ?? null });
+      await flush();
+      client.close();
+      return t.lastRequest('sessions.focus').data;
+    },
+  },
   ListRequest: {
     build: async (j) => {
       const t = fakeTransport();
@@ -398,7 +409,6 @@ const BUILDS = {
 const NOT_REPLAYED = {
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
   SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
-  FocusRequest: 'the PWA does not send sessions.focus yet (#610)',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',
@@ -534,6 +544,20 @@ for (const [record, r] of records) {
 }
 
 // ---- recorded sessions, patched ----
+
+// openQuestion and idleMs are the PWA's own additions to sessions.focus (#1190); the vectors do not
+// carry them yet, and a host that does not read them ignores them. Each goes in the request only
+// beside what it belongs to, and the vectors' own two requests are unchanged by them (above).
+test('a FocusRequest with the question on screen and the age of the last input is the vector\'s with those two fields added', async () => {
+  const t = fakeTransport();
+  const client = new HostClient(t, { timeoutMs: 1000, focusGapMs: 0 });
+  client.capabilities = ['sessions.focus'];
+  const open = records.get('FocusRequest').valid.find((v) => v.name === 'a-session-open').json;
+  client.setFocus({ visible: open.visible, open: open.open, openQuestion: 'q1', idle: () => 1500 });
+  await flush();
+  client.close();
+  assert.deepEqual(t.lastRequest('sessions.focus').data, { ...open, openQuestion: 'q1', idleMs: 1500 });
+});
 
 // session-patches.json: each recorded session as a host sends it to a client that asked for
 // patches. Every patch, applied as the PWA applies it, must give exactly the session an upsert of

@@ -321,7 +321,11 @@ A notice that waits or never goes says so on a line of its own: `held=collapse u
 finished turn held back because the device had one for that session in the last 10 minutes
 (`FinishedCollapse`), and `dropped=…` with `at=+…ms` for one that will not go: `on-screen` (the
 device has the app open and sees it), `collapse-moved-on`, `turn-failed`, `answered`,
-`signed-in`, `expired`, `unsubscribed`, `not-allowed` or `unencryptable`.
+`signed-in`, `expired`, `unsubscribed`, `not-allowed` or `unencryptable`. While the person uses a
+device (#1190; the rule is in [v1-sessions.md](protocol/v1-sessions.md#when-a-host-notifies)), a
+finished turn is `dropped=in-use`, and a question whose card a device in use shows
+`dropped=card-on-screen`; on the other devices the same reason ends in `-elsewhere by=` and the
+device in use.
 
 Sessions and devices are named by the first 8 characters of their ids; the grouped, sign-in,
 restore and machine notices by their own keys. No line has the notice's text, an endpoint or a
