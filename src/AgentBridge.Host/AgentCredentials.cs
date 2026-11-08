@@ -109,6 +109,9 @@ public sealed class AgentCredentials
             }
             pending.RemoveAll(p => p.ExpiresAt <= now || p.Session == session);
             if (pending.Count >= MaxPending) { throw new InvalidOperationException("too many adoptions waiting"); }
+            // A new yes replaces the old one now, not when the session next asks: the earlier
+            // credential (maybe a wider scope) and its open connections end here.
+            Remove(r => r.Credential.Session == session, "adopted again");
             pending.Add(adoption);
         }
         log($"agent credentials: session {session} adopted by a person at this machine as {scope}; waiting for it to ask (until {adoption.ExpiresAt:O})");

@@ -49,7 +49,7 @@ public sealed class AdoptSessionViewModel : Observable
             var result = await host.CallAsync<AgentAdoptResult>(AgentProtocol.Adopt, new AgentAdoptRequest { Session = sessionId, Scope = scope }, TimeSpan.FromSeconds(10));
             Finish(false, $"Adopted as {result.Scope}. Now, inside that session, run `agent-bridge-host agents credential` within {AgentProtocol.AdoptionMinutes} minutes.", Tone.Ok);
         }
-        catch (Exception e) when (e is not OperationCanceledException) { Finish(true, $"Not adopted: {Words.Sentence(e.Message)}", Tone.Bad); }
+        catch (Exception e) { Finish(true, $"Not adopted: {Words.Sentence(e.Message)}", Tone.Bad); }
     }
 
     public async Task StopAsync()
@@ -61,7 +61,7 @@ public sealed class AdoptSessionViewModel : Observable
             var result = await host.CallAsync<AgentRevokeResult>(AgentProtocol.Revoke, new AgentRevokeRequest { Session = sessionId }, TimeSpan.FromSeconds(10));
             Finish(false, result.Revoked ? "This session no longer acts as an agent." : "This session wasn't acting as an agent.", Tone.Ok);
         }
-        catch (Exception e) when (e is not OperationCanceledException) { Finish(true, $"Couldn't stop it: {Words.Sentence(e.Message)}", Tone.Bad); }
+        catch (Exception e) { Finish(true, $"Couldn't stop it: {Words.Sentence(e.Message)}", Tone.Bad); }
     }
 
     void Finish(bool keepAsking, string text, Tone tone) => ui.Post(() =>

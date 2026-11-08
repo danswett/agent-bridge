@@ -1,5 +1,6 @@
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 using Xunit;
 
 namespace AgentBridge.Host.Tests;
@@ -156,6 +157,33 @@ public sealed class AgentAdoptionTests : IDisposable
         store.Revoke("sess-1", "test");
         Assert.NotEmpty(lines);
         Assert.DoesNotContain(lines, l => l.Contains(token) || l.Contains(AgentProtocol.TokenPrefix));
+    }
+
+    [Fact]
+    public void Adopting_again_ends_the_earlier_credential_and_its_open_connection_at_once()
+    {
+        var store = Store();
+        store.Adopt("sess-1", 100, Started, AgentProtocol.ScopeReadReply);
+        var claim = store.Claim(Inside());
+        var channel = new FakeChannel();
+        store.Accept(channel, claim.Credential!);
+        Assert.NotNull(store.Of(channel));
+
+        store.Adopt("sess-1", 100, Started, AgentProtocol.ScopeRead);
+
+        Assert.Null(store.Check(claim.Token, Inside()).Accepted);
+        Assert.Null(store.Of(channel));
+    }
+
+    sealed class FakeChannel : IProtocolChannel
+    {
+        public string PeerId => "fixture";
+        public string PeerName => "fixture";
+        public string PeerKind => "fixture";
+        public bool IsOpen => true;
+        public Task Closed => Task.Delay(Timeout.Infinite);
+        public void Close() { }
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => Task.FromResult(0L);
     }
 
     sealed class Clock(DateTimeOffset now) : TimeProvider
