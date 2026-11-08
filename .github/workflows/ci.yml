@@ -993,7 +993,7 @@ jobs:
     #    Chromium and WebKit through the same relay, then the container build.
     needs: plan
     if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.spikes-linux == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 35, as every job that runs `playwright install --with-deps` gets (#689): room for the five
     # minutes the download step gives a slow apt mirror and a full download from Canonical's
     # archive, on top of the checks.
@@ -1266,7 +1266,7 @@ jobs:
           - name: webkit 3/3
             project: webkit
             shard: 3/3
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 35 minutes for every leg, as for every job that runs `playwright install --with-deps`
     # (#689). WebKit needs 181 system packages (114 MB), and on main run 41927187905 a slow apt
     # mirror held webkit 3/3 in that download past 20 minutes, twice, before a test ran; Chromium's
@@ -1360,7 +1360,7 @@ jobs:
     # it (#457): built once, here, rather than in every shard or passed round as an artifact.
     needs: plan
     if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.pwa-e2e == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 35, as every job that runs `playwright install --with-deps` gets (#689): main run
     # 41952998347 cancelled this job at its old 15 inside that install, fetching 126 of Chromium's
     # and WebKit's packages from azure.archive.ubuntu.com at about 100 kB/s. Room for the download
