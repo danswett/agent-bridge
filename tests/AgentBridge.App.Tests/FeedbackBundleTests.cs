@@ -288,6 +288,9 @@ public class FeedbackBundleTests
         "mail bob@example.com",
         "API_KEY=zzz111 AUTHORIZATION=qqq222",
         "{\\\"password\\\":\\\"hunter2\\\"}",
+        "key AAAAB3NzaC1yc2EAAAADAQABAAABAQC7vbqajDhA9bP8f0dQ1c2e3f4g5h6i7j8k9l0m",
+        "{\"msg\":\"{\\u0022password\\u0022:\\u0022hunter2\\u0022}\"}",
+        "{\"msg\":\"--password\\u0020hunter2\"}",
     };
 
     [Theory]
@@ -346,13 +349,30 @@ public class FeedbackBundleTests
     [InlineData("{\"password\":\"abc\\u0022tail-secret\"}", "tail-secret")]
     [InlineData("'password':'x\\u0027y-secret'", "y-secret")]
     [InlineData("{\"password\":\"hun\\u000ater2 more\"}", "more")]
-    [InlineData("{\"password\":\"hun\\u005cter2 more\"}", "more")]
+    [InlineData("{\"msg\":\"{\\u0022password\\u0022:\\u0022hunter2\\u0022}\"}", "hunter2")]
+    [InlineData("{\"msg\":\"password\\u003Dhunter2\"}", "hunter2")]
+    [InlineData("{\"msg\":\"password\\u003Ahunter2\"}", "hunter2")]
+    [InlineData("{\"msg\":\"--password\\u0020hunter2\"}", "hunter2")]
+    [InlineData("{\"msg\":\"--token\\u0020hunter2zz\"}", "hunter2zz")]
+    [InlineData("{\"msg\":\"password\\u003D\\u0022hunter2 more\\u0022\"}", "hunter2")]
     public void An_escaped_quote_or_control_char_inside_a_value_does_not_end_it(string input, string gone)
     {
         var r = FeedbackRedactor.Redact(input);
         Assert.DoesNotContain(gone, r);
         Assert.DoesNotContain('\n', r);
         Assert.False(FeedbackRedactor.ContainsSecret(r));
+        Assert.Equal(r, FeedbackRedactor.Redact(r));
+        Assert.True(FeedbackRedactor.ContainsSecret(input));
+    }
+
+    [Fact]
+    public void Escaped_input_stays_fast_in_both_views()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var big = string.Concat(Enumerable.Repeat("\\u0061-", 350_000));
+        FeedbackRedactor.Redact(big);
+        FeedbackRedactor.ContainsSecret(big);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8), sw.Elapsed.ToString());
     }
 
     [Fact]

@@ -39,29 +39,28 @@ public static partial class FeedbackRedactor
 
     // Credentials only, the patterns that must never be sent. S2's pre-send refusal uses these same
     // patterns through ContainsSecret, so there is one list.
+    // Two views of each text: as written, and with every escape decoded. A credential found only in
+    // the decoded view (nested JSON, \u0022 quotes, \u003D) cannot be cut by span, so the whole text
+    // is replaced.
     static string RedactSecrets(string text)
     {
-        var decoded = DecodeEscapes(text);
-        var redacted = Pass(decoded);
-        // Text with nothing to redact comes back as it was written, escapes included.
-        return string.Equals(redacted, decoded, StringComparison.Ordinal) ? text : redacted;
+        var redacted = Pass(text);
+        return HasSecretIn(Normalize(redacted)) ? EscapedMark : redacted;
     }
+
+    public const string EscapedMark = "[redacted: escaped secret]";
+
+    static bool HasSecretIn(string text) => !string.Equals(Pass(text), text, StringComparison.Ordinal);
 
     // Test seam: lets a test force the timeout path, which real patterns only reach on hostile text.
     [ThreadStatic] internal static Func<string, string>? SecretPassOverride;
 
     static string Pass(string text) => SecretPassOverride?.Invoke(text) ?? RedactDecoded(text);
 
-    // A journal line can hold JSON with its keys written as \uXXXX, which the patterns would not
-    // see as a word; matching runs on the decoded text.
-    static string DecodeEscapes(string text) => text.Contains("\\u", StringComparison.Ordinal)
-        ? UnicodeEscape().Replace(text, m =>
-        {
-            // Only characters a credential word is spelled with; quotes, backslashes, control and
-            // non-ASCII characters stay escaped so they cannot change where a value ends.
-            var c = (char)Convert.ToInt32(m.Groups[1].Value, 16);
-            return c < 128 && (char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.') ? c.ToString() : m.Value;
-        })
+    static string Normalize(string text) => text.Contains('\\')
+        ? EscapeSequence().Replace(text, m => m.Groups[1].Success
+            ? ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString()
+            : m.Groups[2].Value switch { "n" => "\n", "r" => "\r", "t" => "\t", var c => c })
         : text;
 
     static string RedactDecoded(string text)
@@ -89,8 +88,7 @@ public static partial class FeedbackRedactor
         if (string.IsNullOrEmpty(text)) { return false; }
         try
         {
-            var decoded = DecodeEscapes(text);
-            return !string.Equals(Pass(decoded), decoded, StringComparison.Ordinal);
+            return HasSecretIn(text) || HasSecretIn(Normalize(text));
         }
         catch (RegexMatchTimeoutException) { return true; }
     }
@@ -173,8 +171,8 @@ public static partial class FeedbackRedactor
     [GeneratedRegex(@"((?<![\w.-])[\w.-]{0,64}(?:password|passwd|pwd|secret|token|api[_ -]?key|authorization|private[_ -]?key|credential|connection[_ -]?string)[\w.-]{0,64}(?:\\*[""'])?\s*[:=]\s*)(?!\s*\[redacted\])(?:\\*""[^""\r\n]*""|'[^'\r\n]*'|(?:\\*[""'])?(?:[^\s""',;}&\\]|\\(?![""']))+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
     private static partial Regex Assignment();
 
-        [GeneratedRegex(@"\\u([0-9a-fA-F]{4})", RegexOptions.None, TimeoutMs)]
-        private static partial Regex UnicodeEscape();
+    [GeneratedRegex(@"\\(?:u([0-9a-fA-F]{4})|([""\\/nrt]))", RegexOptions.None, TimeoutMs)]
+    private static partial Regex EscapeSequence();
 
     [GeneratedRegex(@"(?<![\w-])(--?(?:[a-z0-9]{1,20}[-_]){0,3}(?:password|passwd|pwd|token|secret|api-?key)\s+)(?!\s*\[redacted\])(?!-)\S+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeoutMs)]
     private static partial Regex CliFlag();
