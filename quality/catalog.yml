@@ -403,6 +403,20 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: beta-acceptance
+    kind: e2e
+    ring: 4
+    select: always
+    # The real published Beta installer on a clean hosted Windows runner, x64 and Arm64, through
+    # a working session driven from the PWA (#1185, #736). Dispatched by hand after review: no
+    # pull_request trigger, no cron, no secrets. Pairing and driving from the PWA are not built yet,
+    # so a run reports them NOT RUN and is not a full pass.
+    platforms: [win-x64, win-arm64]
+    runner: device
+    command: gh workflow run beta-acceptance.yml --ref <branch>
+    where: beta-acceptance.yml accept, report
+    status: partial
+
   - id: relay-container
     kind: packaging
     ring: 1

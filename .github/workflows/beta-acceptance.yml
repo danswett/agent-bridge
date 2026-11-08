@@ -1,6 +1,6 @@
 # The Beta acceptance run (#1185, #736): the real published Beta installer on a fresh hosted
-# Windows runner, x64 and native Arm64. Dispatch only: no pull_request trigger, no cron, no secrets
-# beyond the test account's, each given only to the step that needs it. See quality/lab/beta-acceptance.ps1 for the steps.
+# Windows runner, x64 and native Arm64. Dispatch only: no pull_request trigger, no cron, no secrets.
+# See quality/lab/beta-acceptance.ps1 for the steps.
 name: beta-acceptance
 
 on:
@@ -18,12 +18,8 @@ jobs:
     name: accept (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
-    # The throwaway GitHub test account's secrets live only in this environment (#1185).
-    environment: beta-acceptance
     permissions:
       contents: read
-    outputs:
-      missing: ${{ steps.secrets.outputs.missing }}
     strategy:
       fail-fast: false
       matrix:
@@ -34,25 +30,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      # First, before anything else runs: mask the test account's secrets, and say which are
-      # missing. Nothing later receives a secret until a step needs one.
-      - name: Mask the test account secrets
-        id: secrets
-        shell: pwsh
-        env:
-          ACCEPT_GH_USER: ${{ secrets.ACCEPT_GH_USER }}
-          ACCEPT_GH_PASSWORD: ${{ secrets.ACCEPT_GH_PASSWORD }}
-          ACCEPT_GH_TOTP_SECRET: ${{ secrets.ACCEPT_GH_TOTP_SECRET }}
-        run: |
-          . ./quality/lab/accept-secrets.ps1
-          Protect-AcceptSecrets
-          "missing=$((Get-MissingAcceptSecrets) -join ', ')" | Add-Content $env:GITHUB_OUTPUT
       - name: Run the acceptance steps
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          MISSING_SECRETS: ${{ steps.secrets.outputs.missing }}
-        run: ./quality/lab/beta-acceptance.ps1 -Arch ${{ matrix.arch }} -Out "$env:RUNNER_TEMP/accept" -Repo ${{ github.repository }} -MissingSecrets $env:MISSING_SECRETS
+        run: ./quality/lab/beta-acceptance.ps1 -Arch ${{ matrix.arch }} -Out "$env:RUNNER_TEMP/accept" -Repo ${{ github.repository }}
       - name: Upload logs and screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -62,7 +44,7 @@ jobs:
           if-no-files-found: warn
 
   # Its own job so the only write permission in this workflow never shares a runner with the
-  # installer, the product or the test account's secrets.
+  # installer or the product.
   report:
     name: report a failure
     needs: accept

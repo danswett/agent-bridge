@@ -17,7 +17,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$dir = Join-Path $CopilotHome "session-state\$SessionId"
+$dir = Join-Path (Join-Path $CopilotHome 'session-state') $SessionId
 New-Item -ItemType Directory -Force $dir | Out-Null
 $file = Join-Path $dir 'events.jsonl'
 $parent = $null

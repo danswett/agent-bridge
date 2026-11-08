@@ -2,8 +2,8 @@
 # runner, as a person would install it. One architecture per invocation; the workflow runs both.
 # Steps are named so a failure says which one broke. This slice does steps 1, 2, 3 and 6
 # (download and verify, install and first run, the simulated agent, uninstall and leftovers);
-# pairing and driving from the PWA are NOT RUN until built and until the test account's secrets
-# exist, and the feedback step is NOT RUN. Nothing unrun is ever reported PASS, and only a full PASS exits 0.
+# pairing and driving from the PWA are NOT RUN until built (a relay built from the Beta's source
+# plus a fake GitHub, #1185 option e; no account, no secrets), and the feedback step is NOT RUN. Nothing unrun is ever reported PASS, and only a full PASS exits 0.
 #
 #   pwsh quality/lab/beta-acceptance.ps1 -Arch x64 -Out out/accept
 #Requires -Version 7
@@ -13,10 +13,7 @@ param(
     [Parameter(Mandatory)][string]$Out,
     [string]$Repo = 'danswett/agent-bridge',
     # A release tag to test instead of the newest Beta release; for rehearsals only.
-    [string]$Tag,
-    # Names of the test account secrets the workflow found missing (it checks, so no secret reaches here).
-    [string]$MissingSecrets = ''
-)
+    [string]$Tag)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 New-Item -ItemType Directory -Force $Out | Out-Null
@@ -105,8 +102,8 @@ Step '1-download' @() {
 }
 
 $installDir = Join-Path $env:LOCALAPPDATA 'AgentBridgeApp'
-# The product runs next: it must not inherit the job's tokens or the test account's secrets.
-foreach ($n in 'GH_TOKEN', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACCEPT_GH_USER', 'ACCEPT_GH_PASSWORD', 'ACCEPT_GH_TOTP_SECRET') {
+# The product runs next: it must not inherit the job's tokens.
+foreach ($n in 'GH_TOKEN', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL') {
     [Environment]::SetEnvironmentVariable($n, $null)
 }
 
@@ -147,10 +144,10 @@ Step '3-simulated-agent' @('2-install-first-run') {
     $steps['3-simulated-agent'].detail = "session $($sim.SessionId): transcript written, hook replies as contracted. The host reading it is checked in step 5."
 }
 
-# Steps 4 and 5 need the throwaway GitHub test account (#1185). The workflow checks its secrets in
-# its own step and passes only the names of any that are missing; this script never sees them. They
-# stay NOT RUN, never PASS, and say why. The device-flow login and PWA driver are not built yet.
-$why = if ($MissingSecrets) { "missing secrets: $MissingSecrets" } else { 'the device-flow login and PWA driver are not built yet' }
+# Steps 4 and 5 (#1185 option e): the relay built from the Beta's source commit runs on the runner
+# against a fake GitHub, the installed host signs in to it and the PWA pairs through it. Not built
+# yet, so they stay NOT RUN, never PASS.
+$why = 'not built yet: relay from source plus fake GitHub (#1185 option e)'
 foreach ($n in '4-pair', '5-drive-from-pwa') { $steps[$n].detail = $why }
 
 if (-not $state.Root) { $steps['6-uninstall'].detail = 'not run: nothing was installed' }

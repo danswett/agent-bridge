@@ -31,7 +31,7 @@ Where this file and those comments disagree, the comments win and this file is f
 | `test-provision.ps1`: its checks against a stand-in `az` | **Written**, catalog suite `lab-scripts` (ring 0, ci.yml `light` on Linux, so a draft's fast ring runs it). Never run against Azure | Platform |
 | `run.ps1` (§5) | **Nonexecuting interface draft.** Validates requests and plans only; `-Apply` always refuses. No scenario, result or evidence is produced | Platform |
 | `test-run.ps1`: offline runner-interface checks | **Written**, in the same `lab-scripts` suite; no Azure or product execution | Platform |
-| `beta-acceptance.ps1` and `.github/workflows/beta-acceptance.yml` (#1185): the Beta installer on hosted `windows-latest` and `windows-11-arm`, not the Azure lab | **Draft.** Steps 1, 2, 6 only (download and verify, silent install and first run, uninstall); simulated agent, pairing, driving from the PWA and feedback are NOT RUN. Not yet dispatched | Engineering |
+| `beta-acceptance.ps1` and `.github/workflows/beta-acceptance.yml` (#1185): the Beta installer on hosted `windows-latest` and `windows-11-arm`, not the Azure lab | **Draft.** Steps 1, 2, 3, 6 (download and verify, silent install and first run, simulated agent, uninstall); pairing and driving from the PWA (a relay built from the Beta's source against a fake GitHub, no secrets) and feedback are NOT RUN. Not yet dispatched | Engineering |
 | `fleet.yml`, the images and their S0 snapshots | **Unbuilt** | Platform |
 | Scenarios and the simulated agent (`tests/AgentBridge.AgentSim`) | **Unbuilt** | Platform |
 | The `lab` environment, OIDC principal and reusable workflow | **Unbuilt**; nothing is scheduled or dispatchable | Platform, owner (bootstrap) |
