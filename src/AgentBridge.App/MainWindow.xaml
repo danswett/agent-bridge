@@ -372,10 +372,15 @@
                     AutomationProperties.Name="{x:Bind ViewModel.AppUpdate.UpdatingTitle, Mode=OneWay}" />
                 <!-- The heading takes keyboard focus as the screen appears, so its line is read
                      (MainWindow.FollowUpdating); a tab stop only while it has focus. Should focus not
-                     be had (the window not in front), its polite live region says it instead. -->
+                     be had (the window not in front), its polite live region says it instead.
+                     Focused programmatically, it draws no focus rectangle after a pointer press;
+                     after keyboard use WinUI draws one, so its padding and focus margin keep that
+                     rectangle clear of the first and last letters (Creative on #1181). -->
                 <ContentControl
                     x:Name="UpdatingHeading"
                     HorizontalAlignment="Center"
+                    Padding="8,2"
+                    FocusVisualMargin="-2"
                     IsTabStop="False"
                     UseSystemFocusVisuals="True"
                     AutomationProperties.AutomationId="UpdatingTitle"
