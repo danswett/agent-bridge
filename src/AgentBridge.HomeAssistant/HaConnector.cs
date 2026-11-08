@@ -466,6 +466,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         launchServing = launcher?.Available() == true;
         launchOptions = null;
         launchSignature = null;
+        launchOptionsVersion = null;
         launchDefaultsPending = null;
         // A machine published again while this host runs keeps what it has read of Launch: taken
         // anew, the baseline would swallow a press made since the last read.
@@ -572,7 +573,6 @@ public sealed partial class HaConnector : IAsyncDisposable
         {
             served.UnionWith(HaContract.LaunchConfigs(Slug, options.MachineName, new HaContract.LaunchCard()).Select(c => c.Topic));
             served.UnionWith([HaContract.LaunchResultTopic(Slug), HaContract.LaunchOutcomeTopic(Slug), HaContract.PromptPayloadTopic(Slug)]);
-            // launch_options is ours alone, so it is not in MachineTopics and is never cleared as unserved.
         }
         // The agents' own usage sensors are the usage pass's, and so are the numbered ones of the
         // further Copilot logins it reports; the other numbered ones go rather than keep a reading
@@ -580,7 +580,10 @@ public sealed partial class HaConnector : IAsyncDisposable
         // reason: agent-ha-bridge leaves its sensors when told not to publish, but a reading left on
         // the card with nothing to refresh it is the stale figure this exists to prevent.
         if (usage is not null) { served.UnionWith(HaContract.UsageTopics(Slug, [.. HaContract.UsageClients, .. options.UsageAccountSensors])); }
-        return HaContract.MachineTopics(Slug).Where(t => !served.Contains(t));
+        var unserved = HaContract.MachineTopics(Slug).Where(t => !served.Contains(t));
+        // launch_options is ours alone, so it is not in MachineTopics; with launch not served it is
+        // withdrawn like the card, rather than left retained with lists nothing refreshes.
+        return launchServing ? unserved : unserved.Concat([HaContract.LaunchOptionsConfig(Slug, options.MachineName).Topic, HaContract.LaunchOptionsTopic(Slug)]);
     }
 
     // A session's entities this stage does not serve: with answers, only Stop (and two state

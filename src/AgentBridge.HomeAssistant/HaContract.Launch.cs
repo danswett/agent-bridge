@@ -134,7 +134,7 @@ public static partial class HaContract
 
     // The sensor's payload: `agents` by agent id, each with its label and, per axis, the values
     // that agent accepts (without the "Agent default" placeholder; omit an axis to take its own
-    // default) and the machine's default. `version` is a short hash of `agents`, so the state
+    // default) and the machine's default. `version` is a short hash of `default_agent` and `agents`, so the state
     // changes exactly when an answer does.
     public static JsonObject LaunchOptionsPayload(LaunchOptions offered)
     {
@@ -156,7 +156,7 @@ public static partial class HaContract
                 },
             };
         }
-        var version = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Serialize(agents))))[..12].ToLowerInvariant();
+        var version = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(offered.Defaults.Agent + "\n" + Serialize(agents))))[..12].ToLowerInvariant();
         return new JsonObject { ["version"] = version, ["default_agent"] = offered.Defaults.Agent, ["agents"] = agents };
     }
 
