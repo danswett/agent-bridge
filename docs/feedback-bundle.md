@@ -25,6 +25,8 @@ becomes `"unavailable"`; the error is never recorded, since it could carry conte
 ## Redaction
 
 `FeedbackRedactor` replaces tokens (GitHub, AWS, Slack, `sk-`), JWTs, `Bearer` values, private key blocks,
-credentials in URLs, values of keys named like a secret, email addresses, the user name in profile paths
-(`C:\Users\<user>`, `/home/<user>`) and long base64 or hex runs. It only removes; it does not
+credentials in URLs, whole `Authorization` values, quoted or bare values of keys named like a secret (also inside escaped JSON), `--token`/`--password` style flags, email addresses, the profile folder name in any `C:\Users\...`, `/home/...` or `/Users/...` path, this machine's user and computer names, and long base64 or hex runs. It only removes; it does not
 promise to catch every secret, which is why the person sees the exact bytes first. Nothing here is logged.
+
+
+`FeedbackRedactor.ContainsSecret` and `BundleHasSecret` use the same credential patterns, so the sender's last check before upload cannot disagree with the redactor. A source that fails or ignores cancellation is cut off at the 10 s bound; a failing session source refuses with `SessionUnavailable`.

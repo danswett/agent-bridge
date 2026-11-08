@@ -65,6 +65,8 @@ public enum FeedbackRefusalReason
     ScreenshotNotPng,
     SessionNotFound,
     BundleTooLarge,
+    // The session source failed (as opposed to the session not existing); appended so existing values keep their order.
+    SessionUnavailable,
 }
 
 // A source that cannot be read leaves its item out and the bundle says "unavailable", so gathering

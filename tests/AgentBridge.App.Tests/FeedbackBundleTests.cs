@@ -19,6 +19,9 @@ public class FeedbackBundleTests
         public string Secret = "";
         public bool FailJournal;
         public bool Hang;
+        public bool Junk;
+        public bool IgnoreCancel;
+        public bool FailTurns;
         public IReadOnlyList<FeedbackSessionTurn>? Turns;
         public FeedbackEnvironment Environment() => new("0.1.42", "beta", "Windows 11", "x64", 1, ["0.1.42", "0.1.41"]);
         public Task<IReadOnlyList<FeedbackAgent>> DetectAgentsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<FeedbackAgent>>([new("Copilot", "1.0.107"), new("Claude", null)]);
@@ -32,11 +35,13 @@ public class FeedbackBundleTests
         public async Task<IReadOnlyList<string>> JournalTailAsync(int max, CancellationToken ct)
         {
             if (Hang) { await Task.Delay(Timeout.Infinite, ct); }
+            if (IgnoreCancel) { await Task.Delay(Timeout.Infinite); }
+            if (Junk) { return Enumerable.Repeat(new string((char)1, 400), 200).ToList(); }
             if (FailJournal) { throw new IOException(@"C:\Users\alice\secret.log"); }
             return ["connected", $"Authorization: Bearer {Secret}", @"opened C:\Users\alice\repos\x", "mail bob@example.com"];
         }
-        public Task<IReadOnlyList<string>> CrashRecordsAsync(int max, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([$"System.Exception: boom token={Secret} at C:\\Users\\alice\\a.cs"]);
-        public Task<IReadOnlyList<FeedbackSessionTurn>?> SessionTurnsAsync(string id, int max, CancellationToken ct) => Task.FromResult(Turns);
+        public Task<IReadOnlyList<string>> CrashRecordsAsync(int max, CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(Junk ? Enumerable.Repeat(new string((char)1, 8000), 5).ToList() : [$"System.Exception: boom token={Secret} at C:\\Users\\alice\\a.cs"]);
+        public Task<IReadOnlyList<FeedbackSessionTurn>?> SessionTurnsAsync(string id, int max, CancellationToken ct) => FailTurns ? throw new IOException("x") : Task.FromResult(Turns);
     }
 
     static Task<FeedbackGatherResult> Gather(Fake f, FeedbackRequest? r = null, TimeSpan? timeout = null, CancellationToken ct = default)
@@ -111,23 +116,57 @@ public class FeedbackBundleTests
         Assert.Equal(FeedbackRefusalReason.ScreenshotNotPng, Assert.IsType<FeedbackGatherResult.Refused>(await Gather(new Fake(), new FeedbackRequest { ScreenshotPng = [1, 2, 3, 4, 5, 6, 7, 8, 9] })).Reason);
         Assert.Equal(FeedbackRefusalReason.ScreenshotTooLarge, Assert.IsType<FeedbackGatherResult.Refused>(await Gather(new Fake(), new FeedbackRequest { ScreenshotPng = new byte[FeedbackLimits.MaxScreenshotBytes + 1] })).Reason);
         Assert.Equal(FeedbackRefusalReason.SessionNotFound, Assert.IsType<FeedbackGatherResult.Refused>(await Gather(new Fake { Turns = null }, new FeedbackRequest { SessionTurnsFor = "nope" })).Reason);
-        var big = new byte[FeedbackLimits.MaxScreenshotBytes];
-        Array.Copy(Png, big, Png.Length);
-        var turns = Enumerable.Range(0, 20).Select(i => new FeedbackSessionTurn("user", new string('a', 2000) + i, DateTimeOffset.UnixEpoch)).ToList();
-        var huge = await Gather(new Fake { Turns = turns }, new FeedbackRequest { ScreenshotPng = big, SessionTurnsFor = "s" });
-        // The per-item caps keep the largest possible bundle under the limit; the size check is the backstop.
-        Assert.True(Ready(huge).Length < FeedbackLimits.MaxBundleBytes);
+        Assert.Equal(FeedbackRefusalReason.SessionUnavailable, Assert.IsType<FeedbackGatherResult.Refused>(await Gather(new Fake { FailTurns = true }, new FeedbackRequest { SessionTurnsFor = "s" })).Reason);
     }
 
     [Fact]
+    public async Task A_bundle_over_the_cap_is_refused_as_too_large()
+    {
+        // Control characters stay as they are when redacted but take six bytes each as JSON escapes.
+        var big = new byte[FeedbackLimits.MaxScreenshotBytes];
+        Array.Copy(Png, big, Png.Length);
+        var turns = Enumerable.Range(0, 20).Select(i => new FeedbackSessionTurn("user", new string((char)1, 2000), DateTimeOffset.UnixEpoch)).ToList();
+        var result = await Gather(new Fake { Junk = true, Turns = turns }, new FeedbackRequest { ScreenshotPng = big, SessionTurnsFor = "s" });
+        Assert.Equal(FeedbackRefusalReason.BundleTooLarge, Assert.IsType<FeedbackGatherResult.Refused>(result).Reason);
+    }
+    [Fact]
     public async Task Text_cut_mid_emoji_or_holding_a_lone_surrogate_still_gathers()
     {
-        var f = new Fake { Turns = [new("user", new string('a', 1999) + "😀 tail", DateTimeOffset.UnixEpoch)] };
+        // "ab " filler matches no redaction rule, so the 2000-char cut really lands inside the emoji.
+        var filler = string.Concat(Enumerable.Repeat("ab ", 666)) + "a";
+        Assert.Equal(1999, filler.Length);
+        var f = new Fake { Turns = [new("user", filler + "😀 tail", DateTimeOffset.UnixEpoch)] };
         var bundle = Ready(await Gather(f, new FeedbackRequest { Note = "bad \ud83d half", SessionTurnsFor = "s" }));
         using var doc = JsonDocument.Parse(bundle.Text);
         Assert.Contains("\uFFFD", doc.RootElement.GetProperty("note").GetString());
+        var text = doc.RootElement.GetProperty("sessionTurns").GetProperty("turns")[0].GetProperty("text").GetString()!;
+        Assert.Equal(filler + "…", text);
     }
 
+    [Fact]
+    public async Task A_source_that_ignores_cancellation_cannot_hang_gathering()
+    {
+        await Assert.ThrowsAsync<TimeoutException>(() => Gather(new Fake { IgnoreCancel = true }, timeout: TimeSpan.FromMilliseconds(100)));
+    }
+
+    [Fact]
+    public async Task The_machine_and_user_names_are_cut_from_free_text()
+    {
+        var bundle = Ready(await new FeedbackBundleSource(new Fake(), null, null, ["Swett", "DAN-PC"]).GatherAsync(new FeedbackRequest { Note = "swett on dan-pc broke" }, null, default));
+        Assert.DoesNotContain("wett", bundle.Text);
+        Assert.DoesNotContain("DAN-PC", bundle.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_finished_bundle_passes_the_same_secret_check_the_sender_uses()
+    {
+        var f = new Fake { Secret = Pat, Turns = [new("user", Pat, DateTimeOffset.UnixEpoch)] };
+        var big = new byte[5000];
+        Array.Copy(Png, big, Png.Length);
+        var bundle = Ready(await Gather(f, new FeedbackRequest { Note = "key " + Pat, ScreenshotPng = big, SessionTurnsFor = "s" }));
+        Assert.False(FeedbackRedactor.BundleHasSecret(bundle.Text));
+        Assert.True(FeedbackRedactor.BundleHasSecret(bundle.Text.Replace("\"note\": \"", "\"note\": \"" + Pat + " ")));
+    }
     [Fact]
     public async Task A_failing_environment_source_becomes_unavailable_instead_of_throwing()
     {
@@ -155,7 +194,18 @@ public class FeedbackBundleTests
     }
 
     [Theory]
-    [InlineData(@"opened C:\Users\Dan Swett\x", "Dan Swett")]
+    [InlineData(@"opened C:\Users\Dan Swett\x", "Swett")]
+    [InlineData("file:///home/dan/x", "dan")]
+    [InlineData("sent Bearer opaque.session-value1 to server", "opaque.session")]
+    [InlineData("connection_string: Server=db;User=sa;Password=p4ss;Pooling=true", "p4ss")]
+    [InlineData("-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQdGBF\n-----END PGP PRIVATE KEY BLOCK-----", "lQdGBF")]
+    [InlineData(@"open \\FILESRV01\share\x", "FILESRV01")]
+    [InlineData("/mnt/c/Users/alice/y", "alice")]
+    [InlineData("Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNz")]
+    [InlineData("password: \"horse battery staple\"", "battery")]
+    [InlineData("run --token abcd1234efgh now", "abcd1234efgh")]
+    [InlineData("run --password x now", " x ")]
+    [InlineData("API_KEY=zzz111 AUTHORIZATION=qqq222", "zzz111")]
     [InlineData("see /home/dan/.ssh", "dan")]
     [InlineData("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----", "abc")]
     [InlineData("password=hunter2hunter2", "hunter2")]
@@ -165,6 +215,15 @@ public class FeedbackBundleTests
     public void Redaction_removes_these_shapes(string input, string gone)
     {
         Assert.DoesNotContain(gone, FeedbackRedactor.Redact(input));
+    }
+
+    [Fact]
+    public void A_secret_in_a_query_string_does_not_swallow_the_next_parameter()
+    {
+        var r = FeedbackRedactor.Redact("https://h/x?token=abc123def&page=2&password=zzz999");
+        Assert.DoesNotContain("abc123def", r);
+        Assert.DoesNotContain("zzz999", r);
+        Assert.Contains("page=2", r);
     }
 
     [Fact]

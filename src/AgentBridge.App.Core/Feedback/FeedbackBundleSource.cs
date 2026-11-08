@@ -25,9 +25,11 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
     readonly IFeedbackSources sources;
     readonly Func<DateTimeOffset> now;
     readonly TimeSpan timeout;
+    readonly IReadOnlyList<string> privateNames;
 
-    public FeedbackBundleSource(IFeedbackSources sources, Func<DateTimeOffset>? now = null, TimeSpan? timeout = null)
+    public FeedbackBundleSource(IFeedbackSources sources, Func<DateTimeOffset>? now = null, TimeSpan? timeout = null, IReadOnlyList<string>? privateNames = null)
     {
+        this.privateNames = privateNames ?? [System.Environment.UserName, System.Environment.MachineName];
         this.sources = sources;
         this.now = now ?? (() => DateTimeOffset.UtcNow);
         this.timeout = timeout ?? FeedbackLimits.GatherTimeout;
@@ -60,7 +62,8 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
 
         progress?.Report(FeedbackGatherStage.Versions);
         FeedbackEnvironment env;
-        try { env = sources.Environment(); }
+        try { env = await Task.Run(sources.Environment, ct).WaitAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception) { env = new FeedbackEnvironment("unavailable", "unavailable", "unavailable", "unavailable", 0, []); }
         env = env with { HostVersions = env.HostVersions ?? [] };
         progress?.Report(FeedbackGatherStage.Agents);
@@ -76,7 +79,9 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
         if (request.SessionTurnsFor is { } session)
         {
             progress?.Report(FeedbackGatherStage.SessionTurns);
-            turns = await Safe(c => sources.SessionTurnsAsync(session, FeedbackLimits.MaxSessionTurns, c), ct, fallback: null);
+            try { turns = await sources.SessionTurnsAsync(session, FeedbackLimits.MaxSessionTurns, ct).WaitAsync(ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception) { return new FeedbackGatherResult.Refused(FeedbackRefusalReason.SessionUnavailable); }
             if (turns is null) { return new FeedbackGatherResult.Refused(FeedbackRefusalReason.SessionNotFound); }
         }
         if (request.ScreenshotPng is not null) { progress?.Report(FeedbackGatherStage.Screenshot); }
@@ -153,7 +158,7 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
 
             if (note.Trim().Length > 0)
             {
-                var cleaned = Sanitize(FeedbackRedactor.Redact(note));
+                var cleaned = Sanitize(FeedbackRedactor.Redact(note, privateNames));
                 w.WriteString("note", cleaned);
                 items.Add(Item("note", "Your note", cleaned == note ? "Exactly what you typed" : "What you typed, with secrets removed", w, buffer, ref mark, true));
             }
@@ -192,14 +197,14 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
     // A source that fails leaves its item out; the reason is not recorded since it could carry content.
     static async Task<T?> Safe<T>(Func<CancellationToken, Task<T>> read, CancellationToken ct, T? fallback = default)
     {
-        try { return await read(ct); }
-        catch (OperationCanceledException) { throw; }
+        try { return await read(ct).WaitAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception) { return fallback; }
     }
 
-    static string Clean(string? text, int max)
+    string Clean(string? text, int max)
     {
-        var redacted = Sanitize(FeedbackRedactor.Redact(text ?? ""));
+        var redacted = Sanitize(FeedbackRedactor.Redact(text ?? "", privateNames));
         if (redacted.Length <= max) { return redacted; }
         // Don't cut between the halves of a surrogate pair; the JSON writer rejects a lone half.
         var cut = char.IsHighSurrogate(redacted[max - 1]) ? max - 1 : max;
