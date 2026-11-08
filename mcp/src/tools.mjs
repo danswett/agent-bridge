@@ -9,7 +9,8 @@ const REMEMBERED = 200;
 /** What a reply is answered against: changes whenever the session's visible turn changes. */
 export function turnMarker(session) {
   const response = session?.activity?.response ?? '';
-  return createHash('sha256').update(`${session?.statusSince ?? ''}|${response}`, 'utf8').digest('hex').slice(0, 16);
+  // Not statusSince: it moves with every status change (idle to waiting, a host re-stamp) without a new turn.
+  return createHash('sha256').update(`${session?.activity?.turnCount ?? ''}|${response}`, 'utf8').digest('hex').slice(0, 16);
 }
 
 function typed(session) {
@@ -77,13 +78,24 @@ const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export async function replyToSession(host, id, text) {
   const before = await host.request('session.get', { id });
   if (!before || before.missing) return { id, outcome: 'refused', reason: 'No such session.' };
-  const result = await host.request('session.reply', { id, request: randomUUID(), text });
+  const sent = Buffer.byteLength(text, 'utf8');
+  const since = turnMarker(before);
+  let result;
+  try {
+    result = await host.request('session.reply', { id, request: randomUUID(), text });
+  } catch (error) {
+    if (!(error instanceof PipeError)) throw error;
+    // A timeout leaves the reply possibly delivered: say so, with since, rather than throwing.
+    if (error.kind === 'unavailable') return { id, outcome: 'unknown', reason: error.message, sent, since };
+    return { id, outcome: 'refused', reason: error.message, sent };
+  }
+  const accepted = result.outcome !== 'refused';
   return {
     id,
     outcome: result.outcome,
     ...(result.reason ? { reason: result.reason } : {}),
-    sent: Buffer.byteLength(text, 'utf8'),
-    since: turnMarker(before),
+    sent,
+    ...(accepted ? { since } : {}),
   };
 }
 
@@ -103,7 +115,7 @@ export class LaunchLedger {
 }
 
 export async function launchSession(host, ledger, options = {}) {
-  const data = { request: options.request || randomUUID() };
+  const data = { request: typeof options.request === 'string' && options.request ? options.request : randomUUID() };
   for (const key of LAUNCH_SETTINGS) {
     let value = options[key];
     if (value === undefined || value === null) continue;

@@ -155,6 +155,31 @@ test('read waits for a turn newer than since, never returning the stale answer',
   connection.close(); host.close();
 });
 
+test('read is not done when only statusSince changes, and a refused reply returns no since', async () => {
+  const host = await fakeHost({
+    hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),
+    'session.get': () => session({ statusSince: 't9', status: 'waiting-for-input' }),
+    'session.reply': () => ({ outcome: 'refused', reason: 'no' }),
+  });
+  const { client, connection } = await clientFor(host);
+  const stale = await call(client, 'read_agent_session', { session_id: 's1', since: turnMarker(session()) });
+  assert.equal(stale.done, false);
+  assert.equal(stale.response, '');
+  const refused = await call(client, 'reply_to_agent_session', { session_id: 's1', text: 'x' });
+  assert.equal(refused.outcome, 'refused');
+  assert.equal(refused.since, undefined);
+  connection.close(); host.close();
+});
+
+test('launch rejects a request id that is not a short string', async () => {
+  const host = await fakeHost({ hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }), 'session.launch': () => ({ outcome: 'started' }) });
+  const { client, connection } = await clientFor(host);
+  const res = await client.callTool({ name: 'launch_agent_session', arguments: { request: 'r'.repeat(500) } });
+  assert.equal(res.isError, true);
+  assert.equal(host.seen.some((r) => r.op === 'session.launch'), false);
+  connection.close(); host.close();
+});
+
 test('launch maps permissions, remembers the outcome, and read_launch_result returns it', async () => {
   const host = await fakeHost({
     hello: () => ({ capabilities: CAPS }), 'agent.hello': () => ({ principal: 'p' }),

@@ -96,6 +96,7 @@ function validate(name, args) {
       break;
     case 'launch_agent_session':
       requireString('prompt', { max: MAX_TEXT, optional: true });
+      requireString('request', { max: 128, optional: true });
       for (const key of ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions']) requireString(key, { optional: true });
       break;
     case 'read_launch_result':
