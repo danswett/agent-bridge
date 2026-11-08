@@ -37,6 +37,18 @@ foreach ($kind in 'dev', 'release') {
 }
 $global:PpIgnoreRelease = $false
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+$originalNugetPackages = $env:NUGET_PACKAGES
+$env:NUGET_PACKAGES = Join-Path $fixtures 'nuget'
+foreach ($package in @(
+        @{ Id = 'Notice.Expression'; License = '<license type="expression">MIT</license>'; File = 'LICENSE.txt' }
+        @{ Id = 'Notice.File'; License = '<license type="file">legal/terms.txt</license>'; File = 'legal\terms.txt' }
+    )) {
+    $folder = Join-Path $env:NUGET_PACKAGES $package.Id.ToLowerInvariant() '1.0.0'
+    $file = Join-Path $folder $package.File
+    New-Item -ItemType Directory -Force (Split-Path $file) | Out-Null
+    Set-Content -LiteralPath $file "Verbatim notice fixture for $($package.Id): copyright, terms and disclaimer."
+    Set-Content -LiteralPath (Join-Path $folder "$($package.Id.ToLowerInvariant()).nuspec") "<package><metadata><id>$($package.Id)</id><version>1.0.0</version>$($package.License)</metadata></package>"
+}
 
 # --- Stand-ins. Functions come before programs, so the scripts under test find these. What they
 # record is global: $script: in them would be the script under test's.
@@ -294,6 +306,11 @@ function global:dotnet {
         New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
         if ($f -like '*.exe') { New-PpExe $path $machine } else { Set-Content $path 'stand-in' }
     }
+    @{ libraries = @{
+            'Notice.Expression/1.0.0' = @{ type = 'package' }
+            'Notice.File/1.0.0' = @{ type = 'package' }
+            'AgentBridge.App/0.1.600' = @{ type = 'project' }
+        } } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $out 'AgentBridge.deps.json')
     # The host project's build carries the release metadata exactly when asked for, unless a test
     # stands in for a build cache that ignored the property.
     if ($a[1] -like '*AgentBridge.Host.csproj') {
@@ -1302,6 +1319,233 @@ function New-PpPublished([string]$Runtime = 'win-x64', [switch]$Release) {
     $global:PpPublishRids.Clear()
 }
 
+Check 'Both architectures carry verbatim project and package notices bound to their build source' {
+    foreach ($runtime in 'win-x64', 'win-arm64') {
+        Reset
+        New-PpPublished $runtime
+        . (Join-Path $PSScriptRoot 'app-notices.ps1')
+        $publish = Join-Path $scratch 'publish'
+        $notice = Get-AppNotices $publish '0.1.600' $runtime
+        Assert ($notice.version -ceq '0.1.600') 'a dependency version replaced the build version'
+        Assert ($notice.packages.Count -eq 2) 'package notices missing'
+        Assert ((Get-FileHash (Join-Path $publish 'LICENSE.txt')).Hash -ceq (Get-FileHash (Join-Path $PSScriptRoot '..' 'LICENSE')).Hash) 'project licence changed'
+        $source = Get-Content (Join-Path $publish 'SOURCE.txt') -Raw
+        Assert ($source.Contains("/tree/$($notice.commit)") -and $source.Contains("/blob/$($notice.commit)/docs/app-windows.md")) 'source/build-install links are not exact-commit links'
+        foreach ($package in $notice.packages) {
+            $path = Get-AppNoticePath $publish $package.files[0]
+            Assert ((Get-Content $path -Raw).Contains("Verbatim notice fixture for $($package.id)")) 'notice text changed'
+        }
+    }
+}
+
+Check 'Pack-only refuses missing or altered notices without rebuilding them' {
+    foreach ($edit in @(
+            { Remove-Item -LiteralPath (Join-Path $scratch 'publish' 'LICENSE.txt') }
+            { Add-Content -LiteralPath (Join-Path $scratch 'publish' 'SOURCE.txt') 'changed' }
+        )) {
+        Reset
+        New-PpPublished
+        & $edit
+        $threw = $false
+        try { & $packScript -Version '0.1.600' -Out $scratch -PackOnly 6>$null 3>$null }
+        catch { $threw = $_.Exception.Message -like '*notice*' }
+        Assert $threw 'changed notices were accepted'
+        Assert ($global:PpPublishRids.Count -eq 0 -and $null -eq $global:PpPackSaw) 'pack-only rebuilt notices or packed them'
+    }
+}
+
+Check 'Packages cannot substitute metadata, omit declared terms or escape their restored folder' {
+    foreach ($case in @(
+            @{ From = 'legal/terms.txt'; To = '../outside.txt'; Says = '*notice path escapes its folder*' }
+            @{ From = 'legal/terms.txt'; To = 'legal/missing.txt'; Says = '*missing notice file*' }
+            @{ From = '<id>Notice.File</id>'; To = '<id>Other</id>'; Says = '*metadata does not identify Notice.File/1.0.0*' }
+        )) {
+        Reset
+        $nuspec = Join-Path $env:NUGET_PACKAGES 'notice.file' '1.0.0' 'notice.file.nuspec'
+        $original = Get-Content $nuspec -Raw
+        try {
+            Set-Content -LiteralPath $nuspec ($original.Replace($case.From, $case.To))
+            $threw = $false
+            try { New-PpPublished } catch { $threw = $_.Exception.Message -like $case.Says }
+            Assert $threw "package error was accepted: $($case.To)"
+            Assert ($null -eq $global:PpPackSaw) 'vpk pack ran'
+        } finally { Set-Content -LiteralPath $nuspec $original }
+    }
+}
+
+Check 'Offline upstream notices preserve exact bytes and refuse unpinned packages, metadata or notice material' {
+    foreach ($case in 'valid', 'archive', 'metadata', 'notice', 'version', 'unreviewed',
+        'url-valid', 'url-metadata', 'url-source', 'url-copyright', 'url-expression') {
+        Reset
+        . (Join-Path $PSScriptRoot 'app-notices.ps1')
+        $publish = Join-Path $scratch 'publish'
+        $repositoryRoot = Join-Path $scratch 'notice-repository'
+        $packageRoot = Join-Path $scratch 'notice-packages'
+        $folder = Join-Path $packageRoot 'notice.curated' '1.0.0'
+        $upstream = Join-Path $repositoryRoot 'build' 'notices' 'notice.curated' '1.0.0'
+        foreach ($directory in $folder, $upstream, (Join-Path $publish 'Assets' 'Fonts')) {
+            New-Item -ItemType Directory -Force $directory | Out-Null
+        }
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..' 'LICENSE') -Destination (Join-Path $repositoryRoot 'LICENSE')
+        @{ libraries = @{ 'Notice.Curated/1.0.0' = @{ type = 'package' } } } |
+            ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $publish 'app.deps.json')
+        $nuspec = Join-Path $folder 'notice.curated.nuspec'
+        $archive = Join-Path $folder 'notice.curated.1.0.0.nupkg'
+        $urlOnly = $case.StartsWith('url-')
+        $noticeName = if ($urlOnly) { 'license.rtf' } else { 'license.txt' }
+        $notice = Join-Path $upstream $noticeName
+        $provenancePath = Join-Path $upstream 'provenance.json'
+        $declaration = if ($urlOnly) {
+            '<licenseUrl>https://example.test/SDK-LICENSE.rtf</licenseUrl><copyright>Copyright fixture</copyright>'
+        } else {
+            "<license type=`"expression`">BSD-2-Clause</license><repository type=`"git`" url=`"https://github.com/example/notice`" commit=`"$commit`" />"
+        }
+        $metadata = "<package><metadata><id>Notice.Curated</id><version>1.0.0</version>$declaration</metadata></package>"
+        Set-Content -LiteralPath $nuspec $metadata
+        Set-Content -LiteralPath $archive 'Exact archive fixture bytes, hashed but never unpacked or executed.'
+        $noticeText = if ($urlOnly) { "{\rtf1\ansi Copyright fixture\par Verbatim terms and disclaimer. }`n" } else { "Copyright fixture`nVerbatim terms and disclaimer. `n" }
+        [IO.File]::WriteAllBytes($notice, [Text.Encoding]::UTF8.GetBytes($noticeText))
+        $provenance = @{
+            schemaVersion = 1; packageId = 'Notice.Curated'; packageVersion = '1.0.0'
+            packageSha512 = (Get-FileHash $archive -Algorithm SHA512).Hash.ToLowerInvariant()
+            noticeFile = $noticeName
+            noticeSha256 = (Get-FileHash $notice -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        if ($urlOnly) {
+            $provenance.licenseUrl = 'https://example.test/SDK-LICENSE.rtf'
+            $provenance.noticeSourceUrl = $provenance.licenseUrl
+            $provenance.copyright = 'Copyright fixture'
+        } else {
+            $provenance.licenseExpression = 'BSD-2-Clause'
+            $provenance.repositoryUrl = 'https://github.com/example/notice'
+            $provenance.repositoryCommit = $commit
+            $provenance.noticeSourceUrl = "https://github.com/example/notice/blob/$commit/license.txt"
+        }
+        $expectedNotice = [Convert]::ToBase64String([IO.File]::ReadAllBytes($notice))
+        switch ($case) {
+            'archive' { Add-Content -LiteralPath $archive 'changed' }
+            'metadata' { Set-Content -LiteralPath $nuspec ($metadata.Replace('BSD-2-Clause', 'MIT')) }
+            'notice' { Add-Content -LiteralPath $notice 'changed' }
+            'version' { $provenance.packageVersion = '1.0.1' }
+            'url-metadata' { Set-Content -LiteralPath $nuspec ($metadata.Replace('SDK-LICENSE.rtf', 'OTHER-LICENSE.rtf')) }
+            'url-source' { $provenance.noticeSourceUrl = 'https://example.test/OTHER-LICENSE.rtf' }
+            'url-copyright' { $provenance.copyright = 'Different copyright' }
+            'url-expression' { Set-Content -LiteralPath $nuspec ($metadata.Replace('<licenseUrl>', '<license type="expression">MIT</license><licenseUrl>')) }
+        }
+        $provenance | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $provenancePath
+        if ($case -eq 'unreviewed') { Remove-Item -LiteralPath $provenancePath }
+        $failure = $null
+        try { New-AppNotices $repositoryRoot $publish '0.1.600' 'win-x64' $commit $packageRoot }
+        catch { $failure = $_.Exception.Message }
+        if ($case -in 'valid', 'url-valid') {
+            Assert ($null -eq $failure) "reviewed upstream notice refused: $failure"
+            $manifest = Get-AppNotices $publish '0.1.600' 'win-x64'
+            $bundled = Join-Path $publish 'ThirdPartyNotices' 'packages' 'Notice.Curated' '1.0.0'
+            Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $bundled $noticeName))) -ceq $expectedNotice) 'upstream notice bytes changed'
+            Assert ((Get-FileHash (Join-Path $bundled 'provenance.json')).Hash -ceq (Get-FileHash $provenancePath).Hash) 'upstream provenance bytes changed'
+            Assert ($manifest.packages[0].files.Count -eq 2) 'upstream notice or provenance omitted from the hashed inventory'
+            if ($urlOnly) {
+                Assert ($manifest.packages[0].licenseUrl -ceq $provenance.licenseUrl) 'package-declared licence URL lost'
+                Assert (-not $manifest.packages[0].licenseType -and -not $manifest.packages[0].licenseValue) 'URL-only terms were relabelled as a declared expression or file'
+            }
+        } else {
+            $expected = switch ($case) {
+                'archive' { '*upstream notice package hash mismatch*' }
+                'metadata' { '*upstream notice provenance does not identify*' }
+                'notice' { '*upstream notice hash mismatch*' }
+                'version' { '*upstream notice provenance does not identify*' }
+                'unreviewed' { '*has no restored notice files*' }
+                { $_ -in 'url-metadata', 'url-source', 'url-copyright', 'url-expression' } { '*upstream notice provenance does not identify*' }
+            }
+            Assert ($failure -like $expected) "wrong or missing upstream refusal for $case`: $failure"
+        }
+    }
+}
+
+Check 'SBOM licences preserve custom terms and existing fields without guessing unrelated licences' {
+    Reset
+    New-PpPublished
+    . (Join-Path $PSScriptRoot 'app-notices.ps1')
+    $sbom = Join-Path $scratch 'sbom.json'
+    @{ bomFormat = 'CycloneDX'; components = @(
+            @{ name = 'Notice.Expression'; version = '1.0.0'; purl = 'pkg:nuget/Notice.Expression@1.0.0' }
+            @{ name = 'Notice.File'; version = '1.0.0' }
+            @{ name = 'Notice.Expression'; version = '1.0.0'; licenses = @(@{ expression = 'BSD-2-Clause' }) }
+            @{ name = 'Unknown'; version = '1.0.0' }
+            @{ name = 'Notice.Expression'; version = '1.0.0'; purl = 'pkg:npm/Notice.Expression@1.0.0' }
+            @{ name = 'AgentBridge.App'; version = '0.1.600' }
+        ) } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $sbom
+    Add-AppSbomLicences (Join-Path $scratch 'publish') '0.1.600' 'win-x64' $sbom
+    $components = (Get-Content $sbom -Raw | ConvertFrom-Json -AsHashtable).components
+    Assert ($components[0].licenses[0].expression -ceq 'MIT') 'declared expression lost'
+    $text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($components[1].licenses[0].license.text.content))
+    Assert ($text.Contains('Verbatim notice fixture for Notice.File')) 'custom licence text lost'
+    Assert ($components[2].licenses[0].expression -ceq 'BSD-2-Clause') 'existing licence overwritten'
+    Assert (-not $components[3].ContainsKey('licenses') -and -not $components[4].ContainsKey('licenses')) 'unrelated licences guessed'
+    Assert ($components[5].licenses[0].license.text.content -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $scratch 'publish' 'LICENSE.txt')))) 'project licence text missing'
+}
+
+Check 'SBOM file licences accept Windows casing and normalized relative paths without changing their bytes' {
+    foreach ($declared in 'LEGAL/TERMS.TXT', './legal/terms.txt') {
+        Reset
+        New-PpPublished
+        . (Join-Path $PSScriptRoot 'app-notices.ps1')
+        $publish = Join-Path $scratch 'publish'
+        $manifestPath = Join-Path $publish 'ThirdPartyNotices' 'manifest.json'
+        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json -AsHashtable
+        $package = @($manifest.packages | Where-Object { $_.id -ceq 'Notice.File' })[0]
+        $package.licenseValue = $declared
+        $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath
+        $sbom = Join-Path $scratch 'sbom.json'
+        @{ bomFormat = 'CycloneDX'; components = @(
+                @{ name = 'Notice.File'; version = '1.0.0'; purl = 'pkg:nuget/Notice.File@1.0.0' }
+            ) } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $sbom
+        Add-AppSbomLicences $publish '0.1.600' 'win-x64' $sbom
+        $content = (Get-Content $sbom -Raw | ConvertFrom-Json -AsHashtable).components[0].licenses[0].license.text.content
+        $path = Join-Path $publish 'ThirdPartyNotices' 'packages' 'Notice.File' '1.0.0' 'legal' 'terms.txt'
+        Assert ($content -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))) "declared licence bytes changed: $declared"
+    }
+}
+
+Check 'Distribution evidence checks portable, full and installed notices against their actual hashes' {
+    Reset
+    New-PpPublished
+    . (Join-Path $PSScriptRoot 'app-channels.ps1')
+    . (Join-Path $PSScriptRoot 'app-notices.ps1')
+    $publish = Join-Path $scratch 'publish'
+    $releases = Join-Path $scratch 'releases'
+    New-Item -ItemType Directory -Path $releases | Out-Null
+    foreach ($kind in 'Portable', 'Full') {
+        $stage = Join-Path $scratch "notices-$kind"
+        $inner = if ($kind -eq 'Portable') { Join-Path $stage 'current' } else { Join-Path $stage 'lib' 'app' }
+        New-Item -ItemType Directory -Force (Split-Path $inner) | Out-Null
+        Copy-Item -LiteralPath $publish -Destination $inner -Recurse
+        [IO.Compression.ZipFile]::CreateFromDirectory($stage, (Join-Path $releases (Get-AppAssetName 'win' $kind '0.1.600')))
+    }
+    $setup = Join-Path $releases (Get-AppAssetName 'win' 'Installer' '0.1.600')
+    New-PpExe $setup 'x64'
+    $installed = Join-Path $scratch 'installed'
+    Copy-Item -LiteralPath $publish -Destination $installed -Recurse
+    $out = Join-Path $scratch 'distribution-evidence.json'
+    Write-AppDistributionEvidence $publish $releases '0.1.600' 'win-x64' $installed $out
+    $evidence = Get-Content $out -Raw | ConvertFrom-Json -AsHashtable
+    Assert ($evidence.archives.Count -eq 2 -and $evidence.installedFiles.Count -gt 3) 'file inventories missing'
+    Assert ($evidence.installer.sha256 -ceq (Get-FileHash $setup).Hash.ToLowerInvariant()) 'installer hash is not the inspected file'
+    $portable = Join-Path $releases (Get-AppAssetName 'win' 'Portable' '0.1.600')
+    $zip = [IO.Compression.ZipFile]::Open($portable, [IO.Compression.ZipArchiveMode]::Update)
+    try { $zip.GetEntry('current/LICENSE.txt').Delete() } finally { $zip.Dispose() }
+    $threw = $false
+    try { Write-AppDistributionEvidence $publish $releases '0.1.600' 'win-x64' $installed $out }
+    catch { $threw = $_.Exception.Message -like '*missing or duplicate notice: LICENSE.txt*' }
+    Assert $threw 'a portable missing its project licence passed'
+    Add-Content -LiteralPath (Join-Path $installed 'SOURCE.txt') 'changed'
+    $threw = $false
+    try { Write-AppDistributionEvidence $publish $releases '0.1.600' 'win-x64' $installed $out }
+    catch { $threw = $_.Exception.Message -like '*distribution notice hash mismatch: SOURCE.txt*' }
+    Assert $threw 'an installed copy with changed source material passed'
+    Assert ($global:PpCalls.Count -eq 0) 'notice evidence made a GitHub or vpk call'
+}
+
 Check 'A pack-only signing pack signs the folder already published, for either architecture, publishing nothing' {
     foreach ($runtime in 'win-x64', 'win-arm64') {
         Reset
@@ -1353,5 +1597,7 @@ Check 'The Artifact Signing metadata names the account and profile, the Azure CL
 if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 if (Test-Path $fixtures) { Remove-Item $fixtures -Recurse -Force }
 Remove-Item Env:GH_TOKEN
+if ($null -eq $originalNugetPackages) { Remove-Item Env:NUGET_PACKAGES }
+else { $env:NUGET_PACKAGES = $originalNugetPackages }
 if ($failures) { Write-Output "$failures failed"; exit 1 }
 Write-Output 'all passed'

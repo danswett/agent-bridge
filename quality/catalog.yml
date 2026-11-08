@@ -50,6 +50,7 @@ global_triggers:
   - AgentBridge.slnx
   - nuget.config
   - global.json
+  - .gitattributes
   - '**/Directory.Build.*'
   - '**/Directory.Packages.props'
   - .config/dotnet-tools.json       # coverage tools (#363)
