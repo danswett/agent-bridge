@@ -1,23 +1,25 @@
 # Beta feedback custody
 
-**Draft, not approved or operational.** Real-report decryption remains off until
-person-controlled setup approval, Engineering and Compliance review, and
-Quality's synthetic proof are complete. Requirements below are not evidence of
-deployed controls.
+**Draft, not cleared for real reports or operational.** Product reported owner
+approval of the Azure build and storage retention configuration. Build and test
+with synthetic data only. Real-report decryption remains off until Engineering
+and Compliance review, original-upload-time removal and deletion procedures,
+and Quality's synthetic proof are complete. Requirements below are not evidence
+of deployed controls.
 Feedback Inbox owns this document; SRE supplies the infrastructure and access
 sections. This is the single custody document for [#740](https://github.com/danswett/agent-bridge/issues/740).
 
 ## Hosting and security boundary
 
-**SRE: actual configuration and evidence pending.** The owner selected the plan
-for an isolated Azure worker with managed identity. The VM3 certificate remains
-a staging test identity and must not be used for production. The selection does
-not authorize creating resources or granting access. SRE must provide cost,
-region and exact permissions for separate
-person-controlled setup approval. Prove that the supervisor cannot retrieve worker
-secrets, debug or modify the worker, or redirect plaintext. Record the approved
-host, identity, administrative access, region, review date and evidence without
-publishing credentials.
+**SRE: actual configuration and evidence pending.** Product reported approval
+of SRE's isolated Azure worker plan: West US 2, resource group
+`rg-agent-bridge-feedback`, a dedicated Container Apps environment and a small
+scheduled job with no public inbound access. Estimated cost is $3 to $7 per
+month, not a billed amount. The worker uses managed identity; the VM3
+certificate remains staging-only and must not be used for production. Prove
+that the supervisor cannot retrieve worker secrets, debug or modify the worker,
+or redirect plaintext. Record actual deployment, administrative access, review
+date and evidence without publishing credentials.
 
 ## Key custody
 
@@ -29,25 +31,30 @@ the supervisor, relay and testers may not. Separate staging and production key
 material and key IDs. Hold plaintext keys only in worker memory, never on disk
 in plaintext or in chat, logs or session history.
 
-**Pending:** location, ownership, key IDs, public-key distribution, rotation,
-old-key recovery window covering unprocessed retained uploads, recovery drill,
-revocation and compromise response. Do not publish private-key values. Managed
-identity is not the feedback decryption key.
+The approved plan uses a new dedicated Key Vault for the decryption and GitHub
+App keys, with soft delete, purge protection and read audit; deployment and
+effective isolation remain unverified. **Pending:** ownership, key IDs,
+public-key distribution, rotation, old-key recovery window covering unprocessed
+retained uploads, recovery drill, revocation and compromise response. Do not
+publish private-key values. Managed identity is not the feedback decryption key.
 
 ## Standing access and audit
 
 **SRE: actual assignments, audit and evidence pending.** The worker's managed
-identity needs container-scoped list/read only: no blob write, delete or
-account-wide access. Separate staging and production resources and access.
-Record the identities, provider regions, role scopes, audit, access review
-and one-step revocation.
+identity needs Storage Blob Data Reader on the production feedback container
+only, Key Vault Secrets User for the two secrets in the dedicated vault, and
+container-registry pull rights. It must not have blob write, delete or
+account-wide access. Separate staging and production resources and access;
+the relay and supervising agent must not have access to the vault. Verify
+effective permissions and record identities, role scopes, audit, access
+review and one-step revocation.
 
 A separate private-repository-only GitHub App installation token needs Issues
-read/write without repository visibility or administrative permissions. Do not
-reuse the owner's general token. Record token issuance, expiry, rotation, audit
-and revocation without publishing credentials. The owner provisions the app key
-through an approved secret store, never through chat. The person authorizes and
-provisions host setup and permissions.
+read/write and Metadata read without repository visibility or administrative
+permissions. Do not reuse the owner's general token. Record token issuance,
+expiry, rotation, audit and revocation without publishing credentials. The owner
+provisions the app key through an approved secret store, never through chat.
+The person authorizes and provisions host setup and permissions.
 
 ## Plaintext and extra copies
 
@@ -75,21 +82,23 @@ owner, enforcement and deletion verification separately for encrypted uploads
 and immutable hold; private issue bodies and comment chunks; partial writes;
 receipts and failure records; operational and access-audit logs; backups; and
 notifications or exports. A 30-day immutable minimum is not a maximum; a
-day-31 lifecycle rule alone does not prove erasure, and the actual production
-lock state is unverified.
+day-31 lifecycle rule alone does not prove erasure. Product reported owner
+approval for a 30-day production container retention lock and day-31 deletion;
+SRE must verify actual configuration, lock state and deletion behavior.
 
 The owner adopted a maximum of 30 days from the original upload for active
 plaintext, with earlier actionable deletion requests; enforcement is not yet
 implemented. Use the actual original upload timestamp, preserved through
 processing, retries and restores. The current processor uses processing time,
 and its source interface does not provide upload time; both must be corrected
-and verified before real-report processing. Define a private report-reference request route without
-collecting extra identity. Remove all applicable issue chunks and partial
-writes, describe provider residuals and backups honestly, and keep only minimal,
-time-bounded suppression metadata so retries and restores do not recreate
-deleted reports. Closing an issue or destroying the key does not erase filed
-plaintext. Explicitly document immutable-upload limitations and the need for legal
-determination of deletion and provider obligations.
+and verified before real-report processing. Define a private report-reference
+request route without collecting extra identity. Remove all applicable issue
+chunks and partial writes, describe provider residuals and backups honestly,
+and keep only minimal, time-bounded suppression metadata so retries and
+restores do not recreate deleted reports. Closing an issue or destroying the
+key does not erase filed plaintext. Explicitly document immutable-upload
+limitations and the need for legal determination of deletion and provider
+obligations.
 
 ## Logging allow-list
 
@@ -128,12 +137,12 @@ does not prove a successful sweep.
 
 ## Decisions and proof before real reports
 
-The owner selected an isolated Azure worker, a repository-restricted GitHub App
-and the 30-day active-plaintext limit. These choices do not authorize setup:
-SRE must provide cost, region and exact permissions for separate person-controlled
-approval. SRE supplies actual infrastructure, access and retention facts in
-this document. Engineering reviews consistency and hands the document to
-Compliance.
+Product reported owner approval of the specified Azure worker and production
+storage retention configuration. SRE supplies actual infrastructure, access
+and retention facts in this document. Engineering reviews consistency and
+hands the document to Compliance. The approvals do not clear real-report
+processing; Compliance clearance, the original-upload-time plaintext limit and
+the deletion procedure remain prerequisites.
 
 Quality must prove synthetic end-to-end identity and key restrictions,
 private-only writes, privacy-check failure, key outage, malformed report,
