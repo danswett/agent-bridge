@@ -45,7 +45,10 @@ does (#1184).
 
 ## 6. Rolling restart (slice 4)
 
-- Only through #719's between-turns restart; there is no second path.
+- #719's Install between turns (docs/app-windows.md) restarts the app for an update at a gap
+  in agent work; it does not restart sessions. This restart of sessions that still hold an
+  old token is new behaviour specified here and built in slice 4, and it reuses that gap rule
+  rather than a second timing path.
 - The host never types into a waiting question or approval to restart. A session with a
   waiting question or approval is skipped until it is answered (the #954 ledger), idle
   sessions go first and coordinators last.
