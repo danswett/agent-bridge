@@ -501,7 +501,8 @@ into one folder with one version. An app update is a host update, so they never 
     device keeps its own rule in either mode (the host idle for two minutes). Changing the setting takes
     effect at once (the app looks again). Setting it from the phone is #801's.
   * **Update now, from another device** (#1159; design in
-    [v1-update.md](protocol/v1-update.md#update-now-1159), its host half built, the app's not yet): the
+    [v1-update.md](protocol/v1-update.md#update-now-1159); the host's and this app's halves built,
+    the clients' buttons not yet): the
     person's phone, or this app on another machine, asks for the release ready here to go now,
     accepting about a minute of downtime. The app then skips its two-minute wait, the backstop
     and its own "Restart to update now?" dialog (the phone's confirmation stands in), but nothing
@@ -513,7 +514,10 @@ into one folder with one version. An app update is a host update, so they never 
     #1161), within the press's 15 minutes from its signature; after that the press is dropped and
     the release stays ready. A press signed on that device within two minutes, `permissions.remoteManage` on, and
     one restart in six hours of its own, then the two in six hours it shares with a remote restart
-    (owner, #1161).
+    (owner, #1161). While it waits the devices see why as a code (`waitingCode`: a turn running, a
+    question waiting, the sessions unknown, or a Codex usage check, held at most 11 minutes), and
+    how it ended as one too (`last.code`), which they word themselves; the app's log names the
+    device that pressed it and what it went over.
   * **Ready:** a banner over every page, "Version *v* is ready. Restart to update." with
     **Restart to update** (an `InfoBar` with no close button, like the other app banners, so it
     stays while the release waits), and the same line and button in Settings. No toast: toasts

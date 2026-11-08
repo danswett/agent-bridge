@@ -1,0 +1,58 @@
+{
+  "about": "An agent session opening its local pipe connection as itself (Windows, local pipe only).",
+  "spec": "local-pipe.md#agent-principals-agenthello",
+  "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
+  "contexts": {},
+  "records": {
+    "AgentHelloRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "a-token",
+          "json": {
+            "token": "abat1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-token",
+          "json": {},
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-token",
+          "json": {
+            "token": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "AgentHelloResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-reader",
+          "json": {
+            "principal": "agent:machine1/session-1",
+            "scope": "read"
+          }
+        },
+        {
+          "name": "wrong-type-principal",
+          "json": {
+            "principal": 42,
+            "scope": "read"
+          },
+          "reads": {
+            "principal": "",
+            "scope": "read"
+          }
+        }
+      ],
+      "refused": []
+    }
+  },
+  "knownDifferences": []
+}

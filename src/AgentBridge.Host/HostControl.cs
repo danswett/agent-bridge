@@ -255,6 +255,9 @@ public sealed class HostControl
                 return new ChannelReply(new { restarting = true }, _ => { options.Restart(); return Task.CompletedTask; });
             case HostOps.UpdateReport when options.Updates is not null:
                 return options.Updates.Report(channel, Read<UpdateReport>(data) ?? throw new ArgumentException($"{HostOps.UpdateReport} needs the updater's state"));
+            case HostOps.UpdateDepart when options.Updates is not null:
+                return await options.Updates.DepartForAppAsync(Read<UpdateDepartRequest>(data)?.Request
+                    ?? throw new ArgumentException($"{HostOps.UpdateDepart} needs the press's request"));
             case HostOps.ProbeHold:
                 return options.HoldProbes() is { } why ? new ProbeHoldResult(true, why) : new ProbeHoldResult(false);
             default:

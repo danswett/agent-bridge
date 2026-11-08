@@ -146,7 +146,31 @@ ancestry is read only in part, is anything else of the user's. An agent that sta
 detached from itself gets past this as it could past the app's check; restarting is the only
 thing it gains.
 
-## Management ops
+## Agent principals: `agent.hello`
+
+Windows only, pipe only; other hosts refuse it. An agent session holds a credential the host
+issued for it (`abat1_` and 32 random bytes in base64url, 49 characters). The host stores only
+the token's SHA-256 with what it is bound to (session, root process id and start time, scope,
+expiry), in `agent-credentials.json` in the profile folder, so credentials survive a host
+restart. A file that exists but can't be read stops the host issuing or accepting any: unreadable
+is not empty.
+
+```json
+{ "id": 1, "op": "agent.hello", "data": { "token": "abat1_..." } }
+```
+
+It is accepted only when the token matches a live credential (compared in constant time), the
+caller's ancestry was read in full, and the credential's root process, with the same start time,
+is among the caller's ancestors. Anything else is refused, and a token presented from outside its
+session is logged as `credential presented from outside its session`. `AGENT_BRIDGE_SESSION` is
+never proof. The reply is `{ "principal": "agent:<machine>/<session>", "scope": "read" }`.
+
+This is a safety rail, not a boundary: a same-user process that spoofs its parent or joins the
+session's Job object gets through (design/agent-principals.md §3.4). A new credential for a
+session replaces its old one, so a resumed session's old token is dead. This slice only proves who
+holds a credential; what each scope may do, and minting at launch, follow in later slices. Until
+then an agent connection is refused the acting ops exactly as before.
+
 
 Local only: a relay channel answers each of these with `unknown op`. All but `host.status`
 and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
@@ -171,6 +195,7 @@ and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
 | `host.relay.account` | `{ "device"?: device id }`: the app's own relay device id, so the host never accepts a management command from the app beside it (#801); an older app sends nothing | `{ "relay", "token", "accountId", "login" }`: the account this host signed in to, and the relay that issued it, so the app can reach the account's other machines through the relay as a device of its own (kind `app`, with its own key) without a second sign-in. `token` is a bearer credential for that relay only. Fails with `this host is not signed in to the relay` before a sign-in, and on a `--local-only` host |
 | `manage.*` | any | Refused to every caller, the app included: `managing a machine from another device goes through the relay; on this machine, use the app's Settings`. Managing a machine from another device ([v1-sessions.md](v1-sessions.md#managing-a-machine)) is through the relay only, so the #67 guard on `host.restart` and `host.stop` gains no way around it |
 | `host.update.report` | `{ "state": UpdateState, "taken"?: [request], "carriesUpdateNow"?: bool }`: what the app's updater is doing, the presses in `updateAsks` it has taken on, and whether it can carry out an Update now (#1159; absent from an older app, whose machine then offers none, `updateNowWhy` `old-app`) ([v1-update.md](v1-update.md)) | `{ "ok": true }`. The host serves the state to the account's other devices (`update.*`) until the app's connection closes, then says the app is not running, and drops the presses taken from `updateAsks`. `canUpdateNow`, `updateNowWhy`, `updateNowAt` and `busy` are the host's own, and dropped from what the app reports. Refused to anything but the app: `only the Agent Bridge app beside this host reports its updates, and takes other devices' presses of Install` |
+| `host.update.depart` | `{ "request": UUID }`: an Update now's press (#1159) the app is carrying, its download checked and its probe hold over | `{ "outcome": "committed" \| "waiting" \| "refused", "code"?, "transition"? }` ([v1-update.md](v1-update.md#going-the-lease-and-the-departure), step 3). The host takes #805's quiet lease as purpose `Update`, compares what is busy with what the person confirmed, announces and commits: `committed` (the host refuses new deliveries until it exits; the app then stops it with `host.stop` and installs), `waiting` (`code` is `turn-running`, `question-waiting` or `unknown`; the app keeps the download for the next quiet moment) or `refused` (`code` says why; the host serves on). An unknown outcome reads as `refused`. A request that isn't a UUID is an error. This is #870's departure step, wired minimally until that lane lands it. Refused to anything but the app, as `host.update.report` is; an older host answers `unknown op`, and the press ends refused |
 
 `HostStatus`:
 

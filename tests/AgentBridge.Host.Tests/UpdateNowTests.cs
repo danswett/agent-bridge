@@ -223,6 +223,24 @@ public sealed class UpdateNowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_apps_departure_op_answers_committed_with_the_departure_and_a_press_already_gone_refused_changed()
+    {
+        var (phone, ch) = await OpenAsync();
+        var press = Press(phone);
+        Assert.Equal(UpdateAck.Accepted, (await PressAsync(ch, press)).Outcome);
+
+        var left = await updates.DepartForAppAsync(RequestOf(press));
+
+        Assert.Equal(UpdateDepartOutcome.Committed, left.Outcome);
+        Assert.False(string.IsNullOrEmpty(left.Transition));
+        Assert.Equal(new UpdateDepartResult(UpdateDepartOutcome.Refused, ManageReason.Changed), await updates.DepartForAppAsync(RequestOf(press)));
+        // The app's host.stop, which follows, still takes the host's stop fence: the departure's
+        // own fence doesn't keep the host from stopping.
+        using var stop = await gate.PrepareStopAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(stop);
+    }
+
+    [Fact]
     public async Task Update_now_with_a_turn_running_and_no_accept_is_answered_confirm_and_asks_the_app_nothing()
     {
         sessions.Set(S(Id(1), SessionStatus.Working));

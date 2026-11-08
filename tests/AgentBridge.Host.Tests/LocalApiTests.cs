@@ -984,6 +984,25 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(state, updates.State());
     }
 
+    [Fact]
+    public async Task Only_the_app_asks_the_host_to_leave_for_an_Update_now_and_the_hosts_departure_answers_it()
+    {
+        var app = await ConnectAsync();
+        // This host composes no Update now: its departure answers refused, unavailable.
+        var left = await app.CallAsync<UpdateDepartResult>(HostOps.UpdateDepart, new UpdateDepartRequest(Guid.NewGuid().ToString()));
+        Assert.Equal(new UpdateDepartResult(UpdateDepartOutcome.Refused, ManageReason.Unavailable), left);
+        var malformed = await Assert.ThrowsAsync<HostErrorException>(() => app.CallAsync(HostOps.UpdateDepart, new UpdateDepartRequest("not-a-uuid")));
+        Assert.Contains("needs the press's request", malformed.Message, StringComparison.Ordinal);
+
+        foreach (var kind in new[] { CallerKind.Agent, CallerKind.Other })
+        {
+            callers.Current = new FixedCallerGuard(new Caller(kind, "pid 4242"));
+            var other = await ConnectAsync();
+            var refused = await Assert.ThrowsAsync<HostErrorException>(() => other.CallAsync(HostOps.UpdateDepart, new UpdateDepartRequest(Guid.NewGuid().ToString())));
+            Assert.Equal($"refused: this connection is from pid 4242; only the {Product.App} beside this host reports its updates, and takes other devices' presses of Install", refused.Message);
+        }
+    }
+
     sealed class Callers : ICallerGuard
     {
         public ICallerGuard Current { get; set; } = new FixedCallerGuard(new Caller(CallerKind.App, $"the {Product.App}"));

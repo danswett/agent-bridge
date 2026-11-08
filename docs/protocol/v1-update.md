@@ -99,8 +99,8 @@ review, Low). A client sends it only to a machine whose state says `canUpdateNow
 | `updateNowWhy` | string? | **#1159, the host's.** With `available` set and `canUpdateNow` false: why, as a code (`disabled`, `read-only`, `old-app`, `unavailable`, `sign-in`, `busy`, `restart-cap`), which a client words itself ([What the person sees](#what-the-person-sees)). A read-only machine serves no `update.*` at all; `read-only` is for a state a client already holds when the machine turns read-only, or one served in the moment before it notices |
 | `updateNowAt` | time? | **#1159, the host's.** With `updateNowWhy` `restart-cap`: when the first slot frees, of its own allowance or the shared cap |
 | `busy` | `UpdateBusy`? | **#1159, the host's.** Only with `canUpdateNow`: what Update now would go over, from the host's own session snapshot ([What the phone sees](#what-the-phone-sees-before-the-press)); sent again when a session changes, at most every 2 s |
-| `requestNow` | bool | **#1159, the app's; not sent yet (slice 2).** The press in `request` is an Update now |
-| `waitingCode` | string? | **#1159, the app's; not sent yet (slice 2).** With phase `waiting`: why, as a code a client words itself (`turn-running`, `question-waiting`, `unknown`, `usage-check`), never showing `waiting`'s text ([The confirmation](#the-confirmation)) |
+| `requestNow` | bool | **#1159, the app's.** The press in `request` is an Update now |
+| `waitingCode` | string? | **#1159, the app's.** With phase `waiting`: why, as a code a client words itself (`turn-running`, `question-waiting`, `unknown`, `usage-check`), never showing `waiting`'s text ([The confirmation](#the-confirmation)) |
 
 An unknown `phase` reads as `idle`. Text fields are cut to 64 bytes (versions), 512 (reasons)
 and 4 KiB (notes).
@@ -113,7 +113,7 @@ and 4 KiB (notes).
 | `from`, `to` | string? | The releases |
 | `reason` | string? | |
 | `request` | string? | The press it answers; absent for one the person started at the machine (Restart to update), or an automatic one before #516 |
-| `code` | string? | **#1159, the app's; not sent yet (slice 2).** For an Update now, as in `UpdateCommandResult` |
+| `code` | string? | **#1159, the app's.** For an Update now, as in `UpdateCommandResult` |
 | `at` | time | |
 
 An install restarts the app and host, so its outcome is reported by the new version: the app
@@ -148,12 +148,13 @@ host, and an app that comes to it later (from a status it was slow to read) refu
 **Where it stands.** Slice 1, the host and the protocol, is built: the press, its signed-command
 gate (shared with `manage.*`), the durable record of presses (`update-now.json`), `busy`,
 `canUpdateNow` and `updateNowWhy`, the confirm outcome, the restart allowance, the `Update`
-purpose's conditions and the host's half of the departure (`UpdateService.DepartAsync`). Not yet:
-the app-only pipe op that calls the departure (proposed `host.update.depart`, #870's lane, which
-owns that step's contract; until it lands the host's half is reached only by its tests), the
-app's half (slice 2: it takes no `now` ask, reports no `requestNow`, `waitingCode` or `last.code`,
-and says nothing of `carriesUpdateNow`, so every host answers `updateNowWhy` `old-app` until it
-does), and the clients (slices 3 and 4). Everything below is the design all slices follow.
+purpose's conditions and the host's half of the departure (`UpdateService.DepartAsync`). Slice 2,
+the app's half, is built: `AutoUpdater` takes a `now` ask, says it carries one
+(`carriesUpdateNow`), reports `requestNow`, `waitingCode` and `last.code`, and leaves through
+`host.update.depart`, the app-only pipe op that calls the departure. That op is the step #870's
+lane owns: until #870 lands it, it is wired minimally here (`HostControl`, `UpdateService.DepartForAppAsync`)
+to the contract below (step 3), for SRE to review with #870 (settled decision 1). Not yet: the
+clients (slices 3 and 4). Everything below is the design all slices follow.
 
 **The bound on the press's size.** A signed command's `body` is at most 2048 base64url
 characters for every action ([v1-transfer.md](v1-transfer.md#the-signed-command)) but
@@ -380,7 +381,7 @@ waiting. A quiet machine updates on one press.
   ready, offered as before (Install, Update now, or Restart to update at the machine). So a
   forgotten press can't restart the bridge hours later, unwatched.
 
-`UpdateState` gains, for this, **`waitingCode`** (#1159, not built): with phase `waiting`, why,
+`UpdateState` gains, for this, **`waitingCode`** (#1159, built in slice 2): with phase `waiting`, why,
 as a code a client words itself: `turn-running`, `question-waiting`, `unknown` or `usage-check`. The host's
 `waiting` text stays for the log and older clients, and is never shown by a client that knows
 the code.
@@ -484,7 +485,7 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
    press](#the-confirmation)), never going on sessions the confirmation didn't cover. Throughout,
    the press lives at most **15 minutes from `issuedAt`**; at that moment, wherever it is, it is
    dropped with `last` code `expired`, before any lease, cap slot or sign-in is touched.
-3. The app asks the host to leave: one app-only pipe op (proposed `host.update.depart`,
+3. The app asks the host to leave: one app-only pipe op (`host.update.depart`,
    `{ "request" }`), the step #870 owns, which #819's installs move to later ([settled decision 1](#settled-decisions)). The
    host takes #805's lease, purpose `Update`, waiting up to 10 s. If an answer, a reply or a stop
    is being typed or delivered, it doesn't get it; it tries again, up to 6 times (about a
@@ -507,8 +508,7 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
    serves on.
 
    **Built (slice 1):** the host's half is `UpdateService.DepartAsync(request)`, answering
-   committed, waiting (with the waiting code) or refused (with the code); the pipe op that calls
-   it is #870's and not wired yet. It acts only on a press this host, or one before it, recorded
+   committed, waiting (with the waiting code) or refused (with the code). It acts only on a press this host, or one before it, recorded
    as accepted and not yet gone ([Replay, durably](#the-press)), its signature verified again,
    else refuses `changed`; and on a release still offered, else `release-changed`. The `Update`
    purpose's conditions are registered once, where the host composes remote management
@@ -518,6 +518,23 @@ app's wait; it adds no lease, fence, idle test, downloader or installer of its o
    conditions join this registration rather than register beside it; the conditions of a purpose
    apply to every departure of it, so one an Update now must not meet (#819's "app running", say,
    where the app is what leaves) needs that lane's decision ([host-lifecycle.md](../host-lifecycle.md)).
+
+   **Built (slice 2):** `host.update.depart` is wired minimally to `DepartAsync` until #870 lands
+   the step (`HostControl`, `UpdateService.DepartForAppAsync`): `{ "request" }` in, `{ "outcome":
+   committed | waiting | refused, "code"?, "transition"? }` out (an unknown outcome reads as
+   refused), the app alone (`LocalApi`), a request that isn't a UUID an error. The app
+   (`AutoUpdater`) asks it once its download is checked and the probe hold is over, and only after
+   checking that the release ready is still `args.release` (else `release-changed`) and that
+   nothing holds the installation's files (#1092's preflight, else `unavailable`), so a departure
+   is never spent on an update that can't finish. Committed, it logs the line naming the device
+   and the counts, stops the host (`host.stop`) and installs, as every install does. Waiting, it
+   keeps the download and goes again at the next quiet moment. Refused, it ends `refused` with
+   the host's code (`expired` if the press's life ended while the host was asked), the release
+   still offered. A host that can't be asked, or doesn't answer within 3 minutes, ends it
+   `refused` `unavailable` with nothing installed; one that committed unseen meanwhile is
+   restarted by `departure-stuck`. The host answers `committed` at once,
+   rather than waiting `LeaveAnyway` itself: the app's `host.stop` that follows lets admitted
+   typing finish (up to 15 s) before it exits.
 4. Committed, the host refuses new deliveries until it exits (`DepartureGuard`), answers the app
    `committed`, and waits up to 3 s (`ManageService.LeaveAnyway`) for its replies to be sent.
    The app stops the host and hands the checked copy to `Update.exe`, as today. If the host has
@@ -802,7 +819,8 @@ owns what the host keeps on disk; slice 0 lands only with all of Trust's conditi
    "an Update now still held by a usage check after 11 minutes ends refused usage-check"; "an
    Update now whose 15 minutes run out during the usage-check wait ends expired, not
    usage-check"; "a new press during the usage-check hold replaces the first without restarting
-   the 11 minutes".
+   the 11 minutes". **Built**, with `host.update.depart` wired minimally until #870 lands it
+   ([Going](#going-the-lease-and-the-departure), step 3).
 3. **PWA.** Update now beside Install, or the row's reason when it can't be pressed, the
    confirmation, signing the press with `accept`, the `confirm` outcome shown as the
    confirmation again, the lines while it goes, the 90 s "Restarting to update…" across the
@@ -898,7 +916,9 @@ The pipe carries this ([local-pipe.md](local-pipe.md)): the app sends `host.upda
 its `UpdateState` and the requests it has taken, on connecting and on every change, and follows
 the host's status (`host.subscribe`), whose `updateAsks` lists the presses waiting for it. Only
 the app may send the report. A report from an older app, or none, leaves the devices told the
-app is not running.
+app is not running. For an Update now the app also sends `host.update.depart` with the press's
+`request` once it is ready to go ([Going](#going-the-lease-and-the-departure), step 3); only the
+app may send that either.
 
 ## Clients
 
