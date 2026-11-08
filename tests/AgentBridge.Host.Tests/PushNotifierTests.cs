@@ -760,6 +760,130 @@ public sealed class PushNotifierTests : IDisposable
         Assert.Single(next.Sent);
     }
 
+    // In use means input less than two minutes before the push goes (decided at +3 s), not before it was made.
+    [Theory]
+    [InlineData(119, false)]
+    [InlineData(120, true)]
+    [InlineData(121, true)]
+    public async Task A_finished_turn_is_held_back_with_input_119_seconds_before_it_goes_and_sent_with_input_120_or_121(int secondsBeforeSend, bool sent)
+    {
+        Start();
+        Subscribe(Phone);
+        notifier.Presences = () => [new DevicePresence(Phone, true, null, null, T.AddSeconds(3 - secondsBeforeSend))];
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(sent ? 1 : 0, sender.Sent.Count);
+    }
+
+    // As Sees: the finished notice takes the place of the question notice still on the device, which
+    // held back would stay there, answered.
+    [Fact]
+    public async Task A_finished_turn_still_replaces_a_question_notice_on_the_device_in_use()
+    {
+        Start();
+        Subscribe(Phone);
+        var inUse = false;
+        notifier.Presences = () => inUse ? new[] { Said(Phone, open: "s1") } : [];
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+
+        inUse = true;
+        source.Upsert(S("s1", SessionStatus.Working));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "All done."));
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(["question", "finished"], Received().Select(r => Kind(r.Notification)));
+    }
+
+    // The reminder is the question's own notice again: on the card's screen it is as read.
+    [Fact]
+    public async Task A_reminder_of_a_question_whose_card_a_device_in_use_shows_is_not_sent()
+    {
+        Start();
+        Subscribe(Phone);
+        var showing = false;
+        notifier.Presences = () => showing ? new[] { Said(Phone, open: "s1", question: "q1") } : [];
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Single(sender.Sent);
+
+        showing = true;
+        await After(TimeSpan.FromMinutes(15));
+        await After(TimeSpan.FromSeconds(1));
+
+        Assert.Single(sender.Sent);
+        Assert.Contains(logs, l => l.Contains("push question session=s1 device=aaaaaaaa", StringComparison.Ordinal) && l.Contains("dropped=card-on-screen", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_question_whose_card_is_open_on_a_device_out_of_sight_still_goes_to_every_device()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        notifier.Presences = () => [Said(Phone, visible: false, open: "s1", question: "q1")];
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Equal([Phone, Laptop], Received().Select(r => r.Device).Order());
+    }
+
+    // One channel in use is enough, whatever the device's other channels and the other devices say.
+    [Fact]
+    public async Task A_device_in_use_on_one_channel_holds_back_a_finished_turn_though_its_other_channel_is_hidden_and_another_device_is_stale()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        notifier.Presences = () => [Said(Phone, visible: false), Said(Laptop, inputSecondsAgo: 200), Said(Phone, open: "s2")];
+        source.Upsert(S("s1", SessionStatus.Working, turns: 0));
+        source.Upsert(S("s1", SessionStatus.Idle, response: "Done."));
+
+        await After(TimeSpan.FromSeconds(3));
+
+        Assert.Empty(sender.Sent);
+        Assert.Contains("push finished session=s1 device=aaaaaaaa queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=in-use at=+3000ms", logs);
+        Assert.Contains("push finished session=s1 device=bbbbbbbb queued=2026-10-28T04:00:00.000Z decided=+3000ms dropped=in-use-elsewhere by=aaaaaaaa at=+3000ms", logs);
+    }
+
+    // Only finished turns and questions are held back: a resolved replaces what is shown, and the
+    // rest need the person.
+    [Fact]
+    public async Task Restored_sign_in_resolved_and_grouped_notices_still_go_while_a_device_is_in_use()
+    {
+        Start();
+        Subscribe(Phone);
+        Subscribe(Laptop);
+        notifier.Presences = () => [Said(Phone, open: "s9")];
+
+        notifier.NotifyRestore(new RestoreNotice { At = T, Cause = RestoreCause.Reboot, Why = RestoreWhy.Pending, Restored = 1 });
+        source.Upsert(S("s5", SessionStatus.Idle, response: "Done.", turns: 2) with { Attention = SignedOut with { Account = "octo" } });
+        await After(TimeSpan.Zero);
+
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        notifier.Answered(Laptop, "s1", "q1");
+        source.Upsert(S("s1", SessionStatus.Working));
+        await After(TimeSpan.FromSeconds(2));
+
+        await After(TimeSpan.FromHours(1));
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+        source.Upsert(S("s3", SessionStatus.Waiting, question: Q("q3")));
+        await After(TimeSpan.FromSeconds(10));
+
+        var toPhone = Received().Where(r => r.Device == Phone).Select(r => Kind(r.Notification)).ToList();
+        Assert.Contains("restored", toPhone);
+        Assert.Contains("signIn", toPhone);
+        Assert.Contains("resolved", toPhone);
+        Assert.Contains("group", toPhone);
+        Assert.DoesNotContain(logs, l => l.Contains("dropped=in-use", StringComparison.Ordinal) || l.Contains("dropped=card-on-screen", StringComparison.Ordinal));
+    }
+
     static readonly Attention SignedOut = new() { Kind = AttentionKind.SignInNeeded, Since = T, Agent = AgentKind.Copilot, Provider = "github" };
 
     // The pushes about sessions, without the machine's sign-in notices.
