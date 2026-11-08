@@ -91,8 +91,12 @@ internal sealed class AnswerWords
             var read = File.ReadAllBytes(keyFile);
             if (read.Length != KeyBytes)
             {
-                log($"this install's key for the hashes of answers ({KeyName}) is not a key, so no hash is made or used");
-                return Forget();
+                // Not a key, so no hash was ever made with it: a new one takes its place, and every
+                // hash made with an earlier key is unusable, as for a key lost.
+                log($"this install's key for the hashes of answers ({KeyName}) is not a key, so a new one is made");
+                File.Delete(keyFile);
+                MakeKey();
+                if (!IsPrivate(keyFile) || (read = File.ReadAllBytes(keyFile)).Length != KeyBytes) { return Forget(); }
             }
             return key = read;
         }

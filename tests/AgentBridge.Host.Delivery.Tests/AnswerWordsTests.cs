@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Runtime.Versioning;
 using System.Security.Principal;
 using System.Text;
+using System.Text.Json;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
@@ -74,11 +75,13 @@ public sealed class AnswerWordsTests : IDisposable
         {
             var bytes = File.ReadAllBytes(file);
             var text = Encoding.UTF8.GetString(bytes);
+            // As JSON writes it too, which escapes a base64 '+' as \u002B.
             Assert.DoesNotContain(Convert.ToBase64String(plain), text);
+            Assert.DoesNotContain(JsonSerializer.Serialize(Convert.ToBase64String(plain))[1..^1], text);
             Assert.DoesNotContain(Convert.ToHexString(plain), text, StringComparison.OrdinalIgnoreCase);
             Assert.False(bytes.AsSpan().IndexOf(plain) >= 0);
         }
-        Assert.Contains(Convert.ToBase64String(ledger.Keyed(plain)!), File.ReadAllText(ledgerPath));
+        Assert.Contains(JsonSerializer.Serialize(Convert.ToBase64String(ledger.Keyed(plain)!))[1..^1], File.ReadAllText(ledgerPath));
         var keyPath = Path.Combine(Path.GetDirectoryName(wordsPath)!, AnswerWords.KeyName);
         AssertPrivate(Path.GetDirectoryName(wordsPath)!, keyPath);
         Assert.Equal(ledger.Keyed(plain), Ledger().Keyed(plain));
@@ -99,6 +102,53 @@ public sealed class AnswerWordsTests : IDisposable
 
         Assert.Null(ledger.FirstFor("s1", "q1"));
         Assert.Contains("already typed", ledger.Claim("k1", Guid.NewGuid(), Admit("yes")));
+        // And it is gone from the file at once, the claim kept.
+        var rewritten = File.ReadAllText(ledgerPath);
+        Assert.DoesNotContain(Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes("yes"))), rewritten);
+        Assert.DoesNotContain("\"Digest\"", rewritten);
+        Assert.Contains(request.ToString(), rewritten);
+    }
+
+    // The rewrite that drops a plain hash can fail: then nothing is typed, every claim is kept, and
+    // the next look tries the rewrite again, so the plain hash goes as soon as the file can be written.
+    [Fact]
+    public void A_plain_hash_that_can_t_be_dropped_yet_refuses_every_answer_keeps_the_claim_and_is_dropped_at_the_next_look()
+    {
+        var request = Guid.NewGuid();
+        var plain = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes("yes")));
+        Directory.CreateDirectory(Path.GetDirectoryName(ledgerPath)!);
+        File.WriteAllText(ledgerPath, $$$"""
+            {"Version":1,"Attempts":{"k1":{"At":"2026-11-07T12:00:00+00:00","Request":"{{{request}}}","By":{"Sender":"phone","Session":"s1","Question":"q1"},"Digest":"{{{plain}}}"}},"Outcomes":{}}
+            """);
+        Directory.CreateDirectory(ledgerPath + ".tmp");
+        var ledger = Ledger();
+
+        Assert.Equal(DeliveryReasons.CouldNotDeliver, ledger.Claim("k2", Guid.NewGuid(), Admit("other", "q2")));
+        Assert.Equal(DeliveryReasons.CouldNotDeliver, ledger.Claim("k1", Guid.NewGuid(), Admit("yes")));
+        Assert.True(ledger.HasClaim(request));
+
+        Directory.Delete(ledgerPath + ".tmp");
+
+        Assert.Contains("already typed", ledger.Claim("k1", Guid.NewGuid(), Admit("yes")));
+        Assert.DoesNotContain(plain, File.ReadAllText(ledgerPath));
+        Assert.DoesNotContain("\"Digest\"", File.ReadAllText(ledgerPath));
+        Assert.Contains(request.ToString(), File.ReadAllText(ledgerPath));
+    }
+
+    // A key file that isn't a key (cut short, or written over) was never used for a hash: a new key
+    // takes its place, and answers go on being kept under it.
+    [Fact]
+    public void A_key_file_that_is_not_a_key_is_replaced_by_a_new_one()
+    {
+        Assert.Null(Ledger().Claim("k0", Guid.NewGuid(), Admit("first", "q0")));
+        var keyPath = Path.Combine(Path.GetDirectoryName(wordsPath)!, AnswerWords.KeyName);
+        File.WriteAllBytes(keyPath, [1, 2, 3]);
+
+        var ledger = Ledger();
+
+        Assert.Null(ledger.Claim("k1", Guid.NewGuid(), Admit("second")));
+        Assert.Equal(32, File.ReadAllBytes(keyPath).Length);
+        Assert.NotNull(ledger.FirstFor("s1", "q1"));
     }
 
     // A key lost or replaced can't open the hashes made with it: none is taken for the same answer,

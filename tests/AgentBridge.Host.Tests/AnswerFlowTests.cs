@@ -1227,6 +1227,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
                 var text = System.Text.Encoding.UTF8.GetString(bytes);
                 if (file != words) { Assert.DoesNotContain(Canary, text); }
                 Assert.DoesNotContain(Convert.ToBase64String(plain), text);
+                Assert.DoesNotContain(JsonSerializer.Serialize(Convert.ToBase64String(plain))[1..^1], text);
                 Assert.DoesNotContain(Convert.ToHexString(plain), text, StringComparison.OrdinalIgnoreCase);
                 Assert.True(bytes.AsSpan().IndexOf(plain) < 0);
             }

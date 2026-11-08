@@ -708,7 +708,9 @@ In order, for every answer:
    folder is readable by anyone else, when the key is deleted too), nothing may rely on a hash:
    every answer is `refused` before any key as one the machine can't keep safely (below). A hash
    made with a key since lost or replaced, or a plain one written by an earlier build, is never
-   taken for the same answer, and its entry is nobody's.
+   taken for the same answer, and its entry is nobody's. A plain hash is also dropped from the
+   file when the ledger is first read, every claim kept; until that write succeeds nothing is
+   typed, and each later look tries it again. A key file that isn't a key is replaced by a new one.
 
    While a Copilot form's or Claude answer is `unconfirmed`, the claim also keeps what reading
    it again needs (the agent, transcript path, call or tool-use id and read offset) and a key to

@@ -433,7 +433,7 @@ public sealed class AttemptLedger
         }
         try
         {
-            var (durableAttempts, durableOutcomes) = ReadDurable();
+            var (durableAttempts, durableOutcomes, plain) = ReadDurable();
             if (attempts is null)
             {
                 (attempts, outcomes) = (durableAttempts, durableOutcomes);
@@ -451,6 +451,11 @@ public sealed class AttemptLedger
                 foreach (var (k, v) in durableOutcomes) { outcomes!.TryAdd(k, v); }
             }
             unverified = false;
+            // A plain hash an earlier build wrote (#1184 review): never read, but on disk it is a
+            // guessing target for anyone who can read this file, so the file is written again at
+            // once without it, every claim kept. Until that write succeeds nothing is typed (the
+            // ledger reads as unwritable, every prompt as claimed), and each later look tries again.
+            if (plain && Save() is { } failed) { return failed; }
             return null;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -471,7 +476,8 @@ public sealed class AttemptLedger
         }
     }
 
-    (Dictionary<string, ClaimEntry>, Dictionary<Guid, Receipt>) ReadDurable()
+    // plain: a claim still holds the plain hash (Digest) an earlier build wrote, to be dropped.
+    (Dictionary<string, ClaimEntry>, Dictionary<Guid, Receipt>, bool Plain) ReadDurable()
     {
         try
         {
@@ -490,19 +496,21 @@ public sealed class AttemptLedger
                 {
                     throw new JsonException("unknown or invalid ledger");
                 }
-                return (new(data.Attempts, StringComparer.Ordinal), data.Outcomes);
+                var plain = root.GetProperty(nameof(FileData.Attempts)).EnumerateObject()
+                    .Any(a => a.Value.ValueKind == JsonValueKind.Object && a.Value.TryGetProperty("Digest", out _));
+                return (new(data.Attempts, StringComparer.Ordinal), data.Outcomes, plain);
             }
             else
             {
                 // The old format was a map from prompt key to claim time, with no request id.
                 var old = root.Deserialize<Dictionary<string, DateTimeOffset>>() ?? throw new JsonException("empty ledger");
                 if (old.Any(a => a.Value == default)) { throw new JsonException("invalid claim"); }
-                return (old.ToDictionary(a => a.Key, a => new ClaimEntry(a.Value, null), StringComparer.Ordinal), []);
+                return (old.ToDictionary(a => a.Key, a => new ClaimEntry(a.Value, null), StringComparer.Ordinal), [], false);
             }
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
         {
-            return (new(StringComparer.Ordinal), []);
+            return (new(StringComparer.Ordinal), [], false);
         }
     }
 
