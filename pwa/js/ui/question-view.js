@@ -247,7 +247,9 @@ export function describeAnswer(entry, machineName, { question = null, stalled = 
         const words = answeredWords(question, entry.answer);
         return { key: 'notDelivered', text: NOT_DELIVERED, more: null, tone: 'warn', line: true, speech: `Answer: ${NOT_DELIVERED}`, ...(words ? { words } : {}) };
       }
-      if (outcome === 'refused' && entry.reason) { text = `The machine refused this answer: ${entry.reason}.`; }
+      // The host's own words, as it said them: a sentence of its own already ends with its stop
+      // (the too-tall refusal does, #1213), and gets no second one.
+      if (outcome === 'refused' && entry.reason) { text = `The machine refused this answer: ${entry.reason}${/[.!?]$/.test(entry.reason.trimEnd()) ? '' : '.'}`; }
       // A reason with fixed words of its own, the same in every client (#908).
       if (outcome === 'refused' && AnswerReasons[entry.detail?.code]) { text = NOT_SENT + AnswerReasons[entry.detail.code]; }
       // How far the host knows it got (#467): typed into the prompt, or recorded differently.

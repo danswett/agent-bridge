@@ -148,6 +148,20 @@ test('a closed answer is "No longer waiting" unless it may have gone in or the h
   assert.match(describeAnswer(done('stale'), 'DEV-VM1').text, /^Already answered or gone/);
 });
 
+test('a refusal says the host\'s own words as they came, never "Already answered or gone" (#1213)', () => {
+  const tall = 'This question is taller than the session window, so Slipgates cannot check it. Make the window taller, or answer it at the machine.';
+  const refused = (reason) => ({ state: 'done', outcome: 'refused', reason, detail: { outcome: 'refused' } });
+  const d = describeAnswer(refused(tall), 'DEV-VM1');
+  // The host's sentence already ends with its stop: no second one.
+  assert.equal(d.text, `The machine refused this answer: ${tall}`);
+  assert.deepEqual([d.key, d.tone], ['refused', 'bad']);
+  assert.doesNotMatch(d.text, /Already answered|No longer waiting/);
+  // A reason with no stop of its own gets one.
+  assert.equal(describeAnswer(refused('the session is running elevated'), 'DEV-VM1').text, 'The machine refused this answer: the session is running elevated.');
+  // Once the question has left the list there is nothing to refuse: the neutral closed line.
+  assert.deepEqual([describeClosed(refused(tall), 'DEV-VM1').text, describeClosed(refused(tall), 'DEV-VM1').tone], ['No longer waiting', 'closed']);
+});
+
 test('a stale answer can be given again only when the host cancelled its form, and what was typed is read back as typed', () => {
   assert.equal(answerControls({ state: 'done', outcome: 'stale', detail: { code: 'formReset' } }).again, true);
   assert.equal(answerControls({ state: 'done', outcome: 'stale', detail: {} }).again, false);
