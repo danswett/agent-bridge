@@ -10,7 +10,9 @@ namespace AgentBridge.RelaySmoke;
 // Ends a host's connection to a relay in a chosen way, so the relay's disconnect log line
 // (and the roster an app sees) can be read for each kind of end (#970 slice 1a):
 //   kill       hold, then Environment.FailFast: the process dies with no close frame.
-//   blackhole  connect, then never read again: the relay's pings go unanswered.
+//   blackhole  connect, then never read again: the relay's pings go unanswered. The hold defaults to
+//              60 s, past the relay's 20 s keepalive interval plus 30 s pong timeout; a shorter
+//              hold drops the sockets before the relay can see a missed pong.
 //   hold       hold, then close normally.
 //   observe    an app of the same account that prints presence and roster changes.
 // Tokens are minted in-process from RELAY_SMOKE_TOKEN_KEY, as the smoke test does. Neither the
@@ -55,7 +57,7 @@ public static class HostProbe
         var mode = Arg("--mode");
         if (Arg("--relay") is not { } url || !Uri.TryCreate(url, UriKind.Absolute, out var relay)
             || mode is not ("kill" or "blackhole" or "hold" or "observe") || string.IsNullOrEmpty(key)
-            || !int.TryParse(Arg("--hold") ?? (mode == "observe" ? "300" : "10"), out var hold) || hold < 0
+            || !int.TryParse(Arg("--hold") ?? (mode == "observe" ? "300" : mode == "blackhole" ? "60" : "10"), out var hold) || hold < 0
             || !int.TryParse(Arg("--count") ?? "1", out var count) || count is < 1 or > 20)
         {
             Console.Error.WriteLine(Usage);

@@ -10,14 +10,31 @@ public static class DisconnectCause
     public static string Describe(Exception? ended, WebSocketCloseStatus? closeStatus)
     {
         var type = ended?.GetType().Name ?? "none";
-        var error = ended is WebSocketException w ? w.WebSocketErrorCode.ToString() : "none";
+        var socket = FindWebSocketException(ended);
+        var error = socket is not null ? socket.WebSocketErrorCode.ToString() : "none";
         var close = closeStatus is { } s ? ((int)s).ToString() : "none";
-        return $"exception={type} wserror={error} close={close} keepalive={(IsKeepAliveTimeout(ended) ? "timeout" : "no")}";
+        return $"exception={type} wserror={error} close={close} keepalive={(IsKeepAliveTimeout(socket) ? "timeout" : "no")}";
+    }
+
+    // The runtime wraps the keepalive failure when it aborts an outstanding receive: an
+    // OperationCanceledException or AggregateException carries it as an inner exception.
+    static WebSocketException? FindWebSocketException(Exception? e)
+    {
+        if (e is WebSocketException w) { return w; }
+        if (e is AggregateException a)
+        {
+            foreach (var inner in a.InnerExceptions)
+            {
+                if (FindWebSocketException(inner) is { } found) { return found; }
+            }
+            return null;
+        }
+        return e?.InnerException is { } next ? FindWebSocketException(next) : null;
     }
 
     // The runtime reports a missed pong only in its message (SR.net_Websockets_KeepAlivePingTimeout),
     // with no distinct error code, so this matches that text; a runtime that words it differently
     // reads as "no" and the cause is then told apart by close=none with wserror.
-    static bool IsKeepAliveTimeout(Exception? e) =>
-        e is WebSocketException { Message: var m } && m.Contains("KeepAliveTimeout", StringComparison.Ordinal);
+    static bool IsKeepAliveTimeout(WebSocketException? e) =>
+        e is { Message: var m } && m.Contains("KeepAliveTimeout", StringComparison.Ordinal);
 }

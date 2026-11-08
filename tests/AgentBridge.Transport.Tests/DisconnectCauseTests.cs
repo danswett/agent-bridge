@@ -32,6 +32,15 @@ public class DisconnectCauseTests
     }
 
     [Fact]
+    public void A_missed_pong_wrapped_by_the_runtime_is_still_told_from_a_reset()
+    {
+        var missed = new WebSocketException(WebSocketError.Faulted, "The WebSocket didn't receive a Pong frame in response to a Ping frame within the configured KeepAliveTimeout.");
+        var wrapped = new OperationCanceledException("aborted", new AggregateException(missed));
+        Assert.Equal("exception=OperationCanceledException wserror=Faulted close=none keepalive=timeout",
+            DisconnectCause.Describe(wrapped, null));
+    }
+
+    [Fact]
     public void An_exception_message_never_reaches_the_line()
     {
         var e = new WebSocketException(WebSocketError.ConnectionClosedPrematurely, "peer 203.0.113.9 reset");
