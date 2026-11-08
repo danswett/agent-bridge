@@ -273,6 +273,8 @@ export class SessionsPage {
       // A session registered may be the one a launch's machine was busy with, or the one a launch
       // reported unconfirmed started (#896).
       if (c?.type === 'upsert') { this.launchPanel.sessionSeen(c.hostId, hosts.sessions.get(c.hostId, c.id)); }
+      // A question that came or went in the session shown is said again (sessions.focus).
+      if (c?.type === 'upsert') { this.#reportOpen(); }
     });
     const unwatchHosts = hosts.onChange(() => {
       const now = new Set((hosts.shownIds?.() ?? []).filter((id) => !hosts.staleOf?.(id)));
@@ -705,7 +707,9 @@ export class SessionsPage {
   #reportOpen() {
     const card = this.view?.selected;
     const showing = card && (!this.shell || this.shell.route === 'sessions') && (!this.phone.matches || this.#open);
-    try { this.opened(showing ? { hostId: card.hostId, id: card.id } : null); } catch (e) { console.error(e); }
+    // The question its card shows is the session's own, as the store has it now.
+    const question = showing ? this.hosts.sessions.get(card.hostId, card.id)?.question?.id ?? null : null;
+    try { this.opened(showing ? { hostId: card.hostId, id: card.id, question } : null); } catch (e) { console.error(e); }
   }
 
   // Which panes show: on a phone, the list or the session pushed over it; the inspector, as its
@@ -747,6 +751,8 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    // The account's session is no longer shown: said before the page lets go of what says it.
+    try { this.opened(null); } catch (e) { console.error(e); }
     this.#unroute?.();
     this.#unroute = null;
     this.#listening?.abort();

@@ -150,8 +150,8 @@ export class HostSession {
 
   // What the page shows (#1190, sessions.focus): whether it is in sight, and the session open, on
   // the machine it belongs to. Told to every channel now, and to each new one before it subscribes.
-  setFocus({ visible, hostId = null, id = null, idle = null } = {}) {
-    this.#focus = { visible: visible === true, hostId, id, idle };
+  setFocus({ visible, hostId = null, id = null, question = null, idle = null } = {}) {
+    this.#focus = { visible: visible === true, hostId, id, question, idle };
     for (const link of this.#links.values()) { this.#tellFocus(link); }
   }
 
@@ -165,7 +165,8 @@ export class HostSession {
   #tellFocus(link) {
     const f = this.#focus;
     if (!f || typeof link.client?.setFocus !== 'function') { return; }
-    try { link.client.setFocus({ visible: f.visible, open: f.hostId === link.id ? f.id : null, idle: f.idle }); } catch (e) { console.error(e); }
+    const mine = f.hostId === link.id;
+    try { link.client.setFocus({ visible: f.visible, open: mine ? f.id : null, openQuestion: mine ? f.question : null, idle: f.idle }); } catch (e) { console.error(e); }
   }
 
   // Where something sent from a card goes: its own machine's channel, open now, or null. Never

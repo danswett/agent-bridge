@@ -561,6 +561,31 @@ test('a burst of input keeps inside the host\'s limit: refreshFocus says the foc
   client.close();
 });
 
+test('the question on screen goes with the open session as openQuestion, again when it changes, and never without a session', async () => {
+  const { t, client } = await focusing();
+  client.setFocus({ visible: true, open: 's1', openQuestion: 'q1' });
+  await flush();
+  client.setFocus({ visible: true, open: 's1', openQuestion: 'q1' });
+  client.setFocus({ visible: true, open: 's1', openQuestion: 'q2' });
+  await flush();
+  client.setFocus({ visible: true, open: 's1' });
+  await flush();
+  client.setFocus({ visible: true, openQuestion: 'q2' });
+  await flush();
+  assert.deepEqual(focusSent(t), [
+    { visible: true, open: 's1', openQuestion: 'q1' },
+    { visible: true, open: 's1', openQuestion: 'q2' },
+    { visible: true, open: 's1' },
+    { visible: true },
+  ]);
+  // Said again after a subscribe as it stands.
+  client.setFocus({ visible: true, open: 's1', openQuestion: 'q9' });
+  await flush();
+  await subscribeAgain(t, client);
+  assert.deepEqual(focusSent(t).slice(-2), Array(2).fill({ visible: true, open: 's1', openQuestion: 'q9' }));
+  client.close();
+});
+
 test('refreshing the focus sends nothing to a host that does not offer it, or before anything is said', async () => {
   const older = await focusing(['sessions.read']);
   older.client.setFocus({ visible: true });

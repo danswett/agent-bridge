@@ -11,8 +11,9 @@
 // two-minute window stays fresh. Nothing is sent while idle or hidden; a host that hears nothing
 // treats the device as not active and sends the push.
 //
-// hosts: HostSession (setFocus, refreshFocus, sessions.onChange). close(hostId, sessionId): takes
-// down that session's shown notices. delayMs: how long after a change to the open session its
+// hosts: HostSession (setFocus, refreshFocus, sessions.onChange). close(hostId, sessionId,
+// question): takes down that session's shown notices that are read: all but those of questions
+// other than `question`. delayMs: how long after a change to the open session its
 // notices are looked at again; a push that lands during reading is shown a moment after the
 // change that caused it, so closing at once would miss it.
 export class Reading {
@@ -26,6 +27,7 @@ export class Reading {
   #timer = null;
   #alive = null;
   #lastInput = null;
+  #stopped = false;
   #off = [];
 
   constructor({ hosts, close, doc = globalThis.document ?? null, win = globalThis, delayMs = 1000, keepaliveMs = 60000, now = () => Date.now() }) {
@@ -35,11 +37,11 @@ export class Reading {
     this.#delayMs = delayMs;
     this.#keepaliveMs = keepaliveMs;
     this.#now = now;
-    doc?.addEventListener?.('visibilitychange', () => this.#apply());
-    win?.addEventListener?.('pageshow', () => this.#apply());
+    this.#listen(doc, 'visibilitychange', () => this.#apply());
+    this.#listen(win, 'pageshow', () => this.#apply());
     // Passive, and cheap: a timestamp write, and only once in INPUT_GAP_MS of a stream of moves.
     for (const type of ['pointerdown', 'pointermove', 'keydown', 'touchstart', 'wheel']) {
-      win?.addEventListener?.(type, () => this.#input(), { passive: true, capture: true });
+      this.#listen(win, type, () => this.#input(), { passive: true, capture: true });
     }
     this.#off.push(hosts.sessions.onChange((c) => {
       if (c?.type !== 'upsert' || !this.#reading(c.hostId, c.id) || this.#timer !== null) { return; }
@@ -51,25 +53,36 @@ export class Reading {
     this.#apply();
   }
 
+  // Listeners are kept to be taken off again: a Reading is made for each sign-in, and one left
+  // behind would go on telling the machines of an account that is gone.
+  #listen(target, type, fn, options) {
+    if (typeof target?.addEventListener !== 'function') { return; }
+    target.addEventListener(type, fn, options);
+    this.#off.push(() => target.removeEventListener?.(type, fn, options));
+  }
+
   get visible() { return this.#doc?.visibilityState === 'visible'; }
 
   // Ms since the last input in this page, or null when none has been seen: unknown, not 0.
   idleMs() { return this.#lastInput === null ? null : Math.max(0, this.#now() - this.#lastInput); }
 
-  // The session the page shows now ({ hostId, id }), or null: the list, another page, or none.
+  // The session the page shows now ({ hostId, id, question }), or null: the list, another page,
+  // or none. question: the id of the question its card shows, if any: the notice of that question
+  // is read too, and a notice of another question is not.
   open(target) {
-    const next = target?.id ? { hostId: target.hostId ?? null, id: target.id } : null;
-    if (next?.hostId === this.#open?.hostId && next?.id === this.#open?.id) { return; }
+    const next = target?.id ? { hostId: target.hostId ?? null, id: target.id, question: typeof target.question === 'string' && target.question ? target.question : null } : null;
+    if (this.#stopped || (next?.hostId === this.#open?.hostId && next?.id === this.#open?.id && next?.question === this.#open?.question)) { return; }
     this.#open = next;
     this.#apply();
   }
 
+  // Everything it listened to is let go, and nothing more is said.
   stop() {
+    this.#stopped = true;
     clearTimeout(this.#timer);
     clearTimeout(this.#alive);
     this.#timer = this.#alive = null;
-    for (const off of this.#off) { off(); }
-    this.#off = [];
+    for (const off of this.#off.splice(0)) { off(); }
   }
 
   #reading(hostId, id) { return this.visible && this.#open?.hostId === hostId && this.#open?.id === id; }
@@ -103,8 +116,11 @@ export class Reading {
   }
 
   #apply() {
+    if (this.#stopped) { return; }
     try {
-      this.#hosts.setFocus({ visible: this.visible, hostId: this.#open?.hostId ?? null, id: this.#open?.id ?? null, idle: () => this.idleMs() });
+      this.#hosts.setFocus({
+        visible: this.visible, hostId: this.#open?.hostId ?? null, id: this.#open?.id ?? null, question: this.#open?.question ?? null, idle: () => this.idleMs(),
+      });
     } catch (e) { console.error(e); }
     if (!this.visible) {
       clearTimeout(this.#alive);
@@ -117,8 +133,8 @@ export class Reading {
 
   #closeOpen() {
     const o = this.#open;
-    if (!o || !this.#reading(o.hostId, o.id)) { return; }
-    Promise.resolve().then(() => this.#close(o.hostId, o.id)).catch(() => {});
+    if (this.#stopped || !o || !this.#reading(o.hostId, o.id)) { return; }
+    Promise.resolve().then(() => this.#close(o.hostId, o.id, o.question)).catch(() => {});
   }
 }
 

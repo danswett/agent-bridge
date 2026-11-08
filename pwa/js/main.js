@@ -34,7 +34,7 @@ import { Reading } from './reading.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
 import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
-import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
+import { PushRegistrar, closeMachineNotices, closeNotices, closeReadNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
 import { offlineMachines } from './ui/views.js';
 import { Shell } from './ui/shell.js';
@@ -801,7 +801,7 @@ function begin(account) {
   // connected to, when it has one and the machine fetches from it (sessions.attach.blob).
   // What this page shows is told to each machine (sessions.focus) and its notices taken down
   // while it is read (#1190). worker() is defined below; it is only called once a session is open.
-  const reading = new Reading({ hosts, close: (hostId, sessionId) => worker().then((r) => closeNotices(r, hostId, sessionId)) });
+  const reading = new Reading({ hosts, close: (hostId, sessionId, question) => worker().then((r) => closeReadNotices(r, hostId, sessionId, question)) });
   page = new SessionsPage({
     $, hosts, connection, me: identity.deviceId, shell,
     opened: (open) => reading.open(open),
@@ -995,6 +995,8 @@ function begin(account) {
     diagnose.clear();
     lastKnown = null;
     page.clear();
+    // Its listeners go with the account: the next sign-in begins afresh with a Reading of its own.
+    reading.stop();
     $('feedback').hidden = true;
     if (feedbackDialog.open) { feedbackDialog.close(); }
     // A session's address names this account's machine: the next sign-in, perhaps another
@@ -1019,6 +1021,7 @@ function begin(account) {
     hosts.forget();
     fleet.clear();
     page.clear();
+    reading.stop();
     $('feedback').hidden = true;
     if (feedbackDialog.open) { feedbackDialog.close(); }
     accountStore.clear();

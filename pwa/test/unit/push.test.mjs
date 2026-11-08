@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PushRegistrar, base64UrlToBytes, closeNotices, closeStaleNotices, fetchVapidKey, noticeTag, pushSupport } from '../../js/push.js';
+import { PushRegistrar, base64UrlToBytes, closeNotices, closeReadNotices, closeStaleNotices, fetchVapidKey, noticeTag, pushSupport } from '../../js/push.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 import { Reading } from '../../js/reading.js';
 import { deviceName } from '../../js/identity.js';
@@ -222,26 +222,31 @@ test('question notifications this app sees answered are closed; others stay', as
 // ---- the session being read (#1190) ----
 
 function readingPage({ visible = true, keepaliveMs = 30 } = {}) {
-  const doc = { visibilityState: visible ? 'visible' : 'hidden', fire: [], addEventListener(type, fn) { if (type === 'visibilitychange') { this.fire.push(fn); } } };
+  const doc = { visibilityState: visible ? 'visible' : 'hidden', fire: [], addEventListener(type, fn) { if (type === 'visibilitychange') { this.fire.push(fn); } }, removeEventListener(type, fn) { this.fire = this.fire.filter((f) => f !== fn); } };
   const inputs = [];
-  const win = { addEventListener(type, fn, options) { if (options?.passive === true) { inputs.push(fn); } } };
+  const listening = new Set();
+  const win = {
+    addEventListener(type, fn, options) { listening.add(fn); if (options?.passive === true) { inputs.push(fn); } },
+    removeEventListener(type, fn) { listening.delete(fn); const i = inputs.indexOf(fn); if (i >= 0) { inputs.splice(i, 1); } },
+  };
   const changes = [];
   const focus = [];
   const closed = [];
   const clock = { t: 1_000_000 };
   const said = { refreshes: 0, idle: null };
   const hosts = {
-    setFocus: ({ idle, ...f }) => { said.idle = idle; focus.push(f); },
+    setFocus: ({ idle, ...f }) => { said.idle = idle; if (f.question === null) { delete f.question; } focus.push(f); },
     refreshFocus: () => { said.refreshes += 1; },
-    sessions: { onChange: (fn) => { changes.push(fn); return () => {}; } },
+    sessions: { onChange: (fn) => { changes.push(fn); return () => { changes.splice(changes.indexOf(fn), 1); }; } },
   };
-  const reading = new Reading({ hosts, doc, win, delayMs: 20, keepaliveMs, now: () => clock.t, close: async (h, s) => { closed.push(`${h}/${s}`); } });
+  const reading = new Reading({ hosts, doc, win, delayMs: 20, keepaliveMs, now: () => clock.t, close: async (h, s, q) => { closed.push(q ? `${h}/${s}/${q}` : `${h}/${s}`); } });
   const initial = focus.splice(0);
   const flip = (state) => { doc.visibilityState = state; for (const fn of doc.fire) { fn(); } };
   const input = (advanceMs = 300) => { clock.t += advanceMs; for (const fn of inputs) { fn(); } };
   const settle = () => new Promise((r) => { setTimeout(r, 60); });
-  return { reading, focus, initial, said, clock, input, closed, changes, flip, settle };
+  return { reading, focus, initial, said, clock, input, closed, changes, flip, settle, doc, win, listening, hosts };
 }
+
 
 test('the page says what it shows as soon as it starts, even with no session open', () => {
   assert.deepEqual(readingPage().initial, [{ visible: true, hostId: null, id: null }]);
@@ -320,6 +325,68 @@ test('a hidden page closes no notices and says it is hidden; coming back to the 
   await Promise.resolve();
   assert.deepEqual(focus.at(-1), { visible: false, hostId: 'm1', id: 's1' });
   assert.deepEqual(closed, ['m1/s1']);
+});
+
+test('the question its card shows is said with the open session, and said again when it changes', async () => {
+  const { reading, focus, closed } = readingPage();
+  reading.open({ hostId: 'm1', id: 's1', question: 'q1' });
+  reading.open({ hostId: 'm1', id: 's1', question: 'q1' });
+  reading.open({ hostId: 'm1', id: 's1', question: 'q2' });
+  reading.open({ hostId: 'm1', id: 's1', question: null });
+  await Promise.resolve();
+  assert.deepEqual(focus, [
+    { visible: true, hostId: 'm1', id: 's1', question: 'q1' },
+    { visible: true, hostId: 'm1', id: 's1', question: 'q2' },
+    { visible: true, hostId: 'm1', id: 's1' },
+  ]);
+  assert.deepEqual(closed, ['m1/s1/q1', 'm1/s1/q2', 'm1/s1']);
+});
+
+test('only a notice of the question on screen is closed with a session being read; its other notices go, and a question not shown stays', async () => {
+  const tagged = () => [
+    notification({ kind: 'question', machine: 'm1', session: 's1', question: 'q1' }),
+    notification({ kind: 'question', machine: 'm1', session: 's1', question: 'q2' }),
+    notification({ kind: 'finished', machine: 'm1', session: 's1' }),
+  ];
+  let shown = tagged();
+  const registration = { getNotifications: async (filter) => { assert.deepEqual(filter, { tag: noticeTag('m1', 's1') }); return shown; } };
+  await closeReadNotices(registration, 'm1', 's1', 'q2');
+  assert.deepEqual(shown.map((n) => n.closed), [false, true, true]);
+  shown = tagged();
+  await closeReadNotices(registration, 'm1', 's1', null);
+  assert.deepEqual(shown.map((n) => n.closed), [false, false, true], 'no question on screen: no question notice is read');
+});
+
+test('a stopped Reading has let go of every listener and says nothing more', async () => {
+  const { reading, focus, said, input, flip, settle, doc, listening, changes, closed } = readingPage();
+  reading.open({ hostId: 'm1', id: 's1' });
+  input();
+  assert.ok(listening.size > 0 && doc.fire.length === 1 && changes.length === 1);
+  reading.stop();
+  await Promise.resolve();
+  assert.equal(listening.size, 0, 'no window listener left');
+  assert.equal(doc.fire.length, 0, 'no visibility listener left');
+  assert.equal(changes.length, 0, 'no sessions listener left');
+  const [sent, refreshed, shut] = [focus.length, said.refreshes, closed.length];
+  reading.open({ hostId: 'm1', id: 's2' });
+  flip('hidden');
+  flip('visible');
+  await settle();
+  await settle();
+  assert.deepEqual([focus.length, said.refreshes, closed.length], [sent, refreshed, shut]);
+});
+
+test('a Reading made for a later sign-in is the only one listening once the earlier is stopped', () => {
+  const first = readingPage();
+  const alone = first.listening.size;
+  first.reading.stop();
+  // The same page again, as begin() makes it: a second Reading on the same window and document.
+  const again = new Reading({ hosts: first.hosts, doc: first.doc, win: first.win, close: async () => {} });
+  assert.equal(first.listening.size, alone, 'the listeners are the second Reading\'s alone');
+  assert.equal(first.doc.fire.length, 1);
+  assert.equal(first.changes.length, 1);
+  again.stop();
+  assert.equal(first.listening.size, 0);
 });
 
 test("a change to the open session closes its notices a moment later; another session's change, or one while hidden, closes nothing", async () => {

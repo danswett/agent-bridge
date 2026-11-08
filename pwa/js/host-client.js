@@ -278,15 +278,21 @@ export class HostClient {
 
   // sessions.focus (#1190): what this page shows, for a host that offers it, so it does not send
   // a notification for what is being read. visible: the page is on screen; open: the id of the
-  // session shown on this machine, if any. Said as it changes and after each subscribe, never
+  // session shown on this machine, if any; openQuestion: the id of the question its card shows,
+  // if any. Said as it changes and after each subscribe, never
   // more than once in focusGapMs (the host refuses more than 20 in 10 s on a channel), and only
   // the latest state goes. A failure is ignored: the host then notifies as it always has.
   // idle: a function giving the ms since the person's last input in this page, read as each
   // request is made (an age, so the clocks of phone and host need not agree), or null when no
   // input has been seen: then idleMs is left out rather than say 0 (it reads as "not active").
-  setFocus({ visible, open = null, idle = null } = {}) {
+  setFocus({ visible, open = null, openQuestion = null, idle = null } = {}) {
     this.#focusIdle = typeof idle === 'function' ? idle : null;
-    const want = { visible: visible === true, ...(typeof open === 'string' && open ? { open } : {}) };
+    const session = typeof open === 'string' && open ? open : null;
+    const want = {
+      visible: visible === true,
+      ...(session ? { open: session } : {}),
+      ...(session && typeof openQuestion === 'string' && openQuestion ? { openQuestion } : {}),
+    };
     if (this.#focusWant && JSON.stringify(want) === JSON.stringify(this.#focusWant)) { return; }
     this.#focusWant = want;
     this.#queueFocus();

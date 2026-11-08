@@ -112,6 +112,18 @@ test('a machine renamed while a search is open brings its sessions into the resu
   await expect(page.locator('.session')).toHaveCount(4);
 });
 
+test('retiring the page with its account says no session is shown, so the machines are told (sessions.focus)', async ({ page }) => {
+  await openDemo(page);
+  const said = await page.evaluate(() => {
+    const p = window.agentBridgeDemo.page;
+    const heard = [];
+    p.opened = (o) => heard.push(o);
+    p.clear();
+    return heard;
+  });
+  expect(said).toEqual([null]);
+});
+
 test('a page retired with its account no longer answers the routes', async ({ page }) => {
   await openDemo(page);
   // A relay that stops accepting the sign-in retires the page (clear()); the next sign-in in the

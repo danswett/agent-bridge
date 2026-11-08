@@ -1104,18 +1104,18 @@ test("the page's focus (#1190) is told to a machine's channel as it is made, and
       refreshFocus: () => refreshed.push(ch.peerId),
     }),
   });
-  hosts.setFocus({ visible: true, hostId: 'b', id: 's1', idle: () => 4200 });
+  hosts.setFocus({ visible: true, hostId: 'b', id: 's1', question: 'q1', idle: () => 4200 });
   hosts.select(ALL);
   await flush();
   connection.opens[0].resolve();
   await flush();
-  assert.deepEqual(told, [['a', { visible: true, open: null, idle: 4200 }]]);
+  assert.deepEqual(told, [['a', { visible: true, open: null, openQuestion: null, idle: 4200 }]]);
   connection.opens[1].resolve();
   await flush();
-  assert.deepEqual(told.at(-1), ['b', { visible: true, open: 's1', idle: 4200 }]);
+  assert.deepEqual(told.at(-1), ['b', { visible: true, open: 's1', openQuestion: 'q1', idle: 4200 }]);
   told.length = 0;
-  hosts.setFocus({ visible: false, hostId: 'a', id: 's9', idle: () => 4200 });
-  assert.deepEqual(told, [['a', { visible: false, open: 's9', idle: 4200 }], ['b', { visible: false, open: null, idle: 4200 }]]);
+  hosts.setFocus({ visible: false, hostId: 'a', id: 's9', question: 'q2', idle: () => 4200 });
+  assert.deepEqual(told, [['a', { visible: false, open: 's9', openQuestion: 'q2', idle: 4200 }], ['b', { visible: false, open: null, openQuestion: null, idle: 4200 }]]);
   hosts.refreshFocus();
   assert.deepEqual(refreshed, ['a', 'b']);
 });
