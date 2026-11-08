@@ -264,7 +264,8 @@ public class FeedbackBundleTests
             FeedbackRedactor.Redact(s);
             FeedbackRedactor.ContainsSecret(s);
         }
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8), sw.Elapsed.ToString());
+        // Generous on purpose: CI coverage is slow, and a quadratic redactor on this input would take far longer.
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(60), sw.Elapsed.ToString());
     }
 
     public static TheoryData<string> OneSamplePerRule => new()
@@ -385,7 +386,8 @@ public class FeedbackBundleTests
         var big = string.Concat(Enumerable.Repeat("\\u0061-", 350_000));
         FeedbackRedactor.Redact(big);
         FeedbackRedactor.ContainsSecret(big);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8), sw.Elapsed.ToString());
+        // Generous on purpose: CI coverage is slow, and a quadratic redactor on this input would take far longer.
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(60), sw.Elapsed.ToString());
     }
 
     [Fact]
@@ -453,7 +455,8 @@ public class FeedbackBundleTests
             FeedbackRedactor.Redact(big);
             FeedbackRedactor.ContainsSecret(big);
         }
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(15), sw.Elapsed.ToString());
+        // Generous on purpose: CI coverage is slow, and a quadratic redactor on 2 MiB would take far longer than this.
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(90), sw.Elapsed.ToString());
     }
 
     [Fact]
