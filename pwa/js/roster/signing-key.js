@@ -37,8 +37,11 @@ export async function generateSigningKey() {
 // generate a key and the later put would replace the earlier, leaving the roster naming a key
 // nobody holds. Web Locks serialise across tabs; the in-page chain covers where they are absent.
 let chain = Promise.resolve();
-const exclusive = (fn) => {
-  const run = () => (globalThis.navigator?.locks ? navigator.locks.request(SIGNING_RECORD, fn) : fn());
+const exclusive = (fn, shared) => {
+  const locks = globalThis.navigator?.locks;
+  // The real (IndexedDB) store is shared across tabs, and the chain alone cannot protect it.
+  if (!locks && shared) { return Promise.reject(new Error('the signing key needs Web Locks (navigator.locks), which this browser lacks')); }
+  const run = () => (locks ? locks.request(SIGNING_RECORD, fn) : fn());
   const next = chain.then(run, run);
   chain = next.catch(() => {});
   return next;
@@ -52,7 +55,7 @@ export function loadSigningKey(store = browserStore) {
       await store.put(SIGNING_RECORD, rec);
     }
     return new SigningKey(rec.privateKey, new Uint8Array(rec.public));
-  });
+  }, store === browserStore);
 }
 
 // Forgetting the device: the key goes with it.

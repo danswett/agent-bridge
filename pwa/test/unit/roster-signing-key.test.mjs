@@ -26,6 +26,13 @@ test('concurrent first uses share the one key, and the stored key is not replace
   assert.deepEqual(new Uint8Array((await store.get(SIGNING_RECORD)).public), keys[0].public);
 });
 
+test('the shared browser store fails closed when Web Locks are missing', async () => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
+  try { await assert.rejects(loadSigningKey(), /Web Locks/); }
+  finally { if (had) Object.defineProperty(globalThis, 'navigator', had); else delete globalThis.navigator; }
+});
+
 test('a signing key is made once, kept, and comes back as the same key', async () => {
   const store = memoryStore();
   const made = await loadSigningKey(store);
