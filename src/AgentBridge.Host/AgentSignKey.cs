@@ -79,7 +79,7 @@ public sealed class AgentSignKey : IDisposable
         byte[]? content = null;
         try
         {
-            content = File.ReadAllBytes(path);
+            content = ReadWithRetry(path);
             if (OperatingSystem.IsWindows()) { content = Unprotect(content); }
             if (content.Length < 66 || content[0] != 0x04) { throw new InvalidDataException("short"); }
             var ecdsa = ECDsa.Create();
@@ -97,6 +97,17 @@ public sealed class AgentSignKey : IDisposable
             throw new InvalidDataException("the agent signing key file is damaged or was changed; it is left as it is and no new key is made");
         }
         finally { if (content is not null) { CryptographicOperations.ZeroMemory(content); } }
+    }
+
+    // Windows can report a sharing violation while a just-moved file settles; that is an IOException,
+    // retried briefly. A file that reads but is damaged is not retried (InvalidDataException).
+    static byte[] ReadWithRetry(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try { return File.ReadAllBytes(path); }
+            catch (IOException) when (attempt < 20 && File.Exists(path)) { Thread.Sleep(10 * (attempt + 1)); }
+        }
     }
 
     static byte[] Point(ECDsa e)
