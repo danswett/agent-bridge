@@ -416,7 +416,7 @@ public sealed partial class HaConnector
         if (rid is not null)
         {
             p.Reply.TakeRid(rid);
-            p.Reply.Ack = null;
+            if (p.Reply.Ack?["rid"]?.GetValue<string>() == rid) { p.Reply.Ack = null; }
         }
         try { await TransientAsync(p, "Sending...", [], ct); }
         catch
