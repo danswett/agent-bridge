@@ -458,7 +458,7 @@ suites:
     # src/** is not a trigger (#1249): the app's folder and what it builds from (builds), the other
     # projects pack-app.ps1 publishes, and the packaging inputs are. app-package-host adds the
     # host's own closure.
-    triggers: [src/AgentBridge.App/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, design/**]
+    triggers: [src/AgentBridge.App/**, src/AgentBridge.HostLauncher/**, src/AgentBridge.Injector/**, src/AgentBridge.Hook/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, build/notices/**, LICENSE, design/**]
     command: see ci.yml app job
     where: ci.yml app
     status: exists

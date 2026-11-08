@@ -100,7 +100,15 @@ $Narrow = @($Narrow -split '[,\s]+' | Where-Object { $_ })
 $ring1 = $null
 if ($Ring -gt 1 -and ($Narrow.Count -gt 0 -or $CompareRing1)) { $ring1 = Select-Suites 1 }
 $ring1Ci = if ($ring1) { $ring1.jobs['ci.yml'] ?? @{} } else { @{} }
+# ci.yml holds the app job's packaging and SBOM steps, and install-trivy feeds them: a pull request
+# editing either must still package the app, which the workflows-wide global trigger can't say.
+$packagingEdited = $false
+if ($ring1) {
+    $edited = @(git -C $root diff --name-only "$Base...$Head")
+    $packagingEdited = @($edited | Where-Object { $_ -eq '.github/workflows/ci.yml' -or $_ -like '.github/actions/install-trivy/*' }).Count -gt 0
+}
 function Test-OwnReason([string] $job) {
+    if ($packagingEdited -and $job -eq 'app') { return $true }
     $own = @($ring1Ci[$job] ?? @())
     @($ring1.suites | Where-Object { $_.id -in $own -and @($_.reasons | Where-Object { -not (Test-NotOwn $_.rule) }).Count -gt 0 }).Count -gt 0
 }
