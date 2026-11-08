@@ -82,6 +82,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     int _nonRemovals;
     Bits? _quarantined;
     RosterState? _applied;
+    readonly HashSet<int> _retained = [];
 
     public string Account { get; } = account;
     public string Generation { get; } = generation;
@@ -437,7 +438,7 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             for (var i = 0; i < _g.Count; i++)
             {
                 var n = _g[i];
-                if (n.Op != EntryOp.Merge || !n.Body.Adopt || _adoptingMerges.Contains(i) || _candidate[i] || q[n.Signer]) { continue; }
+                if (n.Op != EntryOp.Merge || !n.Body.Adopt || _adoptingMerges.Contains(i) || _candidate[i] || n.Evidence || q[n.Signer]) { continue; }
                 _adoptingMerges.Add(i);
                 AdoptClosure(i);
                 more = true;
@@ -479,7 +480,13 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
             }
             for (var i = 0; i < _g.Count; i++)
             {
-                if (q[i] && _g[i].Op == EntryOp.Remove && !_g[i].Evidence && !_candidate[i] && AppliesUnquarantined(i, members)) { members.Set(i); }
+                if (q[i] && _g[i].Op == EntryOp.Remove && !_g[i].Evidence && !_candidate[i] && AppliesUnquarantined(i, members)) { _retained.Add(i); }
+            }
+            // A removal that once applied stays applied (§3.5, monotone revocation), even if a
+            // later entry changes the unquarantined state it was judged against.
+            foreach (var i in _retained)
+            {
+                if (!_g[i].Evidence && !_candidate[i]) { members.Set(i); }
             }
             return _applied = new RosterState(_g, members);
         }
