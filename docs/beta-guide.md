@@ -144,9 +144,13 @@ fact we do not yet know, not one we are leaving out.
   The subscription review reported a human Owner and relay-deployment identities; it did not
   establish the complete telemetry reader set or inherited and provider access. Processing outside
   the identified resources remains unconfirmed.
-- **Retention and requests.** Log Analytics is configured for 30 days. Application Insights is
-  deployed into that workspace; a separate 90-day setting has not been confirmed. Default Application Insights IP masking was reported; it does not prove that no IP is
-  received or recorded elsewhere. Other copies and provider residuals are unconfirmed. No
+- **Retention and requests.** Azure monitoring retention is configured per workspace and table.
+  The production relay's Application Insights AppRequests table is configured to retain data for
+  90 days. Its Log Analytics workspace default is 30 days; retention settings for other tables
+  have not yet been confirmed. The separate feedback-vault logging workspace is configured for 30
+  days. These are configuration settings, not a guarantee of deletion from every copy. The
+  contents of client-IP and payload fields have not been checked and remain unconfirmed. We do not
+  claim that those fields contain no IP addresses or session content. Other copies and provider residuals are unconfirmed. No
   per-person telemetry deletion procedure is currently established in the supplied operational
   record. The privacy contact coordinates requests; scheduled ageing is not proof of
   request-based or all-copy erasure.
@@ -204,8 +208,8 @@ records.
 
 The beta does not offer an account-erasure feature or promise manual deletion. A roster is
 configured to be deleted after all of its hosts have been offline for 180 days. Log Analytics is
-configured for 30 days, and Application Insights is deployed into that workspace; a separate
-90-day setting has not been confirmed. Temporary transfer blobs have lifecycle deletion configured
+configured for 30 days by default; the Application Insights AppRequests table is configured for
+90 days, and other tables' settings are not yet confirmed. Temporary transfer blobs have lifecycle deletion configured
 one day after creation. These are the specified schedules, not a guarantee of erasure from every
 copy; support-mail and other provider-copy retention are not yet fully confirmed.
 
