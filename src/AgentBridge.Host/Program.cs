@@ -472,7 +472,8 @@ async Task<int> ServeAsync(HostHandover handover)
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
-    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore);
+    var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
+    var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials);
     launcher.SessionStarted += restore.Launched;
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
@@ -605,7 +606,6 @@ async Task<int> ServeAsync(HostHandover handover)
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
     var inspector = new SystemProcessInspector();
-    var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
     var callers = new CallerGuard(() => KnownAgents.Of(source, launcher, inspector), OperatingSystem.IsWindows() ? Path.Combine(AppContext.BaseDirectory, CallerGuard.AppExecutable) : null,
         hostImage: OperatingSystem.IsWindows() ? Environment.ProcessPath : null);
     // On a machine migrated from agent-ha-bridge, the hooks hand their events to this host
@@ -911,7 +911,7 @@ async Task<int> ServeAsync(HostHandover handover)
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
 // the profile's config.json approves, and on Windows only for now. The agent starts in a console
 // of its own on this desktop, so the host must run here, as the user, unelevated.
-LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore)
+LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, AttachmentStore? attachments, SessionTransfers transfers, DeliveryGate deliveryGate, IRestorePending restore, ILaunchCredentials? credentials)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
     IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
@@ -928,7 +928,7 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
         WorktreeUsage = new RestoreWorktreeUsage(restore, new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots)),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
-    }, Log, attachments);
+    }, Log, attachments, credentials: credentials);
     var why = !settings.Launch.Enabled ? "turned off (launch.enabled)" : starter.Unavailable() ?? probe.Active();
     var count = settings.Launch.Workspaces.Count;
     Log(why is null

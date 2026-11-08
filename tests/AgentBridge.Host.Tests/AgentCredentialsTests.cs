@@ -67,6 +67,35 @@ public sealed class AgentCredentialsTests : IDisposable
     }
 
     [Fact]
+    public void A_launch_token_answers_to_nobody_until_the_started_process_is_bound()
+    {
+        var store = Store();
+        var token = store.Prepare("sess-1", "launch-1")!;
+        Assert.Null(store.Check(token, Inside()).Accepted);
+        store.Bind("launch-1", 100, Started);
+        Assert.Equal("sess-1", store.Check(token, Inside()).Accepted!.Session);
+        Assert.Null(store.Check(token, Inside(rootPid: 101)).Accepted);
+    }
+
+    [Fact]
+    public void A_launch_that_did_not_start_loses_its_token_and_a_resume_replaces_the_old_one()
+    {
+        var store = Store();
+        var failed = store.Prepare("sess-1", "launch-1")!;
+        store.Abandon("launch-1");
+        store.Bind("launch-1", 100, Started);
+        Assert.Null(store.Check(failed, Inside()).Accepted);
+        Assert.Equal(0, store.Count);
+
+        var first = store.Prepare("sess-2", "l2")!;
+        store.Bind("l2", 100, Started);
+        var second = store.Prepare("sess-2", "l3")!;
+        store.Bind("l3", 100, Started);
+        Assert.Null(store.Check(first, Inside()).Accepted);
+        Assert.NotNull(store.Check(second, Inside()).Accepted);
+    }
+
+    [Fact]
     public void An_unknown_or_malformed_token_is_refused()
     {
         var store = Store();

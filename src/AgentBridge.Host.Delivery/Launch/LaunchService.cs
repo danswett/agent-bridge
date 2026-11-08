@@ -157,6 +157,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // Alive: the launcher's process, or, once that handed the session on and exited, the session's own
     // (AgentHeld). Transcript: Copilot's events.jsonl and its length just before the agent was started.
     sealed record Unready(Func<bool> Alive, string Label, bool RegistersBeforeReady, (string Path, long From)? Transcript);
+    readonly ILaunchCredentials? credentials;
     readonly List<Pending> pending = [];
     // Every session id a launch has started an agent on (given, resumed, or the Codex session
     // bound to it), with its process: while that process runs, the session is not resumed
@@ -166,12 +167,13 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Test-only compatibility overload; production must pass the shared gate explicitly.
     internal LaunchService(ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
-        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null, DeliveryGate? gate = null)
-        : this(gate ?? new DeliveryGate(), source, probe, injector, starter, locator, agency, options, log, attachments) { }
+        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null, DeliveryGate? gate = null, ILaunchCredentials? credentials = null)
+        : this(gate ?? new DeliveryGate(), source, probe, injector, starter, locator, agency, options, log, attachments, credentials) { }
 
     public LaunchService(DeliveryGate gate, ISessionSource source, IAgentHaBridgeProbe probe, IConsoleInjector injector, IAgentStarter starter, IAgentLocator locator,
-        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null)
+        AgencyCatalog agency, LaunchServiceOptions options, Action<string>? log = null, AttachmentStore? attachments = null, ILaunchCredentials? credentials = null)
     {
+        this.credentials = credentials;
         this.source = source;
         this.probe = probe;
         this.injector = new GateTrackedInjector(injector, gate);
@@ -907,6 +909,8 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var environment = AgentEnvironment.For(options.CopilotHome, options.ClaudeHome,
                 options.CodexHome, options.ClaudeConfigDirExplicit, locator.ChildPath());
             environment[Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched";
+            // Set to nothing when none is issued, so a token of the host's own is never inherited.
+            environment[Launchers.TokenVariable] = null;
             var spec = new StartSpec(plan.Executable, args, directory, environment, ConsoleColumns);
             if (starter.CommandLine(spec, out var tooLong) is null)
             {
@@ -957,13 +961,26 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // Where a prompt of the person's would show they got past its startup questions
             // (HeldForReply): what the transcript holds now is from before this agent.
             var transcriptFrom = TranscriptFrom(plan.Launcher, sessionId);
+            // A session whose id the agent chooses (Codex) has none to bind a credential to yet.
+            var launchId = Guid.NewGuid().ToString("N");
+            var credentialIssued = false;
+            if (credentials is not null && sessionId.Length > 0)
+            {
+                try { environment[Launchers.TokenVariable] = credentials.Prepare(sessionId, launchId); credentialIssued = environment[Launchers.TokenVariable] is not null; }
+                catch (Exception e) when (e is InvalidOperationException or ArgumentException or IOException or UnauthorizedAccessException)
+                {
+                    log($"launch {Short(key)}: no agent credential was issued: {e.Message}");
+                }
+            }
             Started started;
             try { started = starter.Start(spec); }
             catch (Exception e)
             {
+                if (credentialIssued) { credentials!.Abandon(launchId); }
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
                 return new LaunchResult(LaunchOutcome.Failed, $"{plan.Launcher.Label} couldn't be started") { Launched = launched };
             }
+            if (credentialIssued) { credentials!.Bind(launchId, started.ProcessId, started.StartedAt); }
             if (claim is not null) { attachments!.Consume(claim); handed.Value = true; }
             if (sessionId.Length > 0) { Launched(sessionId, started); }
             log($"launch {Short(key)}: {(plan.Resume is null ? "started" : "resumed")} pid {started.ProcessId} in {directory} via {plan.Launcher.Label} (session {(sessionId.Length > 0 ? sessionId : "id chosen by the agent")})");

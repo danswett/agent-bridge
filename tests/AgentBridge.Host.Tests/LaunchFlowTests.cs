@@ -87,7 +87,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null)
+    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
@@ -115,7 +115,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             LocalNow = now ?? (() => DateTime.Now),
             Transfers = fetcher ?? transfers,
             TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
-        }, log: logged.Enqueue, attachments: attachments);
+        }, log: logged.Enqueue, attachments: attachments, credentials: credentials);
     }
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
@@ -179,6 +179,46 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Equal(saved.Codex, environment["CODEX_HOME"]);
         Assert.Equal(locator.PathEnvironment, environment["PATH"]);
         Assert.False(string.IsNullOrEmpty(environment[Launchers.SessionVariable]));
+    }
+
+    sealed class RecordedCredentials : ILaunchCredentials
+    {
+        public readonly List<string> Calls = [];
+        public string? Prepare(string session, string launchId) { Calls.Add($"prepare {session} {launchId}"); return "tok-" + launchId; }
+        public void Bind(string launchId, int processId, DateTimeOffset startedAt) => Calls.Add($"bind {launchId} {processId}");
+        public void Abandon(string launchId) => Calls.Add($"abandon {launchId}");
+    }
+
+    [Fact]
+    public async Task A_launch_hands_the_agent_its_credential_in_its_environment_and_binds_it_to_the_started_process()
+    {
+        var credentials = new RecordedCredentials();
+        var launcher = Launcher(Config(), credentials: credentials);
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        var environment = Assert.Single(starter.Specs).Environment!;
+        var session = environment[Launchers.SessionVariable]!;
+        var launchId = credentials.Calls[0].Split(' ')[2];
+        Assert.Equal("tok-" + launchId, environment[Launchers.TokenVariable]);
+        Assert.Equal([$"prepare {session} {launchId}", $"bind {launchId} {Assert.Single(starter.Pids)}"], credentials.Calls);
+    }
+
+    [Fact]
+    public async Task A_launch_that_could_not_start_abandons_its_credential_and_one_without_a_service_inherits_no_token()
+    {
+        var credentials = new RecordedCredentials();
+        starter.Throws = new IOException("no such file");
+
+        var result = await Launcher(Config(), credentials: credentials).LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Failed, result.Outcome);
+        Assert.Equal(2, credentials.Calls.Count);
+        Assert.Equal("abandon " + credentials.Calls[0].Split(' ')[2], credentials.Calls[1]);
+
+        starter.Throws = null;
+        await Launcher(Config()).LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+        Assert.Null(Assert.Single(starter.Specs).Environment![Launchers.TokenVariable]);
     }
 
     [Fact]
