@@ -1,0 +1,181 @@
+using System.Text.Json;
+using AgentBridge.Protocol;
+
+namespace AgentBridge.App.Core;
+
+// Where a session's history stands (ui.md H5). Idle: nothing is loading and older turns may remain
+// (or none has been asked for yet). StartReached: the host serves nothing older. NoHistory: this
+// machine sends none (no capability, or `unavailable`). Gone: the machine no longer lists the session.
+public enum HistoryLoad { Idle, Loading, Failed, NoHistory, StartReached, Gone }
+
+// One session's history as the app holds it (docs/protocol/v1-history.md, H0-H6): the turns the
+// host served, keyed by their stable id so a turn that arrives twice (a page, a newer page, the
+// live exchange) is held once, and the cursor for the page before the oldest. Data only: no view
+// reads it yet, and nothing here touches the UI thread, so a caller on any thread may use it. One
+// load runs at a time; a call made while one runs does nothing.
+public sealed class SessionHistory(HostConnection host, string sessionId)
+{
+    readonly object gate = new();
+    readonly List<HistoryTurn> held = [];
+    // Pages read past turns already held after a stale cursor: the held turns are at most Kept, a page is
+    // at least one turn, so this bounds a host that keeps answering with pages of the same turns.
+    const int MaxRestartPages = HistoryLimits.Kept / HistoryLimits.DefaultTurns + 5;
+    string? before;
+    bool loadedNewest;
+
+    // Raised on the thread that finished a load or added a live turn, once the change is held.
+    public event Action? Changed;
+
+    public HistoryLoad State { get; private set; }
+    // The turns held, oldest first.
+    public IReadOnlyList<HistoryTurn> Turns { get { lock (gate) { return [.. held]; } } }
+    // Whether an older page can be asked for: the newest has been read and its cursor says more.
+    public bool HasOlder { get { lock (gate) { return loadedNewest && before is not null && State is not (HistoryLoad.NoHistory or HistoryLoad.Gone); } } }
+    // Why the host has none, when it said (`unavailable`), as secondary text.
+    public string? Reason { get; private set; }
+    // How the start of the history reads once reached: "Start of session · date" or, when Limited, "Start of available history".
+    public HistoryStart? Start { get; private set; }
+    // Turns at the newest end were let go to stay within HistoryLimits.Kept; scrolling forward would need them again.
+    public bool NewestDropped { get; private set; }
+    // Whether a turn was read in part or not at all (a page's `partial`), for a line above it (H5).
+    public bool AnyPartial { get { lock (gate) { return held.Any(t => t.Unreadable == true || t.Truncated == true); } } }
+
+    // Opens the session: the newest page. Without the machine's capability nothing is sent.
+    public async Task LoadNewestAsync(CancellationToken ct = default)
+    {
+        if (!host.Can(HistoryProtocol.Capability)) { Settle(HistoryLoad.NoHistory); return; }
+        if (!Begin()) { return; }
+        await RunAsync(newest: true, ct);
+    }
+
+    // The page before the oldest turn held, the same call that retries a failed one: the first
+    // page again while none has been read.
+    public async Task LoadOlderAsync(CancellationToken ct = default)
+    {
+        if (!loadedNewest) { await LoadNewestAsync(ct); return; }
+        if (!Begin()) { return; }
+        await RunAsync(newest: false, ct);
+    }
+
+    // The live exchange's turn: held once whatever else has brought it. A turn already held stays
+    // as it is (the live session says what is newer of it); a new one goes after every other,
+    // never between (v1-history.md, Live turns and history 3). Returns whether it was new.
+    public bool AddLive(HistoryTurn turn)
+    {
+        lock (gate)
+        {
+            if (held.Any(t => t.Id == turn.Id)) { return false; }
+            held.Add(turn);
+        }
+        Changed?.Invoke();
+        return true;
+    }
+
+    bool Begin()
+    {
+        lock (gate)
+        {
+            if (State == HistoryLoad.Loading || State is HistoryLoad.NoHistory or HistoryLoad.Gone) { return false; }
+            if (State == HistoryLoad.StartReached) { return false; }
+            State = HistoryLoad.Loading;
+            return true;
+        }
+    }
+
+    void Settle(HistoryLoad state, string? reason = null)
+    {
+        lock (gate)
+        {
+            State = state;
+            Reason = reason;
+        }
+        Changed?.Invoke();
+    }
+
+    async Task RunAsync(bool newest, CancellationToken ct)
+    {
+        Changed?.Invoke();
+        try
+        {
+            var asked = newest ? null : before;
+            var restarted = false;
+            var pages = 0;
+            while (true)
+            {
+                var result = await host.ReadAsync<HistoryResult>(HistoryProtocol.Op, new HistoryRequest { Id = sessionId, Before = asked }, ct: ct);
+                if (result.Missing == true) { Settle(HistoryLoad.Gone); return; }
+                if (result.Unavailable is { } why) { Settle(HistoryLoad.NoHistory, why); return; }
+                if (result.Stale == true)
+                {
+                    // The cursor can't be continued from: keep what is held and read the newest page
+                    // again, merged by id, once (a second answer like it is a failure, not a loop).
+                    if (asked is null || restarted) { Settle(HistoryLoad.Failed); return; }
+                    restarted = true;
+                    asked = null;
+                    continue;
+                }
+                if (result.Turns is null) { Settle(HistoryLoad.Failed); return; }
+
+                var added = Merge(result, atNewestEnd: asked is null);
+                lock (gate)
+                {
+                    loadedNewest = true;
+                    before = result.Before;
+                    if (result.Before is null) { Start = result.Start; }
+                }
+                if (result.Before is null) { Settle(HistoryLoad.StartReached); return; }
+                // After a restart the newest page's cursor leads back over turns already held: keep
+                // reading until a page brings one that is not, so the call shows something older.
+                if (restarted && added == 0 && ++pages < MaxRestartPages)
+                {
+                    asked = result.Before;
+                    continue;
+                }
+                Settle(HistoryLoad.Idle);
+                return;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            Settle(HistoryLoad.Idle);
+            throw;
+        }
+        catch (Exception e) when (e is HostErrorException or HostNotRunningException or IOException or TimeoutException or JsonException or OperationCanceledException)
+        {
+            // What is held stays (H5): the failure is the line above it, and Try again asks again.
+            Settle(HistoryLoad.Failed);
+        }
+    }
+
+    // Puts the page's turns among those held, each id once: a turn held is replaced where it is;
+    // the rest go above the oldest held (an older page) or after the newest (the newest page, v1-history.md
+    // Live turns and history 3 to 6). An older page that overfills the cap lets the newest go (H6).
+    // Returns how many turns were new.
+    int Merge(HistoryResult page, bool atNewestEnd)
+    {
+        var added = 0;
+        lock (gate)
+        {
+            var fresh = new List<HistoryTurn>();
+            foreach (var turn in page.Turns!)
+            {
+                var at = held.FindIndex(t => t.Id == turn.Id);
+                if (at >= 0) { held[at] = turn; }
+                else if (fresh.All(t => t.Id != turn.Id)) { fresh.Add(turn); }
+            }
+            added = fresh.Count;
+            if (atNewestEnd) { held.AddRange(fresh); }
+            else
+            {
+                held.InsertRange(0, fresh);
+                var over = held.Count - HistoryLimits.Kept;
+                if (over > 0)
+                {
+                    held.RemoveRange(held.Count - over, over);
+                    NewestDropped = true;
+                }
+            }
+        }
+        return added;
+    }
+}
