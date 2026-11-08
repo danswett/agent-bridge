@@ -489,6 +489,15 @@ person, from an agent and given up on, a repeated press) with the daemon's const
 contract tests assert the connector tells the card exactly what the daemon told it, and makes
 the same service calls.
 
+**Request id and acknowledgement.** A sender may add `rid` (1 to 64 letters, digits, `-`, `_`, `.`;
+anything else is ignored) and `sender` (a name, at most 64 characters). The host then publishes
+`reply_ack` `{rid, outcome, at, sender?, duplicate?}` in the session's activity attributes in the same
+update as `Reply sent` / `Reply NOT sent`. `outcome` is `delivered`, `unconfirmed` or `refused`. The ack
+stays until a newer one replaces it, so a sender that finds another rid there knows its message was
+swapped or lost and sends again. A rid seen before (the last 50 per session) is not delivered again; the
+host re-acks it with `duplicate: true`. A `refused` rid is forgotten, so the same rid may be retried.
+Publishes without a `rid` behave as before.
+
 **The reply card** publishes `{at, text, images: [{id, name, content_type}], files: [{name,
 content_type, b64}], driver?}` (not retained) to `copilot/cli/<node>/replypayload/set`, read
 through the reply payload sensor: its state is `at`, the stamp that makes a publish new. A new

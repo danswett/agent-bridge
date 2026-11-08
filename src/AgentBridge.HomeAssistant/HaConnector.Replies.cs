@@ -49,6 +49,30 @@ public sealed partial class HaConnector
         // When the last reply-card publish went in (LastPayloadDeliveredAt).
         public DateTimeOffset? PayloadDeliveredAt;
 
+        // Request ids (rid) taken from the card, most recent last, each with what came of it
+        // (null while it is being delivered): a publish repeating one is dropped, and the sender
+        // reads the same outcome again. A refused one is forgotten so the sender can retry it.
+        public readonly Dictionary<string, string?> Rids = new(StringComparer.Ordinal);
+        readonly List<string> ridOrder = [];
+        // The last acknowledgement: which rid the host delivered, published with the card's activity.
+        public JsonObject? Ack;
+
+        public void TakeRid(string rid)
+        {
+            if (Rids.TryAdd(rid, null)) { ridOrder.Add(rid); }
+            if (ridOrder.Count > MaxRids)
+            {
+                Rids.Remove(ridOrder[0]);
+                ridOrder.RemoveAt(0);
+            }
+        }
+
+        public void ForgetRid(string rid)
+        {
+            Rids.Remove(rid);
+            ridOrder.Remove(rid);
+        }
+
         public bool IsHandled(string stamp) => Handled.Contains(stamp, StringComparer.Ordinal);
 
         public void Handle(string stamp)
@@ -65,10 +89,37 @@ public sealed partial class HaConnector
     // reply goes in.
     const int MaxWaiting = 16;
 
+    // The request ids remembered per card to drop a message delivered twice.
+    const int MaxRids = 50;
+
+    // A rid is one short token; anything else is treated as no rid, so a malformed one never
+    // reaches an acknowledgement.
+    static string? CleanRid(string? rid) =>
+        rid is { Length: > 0 and <= 64 } && rid.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.') ? rid : null;
+
+    static string? CleanSender(string? sender)
+    {
+        var s = sender is null ? null : string.Join(' ', sender.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return string.IsNullOrEmpty(s) ? null : s.Length > 64 ? s[..64] : s;
+    }
+
+    JsonObject MakeAck(string rid, string? sender, string outcome, bool duplicate = false)
+    {
+        var ack = new JsonObject
+        {
+            ["rid"] = rid,
+            ["outcome"] = outcome,
+            ["at"] = time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
+        };
+        if (sender is not null) { ack["sender"] = sender; }
+        if (duplicate) { ack["duplicate"] = true; }
+        return ack;
+    }
+
     // Arm: the driver arm the reply made when it started, so what came of it touches that arm
     // and never a newer one (an answer given meanwhile, say).
     sealed record ReplyDone(long Delivery, string SessionId, string Shown, bool Box, string? Text, IReadOnlyList<string> Images,
-        DateTimeOffset? Arm, ReplyResult Result, bool Failed);
+        DateTimeOffset? Arm, ReplyResult Result, bool Failed, string? Rid = null, string? Sender = null);
 
     readonly Func<HaReply, CancellationToken, Task<ReplyResult>>? reply;
     readonly ConcurrentQueue<ReplyDone> replies = new();
@@ -141,6 +192,14 @@ public sealed partial class HaConnector
         var short8 = done.SessionId[..Math.Min(8, done.SessionId.Length)];
         // Still the arm this reply made, not consumed by its turn nor replaced since.
         var ours = done.Arm is { } arm && p.DriverPendingAt == arm;
+        // The delivered rid goes out with the same update that says how the delivery ended.
+        if (done.Rid is { } rid)
+        {
+            var outcome = result.Outcome switch { AnswerOutcome.Delivered => "delivered", AnswerOutcome.Unconfirmed => "unconfirmed", _ => "refused" };
+            if (outcome == "refused") { p.Reply.ForgetRid(rid); }
+            else if (p.Reply.Rids.ContainsKey(rid)) { p.Reply.Rids[rid] = outcome; }
+            p.Reply.Ack = MakeAck(rid, done.Sender, outcome);
+        }
         switch (result.Outcome)
         {
             case AnswerOutcome.Delivered:
@@ -317,6 +376,20 @@ public sealed partial class HaConnector
             p.Reply.Handle(stamp);
             return CardRead.Nothing;
         }
+        var rid = attributes ? CleanRid(Str(a, "rid")) : null;
+        var sender = attributes ? CleanSender(Str(a, "sender")) : null;
+        // A message delivered twice is dropped: nothing is typed again, and the sender is told
+        // what came of the first. While the first is still going in, its own outcome will say.
+        if (rid is not null && p.Reply.Rids.TryGetValue(rid, out var prior))
+        {
+            if (prior is not null)
+            {
+                p.Reply.Ack = MakeAck(rid, sender, prior, duplicate: true);
+                await TransientAsync(p, "Duplicate reply dropped", [], ct);
+            }
+            p.Reply.Handle(stamp);
+            return CardRead.Taken;
+        }
         // Each said before the publish is marked used: if saying it fails, the next pass reads the
         // same publish again rather than finding it used with nothing done.
         if (usable)
@@ -326,6 +399,7 @@ public sealed partial class HaConnector
         if (!usable || images.Count + files.Count != requested)
         {
             p.DriverPendingAt = null;
+            if (rid is not null) { p.Reply.Ack = MakeAck(rid, sender, "refused"); }
             await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = "The attachment metadata is incomplete; no reply was sent." }, ct);
             p.Reply.Handle(stamp);
             return CardRead.Taken;
@@ -334,11 +408,22 @@ public sealed partial class HaConnector
         if (images.Count + files.Count > AttachmentLimits.PerReply)
         {
             p.DriverPendingAt = null;
+            if (rid is not null) { p.Reply.Ack = MakeAck(rid, sender, "refused"); }
             await TransientAsync(p, "Reply NOT sent", new JsonObject { ["error"] = $"A reply carries at most {AttachmentLimits.PerReply} attachments; no reply was sent." }, ct);
             p.Reply.Handle(stamp);
             return CardRead.Taken;
         }
-        await TransientAsync(p, "Sending...", [], ct);
+        if (rid is not null)
+        {
+            p.Reply.TakeRid(rid);
+            p.Reply.Ack = null;
+        }
+        try { await TransientAsync(p, "Sending...", [], ct); }
+        catch
+        {
+            if (rid is not null) { p.Reply.ForgetRid(rid); }
+            throw;
+        }
         p.Reply.Handle(stamp);
         var shown = Preview(text, images.Count + files.Count);
         var request = RequestId(sessionId, "reply", "card:" + stamp);
@@ -367,7 +452,7 @@ public sealed partial class HaConnector
                 staged.Add(new HaReplyFile(string.IsNullOrWhiteSpace(name) ? "file" : name, type, bytes));
             }
             return (await reply!(new HaReply(sessionId, request, string.IsNullOrWhiteSpace(text) ? null : text, staged), token), false);
-        });
+        }, rid, sender);
         log($"Home Assistant connector took a reply-card reply for {sessionId[..Math.Min(8, sessionId.Length)]}" +
             (images.Count + files.Count > 0 ? $" with {images.Count + files.Count} attachment(s)" : ""));
         return CardRead.Delivering;
@@ -443,7 +528,7 @@ public sealed partial class HaConnector
 
     // Runs a delivery beside the passes; what came of it waits for the next one.
     void Deliver(Published p, string sessionId, string shown, bool box, string? text, IReadOnlyList<string> images,
-        Func<CancellationToken, Task<(ReplyResult Result, bool Failed)>> send)
+        Func<CancellationToken, Task<(ReplyResult Result, bool Failed)>> send, string? rid = null, string? sender = null)
     {
         var number = Interlocked.Increment(ref deliveries);
         underWay[sessionId] = number;
@@ -455,7 +540,7 @@ public sealed partial class HaConnector
             try { outcome = await send(token); }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { outcome = (new ReplyResult(AnswerOutcome.Unconfirmed, "the host stopped while the reply was being delivered"), false); }
             catch (Exception e) { outcome = (new ReplyResult(AnswerOutcome.Unconfirmed, $"delivery failed: {e.GetType().Name}"), false); }
-            replies.Enqueue(new ReplyDone(number, sessionId, shown, box, text, images, arm, outcome.Result, outcome.Failed));
+            replies.Enqueue(new ReplyDone(number, sessionId, shown, box, text, images, arm, outcome.Result, outcome.Failed, rid, sender));
         }, CancellationToken.None);
         Track(task);
     }
