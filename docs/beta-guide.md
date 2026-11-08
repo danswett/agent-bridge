@@ -1,7 +1,6 @@
 # Slipgates beta guide
 
-<!-- Source for slipgates.com/docs (#762). Items marked [confirm] wait on the owner or Platform
-and are filled in before the first tester gets the link. -->
+<!-- Source for slipgates.com/docs (#762). -->
 
 Thank you for trying Slipgates early. This page is the whole guide: what it is, how to install
 it, what is rough, what we collect, and how to reach us.
@@ -64,7 +63,7 @@ What you lose and what to do is in [the address move notes](app-domain.md#if-you
 - Getting help: reply in the email or Teams conversation your invitation came in.
 - Who answers: support@slipgates.com is live and receives mail; the owner's confirmed statement
   and its limits are under "Support email, Teams and privacy requests" below.
-- Privacy notice and beta terms: [confirm: links to the published privacy notice and terms].
+- Privacy notice: <https://slipgates.com/privacy>.
 
 Invitations are currently on hold. Real reports must not be sent through the in-app or staging
 feedback service while real-report collection and processing remain uncleared. You can still send
