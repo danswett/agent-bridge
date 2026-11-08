@@ -459,6 +459,8 @@ const NOT_REPLAYED = {
   HistoryResult: 'the PWA does not page a session\'s history yet (#292)',
   HistoryStart: 'the PWA does not page a session\'s history yet (#292)',
   HistoryTurn: 'the PWA does not page a session\'s history yet (#292)',
+  AgentHelloRequest: 'agent.hello is local pipe only; no PWA or relay channel serves it (#720)',
+  AgentHelloResult: 'agent.hello is local pipe only; no PWA or relay channel serves it (#720)',
   HistoryPrompt: 'the PWA does not page a session\'s history yet (#292)',
   HistoryPart: 'the PWA does not page a session\'s history yet (#292)',
   DelegateEvent: 'the PWA does not page a session\'s history yet (#292)',
