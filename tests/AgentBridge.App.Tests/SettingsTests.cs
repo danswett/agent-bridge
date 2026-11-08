@@ -858,6 +858,19 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Get_started_points_CLI_sign_in_at_the_Copilot_row_first_and_stays_yours_to_check()
+    {
+        AgentReadinessRow Row(string id, string label) => new(Agent(id, label, ReadinessState.NeedsAction), canManage: true, canInstall: true);
+        SetupStep SignIn(params AgentReadinessRow[] rows) => SetupGuide.Steps(true, rows, false).Single(x => x.Id == "cli-signin");
+
+        var both = SignIn(Row("claude", "Claude Code"), Row("copilot", "Copilot CLI"));
+        Assert.Equal("Yours to check", both.Mark);
+        Assert.Contains("Choose Sign in on the Copilot CLI row below", both.Detail);
+        Assert.Contains("Choose Sign in on the Claude Code row below", SignIn(Row("claude", "Claude Code")).Detail);
+        Assert.Contains("Open the CLI once in a terminal", SignIn().Detail);
+    }
+
+    [Fact]
     public void Get_started_marks_the_new_session_step_done_only_on_a_passed_test_of_an_installed_agent()
     {
         var rows = new[] { new AgentReadinessRow(Agent("claude", "Claude Code", ReadinessState.Unknown, hooksDetail: "owned setup record")) };

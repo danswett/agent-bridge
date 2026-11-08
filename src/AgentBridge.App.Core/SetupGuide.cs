@@ -57,8 +57,11 @@ public static class SetupGuide
             else { result.Add(new(id, title, SetupStepState.Waiting, todo)); }
         }
 
+        // Copilot first: it is the agent most testers use. Sign in opens the CLI's own login; Settings never sees the result.
+        var signInRow = installed.Where(a => a.ShowSignIn).OrderBy(a => a.Id == "copilot" ? 0 : 1).FirstOrDefault();
         result.Add(new("cli-signin", "Sign in to the CLI itself", SetupStepState.Yours,
-            "Open the CLI once in a terminal and sign in if it asks. Settings can't see this yet."));
+            signInRow is null ? "Open the CLI once in a terminal and sign in if it asks. Settings can't see this yet."
+                : $"Choose Sign in on the {signInRow.Label} row below and finish in the window it opens. Settings can't see this yet."));
         result.Add(tested
             ? new("session", "Start a new session", SetupStepState.Done, verified ? "A test session on this machine sent its hook" : "A hook arrived from a session on this machine")
             : new("session", "Start a new session", nextTaken ? SetupStepState.Waiting : SetupStepState.Next,
