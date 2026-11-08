@@ -433,6 +433,19 @@ suites:
     command: gh workflow run beta-acceptance.yml --ref <branch>
     where: beta-acceptance.yml accept, report
     status: partial
+  - id: forms-soak-scripts
+    kind: unit
+    ring: 0
+    select: affected
+    # The forms soak rig's redaction checks and a syntax check of its stub server (#1138). The rig
+    # itself, which needs a console, the host's injector and the Copilot CLI, is run by hand on a
+    # lab machine and is not part of this suite.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [tools/lab/forms-soak/**]
+    command: pwsh -NoProfile -File tools/lab/forms-soak/Test-Redaction.ps1; node --check tools/lab/forms-soak/stub-mcp.js
+    where: ci.yml light
+    status: exists
 
   - id: relay-container
     kind: packaging
