@@ -234,6 +234,7 @@ public sealed record EntryBody(
             if (hostSignAlg != SignAlgorithm) { throw new RosterFormatException(Refusal.Value, "body.device.hostSignAlg"); }
             hostSignProof = Codec.FromBase64Url(StrictJson.String(d.GetProperty("hostSignProof"), "body.device.hostSignProof"), "body.device.hostSignProof");
             P256.CheckRosterSignature(hostSignProof, "body.device.hostSignProof");
+            if (hostSign.AsSpan().SequenceEqual(dh)) { throw new RosterFormatException(Refusal.Device, "body.device.hostSign is its dh key"); }
         }
         var platform = StrictJson.String(d.GetProperty("platform"), "body.device.platform");
         if (platform is not ("windows" or "macos" or "linux" or "ios" or "ipados" or "android")) { throw new RosterFormatException(Refusal.Value, "body.device.platform"); }

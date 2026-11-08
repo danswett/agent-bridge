@@ -40,6 +40,8 @@ public static class Invalid
     public const string Evidence = "evidence";
     // A v2 host add on a roster whose verifier has not switched v2 on.
     public const string Version = "version";
+    // A hostSign key that is, or is made by this add the same as, another device's key of any kind.
+    public const string HostKey = "host-key";
 
     // A veto (§5.6) naming another reset than the one held.
     public const string Reset = "reset";
@@ -77,6 +79,21 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
     // Roster v2 (a host add with hostSign) is switched on per roster, never inferred (§8.10, V1);
     // until then a v2 add is refused.
     public bool AcceptHostSign { get; init; }
+
+    // A hostSign is for nothing but its host's own statements: it equals no other device's dh,
+    // sign, webauthn key or hostSign, whichever add came first.
+    static bool HostKeyCollides(DeviceDescriptor added, DeviceDescriptor other)
+    {
+        static IEnumerable<byte[]> Keys(DeviceDescriptor d)
+        {
+            yield return d.Dh;
+            if (d.Sign is not null) { yield return d.Sign; }
+            if (d.WebAuthn is not null) { yield return d.WebAuthn.Key; }
+        }
+        bool Hit(byte[]? hostSign, DeviceDescriptor d) =>
+            hostSign is not null && (Keys(d).Any(k => k.AsSpan().SequenceEqual(hostSign)) || (d.HostSign is not null && d.HostSign.AsSpan().SequenceEqual(hostSign)));
+        return Hit(added.HostSign, other) || Hit(other.HostSign, added);
+    }
     internal int AddCap { get; init; } = MaxAdds;
     internal int EntryCap { get; init; } = MaxEntries;
     internal int EvidenceSignerCap { get; init; } = EvidencePerSigner;
@@ -336,6 +353,10 @@ public sealed class RosterVerifier(string account, string generation, Func<TimeS
                     foreach (var a in ancestors.Members())
                     {
                         if (_g[a].IsAdd && _g[a].DeviceId == body.Device!.Id) { return Invalid.Readded; }
+                    }
+                    foreach (var a in ancestors.Members())
+                    {
+                        if (_g[a].IsAdd && HostKeyCollides(body.Device!, _g[a].Body.Device!)) { return Invalid.HostKey; }
                     }
                     if (p.ActiveCount >= MaxActive) { return Invalid.ActiveCap; }
                     if (_adds >= AddCap || _nonRemovals >= EntryCap) { return Invalid.Cap; }

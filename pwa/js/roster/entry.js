@@ -2,7 +2,7 @@
 // in the order the C# library (src/AgentBridge.Roster/Entry.cs, EntryBody.cs) runs them, so an
 // input with one defect is refused with the same code by both. Async only because WebCrypto is.
 import { RosterFormatError, REFUSAL } from './refusal.js';
-import { base64Url, fromBase64Url, tryBase64Url, isId, hex, compare } from './codec.js';
+import { base64Url, fromBase64Url, tryBase64Url, isId, hex, compare, equal } from './codec.js';
 import { frame, utf8, sha256, LABEL } from './framing.js';
 import { point, verify, checkRosterSignature } from './p256.js';
 import { parseStrict, members, object, string, bool, integer, scalars, utf8Bytes, hasControl } from './strict-json.js';
@@ -180,6 +180,7 @@ async function parseDevice(node, version, account, generation) {
     if (hostSignAlg !== SIGN_ALGORITHM) throw new RosterFormatError(REFUSAL.value, 'body.device.hostSignAlg');
     hostSignProof = fromBase64Url(string(d.get('hostSignProof'), 'body.device.hostSignProof'), 'body.device.hostSignProof');
     checkRosterSignature(hostSignProof, 'body.device.hostSignProof');
+    if (equal(hostSign, dh)) throw new RosterFormatError(REFUSAL.device, 'body.device.hostSign is its dh key');
   }
   const platform = string(d.get('platform'), 'body.device.platform');
   if (!PLATFORMS.includes(platform)) throw new RosterFormatError(REFUSAL.value, 'body.device.platform');

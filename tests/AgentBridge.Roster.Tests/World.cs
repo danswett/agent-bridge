@@ -76,12 +76,24 @@ public sealed class World
 
     // An add of `device` by `by`. A copy (`copyBy`) carries the device's dh with the copier's own
     // sign key, as a hostile approver's copy would.
-    public Signed Add(string label, string by, string device, string parent, string kind = "phone", string? signAs = null, bool copy = false, string presence = Presence.Key, byte[]? transcript = null)
+    public Signed Add(string label, string by, string device, string parent, string kind = "phone", string? signAs = null, bool copy = false, string presence = Presence.Key, byte[]? transcript = null, string? signWith = null)
     {
         var b = Body("add", by, [parent]);
-        b["device"] = Device(device, kind, copy ? by : null, presence);
+        b["device"] = Device(device, kind, copy ? by : signWith, presence);
         b["approval"] = new JsonObject { ["method"] = "code", ["transcript"] = Codec.Base64Url(transcript ?? System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(label))) };
         return Put(label, b, by, signAs: signAs);
+    }
+
+    // A host's v2 add. Its hostSign is `hostSignOf`'s sign key (its own by default), or that device's dh.
+    public Signed AddHostV2(string label, string by, string device, string parent, string? hostSignOf = null, bool hostSignIsDh = false)
+    {
+        var b = Body("add", by, [parent]);
+        b["v"] = 2;
+        var k = Keys(hostSignOf ?? device);
+        b["device"] = HostDeviceV2(Keys(device).Dh, hostSignIsDh ? k.Dh : k.Sign, "linux", device);
+        Id(device);
+        b["approval"] = new JsonObject { ["method"] = "code", ["transcript"] = Codec.Base64Url(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(label))) };
+        return Put(label, b, by);
     }
 
     public Signed Remove(string label, string by, string targetAdd, string parent, string[]? keep = null, string? cosigner = null, string? signAs = null, string? cosignAs = null)

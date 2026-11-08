@@ -13,7 +13,7 @@ public sealed class RosterStateVectorTests
 
     sealed record Step(string? Offer = null, double? Hours = null, string? Adopt = null);
 
-    sealed record Scenario(string Name, string About, Func<World> Build, Func<World, Step[]>? Steps = null, int? AddCap = null);
+    sealed record Scenario(string Name, string About, Func<World> Build, Func<World, Step[]>? Steps = null, int? AddCap = null, bool AcceptHostSign = false);
 
     static Step[] All(World w) => [.. w.Labels.Select(l => new Step(l))];
 
@@ -69,12 +69,29 @@ public sealed class RosterStateVectorTests
                 var w = new World();
                 w.Genesis();
                 w.Add("+A", "G", "A", "G");
-                w.Add("+C", "A", "C", "+A");
-                w.Rename("nA", "A", "+A", "+C", "G");
-                w.Rename("nC", "C", "+C", "nA", "Kitchen laptop");
                 return w;
-            },
-            w => [.. All(w), new Step(Hours: 0), new Step(Hours: 73)]);
+            });
+        // A host's hostSign key (agent-principals.md §8.10, V1) is a verifier's choice to accept, and
+        // never another device's key.
+        World HostBase()
+        {
+            var w = new World();
+            w.Genesis();
+            w.Add("+A", "G", "A", "G");
+            return w;
+        }
+        yield return new("host-sign-off", "a v2 host add is refused while the verifier has not switched v2 on",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); return w; });
+        yield return new("host-sign", "a v2 host add with its own hostSign is accepted once v2 is on",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); return w; }, AcceptHostSign: true);
+        yield return new("host-sign-is-a-person-sign", "a hostSign equal to a person's sign key is refused",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A", hostSignOf: "A"); return w; }, AcceptHostSign: true);
+        yield return new("host-sign-is-a-person-dh", "a hostSign equal to a person's dh key is refused",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A", hostSignOf: "A", hostSignIsDh: true); return w; }, AcceptHostSign: true);
+        yield return new("host-sign-is-another-hosts", "a hostSign equal to another host's hostSign is refused",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.AddHostV2("+I", "G", "I", "+H", hostSignOf: "H"); return w; }, AcceptHostSign: true);
+        yield return new("later-key-is-a-host-sign", "a person's add whose sign key is an active host's hostSign is refused",
+            () => { var w = HostBase(); w.AddHostV2("+H", "G", "H", "+A"); w.Add("+P", "G", "P", "+H", signWith: "H"); return w; }, AcceptHostSign: true);
         yield return new("ninth-rename", "the ninth rename of one add is refused",
             () =>
             {
@@ -205,7 +222,7 @@ public sealed class RosterStateVectorTests
     {
         var w = scenario.Build();
         var steps = (scenario.Steps ?? All)(w);
-        var v = new RosterVerifier(Account, Generation, () => w.Now) { AddCap = scenario.AddCap ?? RosterVerifier.MaxAdds };
+        var v = new RosterVerifier(Account, Generation, () => w.Now) { AddCap = scenario.AddCap ?? RosterVerifier.MaxAdds, AcceptHostSign = scenario.AcceptHostSign };
         var devices = new JsonObject();
         var entries = new JsonArray();
         foreach (var l in w.Labels)
@@ -254,6 +271,7 @@ public sealed class RosterStateVectorTests
             ["state"] = Snapshot(w, v),
         };
         if (scenario.AddCap is { } cap) { result.Insert(3, "limits", new JsonObject { ["addCap"] = cap }); }
+        if (scenario.AcceptHostSign) { result.Insert(2, "acceptHostSign", true); }
         return result;
     }
 

@@ -3,7 +3,7 @@
 // The set of accepted entries, which are quarantined, what has been adopted, and the state it
 // applies. It decides each offered entry by the acceptance rule, in the order offered; nothing
 // accepted is ever dropped.
-import { compare } from './codec.js';
+import { compare, equal } from './codec.js';
 import { isPerson, signedBy, signedByCosigner } from './entry.js';
 import { verify } from './p256.js';
 import { Bits, RosterGraph } from './graph.js';
@@ -34,6 +34,14 @@ export const RENAMES_PER_ADD = 8;
 export const EVIDENCE_PER_SIGNER = 256;
 export const EVIDENCE_TOTAL = 1024;
 export const PROBATION_MS = 72 * 3600 * 1000;
+
+// A hostSign is for nothing but its host's own statements: it equals no other device's dh, sign,
+// webauthn key or hostSign, whichever add came first.
+function hostKeyCollides(added, other) {
+  const keys = (d) => [d.dh, d.sign, d.webauthn && d.webauthn.key, d.hostSign].filter(Boolean);
+  const hit = (hostSign, d) => Boolean(hostSign) && keys(d).some((k) => equal(k, hostSign));
+  return hit(added.hostSign, other) || hit(other.hostSign, added);
+}
 
 // `clock` is the verifier's persisted monotonic running time in milliseconds (§3.4): it moves
 // only while the verifier runs, never with the wall clock, and survives restarts.
@@ -300,6 +308,7 @@ export class RosterVerifier {
         if (body.version === 2 && !this.acceptHostSign) return INVALID.version;
         for (const a of ancestors.members()) {
           if (g.at(a).isAdd && g.at(a).deviceId === body.device.id) return INVALID.readded;
+          if (g.at(a).isAdd && hostKeyCollides(body.device, g.at(a).body.device)) return INVALID.hostKey;
         }
         if (p.activeCount >= MAX_ACTIVE) return INVALID.activeCap;
         if (this.#adds >= this.#addCap || this.#nonRemovals >= MAX_ENTRIES) return INVALID.cap;

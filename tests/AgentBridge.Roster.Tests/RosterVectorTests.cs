@@ -333,6 +333,35 @@ public sealed class RosterVectorTests
         Text("cosigner-is-the-signer", Refusal.Signer, (remove with { Body = BodyWith(remove, b => b["cosigner"] = Phone.Device) }).Wire);
         Text("cosigner-is-the-target", Refusal.Signer, (remove with { Body = BodyWith(remove, b => b["cosigner"] = Host2.Device) }).Wire);
         Edit("cosigner-uppercase", Refusal.Id, remove, b => b["cosigner"] = Pwa.Device.ToUpperInvariant());
+
+        // A host's v2 add (agent-principals.md §8.10, V1): the hostSign key and its proof.
+        var addHostV2 = HostV2Add();
+        void HostV2(string name, string code, Action<JsonObject> change) => Edit(name, code, addHostV2, b => change(b["device"]!.AsObject()));
+        void Proof(string name, byte[] binding, TestKey? by = null) =>
+            HostV2(name, Refusal.HostProof, d => d["hostSignProof"] = Codec.Base64Url((by ?? Host1Sign).Sign(binding)));
+        var proof = Host1Sign.Sign(HostKey.Binding(Account, Generation, Host1.Public));
+        Proof("host-proof-for-another-account", HostKey.Binding("another", Generation, Host1.Public));
+        Proof("host-proof-for-another-generation", HostKey.Binding(Account, new string('0', 32), Host1.Public));
+        Proof("host-proof-for-another-dh", HostKey.Binding(Account, Generation, Host2.Public));
+        Proof("host-proof-by-another-key", HostKey.Binding(Account, Generation, Host1.Public), Host2);
+        Proof("host-proof-under-the-entry-label", Framing.F(Framing.Label(Framing.EntryLabel), Framing.Utf8(Account), Framing.Utf8(Generation), Host1.Public));
+        HostV2("host-proof-high-s", Refusal.HighS, d => d["hostSignProof"] = Codec.Base64Url(P256.Flip(proof)));
+        HostV2("host-proof-non-minimal-der", Refusal.Der, d => d["hostSignProof"] = Codec.Base64Url(LongR(proof)));
+        HostV2("host-proof-missing", Refusal.Missing, d => d.Remove("hostSignProof"));
+        HostV2("host-sign-alg-unknown", Refusal.Value, d => d["hostSignAlg"] = "ed25519");
+        HostV2("host-sign-off-curve", Refusal.Point, d => d["hostSign"] = Codec.Base64Url(OffCurve(Host1Sign.Public)));
+        HostV2("host-sign-is-its-dh", Refusal.Device, d =>
+        {
+            d["hostSign"] = Codec.Base64Url(Host1.Public);
+            d["hostSignProof"] = Codec.Base64Url(Host1.Sign(HostKey.Binding(Account, Generation, Host1.Public)));
+        });
+        Edit("v-2-on-a-rename", Refusal.Version, rename, b => b["v"] = 2);
+        Edit("v-2-on-a-person-with-host-sign", Refusal.Version, addHostV2, b =>
+        {
+            b["device"] = Person(Pwa, PwaSign, RosterKinds.Pwa, "windows", "Desk", Presence.Key);
+            b["device"]!["hostSign"] = Codec.Base64Url(Host1Sign.Public);
+        });
+        Edit("host-with-host-sign-needs-v-2", Refusal.Unknown, addHostV2, b => b["v"] = 1);
         return list;
     }
 

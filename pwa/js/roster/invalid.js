@@ -2,6 +2,7 @@
 // C# library's codes (Invalid in src/AgentBridge.Roster/RosterVerifier.cs).
 export const INVALID = Object.freeze({
   version: 'version',
+  hostKey: 'host-key',
   parent: 'parent',
   account: 'account',
   generation: 'generation',
