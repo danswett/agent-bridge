@@ -89,7 +89,7 @@ jobs:
       test-projects: ${{ steps.select.outputs.test-projects }}
       # The whole ring is the whole solution on all three runners, without asking the selector.
       whole-solution: ${{ steps.whole-ring.outputs.whole-ring == 'true' && 'true' || steps.select.outputs.whole-solution }}
-      product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && '["ubuntu-latest","windows-latest","windows-11-arm"]' || steps.select.outputs.product-os }}
+      product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && (github.event_name == 'pull_request' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","windows-latest","windows-11-arm"]') || steps.select.outputs.product-os }}
       test-filter: ${{ steps.select.outputs.test-filter }}
     steps:
       # A run by hand exists only to prove pwa-ui's apt fallback (force-apt-fallback), and its
@@ -217,6 +217,11 @@ jobs:
           $jobs = @($env:JOBS -split '\s+' | Where-Object { $_ })
           if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
             ./quality/plan.ps1 -FastRing -Base $env:BASE -Head HEAD -Jobs $jobs
+          } elseif ($env:EVENT -eq 'pull_request') {
+            # A pull request: the windows-11-arm product leg and the app's packaging legs run
+            # when the change calls for them (the app only for a reason of its own), and on main.
+            $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
+            ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Narrow app -ExcludePlatform win-arm64 -Jobs $jobs
           } else {
             $ring = if ($env:WHOLE_RING -eq 'true') { 2 } else { 1 }
             ./quality/plan.ps1 -Ring $ring -Base $env:BASE -Head HEAD -CompareRing1:($ring -gt 1) -Jobs $jobs
@@ -563,7 +568,7 @@ jobs:
     # took; Arm64 in `win-arm64` (build/app-channels.ps1), built and self-tested on Arm64.
     name: app (${{ matrix.runtime }})
     needs: plan
-    if: needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.app == 'true'
+    if: (needs.plan.outputs.whole-ring == 'true' && github.event_name != 'pull_request') || needs.plan.outputs.app == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -1470,6 +1475,7 @@ jobs:
       - name: Every job the plan selected passed, and none failed
         env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
           bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
@@ -1490,12 +1496,14 @@ jobs:
             echo "::error title=quality-gate::the plan gave no true or false for: $unknown"
             exit 1
           fi
-          # Selected: every job when the whole ring runs, otherwise those the plan gave true.
-          # Each must have succeeded; a skipped one was meant to run and didn't.
-          missing=$(echo "$NEEDS" | jq -r '
+          # Selected: every job when the whole ring runs, otherwise those the plan gave true. On a
+          # pull request the app is the exception: its output says whether the change needs it,
+          # whole ring or not (#1249). Each must have succeeded; a skipped one was meant to run
+          # and didn't.
+          missing=$(echo "$NEEDS" | jq -r --arg ev "$EVENT" '
             (.plan.outputs // {}) as $plan
             | ($plan["whole-ring"] == "true") as $all
-            | [to_entries[] | select(.key == "plan" or $all or $plan[.key] == "true")
+            | [to_entries[] | select(.key == "plan" or ($all and (.key != "app" or $ev != "pull_request")) or $plan[.key] == "true")
                 | select(.value.result != "success") | "\(.key) (\(.value.result))"]
             | join(", ")')
           if [ -n "$missing" ]; then
