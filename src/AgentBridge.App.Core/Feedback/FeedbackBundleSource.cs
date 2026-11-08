@@ -202,13 +202,40 @@ public sealed class FeedbackBundleSource : IFeedbackBundleSource
         catch (Exception) { return fallback; }
     }
 
-    string Clean(string? text, int max)
+    internal string Clean(string? text, int max)
     {
         var redacted = Sanitize(FeedbackRedactor.Redact(text ?? "", privateNames));
         if (redacted.Length <= max) { return redacted; }
         // Don't cut between the halves of a surrogate pair; the JSON writer rejects a lone half.
         var cut = char.IsHighSurrogate(redacted[max - 1]) ? max - 1 : max;
-        return redacted[..cut] + "…";
+        var kept = redacted[..cut];
+        // The cut must not leave half a placeholder or a key with its value gone: the bundle has to
+        // pass the same secret check the sender runs, so back up to an earlier boundary until it does.
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var fragment = DanglingPlaceholder(kept);
+            if (fragment >= 0) { kept = kept[..fragment]; }
+            if (!FeedbackRedactor.ContainsSecret(kept + "…")) { return kept + "…"; }
+            var boundary = kept.TrimEnd().LastIndexOfAny([' ', '\t', '\r', '\n']);
+            if (boundary < 0) { break; }
+            kept = kept[..boundary];
+        }
+        return TruncatedMark;
+    }
+
+    const string TruncatedMark = "[redacted: truncated]";
+
+    // Start of a trailing piece of a redaction placeholder ([redacted], <user>, <host>) that the cut
+    // interrupted, or -1.
+    static int DanglingPlaceholder(string text)
+    {
+        foreach (var placeholder in new[] { FeedbackRedactor.Mark, FeedbackRedactor.EscapedMark, "<user>", "<host>" })
+        {
+            var open = placeholder[0];
+            var start = text.LastIndexOf(open);
+            if (start >= 0 && text.Length - start < placeholder.Length && placeholder.StartsWith(text[start..], StringComparison.Ordinal)) { return start; }
+        }
+        return -1;
     }
 
     // Lone surrogates cannot be written as UTF-8 JSON.

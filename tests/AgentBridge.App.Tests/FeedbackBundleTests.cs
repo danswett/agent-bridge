@@ -405,6 +405,25 @@ public class FeedbackBundleTests
     }
 
     [Fact]
+    public void Truncation_never_leaves_text_the_sender_would_refuse()
+    {
+        var token = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789";
+        var line = "start " + new string('x', 40) + " password=hunter2 then Authorization: Basic dXNlcjpwYXNzd29yZA== and " + @"C:\Users\alice\x" + " mail bob@example.com tok " + token + " " + new string('y', 150) + " token=zzz999 end";
+        var source = new FeedbackBundleSource(new Fake(), null, null, ["zzzzzz"]);
+        for (var max = 1; max < line.Length; max++)
+        {
+            var cleaned = source.Clean(line, max);
+            Assert.False(FeedbackRedactor.ContainsSecret(cleaned), $"{max}: {cleaned}");
+            Assert.False(FeedbackRedactor.BundleHasSecret(System.Text.Json.JsonSerializer.Serialize(new { journal = new[] { cleaned } })), $"{max}: {cleaned}");
+            foreach (var leak in new[] { "hunter2", "dXNlcjpwYXNz", "alice", "bob@", "abcdefghij", "zzz999" }) { Assert.DoesNotContain(leak, cleaned); }
+        }
+    }
+
+    [Fact]
+    public void An_ordinary_line_is_truncated_as_before()
+        => Assert.Equal("hello worl…", new FeedbackBundleSource(new Fake(), null, null, ["zzzzzz"]).Clean("hello world, plain text", 10));
+
+    [Fact]
     public void Redaction_leaves_ordinary_text_alone()
     {
         const string text = "connection.reconnecting after 3 attempts; host 0.1.42";
