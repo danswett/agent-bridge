@@ -17,7 +17,7 @@ public sealed class FeedbackFailureTests
     public async Task A_sent_report_says_thanks_with_the_time_and_cannot_be_sent_twice()
     {
         var sender = new FakeSender().Then(new FeedbackSent(T0));
-        var vm = new FeedbackSendViewModel(sender, () => T0);
+        var vm = new FeedbackSendViewModel(sender);
         await vm.SendAsync();
         Assert.Equal(FeedbackSendState.Sent, vm.State);
         Assert.StartsWith("Thanks. Sent at ", vm.Message);
@@ -29,30 +29,41 @@ public sealed class FeedbackFailureTests
     public async Task A_failed_send_offers_Try_again_and_the_retry_sends_again()
     {
         var sender = new FakeSender().Then(new FeedbackFailed(FeedbackFailureCode.Offline)).Then(new FeedbackSent(T0));
-        var vm = new FeedbackSendViewModel(sender, () => T0);
+        var vm = new FeedbackSendViewModel(sender);
         await vm.SendAsync();
         Assert.Equal(FeedbackSendState.Failed, vm.State);
         Assert.True(vm.CanRetry);
         Assert.Equal(Tone.Bad, vm.Tone);
-        Assert.Contains("offline", vm.Message);
+        Assert.Equal("Couldn't send. Try again when you're online.", vm.Message);
         await vm.RetryAsync();
         Assert.Equal(FeedbackSendState.Sent, vm.State);
         Assert.Equal(2, sender.Calls);
     }
 
     [Fact]
-    public async Task Try_again_waits_out_the_relays_retry_hint()
+    public async Task Every_upload_failure_shows_the_same_words_and_allows_Try_again()
     {
-        var clock = T0;
-        var sender = new FakeSender().Then(new FeedbackFailed(FeedbackFailureCode.RelayBusy, TimeSpan.FromSeconds(30))).Then(new FeedbackSent(T0));
-        var vm = new FeedbackSendViewModel(sender, () => clock);
+        foreach (var code in Enum.GetValues<FeedbackFailureCode>())
+        {
+            var vm = new FeedbackSendViewModel(new FakeSender().Then(new FeedbackFailed(code, TimeSpan.FromSeconds(30))));
+            await vm.SendAsync();
+            Assert.Equal("Couldn't send. Try again when you're online.", vm.Message);
+            Assert.True(vm.CanRetry);
+        }
+    }
+
+    [Fact]
+    public async Task Typed_words_and_the_preview_survive_a_failure_and_are_cleared_on_close()
+    {
+        var vm = new FeedbackSendViewModel(new FakeSender().Then(new FeedbackFailed(FeedbackFailureCode.Offline)));
+        vm.Draft.TypedText = "it broke";
+        vm.Draft.ReviewedPreview = "preview";
         await vm.SendAsync();
-        Assert.Contains("30 seconds", vm.Message);
-        await vm.RetryAsync();
-        Assert.Equal(1, sender.Calls);
-        clock = T0.AddSeconds(31);
-        await vm.RetryAsync();
-        Assert.Equal(FeedbackSendState.Sent, vm.State);
+        Assert.Equal("it broke", vm.Draft.TypedText);
+        Assert.Equal("preview", vm.Draft.ReviewedPreview);
+        vm.Close();
+        Assert.Equal("", vm.Draft.TypedText);
+        Assert.Equal("", vm.Draft.ReviewedPreview);
     }
 
     [Fact]

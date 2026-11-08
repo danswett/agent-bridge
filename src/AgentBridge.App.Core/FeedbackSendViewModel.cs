@@ -10,20 +10,17 @@ public enum FeedbackSendState { Ready, Sending, Sent, Failed, TooLarge, Refused 
 public sealed class FeedbackSendViewModel : Observable
 {
     readonly IFeedbackSender sender;
-    readonly Func<DateTimeOffset> now;
     readonly IUiDispatcher ui;
     CancellationTokenSource? running;
     FeedbackSendState state = FeedbackSendState.Ready;
     string message = "";
     Tone tone = Tone.None;
     bool canRetry;
-    DateTimeOffset? retryAt;
     int attempts;
 
-    public FeedbackSendViewModel(IFeedbackSender sender, Func<DateTimeOffset>? now = null, IUiDispatcher? ui = null)
+    public FeedbackSendViewModel(IFeedbackSender sender, IUiDispatcher? ui = null)
     {
         this.sender = sender;
-        this.now = now ?? (() => DateTimeOffset.Now);
         this.ui = ui ?? InlineDispatcher.Instance;
     }
 
@@ -35,6 +32,8 @@ public sealed class FeedbackSendViewModel : Observable
     public bool IsSending => state == FeedbackSendState.Sending;
     // First send only; after a failure the person uses Try again, which sends the same bundle.
     public bool CanSend => state is FeedbackSendState.Ready;
+    // Product's words (#738): no beta queue, so offline and every upload failure read the same.
+    public const string FailedText = "Couldn't send. Try again when you're online.";
     public string RetryLabel => "Try again";
     // The failure line is the one thing the "Report this" link sits beside.
     public bool Failed => state is FeedbackSendState.Failed or FeedbackSendState.TooLarge or FeedbackSendState.Refused;
@@ -43,12 +42,19 @@ public sealed class FeedbackSendViewModel : Observable
     // What a screen reader says when the line changes.
     public string Speech => Message;
 
-    // Whether Try again is pressable at `at`: after the relay's retry hint has passed.
-    public bool RetryReady(DateTimeOffset at) => canRetry && (retryAt is not { } t || at >= t);
+    // What the person typed and the reviewed preview, held in memory only so Try again sends the same
+    // report; there is no beta queue (#738), so nothing is written to disk and Close clears it.
+    public FeedbackDraft Draft { get; } = new();
+
+    public void Close()
+    {
+        Cancel();
+        Draft.Clear();
+    }
 
     public Task SendAsync() => Run();
 
-    public Task RetryAsync() => CanRetry && RetryReady(now()) ? Run() : Task.CompletedTask;
+    public Task RetryAsync() => CanRetry ? Run() : Task.CompletedTask;
 
     public void Cancel() => running?.Cancel();
 
@@ -58,12 +64,12 @@ public sealed class FeedbackSendViewModel : Observable
         var cancel = new CancellationTokenSource();
         running = cancel;
         attempts++;
-        Apply(FeedbackSendState.Sending, "Sending…", Tone.Progress, false, null, null);
+        Apply(FeedbackSendState.Sending, "Sending…", Tone.Progress, false, null);
         FeedbackSendResult result;
         try { result = await sender.SendAsync(cancel.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
-            ui.Post(() => Apply(FeedbackSendState.Ready, "", Tone.None, false, null, null));
+            ui.Post(() => Apply(FeedbackSendState.Ready, "", Tone.None, false, null));
             return;
         }
         catch
@@ -79,40 +85,25 @@ public sealed class FeedbackSendViewModel : Observable
         switch (result)
         {
             case FeedbackSent s:
-                Apply(FeedbackSendState.Sent, $"Thanks. Sent at {s.At.ToLocalTime().ToString("t", CultureInfo.CurrentCulture)}.", Tone.Ok, false, null, null);
+                Apply(FeedbackSendState.Sent, $"Thanks. Sent at {s.At.ToLocalTime().ToString("t", CultureInfo.CurrentCulture)}.", Tone.Ok, false, null);
                 break;
             case FeedbackFailed f:
-                var (text, retryable) = Describe(f);
-                Apply(FeedbackSendState.Failed, text, Tone.Bad, retryable, f.RetryAfter is { } after ? now() + after : null, f.Code);
+                Apply(FeedbackSendState.Failed, FailedText, Tone.Bad, true, f.Code);
                 break;
             case FeedbackTooLarge t:
-                Apply(FeedbackSendState.TooLarge, $"Not sent: the report is {Words.Size(t.Bytes)}, over the {Words.Size(t.LimitBytes)} limit. Turn off the screenshot or the session turns and send again.", Tone.Bad, false, null, null);
+                Apply(FeedbackSendState.TooLarge, $"Not sent: the report is {Words.Size(t.Bytes)}, over the {Words.Size(t.LimitBytes)} limit. Turn off the screenshot or the session turns and send again.", Tone.Bad, false, null);
                 break;
             case FeedbackRefused:
-                Apply(FeedbackSendState.Refused, "Not sent: the feedback service declined this report. Nothing was kept.", Tone.Bad, false, null, null);
+                Apply(FeedbackSendState.Refused, "Not sent: the feedback service declined this report. Nothing was kept.", Tone.Bad, false, null);
                 break;
             default:
-                Apply(FeedbackSendState.Failed, "Couldn't send it. Try again.", Tone.Bad, true, null, FeedbackFailureCode.Unexpected);
+                Apply(FeedbackSendState.Failed, FailedText, Tone.Bad, true, FeedbackFailureCode.Unexpected);
                 break;
         }
     }
 
-    static (string Text, bool Retryable) Describe(FeedbackFailed f) => f.Code switch
+    void Apply(FeedbackSendState s, string text, Tone t, bool retry, FeedbackFailureCode? code)
     {
-        FeedbackFailureCode.Offline => ("Not sent: this computer is offline. Check the connection, then try again.", true),
-        FeedbackFailureCode.Timeout => ("Not sent: the feedback service took too long to answer. Try again.", true),
-        FeedbackFailureCode.RelayBusy => ($"Not sent: the feedback service is busy.{RetryHint(f.RetryAfter)}", true),
-        FeedbackFailureCode.RelayError => ("Not sent: the feedback service had a problem. Try again in a little while.", true),
-        _ => ("Couldn't send it. Try again.", true),
-    };
-
-    static string RetryHint(TimeSpan? after) => after is { } a && a > TimeSpan.Zero
-        ? $" Try again in {(a.TotalSeconds < 90 ? $"{Math.Ceiling(a.TotalSeconds)} seconds" : $"{Math.Ceiling(a.TotalMinutes)} minutes")}."
-        : " Try again in a moment.";
-
-    void Apply(FeedbackSendState s, string text, Tone t, bool retry, DateTimeOffset? at, FeedbackFailureCode? code)
-    {
-        retryAt = at;
         FailureCode = code;
         Message = text;
         Tone = t;
@@ -120,4 +111,12 @@ public sealed class FeedbackSendViewModel : Observable
         State = s;
         Raise(nameof(CanSend)); Raise(nameof(IsSending)); Raise(nameof(Failed)); Raise(nameof(Speech)); Raise(nameof(FailureCode)); Raise(nameof(Attempts));
     }
+}
+
+// In memory for the life of the open window and never persisted.
+public sealed class FeedbackDraft
+{
+    public string TypedText { get; set; } = "";
+    public string ReviewedPreview { get; set; } = "";
+    public void Clear() { TypedText = ""; ReviewedPreview = ""; }
 }
