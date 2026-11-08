@@ -382,7 +382,9 @@ Both messages are text frames from an admitted device of any kind, counted again
 
 ## Pinned person devices
 
-A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and Daily's lists. It returns each person device the verifier serves (active and not held, §3.5; hosts are left out), in id order, as `id`, `name`, `kind`, `platform`, `presence`, `confirmed` and `quarantined`. `presence` is the declared level; only `key` and `webauthn` prove a person verified (§4.6), and `none` is listed so a client can say why a device cannot be offered. A Windows device stays `none` until R4 proves its mechanism. The query changes nothing and enforces nothing; the host verifier (OFF mode) that feeds it is slice A3.## Vectors
+A read-only query over a verifier (`PinnedDevices.Query`), for #972 slice 2 and Daily's lists. It returns each person device the verifier serves (active, §3.5, and not held, §3.4; hosts are left out), in id order, as `id`, `name`, `kind`, `platform`, `presence`, `confirmed` and `quarantined`. `presence` is the declared level; only `key` and `webauthn` prove a person verified (§4.6), and `none` is listed so a client can say why a device cannot be offered. A Windows device stays `none` until R4 proves its mechanism. The query changes nothing and enforces nothing; the host verifier (OFF mode) that feeds it is slice A3.
+
+## Vectors
 
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:
 
