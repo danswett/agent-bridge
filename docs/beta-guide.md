@@ -150,7 +150,8 @@ fact we do not yet know, not one we are leaving out.
   have not yet been confirmed. The separate feedback-vault logging workspace is configured for 30
   days. These are configuration settings, not a guarantee of deletion from every copy. The
   contents of client-IP and payload fields have not been checked and remain unconfirmed. We do not
-  claim that those fields contain no IP addresses or session content. Other copies and provider residuals are unconfirmed. No
+  claim that those fields contain no IP addresses or session content. Other copies and provider
+  residuals are unconfirmed. No
   per-person telemetry deletion procedure is currently established in the supplied operational
   record. The privacy contact coordinates requests; scheduled ageing is not proof of
   request-based or all-copy erasure.
@@ -180,7 +181,8 @@ fact we do not yet know, not one we are leaving out.
 ### Support email and privacy requests
 
 For beta support, reply to the invitation email or write support@slipgates.com. Support is by
-email only. The support mailbox can be read by the operator; send only the minimum needed. Do not post support content or
+email only. The support mailbox can be read by the operator; send only the minimum needed. Do not
+post support content or
 personal information in public GitHub issues. Screenshots, logs and attachments can contain names,
 paths, prompts, code, tokens or other private information; check them before sharing.
 
@@ -206,11 +208,12 @@ a request or erase data within three days. Requests will be handled as required 
 law. Request coordination does not itself establish each service's ability or procedure to delete
 records.
 
-The beta does not offer an account-erasure feature or promise manual deletion. A roster is
-configured to be deleted after all of its hosts have been offline for 180 days. Log Analytics is
-configured for 30 days by default; the Application Insights AppRequests table is configured for
-90 days, and other tables' settings are not yet confirmed. Temporary transfer blobs have lifecycle deletion configured
-one day after creation. These are the specified schedules, not a guarantee of erasure from every
+The beta does not offer an account-erasure feature or promise manual deletion. Roster records have
+a configured expiry after 180 days untouched. For relay monitoring, the Application Insights
+AppRequests table is configured for 90 days and its Log Analytics workspace default is 30 days;
+other tables' retention settings have not yet been confirmed. The separate feedback-vault logging
+workspace is configured for 30 days. Temporary transfer blobs have lifecycle deletion configured
+one day after creation. These are configuration settings, not a guarantee of erasure from every
 copy; support-mail and other provider-copy retention are not yet fully confirmed.
 
 You can revoke Slipgates' authorization in GitHub. That does not delete Slipgates records or
@@ -302,8 +305,9 @@ remains held.
 
 You can stop participating, disconnect devices or uninstall. Uninstalling or revoking GitHub
 authorization does not itself erase server or support records. Use the privacy contact for separate
-requests about retained information; the privacy notice describes the beta's age-out/no-promised-
-manual-deletion plan and known limits. The published acknowledgement aim is not a guaranteed
+requests about retained information; the privacy notice describes the beta's plan to let records
+age out without promised manual deletion, and known limits. The published acknowledgement aim is
+not a guaranteed
 support response, resolution or erasure deadline.
 
 The applicable open-source and third-party licences accompany the distribution. These beta
