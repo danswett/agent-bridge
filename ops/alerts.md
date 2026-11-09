@@ -8,6 +8,15 @@ stands:
   next runs `infra/deploy.ps1 -Production` (docs/relay-deploy.md "Monitoring").
 - **Planned** isn't built yet.
 
+**Deployment record.** The production monitoring module went live on 2026-11-07 (about 01:15 PT),
+deployed by Platform SRE with `az deployment group create` of `infra/modules/monitoring.bicep`
+alone (deployment `relay-monitoring-sre-20261107`, owner approval in the SRE session). A full
+`infra/deploy.ps1 -Production` what-if that day also showed the unapplied feedback containers
+and app updates, so the module went in alone rather than widening the change. It created the
+action group `ag-agent-bridge-ops` (owner's address, email only), App Insights, `wt-relay-healthz`,
+the seven metric alerts and the $40 budget. The address is not in the repo. Still to do: staging
+alerts, probes for `relay.slipgates.com` and staging, blob alerts, a workbook, and a test email.
+
 Thresholds are first estimates for one 0.25 vCPU / 0.5 GiB replica, with tens of devices.
 Revisit them after two weeks of data, and when capacity changes (CAP-1).
 
