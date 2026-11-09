@@ -64,6 +64,10 @@ and cannot launch anything itself.
    workers may also send messages, so they can report back).
 7. Audit: **launches in a file of their own, kept 30 days or 16 MiB on each machine, no prompt
    text**, readable in the app and by a command.
+8. What "ask-only" means at first: **the new session is started without the skip-permissions
+   switch, in a clean worktree with no agent settings of the repository's own; your own agent
+   settings still apply.** The stricter version, where the host also controls every agent setting,
+   comes later (AP8). Recommended: start with this; or wait for the stricter one.
 
 ---
 
@@ -117,13 +121,18 @@ agents exactly as today. The gate runs, in order, refusing at the first failure:
    revocation takes effect at once);
 2. the machine policy is readable and `agents.launch.enabled` is `true`;
 3. the request passes §3's content rules;
-4. under one lock: the cap (§5) has room, a slot is reserved, and the audit line for the attempt
-   (§6) is written. Two launches at once can never both take the last slot; an audit line that
-   cannot be written releases the slot and refuses;
+4. the attempt limit (§5) has room;
+5. under one lock: the cap (§5) has room, a slot is reserved, and the audit line for the attempt
+   (§6, `outcome: reserved`) is written. Two launches at once can never both take the last slot;
+   an audit line that cannot be written releases the slot and refuses;
 
 then the request goes to the launch service with the agent principal as its peer, which applies
-its own checks unchanged (host-launch.md:110-125, `LaunchProtocol.Check`). A refusal at any step
-is written to the audit log too (§6).
+its own checks unchanged (host-launch.md:110-125, `LaunchProtocol.Check`), plus one new check
+**inside** the launch service: the worktree check of §3, which can only run once the worktree
+exists, after `Worktrees.Create` (`LaunchService.cs:871`) and before the agent's process starts.
+A failing worktree check removes the new worktree and refuses. **The reserved slot is released**
+when the launch service answers `busy` or `refused` (nothing started), and kept for `started`,
+`unconfirmed` and `failed`. A refusal at any step is written to the audit log too (§6).
 
 **Fail closed.** An unreadable or malformed `agents` policy, an unreadable credential store
 (already: `AgentCredentials.cs:132`), caps not yet rebuilt from the audit (§5) or an audit log
@@ -142,9 +151,13 @@ posture as the credential store and host-config.md:139-141. In operation:
 **Closing the side door.** Today only `CallerKind.Agent` is refused acting ops: any other
 same-user process (a script, the HTTP MCP) may `session.launch` as the person, with Allow all
 and no audit (`LocalApi.cs:14-15`, `:68`; local-pipe.md:104). That is a private path, and the
-fleet must not move onto it. #1404 refuses `session.launch` from `CallerKind.Other`, keeping the
-app and the host's own `launch` command (agent-principals.md §3.4, "three explicit exceptions").
-The other acting ops follow in AP8 as planned.
+fleet must not move onto it. #1404 refuses `session.launch` from `CallerKind.Other`; the app (a
+person client) keeps it. agent-principals.md §3.4 plans an `agent-bridge-host launch` command as
+an exception, but it does not exist yet, so after #1404 a person at the machine launches from the
+app, and a script that launches today must move to a credential first (the dispatcher: the fleet
+grant, §11). #1404 logs each refused `Other` launch with the caller, so anything still using the
+side door shows up before it is closed on the fleet. The other acting ops follow in AP8 as
+planned.
 
 ## 3. What an agent launch may contain
 
@@ -157,13 +170,29 @@ Checked by `AgentLaunchGate` before the launch service sees it:
 | `transfer` | refused | Transfers need a person (agent-principals.md §5.2) |
 | `resume` | **refused in v1** | Resuming types an agent's prompt into an existing conversation, possibly a person's; new sessions only keeps it simple |
 | `attachments` | refused | `attachment.*` is already refused for agents (`LocalApi.cs:23`, `:68`) |
-| `workspace` | required, must be on the machine's `agents.launch.workspaces` list (labels a person ticked "agents may launch here", default empty), and must be an isolated workspace, so each launch gets a fresh worktree. The host refuses the launch if that worktree holds a project settings file that pre-approves tools for the chosen agent (for example Claude's `.claude/settings.json` with `permissions.allow`); an agent whose project settings the host cannot check is refused | A folder a person approved at that machine for this purpose. Without the settings check, an agent could plant an allow list in the repository and then launch over it |
-| `agent` | required, from `launch.options`, on `agents.launch.agents`; `auto` and Agency refused | Agency adds profile config the host cannot show keeps ask (agent-principals.md:834-836) |
+| `workspace` | required, must be on the machine's `agents.launch.workspaces` list (labels a person ticked "agents may launch here", default empty), and must be an isolated workspace, so each launch gets a fresh worktree. **The new worktree must hold none of the chosen agent's project configuration** (the worktree check, §2): presence alone refuses, whatever the contents, so it is an allow-list of "clean", not a deny-list of bad settings | A folder a person approved at that machine for this purpose. Without the check an agent could plant settings (Claude's `.claude/` can set a bypass default mode, hooks, an API key helper or MCP servers) and then launch over them |
+| `agent` | required, from `launch.options`, on `agents.launch.agents`; `auto` and Agency refused; only an agent with a confirmed project-configuration list (below) | Agency adds profile config the host cannot show keeps ask (agent-principals.md:834-836) |
 | `profile` | refused | Agency only, which is refused |
 | `model`, `effort`, `context` | from `launch.options` (existing check, host-launch.md:117-119) | |
 | extra arguments | a launcher with any `launch.agents.<id>.extraArgs` is refused for agents | An extra argument can grant Allow all (host-launch.md:295). The verification launcher already does exactly this (`LaunchService.cs:561-565`) |
 | `agentScope` | refused | Only a person sets scope (§1, §4) |
 | `prompt` | at most **16 KiB** of UTF-8; longer is refused (below) | |
+
+**What "ask-only" means in v1, plainly.** No bypass flag (the host adds `--allow-all`,
+`--dangerously-skip-permissions` or `--ask-for-approval never` only for `allowAll`,
+`Launchers.cs:143`, `:156`, `:170`), no extra arguments, no Agency, and no agent project
+configuration in the new worktree. It is **not** agent-principals.md's provably forced-ask launch
+(agent-principals.md:828-833: a host-owned configuration home, a scrubbed environment, no managed
+policy), which comes with AP8. The user's own agent settings (in the user's profile, not the
+repository) still apply, as they do to every session the person launches. Shipping v1 on this
+narrower meaning is an owner decision (§12, question 8).
+
+**Which agents an agent may launch in v1.** Each needs a list of the repository paths through
+which it reads permissions, hooks, tools or MCP servers, confirmed by #1404 from the agent's own
+documentation and `--help` and kept as test vectors (as host-launch.md:295 did for extra
+arguments). Expected: **Claude** (`.claude/`, `.mcp.json`) and **Copilot** (its repository agent,
+hook and MCP configuration, list to be confirmed). **Codex** waits until its list is confirmed. An
+agent without a confirmed list is refused for agent launches.
 
 **Prompt length: keep 16 KiB, refuse longer.** The protocol limit is 16 KiB of UTF-8 in a request
 of at most 20 KiB (`Launch.cs:17-18`; v1-launch.md:102, :105-115), the MCP server checks the
@@ -182,7 +211,9 @@ A 20 KB prompt is therefore **refused, not delivered**. For agents the refusal r
 rest in a file in the workspace and point to it." HA's "any length" was HA's own text store; the
 dispatcher's prompts are short templates. **Who implements:** nothing new for the limit itself.
 #1404 adds the agent wording and the tests (a 16 KiB prompt arrives whole, one byte more is
-refused, a 300-character prompt arrives whole), which settles #1404's and #1413's "up to the
+refused, a 300-character prompt arrives whole) for an agent run directly; for an agent installed
+through npm, which runs through `cmd.exe`, the 8,191-character command line is smaller and wins,
+and the test asserts the host's "too long for the command line" refusal instead. That settles #1404's and #1413's "up to the
 length #1403 decides". The MCP server needs no change to its cap; #1404 removes `Allow all`
 from `launch_agent_session`'s schema (`mcp/src/server.mjs:45`; `mcp/src/tools.mjs:6`) and its
 `profile` and `resume` arguments, so an agent is not offered what the host will refuse.
@@ -218,11 +249,18 @@ running with Allow all does not widen it.
 | `limits.fleetLaunchesPerMachinePerHour` | **8** | this machine, the fleet grant (§11); the dispatcher allows 6 workers per machine. Separate from the agent caps: fleet launches do not use up agents' 10, nor agents the fleet's 8 |
 
 **What counts:** each distinct (principal, `request`) with a `reserved` line (written at §2 step
-4, before the start) or any of `started`, `unconfirmed`, `failed`. So a launch counts once, and a
-host that crashed between the two lines still counts it. Refusals and `busy` do not count, so a
+5, before the start) or any of `started`, `unconfirmed`, `failed`. So a launch counts once, and a
+host that crashed between the two lines still counts it. A `reserved` line with no outcome found
+at host start gets an `outcome: interrupted` line ("the host stopped before this launch
+answered"), keeps counting, and a repeat of that `request` returns `unconfirmed`, since something
+may have started. Refusals and `busy` do not count, so a
 busy machine does not burn an agent's hour. Refusals are rate-limited separately (60 per agent per
 hour; past that, one summary audit line per minute) so a looping agent cannot flood the audit log;
-that refusal limit is kept in memory only and a restart resets it, which is intended.
+that refusal limit is kept in memory only and a restart resets it, which is intended. Separately,
+an **attempt limit** of **20 per agent per hour, any outcome**
+(`limits.launchAttemptsPerOriginPerHour`, §2 step 4) stops an agent retrying `busy` or refused
+launches in a loop and crowding out people's launches; it is rebuilt from the audit like the
+caps.
 
 **How long sessions live.** The caps are per hour, not on how many run at once, so two more
 limits keep idle sessions from piling up: at most **6 live agent-launched sessions per machine**
@@ -287,7 +325,7 @@ Fields: `v`, `at` (UTC), `principal` (`agent:<machine>/<session>`, `AgentPrincip
 known), `grant` (`agent` or `fleet`). **Never** the prompt, the token or a file path beyond the
 workspace label (#1401's rule). Every attempt gets a line: a refusal at any gate step is one
 line with its `code`; a launch that passes writes `outcome: reserved` **before** it starts (§2
-step 4), and the outcome is a second line with the same `request`.
+step 5), and the outcome is a second line with the same `request`.
 
 **Tamper-evidence:** each line carries the SHA-256 of the previous line, and the chain runs on
 across daily files: each file opens with a header line holding the hash of the previous file's
@@ -298,10 +336,11 @@ edited or removed line. It does not stop a same-user program rewriting the whole
 the accepted same-user limit (agent-principals.md §1.3).
 
 **Reading it:** the app's agent activity view (later) and `agent-bridge-host audit --action
-session.launch --since <time>`. The retirement-gate evidence is read with that command on each
-of the four machines: 20 `started` lines in all (5 per machine, §10) with distinct `request`s,
-and a 21st `refused` with
-`code: rateLimited`.
+session.launch --outcome <outcome> --since <time>`. Each launch writes two lines (`reserved`, then
+its outcome), so the evidence filters by outcome: on the four machines together, `--outcome
+started` shows 20 lines (5 per machine, §10) with distinct `request`s, and `--outcome refused`
+shows the 21st with `code: rateLimited`. The rebuild and the command read the previous UTC day's
+file as well, so an hour that spans midnight is whole.
 
 ## 7. What an agent sees
 
@@ -332,7 +371,8 @@ machine; try again in a few minutes", never the other session's agent, workspace
 | **Runaway fan-out** | One agent launch step at most (§4); per-agent and per-machine caps (§5) that survive restarts; refusals rate-limited | None beyond the caps |
 | **The new session reads secrets in its folder** | Workspaces only from the "agents may launch here" list a person set at the machine; isolated workspaces start in a fresh worktree | The session runs as the user and can read what the user can, like any session. The list is what the owner controls |
 | **Ask-only is weaker than it looks** | Ask flag forced, extra arguments refused, Agency refused, fresh worktree, and a worktree with a tool-approving project settings file refused (§3) | User-level agent settings outside the repository, and settings formats the host does not yet know (it refuses agents it cannot check). The full "provably forced-ask" launch (host-owned config, agent-principals.md §5.2) is AP8 |
-| **The fleet grant is abused** (§11) | Only the dispatcher's script credential; the caller's ancestry must be read **in full** and contain no agent session, so a partial or untraceable ancestry, which today falls to `Other` (local-pipe.md:104), is refused; fleet-ticked isolated workspaces only; own cap; audit | Something that tricks the dispatcher (for example text in an issue it reads) can start an Allow-all worker in a fleet workspace, bounded by list and cap. The script credential sits in an owner-only file (#1402), which any same-user program can read: an agent that copies it and runs a parent-spoofed helper can reach the grant. That is the same-user limit (agent-principals.md §1.3), no worse than today's HA token, which every session's environment holds |
+| **The fleet grant is abused** (§11) | Only the dispatcher's script credential; the caller's ancestry must be read **in full** and contain no agent session, so a partial or untraceable ancestry, which today falls to `Other` (local-pipe.md:104), is refused. **This rule is not a barrier:** a detached process whose parent has exited has a complete, agent-free ancestry (local-pipe.md:106-110), so the credential file is the only real barrier; fleet-ticked isolated workspaces only; own cap; audit | Something that tricks the dispatcher (for example text in an issue it reads) can start an Allow-all worker in a fleet workspace, bounded by list and cap. The script credential sits in an owner-only file (#1402), which any same-user program can read: an agent that copies it and runs a parent-spoofed helper can reach the grant. That is the same-user limit (agent-principals.md §1.3), no worse than today's HA token, which every session's environment holds |
+| **Launch loops starve people** (busy or refused attempts are not capped) | Attempt limit of 20 per agent per hour, any outcome (§5); a refused launch removes its worktree, so it cannot fill the per-repository worktree cap | A looping agent can take 20 attempts an hour |
 | **A side door: launching as the person from a script** | Closed for `session.launch` in #1404 (§2) | Other acting ops until AP8 |
 | **Until #1404 and 2e ship** | Nothing new: agent launch stays refused (`LocalApi.cs:68-71`) | Today a same-user script can launch with Allow all through the pipe (`LocalApi.cs:68`), and anything holding the HA token can press Allow all on any machine. Both stay until #1404 and the switch-off of HA launch (#106, then S7) |
 
@@ -361,6 +401,10 @@ small launcher on each machine carries out its own assignments**:
 * A launcher on a host without the fleet grant (an older version) launches nothing there and says
   so on the board. It never falls back to HA or to the unattributed pipe path. Rollout is one
   machine first, with a kill switch for the launchers like the event pump's.
+* A launcher that cannot fetch the fleet repository for 10 minutes starts nothing new and shows
+  `fetchStale` on the board and in its log. Assignments are written only when the dispatcher
+  places work (at most its 3 launches per cycle), and an assignment's file is removed once its
+  outcome is read back, so the assignments stay a handful of small files, not a growing log.
 
 This makes #106 S-M (about 2 days) instead of S. Four dispatchers on a shared queue were
 rejected: they need an exactly-once claim, a GitHub token on every machine and more REST calls.
@@ -370,9 +414,10 @@ rejected: they need an exactly-once claim, a GitHub token on every machine and m
 | Slice | Contents | Size | Tests (fail-closed cases named) |
 |---|---|---|---|
 | **#1401** audit log (first) | as filed, plus the launch file, hash chain across files, line version, folder lock, pruning rules (§6) and the `audit` command | M | an unwritable log refuses the action; a removed line shows "broken"; pruning and rotation keep the chain intact; a torn last line is ignored; a newer major version is refused, unknown fields ignored; a second writer is refused |
-| **2b #1404** scope and enforcement | `agentScope` on person launches; `agents.launch` policy; `AgentLaunchGate` (§2, §3); refuse `session.launch` from `Other`; MCP schema trimmed; agent prompt wording | M-L (about 380) | refused: no scope, scope revoked mid-session, switch off, policy unreadable, `permissions` absent, `allowAll`, `transfer`, `resume`, attachments, workspace not listed, workspace not isolated, worktree with a tool-approving settings file, Agency, `auto`, extra arguments, `agentScope` from an agent, launcher at depth 1, an adopted session, a script caller, two launches racing for the last slot; accepted: ask-only launch in a listed workspace; 16 KiB prompt whole, 16 KiB + 1 refused; child credential is `read` |
-| **2c #1413** cap, result, options | caps rebuilt from the audit at start; result keyed by principal; agent projection of options and busy | M-L (about 380; may split the live limit and idle end off) | 4th launch by one agent refused; 11th on the machine refused; 7th live agent-launched session refused; idle session ended after 2 h, and not after a person's input; cap survives a host restart; a crash between `reserved` and the outcome still counts; a future-dated line counts; a defect inside the hour refuses with `capRebuilding`, an older one warns; a locked policy file retried, then `policyUnreadable`; override lapses by itself; another caller's repeat of the request id never gets the result; options carry no path, resumable or trust |
+| **2b #1404** scope and enforcement | `agentScope` on person launches; the `agents.launch` and `agents.limits` config keys; `agent-bridge-host agents revoke`; `AgentLaunchGate` (§2, §3) with the worktree check and per-agent configuration lists; **in-memory caps and attempt limit with the §5 defaults**, so agents are never uncapped between 2b and 2c; refuse `session.launch` from `Other`; MCP schema trimmed; agent prompt wording | L (about 450; may split the worktree check off) | refused: no scope, scope revoked mid-session, switch off, policy unreadable, `permissions` absent, `allowAll`, `transfer`, `resume`, attachments, workspace not listed, workspace not isolated, worktree with a tool-approving settings file, Agency, `auto`, extra arguments, `agentScope` from an agent, launcher at depth 1, an adopted session, a script caller, two launches racing for the last slot; worktree holding `.claude/` or `.mcp.json` refused and the worktree removed, an agent kind without a confirmed list, a slot released after `busy` and after `refused`, the 21st attempt in an hour; accepted: ask-only launch in a listed workspace; 16 KiB prompt whole, 16 KiB + 1 refused, the npm agent's command-line refusal; child credential is `read` |
+| **2c #1413** cap, result, options | caps and attempt limit made durable (rebuilt from the audit at start, `interrupted` lines); result keyed by principal; agent projection of options and busy | M-L (about 380; may split the live limit and idle end off) | 4th launch by one agent refused; 11th on the machine refused; 7th live agent-launched session refused; idle session ended after 2 h, and not after a person's input; cap survives a host restart; a crash between `reserved` and the outcome still counts; a future-dated line counts; a defect inside the hour refuses with `capRebuilding`, an older one warns; a locked policy file retried, then `policyUnreadable`; override lapses by itself; another caller's repeat of the request id never gets the result; options carry no path, resumable or trust |
 | **2e (new)** fleet launch grant | the grant in §11 on the script credential | S (about 120), after #1414 and #1404 | refused: from inside an agent session, workspace not fleet-ticked, cap 9th, under 1 GiB free (`diskLow`), scope above `read+reply` for the worker |
+| **2f (new)** app controls | the app's Settings ticks ("agents may launch here", "fleet workers may run here", the machine switch), the "may start agents" tick on Launch, and "Stop this session starting agents"; until then the owner uses `agent-bridge-host config` and `agents revoke` | S-M, after #1404 | each tick writes only its key; refused inside agent sessions |
 | **2d fleet #106** dispatcher | central dispatcher plus per-machine launchers (§9) through `session.launch` with the fleet grant; result and options from the call; kill switch; one machine first | S-M (about 2 days) | as filed, plus: a retried assignment starts nothing twice; an assignment on a sleeping machine returns; a host without the grant launches nothing and never falls back |
 
 **Quality acceptance run** (four Windows machines, after 2c): set
@@ -440,3 +485,6 @@ Each has a recommended default; the summary's list is the same.
 6. Sessions agents start: read only, no launch, agents cannot resume **(recommended)**.
 7. Audit: launches in their own file, 30 days or 16 MiB per machine, no prompt text
    **(recommended)**; or keep prompts too.
+8. Ask-only in v1 means no bypass flag, no extra arguments, no Agency and no agent project
+   configuration in the worktree, with the user's own agent settings still applying
+   **(recommended)**; or wait for AP8's provably forced-ask launch before any agent launch.
