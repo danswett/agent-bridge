@@ -149,18 +149,21 @@ public sealed class HostHandover
     // Run by the logon task's launcher (#106).
     public bool Supervised { get; private init; }
 
+    bool checkStop;
+
     // Whether the app stopped this host while it was starting, which no pipe could tell it (#106's
     // review): the app's Stop leaves the launcher's stop marker, and a host the launcher started is
-    // to look for it once its pipe is open. If the marker came first, the host sees it then; if
-    // the pipe came first, the app's Stop reaches the host through it. Either way it stops, even
-    // with its launcher gone or unknown to the app. Never for a host started any other way (by
-    // hand, after the app's Stop), which the marker does not concern.
+    // to look for it once its pipe is open, always (#986: a host that skipped the look resumed
+    // agents that outlive it). So is a host its launcher could not vouch for, one started outside
+    // the launcher's kill-on-close job or under a launcher the app cannot find by its record
+    // (HostLauncherContract.CheckStopVariable, #420's review), and its replacement. Never for a
+    // host started any other way (by hand, after the app's Stop), which the marker does not concern.
     public bool StoppedFromTheApp(string profileFolder) =>
-        Supervised && File.Exists(Path.Combine(profileFolder, HostLauncherContract.StopMarker));
+        (Supervised || checkStop) && File.Exists(Path.Combine(profileFolder, HostLauncherContract.StopMarker));
 
-    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action startReplacement, bool supervised = false)
+    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action<bool> startReplacement, bool supervised = false, bool checkStop = false)
     {
-        var handover = new HostHandover { Supervised = supervised };
+        var handover = new HostHandover { Supervised = supervised, checkStop = checkStop };
         try
         {
             var code = await serve(handover);
@@ -172,7 +175,7 @@ public sealed class HostHandover
         {
             // A supervised host that fails on its way out ends as a crash instead, which the
             // launcher starts again too.
-            if (handover.Requested && !supervised) { startReplacement(); }
+            if (handover.Requested && !supervised) { startReplacement(checkStop); }
         }
     }
 }

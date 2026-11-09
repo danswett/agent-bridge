@@ -303,18 +303,52 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   time (Settings' Stop and Restart, an update's), so a second waits for the first and finds the
   host stopped, rather than clearing the first's marker (#238). The app then
   waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
-  the run itself if it is still there after the 20 s start timeout. A host the launcher starts
-  also looks for the marker once its pipe is open and, finding it, exits 0 without serving (it
-  looks first before it starts restoring what a reboot or a crash took, and exits then having
-  restored nothing; a restore it starts resumes no agent until the look with its pipe open has
-  passed, #986), so
-  a host still starting when the launcher was ended, or under a launcher this app did not start
-  (one from before the app was last opened), stops too: either the app's Stop reaches its pipe
-  or the host sees the marker. A host that refuses the app's connection (one of them elevated)
-  is a refused Stop: left running, with its launcher, and the marker cleared. Without the task,
-  a Start while the launcher the app started is between crash restarts waits for its host rather
-  than starting a second launcher. Every start clears the marker
-  (the app's Start, and a launcher starting, at sign-in or through the task).
+  the run itself if it is still there after the 20 s start timeout, then waits up to the stop
+  timeout for the launcher and its host to be gone, so a Start or Restart after it never takes a
+  host on its way out for one that runs. The host is created in the launcher's kill-on-close job
+  object (`PROC_THREAD_ATTRIBUTE_JOB_LIST`, never added afterwards), so it ends with the
+  launcher however the launcher ends (Task Scheduler's Stop, the app ending it, a crash): a host
+  still starting never runs on unwatched, believing a launcher will restart it (#420). The job
+  allows silent breakaway, so what the host starts (agent sessions) is not in it and runs on.
+  The serving launcher also records itself (`launcher.pid`: its pid and start time) in the
+  profile's folder, held open so no second launcher can write over it and deleted as its handle
+  closes, however it ends; an app opened after it started, with no logon task, finds it to wait
+  for or end, and a process since given its pid is told apart by its start time. A `shadow run`
+  launcher neither records itself nor touches the marker. The app writes the marker, and a
+  launcher looks at an earlier one's time and clears it, each under `host.stopped.lock` beside
+  it (held open with no sharing, so a process that ends lets it go, and the empty file left
+  blocks nothing): unlocked, a Stop's new marker written between a launcher's look and its
+  delete was deleted, and the host started after Stop had said it was stopped (#478). A
+  launcher that cannot have the lock within 2 s leaves the marker; an app that cannot writes
+  it anyway, says so in its log, and waits for the lock once more to write it again if it has
+  gone meanwhile. An app opened after a launcher started waits for the host that launcher
+  brings up, but starts one fresh launcher if it ends first with no host answering (it saw a
+  Stop, or its host ended on purpose). The app starts a launcher only under that lock, looking
+  for a marker first and starting nothing if one is there, so another process's Stop either
+  comes first or writes its marker once the launcher exists, which keeps it; without the lock
+  within 2 s it starts nothing and says so in its log. It runs the logon task the same way,
+  though the launcher that run starts comes later, by Task Scheduler, so a Stop from another
+  process just after the run can still be cleared by it as older. The app runs one Start or
+  Stop at a time: a Stop cancels a Start that is under way or waiting before
+  it writes its marker, so the Start pressed at launch never starts a launcher after a Stop
+  pressed meanwhile, and a Start asked for after a Stop runs once that Stop is done (#478). A
+  launcher looks for the marker again
+  before every start of the host, once its record is held, so a Stop that came just after it
+  cleared the last one is honoured even when the app could not find it yet.   Every host the launcher
+    starts looks for the marker itself once its pipe is open and exits without serving if it is
+    there (#986), whether or not the launcher holds its record; a host the launcher cannot vouch
+    for (one it could not create in its job, or one started while it could not hold its record)
+    also hands that look on to the replacement it starts after `host.restart`. A Stop that fails otherwise (timed out, cancelled) before the host answered it,
+  with the host or its launcher still there, clears the marker too, each looked for on its own and
+  within the stop timeout; once the host may have accepted the stop the marker stays (#986). A host that refuses the app's
+  connection (one of them elevated) is a refused Stop: left running, with its launcher, and the
+  marker cleared. Without the task, a Start while a launcher the app (or an earlier run of it)
+  started is between crash restarts waits for its host rather than starting a second launcher.
+  Every start clears the marker (the app's Start; a launcher starting, at sign-in or through
+  the task, clears one written before it started, while a Stop since, by an app that could not
+  yet find it, stands). A host that looks for the marker once its pipe is open and finds it
+  exits 0 without serving; it looks before it restores what a reboot or a crash took, and a
+  restore it starts resumes no agent until that look has passed (#986).
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
