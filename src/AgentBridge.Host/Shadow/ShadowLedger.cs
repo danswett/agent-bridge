@@ -82,6 +82,7 @@ public sealed class ShadowTransient
 public sealed partial class ShadowLedger
 {
     public const int MaxMismatches = 1000;
+    public static readonly TimeSpan MaxSkippedGap = TimeSpan.FromMinutes(10);
     const int MaxDetails = 8;
     // States a status or activity.response disagreement can go through within its grace that are
     // kept by identity; one changing every sample through a long grace runs past it.
@@ -237,6 +238,9 @@ public sealed partial class ShadowLedger
         foreach (var (key, episode) in open.ToList())
         {
             if (current.ContainsKey(key)) { continue; }
+            // A sample that was not compared carries no differences, so it says nothing about an
+            // open one: only a long silence ends it, lest an outage stretch one episode over hours.
+            if (!comparison.Compared && now - episode.Last <= MaxSkippedGap) { continue; }
             Close(episode);
             open.Remove(key);
         }
