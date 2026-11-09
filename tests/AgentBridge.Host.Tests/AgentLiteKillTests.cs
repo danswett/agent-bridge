@@ -199,6 +199,61 @@ public sealed class AgentLiteKillTests : IDisposable
         Assert.Equal(50, lite.KillEpoch);
     }
 
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("5")]
+    [InlineData("")]
+    [InlineData("{}")]
+    [InlineData("{\"epoch\":0}")]
+    [InlineData("{\"epoch\":-1}")]
+    [InlineData("{\"epoch\":\"7\"}")]
+    public void A_malformed_epoch_file_fails_closed_and_keeps_the_high_water_mark(string content)
+    {
+        var folder = NewHost("a");
+        var lite = Host(folder, Pinned);
+        lite.RaiseEpoch(50);
+        TurnOn(folder);
+        File.WriteAllText(Path.Combine(folder, LiteKill.FileName), content);
+        Assert.False(lite.On);
+        Assert.Equal(50, lite.KillEpoch);
+        Assert.False(lite.Observe(Pinned, 40));
+        Assert.False(Host(folder).On);
+    }
+
+    [Fact]
+    public void A_missing_epoch_file_after_a_kill_keeps_the_mark_and_stays_off()
+    {
+        var folder = NewHost("a");
+        var lite = Host(folder, Pinned);
+        lite.RaiseEpoch(50);
+        TurnOn(folder);
+        File.Delete(Path.Combine(folder, LiteKill.FileName));
+        Assert.False(lite.On);
+        Assert.Equal(50, lite.KillEpoch);
+        Assert.False(lite.Observe(Pinned, 40));
+    }
+
+    [Fact]
+    public async Task A_kill_by_another_process_cancels_the_sends_in_flight()
+    {
+        var folder = NewHost("a");
+        var host = Host(folder);
+        var started = new TaskCompletionSource();
+        var send = host.GuardAsync("r1", async ct => { started.SetResult(); await Task.Delay(Timeout.Infinite, ct); return new LiteOutcome(LiteKind.Delivered, null, "r1"); }, default);
+        await started.Task;
+        Host(folder).Kill();
+        var outcome = await send.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(LiteKind.Unconfirmed, outcome.Kind);
+    }
+
+    [Fact]
+    public void A_non_numeric_epoch_is_rejected()
+    {
+        var lite = Host(NewHost("a"), Pinned);
+        Assert.Throws<ArgumentException>(() => lite.HandleKill(Pinned, "host", JsonDocument.Parse("{\"epoch\":\"x\"}").RootElement));
+        Assert.True(lite.On);
+    }
+
     [Fact]
     public async Task A_send_that_fails_on_its_own_is_not_reported_as_killed()
     {

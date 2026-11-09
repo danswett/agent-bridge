@@ -27,6 +27,7 @@ public sealed class LiteKill : ILiteMode
     readonly TimeProvider time;
     readonly ConcurrentDictionary<CancellationTokenSource, byte> inFlight = new();
     volatile bool off;
+    volatile bool latched;
     long pushed;
     long seen;
 
@@ -36,10 +37,13 @@ public sealed class LiteKill : ILiteMode
         this.peers = peers;
         this.log = log ?? (_ => { });
         this.time = time ?? TimeProvider.System;
+        // The epoch already on disk is the baseline; only a higher one later is a new kill.
+        ReadEpoch(baseline: true);
     }
 
-    // Reading the record each time lets an unreadable one latch the mode off.
-    public bool On { get { ReadEpoch(); return !off && HostSettings.CurrentAgentMessaging(folder).RemoteEnabled; } }
+    // Reading the record each time lets an unreadable one latch the mode off, and a kill made by
+    // another process (`agents lite kill`) cancel the sends in flight here.
+    public bool On { get { ReadEpoch(); return !off && !latched && HostSettings.CurrentAgentMessaging(folder).RemoteEnabled; } }
 
     public long KillEpoch => ReadEpoch();
 
@@ -48,16 +52,21 @@ public sealed class LiteKill : ILiteMode
         // Latched first so a send starting now is refused, then released if the setting took:
         // the setting alone says whether the mode is on, so a person turning it on needs no restart.
         off = true;
+        // Callers waiting on a send stop now; they fall back to Home Assistant.
+        CancelFlights();
         var error = new StringWriter();
         var failed = ConfigCommands.Run(["config", "set", "agentMessaging.remote", "off"], folder, TextWriter.Null, error) != 0;
-        // Callers waiting on a send stop now; they fall back to Home Assistant.
-        foreach (var flight in inFlight.Keys) { try { flight.Cancel(); } catch (ObjectDisposedException) { } }
         off = failed;
         if (failed)
         {
             log($"lite: could not write agentMessaging.remote=off ({error.ToString().Trim()}); off until restart");
         }
         log($"lite: own-agents messaging turned off ({why})");
+    }
+
+    void CancelFlights()
+    {
+        foreach (var flight in inFlight.Keys) { try { flight.Cancel(); } catch (ObjectDisposedException) { } }
     }
 
     // Monotonic: an equal or lower epoch does nothing.
@@ -113,17 +122,25 @@ public sealed class LiteKill : ILiteMode
     public async Task<LiteOutcome> GuardAsync(string request, Func<CancellationToken, Task<LiteOutcome>> send, CancellationToken ct)
     {
         using var flight = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var watch = new CancellationTokenSource();
         inFlight[flight] = 0;
         try
         {
             if (!On) { return new LiteOutcome(LiteKind.Off, "off", request); }
+            // A kill from another process is noticed within a second; On cancels the flights.
+            _ = Task.Run(async () =>
+            {
+                using var tick = new PeriodicTimer(TimeSpan.FromSeconds(1));
+                try { while (await tick.WaitForNextTickAsync(watch.Token)) { if (!On) { CancelFlights(); } } }
+                catch (OperationCanceledException) { }
+            });
             return await send(flight.Token);
         }
         catch (OperationCanceledException) when (flight.IsCancellationRequested && !ct.IsCancellationRequested)
         {
             return new LiteOutcome(LiteKind.Unconfirmed, "killed", request);
         }
-        finally { inFlight.TryRemove(flight, out _); }
+        finally { watch.Cancel(); inFlight.TryRemove(flight, out _); }
     }
 
     // In front of the hub's handler, so the kill op is judged here: only a pinned own host, and
@@ -138,7 +155,7 @@ public sealed class LiteKill : ILiteMode
             log($"lite: ignored {Op} from {Short(peerId)}, which is not a pinned own-agents peer");
             return new { applied = false };
         }
-        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("epoch", out var e) || !e.TryGetInt64(out var epoch))
+        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("epoch", out var e) || e.ValueKind != JsonValueKind.Number || !e.TryGetInt64(out var epoch))
         {
             throw new ArgumentException($"{Op} needs a numeric epoch");
         }
@@ -155,7 +172,8 @@ public sealed class LiteKill : ILiteMode
     {
         var epoch = ReadEpoch();
         if (epoch == 0 || epoch <= Interlocked.Read(ref pushed)) { return; }
-        var told = true;
+        var told = 0;
+        var failed = false;
         foreach (var p in relay.Snapshot.Presence.Where(p => p.Kind == UsagePeers.HostKind && p.Id != relay.DeviceId && peers.TryFind(p.Id, out _)))
         {
             SecureChannel? ch = null;
@@ -163,42 +181,80 @@ public sealed class LiteKill : ILiteMode
             {
                 ch = await hub.OpenAsync(p.Id, TimeSpan.FromSeconds(10));
                 await ch.RequestAsync(Op, new { epoch }, TimeSpan.FromSeconds(10), ct);
+                told++;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception e) { told = false; log($"lite: could not tell {Short(p.Id)} of the kill ({e.GetType().Name})"); }
+            catch (Exception e) { failed = true; log($"lite: could not tell {Short(p.Id)} of the kill ({e.GetType().Name})"); }
             finally { if (ch is not null) { try { await hub.CloseAsync(ch); } catch (Exception) { } } }
         }
-        if (told) { Interlocked.Exchange(ref pushed, epoch); }
+        // Nothing delivered is not told: a peer that connects later still gets it.
+        if (told > 0 && !failed) { Interlocked.Exchange(ref pushed, epoch); }
     }
 
     public void ForgetPushed() => Interlocked.Exchange(ref pushed, 0);
 
-    long ReadEpoch()
+    long ReadEpoch(bool baseline = false)
     {
+        long n;
         try
         {
             var path = Path.Combine(folder, FileName);
-            if (!File.Exists(path)) { return 0; }
+            if (!File.Exists(path))
+            {
+                // Missing is normal only before any kill; after one it means the record was lost.
+                if (Interlocked.Read(ref seen) > 0) { Unreadable("missing"); }
+                return Interlocked.Read(ref seen);
+            }
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            if (doc.RootElement.TryGetProperty("epoch", out var e) && e.TryGetInt64(out var n) && n > 0) { seen = Math.Max(seen, n); }
-            return seen;
+            if (doc.RootElement.ValueKind != JsonValueKind.Object || !doc.RootElement.TryGetProperty("epoch", out var e) || e.ValueKind != JsonValueKind.Number || !e.TryGetInt64(out n) || n <= 0)
+            {
+                Unreadable("malformed");
+                return Interlocked.Read(ref seen);
+            }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
-            // An unreadable record must not let an old kill replay: keep the highest seen and stay off.
-            off = true;
-            log("lite: kill epoch file unreadable; off until restart or the next kill");
-            return seen;
+            Unreadable("unreadable");
+            return Interlocked.Read(ref seen);
         }
+        var raised = Raise(n);
+        if (raised && !baseline)
+        {
+            // Another process killed: stop the sends in flight here too.
+            off = true;
+            CancelFlights();
+            log($"lite: kill epoch {n} seen from another process; own-agents messaging is off");
+        }
+        return Math.Max(n, Interlocked.Read(ref seen));
+    }
+
+    // An unreadable record must not let an old kill replay: keep the highest seen and stay off.
+    void Unreadable(string what)
+    {
+        if (latched) { return; }
+        latched = true;
+        log($"lite: kill epoch file {what}; off until a new kill writes it");
+    }
+
+    bool Raise(long n)
+    {
+        long cur;
+        while ((cur = Interlocked.Read(ref seen)) < n)
+        {
+            if (Interlocked.CompareExchange(ref seen, n, cur) == cur) { return true; }
+        }
+        return false;
     }
 
     // One writer at a time across the host and `agents lite kill` processes, so a lower epoch
-    // can never overwrite a higher one.
+    // can never overwrite a higher one. A kill still applies if the lock times out.
     T Locked<T>(Func<T> body)
     {
         lock (inFlight)
         {
-            using var mutex = new Mutex(false, "AgentBridgeLiteKill-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(folder))))[..16]);
+            var full = Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (OperatingSystem.IsWindows()) { full = full.ToUpperInvariant(); }
+            using var mutex = new Mutex(false, "AgentBridgeLiteKill-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(full)))[..16]);
             var held = false;
             try { held = mutex.WaitOne(TimeSpan.FromSeconds(5)); } catch (AbandonedMutexException) { held = true; }
             try { return body(); }
@@ -209,9 +265,17 @@ public sealed class LiteKill : ILiteMode
     // The mode is already latched off, so a failed write cannot leave a kill unapplied.
     void TryWrite(long epoch)
     {
-        seen = Math.Max(seen, epoch);
-        try { WriteEpoch(epoch); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"lite: could not save kill epoch {epoch} ({e.GetType().Name}); off until restart"); }
+        Raise(epoch);
+        try
+        {
+            WriteEpoch(epoch);
+            latched = false;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            latched = true;
+            log($"lite: could not save kill epoch {epoch} ({e.GetType().Name}); off until restart");
+        }
     }
 
     void WriteEpoch(long epoch)
