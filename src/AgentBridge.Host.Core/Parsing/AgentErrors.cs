@@ -36,6 +36,17 @@ internal static class AgentErrors
             return new Attention { Kind = AttentionKind.SignInNeeded, Since = at, Agent = AgentKind.Copilot, Provider = "github", Message = Template(AttentionKind.SignInNeeded, null, status, AgentKind.Copilot) };
         }
         var errorClass = status switch { 403 => ErrorClass.Auth, 429 => ErrorClass.Rate, _ => ErrorClass.Other };
+        // #687: the CLI's own session host stopped acknowledging events (errorType "query", then
+        // "execution" on every later session.send, 1.0.105 and later; seen again 2026-11-09 on
+        // several sessions). It is the CLI's fault and never recovers until the session is
+        // resumed, and a background agent finishing meanwhile can lose its result. The error has
+        // no structured field to tell it from any other, so only the classification reads its
+        // words; the notice shown is ours, so a session that can't be written to no longer reads
+        // as a generic "stopped with an error".
+        if (IsHostWedge(data))
+        {
+            return new Attention { Kind = AttentionKind.Error, Since = at, Agent = AgentKind.Copilot, Message = HostWedgeMessage, ErrorClass = ErrorClass.Other };
+        }
         return new Attention
         {
             Kind = AttentionKind.Error,
@@ -45,6 +56,12 @@ internal static class AgentErrors
             ErrorClass = errorClass,
         };
     }
+
+    internal const string HostWedgeMessage = "Copilot's session stopped taking messages. Resume it to recover; a background agent's result may be missing.";
+
+    internal static bool IsHostWedge(JsonElement data) =>
+        Json.Str(data, "message") is { } m && m.Contains("session event delivery failed", StringComparison.Ordinal)
+        && (m.Contains("did not acknowledge", StringComparison.Ordinal) || m.Contains("did not complete", StringComparison.Ordinal));
 
     // attention.message (#841, Engineering): composed by the host from the structured fields
     // alone, never from the agent's words. Redacting arbitrary error text is a blocklist that
