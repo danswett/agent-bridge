@@ -42,22 +42,28 @@ and cannot launch anything itself.
   do anything you can).
 * *A new session reads files in its folder.* It runs as you, as every session does. That is why
   agents may only use folders you approved for this.
+* *Once HA launch is gone, a full disk or an unwritable log stops worker launches on that
+  machine.* Launches never go unrecorded; the machine shows why, and refuses the fleet grant
+  with under 1 GiB free so it is caught early.
 
 **Decisions for you** (each has a recommended default; say "defaults" to take them all):
 1. Fleet workers: the fleet launch grant above (**recommended**), or force ask-only.
 2. Who may give a session the right to launch: **you, per session, when you launch it** (a
    "may start agents" tick), and only on machines where you turned agent launch on. Off by
    default everywhere.
-3. Hourly caps: **3 launches per agent session, 10 per machine from all agents; fleet grant 8
-   per machine** (the dispatcher allows 6 workers per machine).
+3. Limits: **3 launches per agent session and 10 per machine per hour from all agents; fleet
+   grant 8 per machine per hour** (the dispatcher allows 6 workers per machine); **at most 6 live
+   agent-started sessions per machine, ended after 2 hours idle.** You can raise a limit at the
+   machine for up to 4 hours, for example to recover after a reboot.
 4. Long prompts: **keep the 16 KiB limit and refuse longer ones** with a reason; a longer
    handover goes in a file the prompt points to.
-5. Other machines: **this machine only** until device approval (#55); the dispatcher launches
-   on each machine locally meanwhile.
+5. Other machines: **this machine only** until device approval (#55). Meanwhile the
+   dispatcher still decides centrally, and a small launcher on each machine starts its own
+   workers.
 6. Sessions an agent starts: **read only, cannot launch, cannot be resumed by agents** (fleet
    workers may also send messages, so they can report back).
-7. Audit: **kept 30 days or 64 MiB on each machine, no prompt text**, readable in the app and
-   by a command.
+7. Audit: **launches in a file of their own, kept 30 days or 16 MiB on each machine, no prompt
+   text**, readable in the app and by a command.
 
 ---
 
@@ -120,9 +126,18 @@ its own checks unchanged (host-launch.md:110-125, `LaunchProtocol.Check`). A ref
 is written to the audit log too (§6).
 
 **Fail closed.** An unreadable or malformed `agents` policy, an unreadable credential store
-(already: `AgentCredentials.cs:132`), an unreadable cap state or an audit log that cannot be
-written each refuse the launch, naming which. Unreadable is never read as allowed, the same
-posture as the credential store and host-config.md:139-141.
+(already: `AgentCredentials.cs:132`), caps not yet rebuilt from the audit (§5) or an audit log
+that cannot be written each refuse the launch. Unreadable is never read as allowed, the same
+posture as the credential store and host-config.md:139-141. In operation:
+* **Transient is not unreadable.** A file briefly locked (a virus scan, a backup, a sync client)
+  is retried for about a second before the host decides.
+* **Distinct codes, all with `retryAfter`:** `policyUnreadable`, `auditUnwritable`,
+  `capRebuilding`, so a dispatcher retries later instead of treating them as permanent. The pipe
+  never hangs: while caps rebuild, launches are refused at once with `capRebuilding`.
+* **Visible.** A refusal that cannot be audited is otherwise invisible, so `host.status` carries
+  the current fail-closed reason and since when, the last successful audit write, refusal counts
+  by code, and the caps' current use; the host's own log is the fallback record. SRE alerts on it.
+  (Any client, the HA component included, shows it from `host.status`.)
 
 **Closing the side door.** Today only `CallerKind.Agent` is refused acting ops: any other
 same-user process (a script, the HTTP MCP) may `session.launch` as the person, with Allow all
@@ -194,7 +209,7 @@ running with Allow all does not widen it.
 
 ## 5. Cap and fairness
 
-**Decision.** Two sliding one-hour windows for agents, from agent-principals.md:706-707:
+**Decision.** Sliding one-hour windows, the agent ones from agent-principals.md:706-707:
 
 | Limit | Default | Counted per |
 |---|---|---|
@@ -202,38 +217,83 @@ running with Allow all does not widen it.
 | `limits.launchesPerMachinePerHour` | **10** | this machine, all agents together |
 | `limits.fleetLaunchesPerMachinePerHour` | **8** | this machine, the fleet grant (§11); the dispatcher allows 6 workers per machine. Separate from the agent caps: fleet launches do not use up agents' 10, nor agents the fleet's 8 |
 
-**What counts:** every attempt that passed the gate and reached the launch service (`started`,
-`unconfirmed`, `failed`), since each may have started a process. Refusals and `busy` do not
-count, so a busy machine does not burn an agent's hour. Refusals are rate-limited separately
-(60 per agent per hour; past that, one summary audit line per minute) so a looping agent cannot
-flood the audit log.
+**What counts:** each distinct (principal, `request`) with a `reserved` line (written at §2 step
+4, before the start) or any of `started`, `unconfirmed`, `failed`. So a launch counts once, and a
+host that crashed between the two lines still counts it. Refusals and `busy` do not count, so a
+busy machine does not burn an agent's hour. Refusals are rate-limited separately (60 per agent per
+hour; past that, one summary audit line per minute) so a looping agent cannot flood the audit log;
+that refusal limit is kept in memory only and a restart resets it, which is intended.
+
+**How long sessions live.** The caps are per hour, not on how many run at once, so two more
+limits keep idle sessions from piling up: at most **6 live agent-launched sessions per machine**
+(`limits.liveAgentLaunched`, the fleet's own worker count), and the host **ends an agent-launched
+session idle with no person input for 2 hours** (`limits.agentLaunchedIdleHours`). Ending it is
+the host's own upkeep, not an op an agent may call; it is audited, and a person's input to the
+session cancels it for good.
 
 **At the cap:** `outcome: refused`, `code: rateLimited`, `retryAfter` in seconds, and the
 reason "This machine has started 10 agent launches in the last hour (its limit). The next one
 can start in 14 minutes. A person can still launch from the app." The agent sees the per-agent
 or per-machine number, whichever stopped it.
 
-**Across restarts:** the windows are rebuilt at host start from the last hour of the audit log
-(§6), not kept in memory only as agent-principals.md:1138 allowed for messages. A launch is costly
-and the gate's evidence (20 started, the 21st refused) must survive a restart. An audit log that
-cannot be read at start means agent launches are refused until it can.
+**Across restarts:** the windows are rebuilt at host start from the audit log (§6), not kept in
+memory only as agent-principals.md:1138 allowed for messages. A launch is costly and the gate's
+evidence (20 started, the 21st refused) must survive a restart.
+* **What is read:** the tail of today's and yesterday's launch files only, never the whole log,
+  so start-up stays quick.
+* **Clock:** the window is judged on each line's wall-clock `at`. A line dated in the future (the
+  clock stepped back) counts as if dated now, so a clock jump can neither open nor close the cap.
+* **Damage:** a torn last line (power loss mid-append) is ignored, and its complete `reserved`
+  line still counts. A bad line or a broken chain **inside the last hour** refuses agent launches
+  (`capRebuilding`, with the reason); an older defect is a warning in `host.status` only, so one
+  flipped byte from last month never disables launches.
+* **Recovery:** the host retries the rebuild every 30 s, with the reason in `host.status`; no
+  restart is needed.
+* **After a reboot** the fleet relaunches its workers, and a second restart within the hour can
+  reach the fleet cap and leave a machine short for up to an hour. That is intended; `retryAfter`
+  and the cap's use are in `host.status`, and the runbook gives the owner's time-boxed override
+  (below).
+
+**Overrides.** `agent-bridge-host agents limits override <limit> <value> --for <minutes>` (at the
+machine, refused inside agent sessions like every setting) raises or lowers a cap for at most 4
+hours, then lapses by itself. It is audited and shown in `host.status`.
 
 ## 6. Audit
 
-**Decision.** One line per launch attempt in the agent audit log that #1401 builds (it lands
-first): `<profile>/audit/agents-YYYY-MM-DD.jsonl`, owner-only, at most 30 days and 64 MiB, oldest
-dropped first (agent-principals.md §5.6). Fields:
+**Decision.** Launch lines go in the agent audit log that #1401 builds (it lands first), in a
+**file of their own**, `<profile>/audit/launches-YYYY-MM-DD.jsonl`, owner-only, beside #1401's
+`agents-YYYY-MM-DD.jsonl` for sends and reads (agent-principals.md §5.6). A flood of message
+traffic or refusals can then never push out the launch evidence that the caps and the retirement
+gate rest on.
+* **Size:** two lines of about 0.7 KB per launch, so at every cap the launch file grows by tens
+  of KB an hour, well under its own **16 MiB** quota for 30 days; refusals are already limited
+  (§5).
+* **Pruning:** whole daily files, oldest first, at host start and once a day, never per append;
+  never a file that holds a line from the last two hours; a prune that fails warns in
+  `host.status` and never blocks a launch. A day over the quota on its own keeps that day and
+  warns.
+* **A person may archive** the log (`agent-bridge-host audit archive`, at the machine); the
+  archive is noted in the next line and in `host.status`.
+* **One writer.** One host runs per profile, under its lock (`LocalApi.cs:106-128`), and a
+  replacement starts only after the old host has let go (`LocalApi.cs:130-137`). The host also
+  holds an exclusive lock on the audit folder while it appends, so two writers can never fork
+  the chain or both take the last slot.
+* **Format:** each line has `v: 1`. Unknown fields are ignored and an unknown major version is
+  refused, so a host rolled back after an upgrade still reads newer lines.
 
-`at` (UTC), `principal` (`agent:<machine>/<session>`, `AgentPrincipals.cs:27`), `scope`,
+Fields: `v`, `at` (UTC), `principal` (`agent:<machine>/<session>`, `AgentPrincipals.cs:27`), `scope`,
 `depth`, `action: "session.launch"`, `request`, `machine`, `agent`, `workspace` (label),
 `model`, `permissions`, `promptBytes`, `outcome`, `code`, `reason`, `session` (the new one, when
 known), `grant` (`agent` or `fleet`). **Never** the prompt, the token or a file path beyond the
 workspace label (#1401's rule). Every attempt gets a line: a refusal at any gate step is one
-line with its `code`; a launch that passes writes its line **before** it starts (§2 step 4), and
-the outcome is a second line with the same `request`.
+line with its `code`; a launch that passes writes `outcome: reserved` **before** it starts (§2
+step 4), and the outcome is a second line with the same `request`.
 
-**Tamper-evidence:** each line carries the SHA-256 of the previous line, and the host shows the
-chain's state in `host.status` ("audit chain intact" or "broken at <time>"). That detects an
+**Tamper-evidence:** each line carries the SHA-256 of the previous line, and the chain runs on
+across daily files: each file opens with a header line holding the hash of the previous file's
+last line, so pruning or rotation never reads as a break. The host shows the chain's state in
+`host.status` ("audit chain intact" or "broken at <time>"), verified at start and incrementally on
+each append, fully once a day, and cached: a status call never re-reads the log. That detects an
 edited or removed line. It does not stop a same-user program rewriting the whole file, which is
 the accepted same-user limit (agent-principals.md §1.3).
 
@@ -267,7 +327,7 @@ machine; try again in a few minutes", never the other session's agent, workspace
 
 | Threat | Mitigation | Accepted residual |
 |---|---|---|
-| **Prompt injection makes an agent launch sessions** | Off by default (two keys, §1); ask-only, so every action of the new session still asks a person; approved workspaces only; caps 3 and 10 per hour; full audit; the new session is `read` and cannot launch | Up to 10 unwanted ask-only sessions per machine per hour, each needing a person to approve anything; the injected prompt runs in the new session (it is the agent's own prompt) |
+| **Prompt injection makes an agent launch sessions** | Off by default (two keys, §1); ask-only, so every action of the new session still asks a person; approved workspaces only; caps 3 and 10 per hour, at most 6 live and idle ones ended after 2 h; full audit; the new session is `read` and cannot launch | Up to 10 unwanted ask-only sessions per machine per hour (6 live at once), each needing a person to approve anything; the injected prompt runs in the new session (it is the agent's own prompt) |
 | **A stolen session token** | Accepted only from inside its own session's process tree, read in full (`AgentCredentials.cs:145-156`); dies with the session (`:157-162`); one per session (`:94-95`); revocable | **Safety rail, not a boundary** (agent-principals.md §3.4): a same-user process can spoof its parent or join the Job. Such a process can already do anything the user can |
 | **Runaway fan-out** | One agent launch step at most (§4); per-agent and per-machine caps (§5) that survive restarts; refusals rate-limited | None beyond the caps |
 | **The new session reads secrets in its folder** | Workspaces only from the "agents may launch here" list a person set at the machine; isolated workspaces start in a fresh worktree | The session runs as the user and can read what the user can, like any session. The list is what the owner controls |
@@ -285,27 +345,46 @@ waits for the device roster (#55), as the owner decided (agent-principals.md §1
 The temporary own-account mode (AP5-lite) carries `agent.send` only and is not extended to launch.
 
 **For the HA retirement:** HA launches across machines today (the dispatcher presses each
-machine's `new_session` button from one place). Until #55, fleet #106 runs the dispatcher's
-launch step on the target machine: the dispatcher's scheduled job is registered on each of the
-four machines and launches only there, from the shared queue. That costs four registrations and
-a little coordination in #106 (S), and removes the cross-machine need.
+machine's `new_session` button from one place). Until #55, **one dispatcher still decides, and a
+small launcher on each machine carries out its own assignments**:
+* The dispatcher stays where it is and keeps choosing which item goes to which machine, so there
+  is no claim race between machines. It writes each assignment (item, machine, a `request` UUID
+  made once per item and machine) to the fleet repository, which every machine already reads with
+  its own git credentials.
+* Each machine's launcher reads only its own assignments, launches through its local pipe with
+  the fleet grant and that `request`, and writes the outcome back. A repeat of the same `request`
+  starts nothing (§7), so a launcher that crashes and retries cannot start an item twice. An
+  assignment not taken up within its time limit (a machine asleep or rebooting) goes back to the
+  dispatcher.
+* No machine adds GitHub REST polling: the launcher reads by `git fetch`, and the dispatcher's
+  own calls do not change. Machines without the GitHub App's private key need no token.
+* A launcher on a host without the fleet grant (an older version) launches nothing there and says
+  so on the board. It never falls back to HA or to the unattributed pipe path. Rollout is one
+  machine first, with a kill switch for the launchers like the event pump's.
+
+This makes #106 S-M (about 2 days) instead of S. Four dispatchers on a shared queue were
+rejected: they need an exactly-once claim, a GitHub token on every machine and more REST calls.
 
 ## 10. Rollout and tests
 
 | Slice | Contents | Size | Tests (fail-closed cases named) |
 |---|---|---|---|
-| **#1401** audit log (first) | as filed, plus the hash chain and the `audit` command | M | an unwritable log refuses the action; a removed line shows "broken" |
+| **#1401** audit log (first) | as filed, plus the launch file, hash chain across files, line version, folder lock, pruning rules (§6) and the `audit` command | M | an unwritable log refuses the action; a removed line shows "broken"; pruning and rotation keep the chain intact; a torn last line is ignored; a newer major version is refused, unknown fields ignored; a second writer is refused |
 | **2b #1404** scope and enforcement | `agentScope` on person launches; `agents.launch` policy; `AgentLaunchGate` (§2, §3); refuse `session.launch` from `Other`; MCP schema trimmed; agent prompt wording | M-L (about 380) | refused: no scope, scope revoked mid-session, switch off, policy unreadable, `permissions` absent, `allowAll`, `transfer`, `resume`, attachments, workspace not listed, workspace not isolated, worktree with a tool-approving settings file, Agency, `auto`, extra arguments, `agentScope` from an agent, launcher at depth 1, an adopted session, a script caller, two launches racing for the last slot; accepted: ask-only launch in a listed workspace; 16 KiB prompt whole, 16 KiB + 1 refused; child credential is `read` |
-| **2c #1413** cap, result, options | caps rebuilt from the audit at start; result keyed by principal; agent projection of options and busy | M (about 300) | 4th launch by one agent refused; 11th on the machine refused; cap survives a host restart; unreadable audit refuses; another caller's repeat of the request id never gets the result; options carry no path, resumable or trust |
-| **2e (new)** fleet launch grant | the grant in §11 on the script credential | S (about 120), after #1414 and #1404 | refused: from inside an agent session, workspace not fleet-ticked, cap 9th, scope above `read+reply` for the worker |
-| **2d fleet #106** dispatcher | per-machine launch through `session.launch` with the fleet grant; result and options from the call | S-M | as filed |
+| **2c #1413** cap, result, options | caps rebuilt from the audit at start; result keyed by principal; agent projection of options and busy | M-L (about 380; may split the live limit and idle end off) | 4th launch by one agent refused; 11th on the machine refused; 7th live agent-launched session refused; idle session ended after 2 h, and not after a person's input; cap survives a host restart; a crash between `reserved` and the outcome still counts; a future-dated line counts; a defect inside the hour refuses with `capRebuilding`, an older one warns; a locked policy file retried, then `policyUnreadable`; override lapses by itself; another caller's repeat of the request id never gets the result; options carry no path, resumable or trust |
+| **2e (new)** fleet launch grant | the grant in §11 on the script credential | S (about 120), after #1414 and #1404 | refused: from inside an agent session, workspace not fleet-ticked, cap 9th, under 1 GiB free (`diskLow`), scope above `read+reply` for the worker |
+| **2d fleet #106** dispatcher | central dispatcher plus per-machine launchers (§9) through `session.launch` with the fleet grant; result and options from the call; kill switch; one machine first | S-M (about 2 days) | as filed, plus: a retried assignment starts nothing twice; an assignment on a sleeping machine returns; a host without the grant launches nothing and never falls back |
 
-**Quality acceptance run** (four Windows machines, after 2c): for the run, set
-`launchesPerMachinePerHour` and `launchesPerOriginPerHour` to 5 on each machine (at the machine,
-then put back). One coordinator session with launch scope on each machine launches 5 ask-only
-sessions there: 20 `started` in all. The 21st, a sixth launch on any one machine, is `refused`
-`rateLimited`; restart that host and the next launch there is still refused. The default
-per-agent cap of 3 is tested separately in 2c. An agent
+**Quality acceptance run** (four Windows machines, after 2c): set
+`launchesPerMachinePerHour` and `launchesPerOriginPerHour` to 5 on each machine with the
+time-boxed override (§5), which lapses by itself and is audited. One coordinator session with
+launch scope on each machine launches 5 ask-only sessions there: 20 `started` in all. The 21st, a
+sixth launch on any one machine, is `refused` `rateLimited`. A person then restarts that host
+(agents cannot), and the next launch there is still refused. The default per-agent cap of 3 is
+tested separately in 2c. **Teardown:** the run lead ends the 20 sessions from the app (agents
+cannot stop sessions in v1); any left over are ended by the 2-hour idle rule. **Close-out:** read
+`host.status` on each machine to show the overrides lapsed and the limits are back to 3, 10
+and 8. An agent
 without the scope, an `allowAll` launch and an unlisted workspace are each refused. Evidence: the
 `audit` command's output from each machine, with request ids matching the launching session's
 log. The fleet run (#106: 20 worker launches, zero through HA) follows 2e separately.
@@ -336,6 +415,13 @@ later turns off (agent-principals.md §5.2); several weeks, or the owner approve
 
 Until 2e lands the dispatcher keeps launching through HA; nothing about today's fleet changes.
 
+**No fallback once HA launch is retired (S7).** Failing closed (§2) then means a full disk or a
+locked audit file stops every unattended worker launch on that machine until it is fixed. That is
+accepted: the alternative is launches nobody can account for. To make it rare and visible, the
+host refuses to turn the fleet grant on, and refuses fleet launches, with under 1 GiB free on the
+profile's disk (`code: diskLow`), and `host.status` shows it. The runbook gets one line each for
+`diskLow`, `auditUnwritable`, `capRebuilding` and the recovery override (§5).
+
 ## 12. Open questions for the owner
 
 Each has a recommended default; the summary's list is the same.
@@ -343,11 +429,14 @@ Each has a recommended default; the summary's list is the same.
 1. Fleet workers: fleet launch grant (§11) **(recommended)**, or force ask-only.
 2. Who grants launch scope: a person, per session, at launch, on machines with the switch on
    **(recommended)**; or every session a person launches on such a machine.
-3. Caps: 3 per agent session and 10 per machine per hour; fleet grant 8 per machine
+3. Limits: 3 per agent session and 10 per machine per hour; fleet grant 8 per machine per
+   hour; at most 6 live agent-started sessions per machine, ended after 2 hours idle
    **(recommended)**.
 4. Prompts over 16 KiB: refused, with "put it in a file" **(recommended)**; or raise the limit
    with a prompt-file channel (about 2 more days, new content path).
-5. Cross-machine: this machine only until #55 **(recommended)**; or extend the temporary
-   own-account mode to launch now.
+5. Cross-machine: this machine only until #55, with a central dispatcher and a launcher on
+   each machine for the fleet **(recommended)**; or extend the temporary own-account mode to
+   launch now.
 6. Sessions agents start: read only, no launch, agents cannot resume **(recommended)**.
-7. Audit: 30 days or 64 MiB per machine, no prompt text **(recommended)**; or keep prompts too.
+7. Audit: launches in their own file, 30 days or 16 MiB per machine, no prompt text
+   **(recommended)**; or keep prompts too.
