@@ -71,7 +71,7 @@ ones, unchanged) or `kind: "script"`, so the two are never confused at check tim
 | Account | The host's own account only. A script cannot name another account, and cross-account federation (agent-principals.md §7) is not extended to it |
 | Scope | `read+reply` only: `agent.send` and the read ops (`fleet.list`, `fleet.find`). **No launch.** No answering an approval, no folder trust, no stop, no transfer, no attachments |
 | Expiry | 30 days by default, shorter if the owner sets it (open question Q1). A script that runs past it fails loudly; it is never extended silently |
-| Count | One credential per name; minting the same name again replaces the old one (the old one is dead at once) |
+| Count | One live credential per name, except during a rotation: minting the same name again adds the new one, and the old one dies when the new one passes its first real call (§5, Rotate), or at its own expiry if that never happens |
 
 **Launch is not part of this credential.** The dispatcher's launch right is the separate
 `launch:fleet` grant in agent-launch-scope.md §11 (slice 2e), and a person at the machine
@@ -94,7 +94,9 @@ token is accepted only from a person's device).
   and the next call is refused.
 * **Rotate.** Mint the same name again. The host writes the new file atomically and keeps the
   old credential until the new one passes one real call (agent-token-rotation.md §4), then
-  deletes it. A script reads its file on each run, so it needs no restart.
+  deletes it. At most two credentials per name are live, and only during a rotation; a
+  failed first call changes nothing, and `scripts revoke <name>` kills both. To end a leak
+  at once, revoke first and then mint, rather than rotating. A script reads its file on each run, so it needs no restart.
 * **Automatic revocation.** Expiry; an unreadable store (fail closed, nothing is accepted until
   the owner deals with it).
 
@@ -105,6 +107,18 @@ token is accepted only from a person's device).
 3. **Not from inside an agent session.** The caller's ancestry must be read in full and must
    contain no agent session: the reverse of `agent.hello`'s rule, as agent-launch-scope.md §11
    states it. A partial or untraceable ancestry is refused, never treated as a script.
+   **A script a coordinator starts does not pass this rule, on purpose.** A script started
+   from inside a coordinator's session (a child of its shell) has an agent session in its
+   ancestry and is refused. There are two ways to run such work:
+   * **Recommended: the coordinator sends and reads with its own session credential**
+     (`agent.send`, `fleet.list`), which it already holds; no script credential is involved.
+   * **Scheduled runs:** the owner starts the script from the machine's task scheduler (or by
+     hand in a terminal), so its ancestry holds no agent session. A coordinator that wants one
+     run now asks the scheduler to run the task. Its parent is then the scheduler, not the
+     session. This is the rail's known gap (a detached process has an agent-free ancestry),
+     not a feature: it is why the credential file, not rule 3, is the real barrier.
+   Running a script credential's file from a session by copying or exporting it is a
+   leak (§8), not a supported path.
 4. **No launch, no answers.** The ops list is an allow-list; an op not on it is refused by
    default.
 5. **Rate limit and size limit** per credential, modelled on the session limits (`agent.send` text is
