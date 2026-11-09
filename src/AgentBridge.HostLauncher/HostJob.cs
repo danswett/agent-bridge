@@ -107,18 +107,22 @@ public sealed class HostJob : IDisposable
         public async Task<int> WaitForExitAsync(CancellationToken ct = default)
         {
             var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var wait = new ManualResetEvent(false) { SafeWaitHandle = new SafeWaitHandle(process.DangerousGetHandle(), ownsHandle: false) };
+            using var wait = new ProcessWait { SafeWaitHandle = new SafeWaitHandle(process.DangerousGetHandle(), ownsHandle: false) };
             var registered = ThreadPool.RegisterWaitForSingleObject(wait, (_, _) => exited.TrySetResult(), null, Timeout.Infinite, executeOnlyOnce: true);
             try
             {
                 await exited.Task.WaitAsync(ct);
                 return GetExitCodeProcess(process, out var code) ? unchecked((int)code) : throw new Win32Exception(Marshal.GetLastPInvokeError());
             }
-            finally { registered.Unregister(null); }
+            finally { registered.Unregister(wait); }
         }
 
         public void Dispose() => process.Dispose();
     }
+
+    // A wait handle on a process handle someone else owns. A ManualResetEvent would create an event
+    // of its own first, which setting SafeWaitHandle leaves unclosed.
+    sealed class ProcessWait : WaitHandle;
 
     // An argument as CommandLineToArgvW and the C runtime read it back.
     public static string Quote(string argument)

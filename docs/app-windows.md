@@ -334,11 +334,11 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   pressed meanwhile, and a Start asked for after a Stop runs once that Stop is done (#478). A
   launcher looks for the marker again
   before every start of the host, once its record is held, so a Stop that came just after it
-  cleared the last one is honoured even when the app could not find it yet. A host the launcher cannot vouch for
-  (one it could not create in its job, which is then also not told it is watched, or one started
-  while it could not hold its record) looks for the marker itself once its pipe is open and
-  exits without serving if it is there, and hands that look on to the replacement it starts after
-  `host.restart`. A Stop that fails otherwise (timed out, cancelled) before the host answered it,
+  cleared the last one is honoured even when the app could not find it yet.   Every host the launcher
+    starts looks for the marker itself once its pipe is open and exits without serving if it is
+    there (#986), whether or not the launcher holds its record; a host the launcher cannot vouch
+    for (one it could not create in its job, or one started while it could not hold its record)
+    also hands that look on to the replacement it starts after `host.restart`. A Stop that fails otherwise (timed out, cancelled) before the host answered it,
   with the host or its launcher still there, clears the marker too, each looked for on its own and
   within the stop timeout; once the host may have accepted the stop the marker stays (#986). A host that refuses the app's
   connection (one of them elevated) is a refused Stop: left running, with its launcher, and the

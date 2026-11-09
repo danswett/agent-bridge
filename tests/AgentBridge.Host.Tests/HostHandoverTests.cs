@@ -97,16 +97,18 @@ public sealed class HostHandoverTests : IDisposable
     }
 
     [Fact]
-    public async Task A_host_its_launcher_cannot_vouch_for_looks_for_the_apps_stop_itself_and_any_other_does_not()
+    public async Task A_host_the_launcher_holds_looks_for_the_apps_stop_whether_or_not_it_was_told_to_and_a_host_started_by_hand_does_not()
     {
         File.WriteAllText(Path.Combine(profile, AgentBridge.Local.HostLauncherContract.StopMarker), "");
-        bool? unvouched = null, held = null;
+        bool? unvouched = null, held = null, byHand = null;
 
         await HostHandover.RunAsync(h => { unvouched = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: false, checkStop: true);
-        await HostHandover.RunAsync(h => { held = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: true);
+        await HostHandover.RunAsync(h => { held = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: true, checkStop: false);
+        await HostHandover.RunAsync(h => { byHand = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement);
 
         Assert.True(unvouched);
-        Assert.False(held);
+        Assert.True(held);
+        Assert.False(byHand);
     }
 
     [Theory]
