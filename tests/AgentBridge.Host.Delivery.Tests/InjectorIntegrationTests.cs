@@ -424,12 +424,14 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         f.Processes.Run(AgentBridge.Protocol.AgentKind.Copilot, echo.Pid);
         await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
-        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+        // Patient screens (#1552, as #1492): an empty screen read on a loaded runner refused the reply
+        // with nothing typed. The echo's wait outlasts the 90 s a read may be retried.
+        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new PatientScreens(new WorkerInjector(Worker)),
             new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) });
         var keyDowns = text.Length + 1;
         var cli = Task.Run(() =>
         {
-            var downs = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { } d && d.Count >= keyDowns ? d : null, seconds: 60);
+            var downs = WaitFor(echo.Log, lines => Keys(lines).Where(k => k.StartsWith("key 1 ", StringComparison.Ordinal)).ToList() is { } d && d.Count >= keyDowns ? d : null, seconds: 150);
             Assert.Equal("key 1 13 13", downs[^1]);
             var words = new string([.. downs.SkipLast(1).Select(k => (char)int.Parse(k.Split(' ')[3], CultureInfo.InvariantCulture))]);
             Fixture.Append(events, Copilot.Event("user.message", new { content = words, delivery = "idle" }, 5));
