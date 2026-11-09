@@ -87,6 +87,12 @@ public sealed class FleetFindTests : IDisposable
         var two = Op(M("a", true, "SG Quality", verified: true), M("b", true, "SG Quality", verified: true), M("c", false, null));
         var amb = await Find(two, new { name = "SG Quality" });
         Assert.Equal("ambiguous", amb.GetProperty("result").GetString());
+        var withOffline = await Find(Op(M("a", true, "SG Quality", verified: true), M("c", false, "SG Quality")), new { name = "SG Quality" });
+        Assert.Equal("ambiguous", withOffline.GetProperty("result").GetString());
+        var cands = withOffline.GetProperty("candidates").EnumerateArray().OrderBy(c => c.GetProperty("machine").GetString(), StringComparer.Ordinal).ToList();
+        Assert.Equal(["a", "c"], cands.Select(c => c.GetProperty("machine").GetString()));
+        Assert.Equal([true, false], cands.Select(c => c.GetProperty("online").GetBoolean()));
+        Assert.Equal(JsonValueKind.Null, cands[1].GetProperty("node").ValueKind);
         var none = await Find(one, new { name = "SG Nobody" });
         foreach (var r in new[] { unpinned, trimmed, pinned, amb, none })
         {
