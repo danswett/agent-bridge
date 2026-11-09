@@ -327,7 +327,9 @@ export class LaunchPanel {
     this.#localLine = null;
     this.#target = target;
     // What the machine last said, kept from a background ask: shown at once, with its age.
-    const cached = target?.cached?.() ?? null;
+    // A machine held (#269) when picked shows its held note, not a form: its choices are asked
+    // for once it is current again, as before the cache.
+    const cached = target?.held ? null : target?.cached?.() ?? null;
     this.#options = cached?.options ?? null;
     this.#optionsAt = cached?.options ? cached.at : 0;
     this.#remote = [];
