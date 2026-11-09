@@ -1719,6 +1719,47 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_press_the_app_refuses_ends_on_the_agents_own_row()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3"), ReadOnly = "fixture legacy host" });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1 && connection.Status?.ReadOnly is not null, "the read-only agent row");
+
+        await settings.SetUpAgentAsync("claude");
+
+        Assert.Equal("Setup failed · this bridge is read-only", settings.Agents.Single().Status);
+        Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
+        Assert.Contains("fixture legacy host", settings.Error);
+        Assert.Empty(host.Sent(HostOps.AgentsSetup));
+    }
+
+    [Fact]
+    public async Task A_press_the_host_calls_done_that_changes_nothing_says_so_on_the_row()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3") });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(true, "Registered.", false));
+        host.On(HostOps.AgentsRefresh, _ => new AgentBridge.Transport.ChannelReply(host.Status.Agents!, ch => host.SendAsync(HostOps.StatusEvent, host.Status)));
+
+        await settings.SetUpAgentAsync("claude");
+
+        await Wait.UntilAsync(() => settings.Agents.SingleOrDefault()?.Status.StartsWith("Nothing changed", StringComparison.Ordinal) == true, "the nothing-changed note",
+            why: () => settings.Agents.SingleOrDefault()?.Status ?? "none");
+        Assert.Equal(Tone.Warn, settings.Agents.Single().StatusTone);
+    }
+
+    [Theory]
+    [InlineData(ReadinessState.Unknown, HookSetupState.NotSetUp, "Set up")]
+    [InlineData(ReadinessState.NeedsAction, HookSetupState.NotSetUp, "Set up")]
+    [InlineData(ReadinessState.Failed, HookSetupState.Incomplete, "Repair")]
+    [InlineData(ReadinessState.Working, HookSetupState.Completed, null)]
+    public void A_row_labels_its_button_for_what_the_host_reports(ReadinessState hooks, HookSetupState setup, string? verb)
+    {
+        var row = new AgentReadinessRow(Agent("claude", "Claude Code", hooks, setup: setup), canManage: true);
+
+        Assert.Equal(verb, row.SetUpVerb);
+    }
+
+    [Fact]
     public async Task A_readiness_probe_failure_is_shown_instead_of_reporting_success()
     {
         host.On(HostOps.AgentsRefresh, _ => throw new InvalidOperationException("readiness scan refused"));

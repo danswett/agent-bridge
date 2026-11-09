@@ -852,15 +852,19 @@ public sealed partial class SettingsViewModel : Observable
 
     public Task SetUpAgentAsync(string agent, bool remove = false) => RunAsync(async () =>
     {
+        var verb = Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb;
+        // A press refused before the host is asked still ends on its own row, not only in the page's
+        // error bar far above the agents list, where it read as a button that did nothing (#1473).
         if (!HostRunning || !host.Can(HostOps.AgentSetupCapability))
         {
+            if (HostRunning) { Note(agent, new(AgentWords.SetupUnsupported(remove, verb), Tone.Bad)); }
             throw new InvalidOperationException("This host does not support agent setup. Update the app and restart the host.");
         }
         if (Status?.ReadOnly is not null || Status?.AgentHaBridge is not null)
         {
+            Note(agent, new(AgentWords.SetupFailed(remove, verb, Status.AgentHaBridge is not null ? "agent-ha-bridge" : "read-only"), Tone.Bad));
             throw new InvalidOperationException($"Agent setup is unavailable: {Status.ReadOnly ?? Status.AgentHaBridge}");
         }
-        var verb = Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb;
         // Agency's removal takes Copilot CLI's hooks, whose card it is that must not come back.
         var offered = AgentReadinessRow.HooksOf(agent);
         var version = Agents.FirstOrDefault(a => a.Id == offered)?.Version;
@@ -900,6 +904,13 @@ public sealed partial class SettingsViewModel : Observable
             catch (Exception e) when (!result.Completed && e is not (OutOfMemoryException or StackOverflowException)) { }
         }
         if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
+        // A press the host called done that left the row offering the same verb changed nothing the
+        // bridge can see; say so instead of a success the row contradicts (#1473). A setup that
+        // needs a restart keeps reporting the old state until then, so that is not "nothing".
+        if (!remove && !result.RestartRequired && verb is not null && gone == hostsGone && Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb == verb)
+        {
+            Note(agent, new(AgentWords.SetupChangedNothing(verb), Tone.Warn));
+        }
     });
 
     public Task InstallAgentAsync(string agent) => RunAsync(async () =>
