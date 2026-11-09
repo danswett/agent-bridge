@@ -344,13 +344,17 @@ What agents did on this machine is written one JSON line per event to
 and files are readable by this user alone, like `agent-credentials.json`. Each line has `at`,
 `direction` (`out`, `in` or `local`), `request`, `principal` (`agent:<machine>/<session>`, never
 the owner), `chain`, `action`, `target`, `outcome`, `reason`, and, when the event carried text,
-`dataSha256` and `textLength`. The text itself is never written, and a reason is cut at 200
-characters.
+`dataSha256` and `textLength`. The text itself is never written; a reason is cut at 200
+characters, every other field at 256, and the chain at 16 entries.
 
-The host keeps 30 days and 64 MiB at most, deleting the oldest day's file first and never the
-file being written. If a write fails (a read-only folder, a full disk) the host log says so once
-and again when writing resumes; the action being audited carries on. Nothing calls the log yet:
-the agent operations that write to it arrive with #720 slice 4 and #1170.
+The host keeps at most 30 days and 64 MiB, deleting the oldest day's file first and never the
+file being written. Age pruning never trusts a clock that has jumped ahead of the newest earlier
+file, and size pruning stops at a file it cannot delete. A line torn by a crash is not joined to
+the next event. An unwritable log (a read-only folder, a full disk) refuses the action being
+audited, as the #1401 row in design/agent-launch-scope.md requires: the log says so once in the
+host log and again when writing resumes, and the caller must refuse and release any slot when the
+write returns false. Nothing calls the log yet: the agent operations that write to it arrive with
+#720 slice 4 and #1170.
 
 ## Approving a workspace at the machine
 

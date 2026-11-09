@@ -65,7 +65,7 @@ public sealed class AgentAuditLogTests : IDisposable
     [Fact]
     public void Past_the_size_limit_the_oldest_files_go_first_and_never_the_current_one()
     {
-        var log = Log(max: 1500);
+        var log = Log(max: 400);
         for (var i = 0; i < 3; i++) { log.Append(Entry(), new string('x', 10)); clock.Advance(TimeSpan.FromDays(1)); }
         log.Append(Entry(outcome: new string('o', 2000)));
 
@@ -103,5 +103,76 @@ public sealed class AgentAuditLogTests : IDisposable
         Log().Append(Entry() with { Reason = new string('r', 5000) });
         using var doc = JsonDocument.Parse(File.ReadAllLines(Directory.GetFiles(Audit)[0])[0]);
         Assert.Equal(AgentAuditLog.MaxReason, doc.RootElement.GetProperty("reason").GetString()!.Length);
+    }
+
+    [Fact]
+    public void Every_text_field_and_the_chain_are_capped_so_one_event_cannot_fill_the_budget()
+    {
+        var big = new string('z', 100_000);
+        Log().Append(new AgentAuditEntry(big, big, big, Enumerable.Repeat(big, 1000).ToArray(), big, big, big, big));
+        var text = File.ReadAllLines(Directory.GetFiles(Audit)[0])[0];
+        Assert.True(text.Length < 10_000);
+        using var doc = JsonDocument.Parse(text);
+        Assert.Equal(AgentAuditLog.MaxChain, doc.RootElement.GetProperty("chain").GetArrayLength());
+    }
+
+    [Fact]
+    public void A_partial_last_line_from_a_crash_is_not_glued_to_the_next_event()
+    {
+        Directory.CreateDirectory(Audit);
+        var file = Path.Combine(Audit, "agents-2026-11-08.jsonl");
+        File.WriteAllText(file, "{\"at\":\"torn");
+        Assert.True(Log().Append(Entry()));
+
+        var lines = File.ReadAllLines(file);
+        Assert.Equal(2, lines.Length);
+        using var doc = JsonDocument.Parse(lines[1]);
+        Assert.Equal("send", doc.RootElement.GetProperty("action").GetString());
+    }
+
+    [Fact]
+    public void A_clock_that_jumps_forward_does_not_age_out_the_history_and_a_file_30_days_old_goes()
+    {
+        var log = Log();
+        log.Append(Entry());
+        clock.Advance(TimeSpan.FromDays(3650));
+        log.Append(Entry());
+        Assert.Equal(2, Directory.GetFiles(Audit).Length);
+
+        var back = new FakeTimeProvider(new DateTimeOffset(2026, 12, 8, 12, 0, 0, TimeSpan.Zero));
+        var fixedLog = new AgentAuditLog(profile, back, said.Add);
+        fixedLog.Append(Entry());
+        back.Advance(TimeSpan.FromDays(1));
+        fixedLog.Append(Entry());
+        Assert.DoesNotContain("agents-2026-11-08.jsonl", Directory.GetFiles(Audit).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public void Size_pruning_stops_at_a_file_it_cannot_delete_and_does_not_take_newer_days()
+    {
+        var log = Log();
+        log.Append(Entry());
+        clock.Advance(TimeSpan.FromDays(1));
+        log.Append(Entry());
+        clock.Advance(TimeSpan.FromDays(1));
+        var oldest = Path.Combine(Audit, "agents-2026-11-08.jsonl");
+        if (!OperatingSystem.IsWindows()) { return; }
+        using (new FileStream(oldest, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Log(max: 400).Append(Entry(outcome: new string('o', 250)));
+        }
+        Assert.Equal(3, Directory.GetFiles(Audit).Length);
+    }
+
+    [Fact]
+    public void The_audit_file_is_owner_only_and_an_existing_loose_one_is_tightened()
+    {
+        if (OperatingSystem.IsWindows()) { return; }
+        Directory.CreateDirectory(Audit);
+        var file = Path.Combine(Audit, "agents-2026-11-08.jsonl");
+        File.WriteAllText(file, "");
+        File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        Log().Append(Entry());
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(file));
     }
 }
