@@ -691,7 +691,7 @@ static class MergeRuleCommand
         return facts with { Statuses = facts.Statuses.Where(s => !contexts.Contains(s.Context)).Concat(history).ToList() };
     }
 
-    /// <summary>The receipt contexts: the independent review's, and the waiver's second review's when set.</summary>
+    /// <summary>The receipt contexts: the independent review's, and the second review's.</summary>
     static HashSet<string> ReceiptContexts(MergeRuleConfig config) =>
         new[] { config.IndependentReview.Context, config.CopilotWaiver.SecondReview }
             .Where(c => !string.IsNullOrWhiteSpace(c)).ToHashSet(StringComparer.Ordinal);

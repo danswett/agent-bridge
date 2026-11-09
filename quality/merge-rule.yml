@@ -64,20 +64,17 @@ main_green:
   workflow: ci.yml
   exempt_labels: [fixes-main]
 
-# The standing rule (owner decision 2026-11-05, #955; it began as a stopgap when Copilot's review
-# quota ran out at about 18:02 PT): Copilot reviews only the security PRs Quality spends the
-# monthly included requests on. A pull request with one of these labels may go without a
-# completed Copilot review on its head, but only with a success independent-review receipt on that
-# head from one of independent_review.posters. One that needs that receipt (a sensitive path, a
-# security mark, an incomplete file list) also needs a success second_review receipt on the same
-# head from a poster, and the two descriptions must each name a model from a different family:
-# Copilot caught #836's HIGH after two claude-opus-5.5 reviews missed it, and the second family is
-# what stands in for that. Sensitive files under one_review_paths don't call for the second
-# (Product, hub 6675322154: a status.md row the receipt checked against its decision). A completed
-# Copilot review on the head is itself the other family, so the label then changes nothing (#962,
-# option a). A poster's failure in second_review blocks whether or not the label is on: taking the
-# label off mustn't discard a reviewer's veto (sr-962b). The label alone waives nothing, and every
-# other requirement stands. Adding a label takes triage rights: the merge coordinator adds it.
+# The standing rule (owner decision 2026-11-08): Copilot and Codex reviews are optional extras and
+# never block a merge; the independent-review receipts are the gate. A pull request needs a success
+# independent-review receipt on its head from one of independent_review.posters, and no Copilot
+# review. One that needs that receipt (a sensitive path, a security mark, an incomplete file list)
+# also needs a success second_review receipt on the same head from a poster, and the two
+# descriptions must each name a model from a different family. Sensitive files under
+# one_review_paths don't call for the second (a status.md row the receipt checked against its
+# decision). A completed Copilot review on the head still counts, as the other family, but never replaces the first receipt. A Copilot
+# error or timeout review is ignored. A poster's failure in either receipt blocks. Every other
+# requirement stands. labels is still accepted (the older 2026-11-05 label, #955) but changes
+# nothing: no label is needed.
 copilot_waiver:
   labels: [copilot-waived]
   second_review: independent-review-2
