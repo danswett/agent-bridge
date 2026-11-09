@@ -154,4 +154,55 @@ public sealed class AgentLiteKillTests : IDisposable
         Assert.False(b.On);
         Assert.Equal(epoch, b.KillEpoch);
     }
+
+    [Fact]
+    public void A_failed_epoch_write_still_turns_the_mode_off()
+    {
+        var folder = NewHost("a");
+        Directory.CreateDirectory(Path.Combine(folder, LiteKill.FileName));
+        var lite = Host(folder, Pinned);
+        Assert.True(lite.Observe(Pinned, 5));
+        Assert.False(lite.On);
+        lite.Kill();
+        Assert.False(lite.On);
+    }
+
+    [Fact]
+    public void A_rejected_epoch_is_not_applied_and_does_not_silence_the_next_push()
+    {
+        var lite = Host(NewHost("a"), Pinned);
+        var far = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 10 * 86400;
+        Assert.Equal(false, ((dynamic)lite.HandleKill(Pinned, "host", Epoch(far))).applied);
+        Assert.True(lite.On);
+        Assert.Equal(true, ((dynamic)lite.HandleKill(Pinned, "host", Epoch(5))).applied);
+    }
+
+    [Fact]
+    public void HandleKill_ignores_a_peer_that_is_not_a_pinned_host()
+    {
+        var lite = Host(NewHost("a"), Pinned);
+        Assert.Equal(false, ((dynamic)lite.HandleKill(Pinned, "phone", Epoch(5))).applied);
+        Assert.Equal(false, ((dynamic)lite.HandleKill(Stranger, "host", Epoch(5))).applied);
+        Assert.True(lite.On);
+    }
+
+    [Fact]
+    public void An_unreadable_epoch_file_stays_off_and_does_not_replay_a_lower_kill()
+    {
+        var folder = NewHost("a");
+        var lite = Host(folder, Pinned);
+        lite.RaiseEpoch(50);
+        TurnOn(folder);
+        File.WriteAllText(Path.Combine(folder, LiteKill.FileName), "garbage");
+        Assert.False(lite.On);
+        Assert.False(lite.Observe(Pinned, 40));
+        Assert.Equal(50, lite.KillEpoch);
+    }
+
+    [Fact]
+    public async Task A_send_that_fails_on_its_own_is_not_reported_as_killed()
+    {
+        var lite = Host(NewHost("a"));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => lite.GuardAsync("r", _ => throw new OperationCanceledException(), CancellationToken.None));
+    }
 }
