@@ -209,6 +209,40 @@ public sealed class AnswerTests : IDisposable
     }
 
     [Fact]
+    public async Task Words_typed_before_the_question_is_on_screen_are_not_sent_and_later_words_are()
+    {
+        Ask(Form("q1"));
+        await using var c = Connector();
+        ha.Unavailable.Add(SessionEntities.Decision(Node));
+        await Pass(c);
+        ha.Type(SessionEntities.Reply(Node), "typed too early");
+        ha.Unavailable.Remove(SessionEntities.Decision(Node));
+        await Pass(c);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Empty(answered);
+        Assert.Equal("Not sent - type your answer again", Activity);
+        ha.Type(SessionEntities.Reply(Node), "Call it Aurora");
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Single(answered);
+    }
+
+    [Fact]
+    public async Task The_same_words_are_sent_when_Send_is_pressed_again_after_the_notice()
+    {
+        Ask(Form("q1"));
+        await using var c = Connector();
+        ha.Unavailable.Add(SessionEntities.Decision(Node));
+        await Pass(c);
+        ha.Type(SessionEntities.Reply(Node), "typed too early");
+        ha.Unavailable.Remove(SessionEntities.Decision(Node));
+        await Pass(c);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.Empty(answered);
+        await Do(c, ha.Press(SessionEntities.Submit(Node)));
+        Assert.True(answered.Count == 1, Activity);
+    }
+
+    [Fact]
     public async Task Words_typed_for_another_question_are_not_this_ones_answer()
     {
         Ask(Form("q1"));
