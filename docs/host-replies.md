@@ -398,3 +398,7 @@ counts a reply as never recorded only once its late watch is known to be over (i
 line, or a log line 300 s after it with no host `stopped` or start line in between); the rest, still
 watched or not observable (transcript unreadable, host stopped or started within the watch), are
 reported apart.
+
+## Messages from other own-agents (AP5-lite, #1353)
+
+`LiteDeliver` types a verified lite message into one idle Copilot session behind a one-line provenance marker (sender machine, session, request id). It refuses, typing nothing, with `notReplyTarget` (not launched here in forced-ask mode; allow-all only while `agentMessaging.allowAllTargets` is on; text unbound, empty, over 4096 characters or with a request id that is not a UUID), `busy` (not idle, or over 6 messages a minute per session), `composerNotEmpty` or `noSuchSession`. Idle is re-checked just before the keys go; the window between that check and `ReplyService` taking its typing slot is narrow but not zero. There is no queue and no retry. Gates (`IReplyTargetGate`) are OR-composed in `LiteComposition`; the log line carries sender, target, request id and outcome, never the text.

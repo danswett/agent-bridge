@@ -487,6 +487,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var agentCredentials = OperatingSystem.IsWindows() ? new AgentCredentials(identity.Folder, machine.Id, log: Log, rootAlive: AgentCredentials.SameProcessAlive) : null;
     var launcher = Launcher(source, g5, attachments, transfers, deliveryGate, restore, agentCredentials);
     launcher.SessionStarted += restore.Launched;
+    var liteDeliver = AgentBridge.Host.Lite.LiteComposition.Create(source, replies, OperatingSystem.IsWindows() ? new WorkerInjector(log: Log) : new NoScreens(), () => settings.AgentMessaging.AllowAllTargets, launcher, Log);
     launcher.SeenReadyLate += restore.SeenReadyLate;
     // Not before the app's Stop has been looked for: a host the logon task's launcher started after a
     // Stop resumed an agent before it saw the marker (#986). The first thing here that can start an
@@ -614,7 +615,7 @@ async Task<int> ServeAsync(HostHandover handover)
         SignInDevices = self => PersonDevices.View(personRoster, rosterAccount(), self),
         Manage = manage,
         Diagnostics = diagnostics,
-        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.NoLitePeers(), new AgentBridge.Host.Lite.NoLiteDelivery()),
+        LiteReceiver = new AgentBridge.Host.Lite.LiteReceiver(new AgentBridge.Host.Lite.SettingsLiteMode(() => HostSettings.CurrentAgentMessaging(identity.Folder)), new AgentBridge.Host.Lite.NoLitePeers(), liteDeliver),
     };
     // Who is on the other end of the pipe: the app beside this host, or something inside an
     // agent session, which may not manage it (§6.3 invariant 13).
