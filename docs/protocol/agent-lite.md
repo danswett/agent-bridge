@@ -26,6 +26,7 @@ own-agents-only.
   uses, and text goes only into an idle session with an empty input box. Delivered text starts with one fixed
   prefix line naming the sending machine and session.
 - Allow-all sessions: `agentMessaging.allowAllTargets` is on for the cut-over machines only (VM1, VM2, VM3 and VM4), by the owner's decision, and off everywhere else including the home and ultra machines. It is the per-machine switch: set to false, that machine refuses allow-all sessions as targets. Delivery into an allow-all session works as Home Assistant does today, only when it is idle.
+- Which sessions receive: the relay types only into sessions this host launched since its last restart, plus allow-all sessions while `allowAllTargets` is true. A session started by hand is refused as `notReplyTarget` and the messenger falls back to Home Assistant. After a host restart, sessions launched before it fall back to Home Assistant until they are relaunched.
 - Rate: the receiver allows at most 6 messages a minute and 60 an hour from one sending session to one
   receiving session. The sender side allows 6 a minute per sender-receiver pair, in the messenger script (fleet #56), covering both the relay and Home Assistant routes. Beyond that is refused as `rate`, which is final.
 - The duplicate memory covers the relay route only. The relay and Home Assistant keep separate in-memory stores, so after an `unconfirmed` relay send the Home Assistant fallback can deliver the same message twice. This is rare and a known limit of the first version; a shared store comes after the cut-over.
@@ -36,7 +37,7 @@ own-agents-only.
   named allow-all list (L5b), durable duplicate memory, a full audit log (today there is one delivery log
   line per message), and pushing the kill to connected hosts (it follows the cut-over).
   The owner accepted these skips. Until the roster lands, anyone with access to the owner's relay account
-  could message his sessions, and any message from a pinned own machine is typed into any session there that is idle with an empty input box.
+   could message his sessions, and any message from a pinned own machine is typed into a session there that is idle, has an empty input box, and is host-launched or allow-all (see the next limit).
 
 ## Turn it on (a person at each machine, in this order: VM3, VM1, VM4, VM2)
 
@@ -44,7 +45,7 @@ own-agents-only.
    On VM1, VM2, VM3 and VM4 also set `agentMessaging.allowAllTargets` to `true`; leave it off on every other machine. Setting it back to `false` makes that machine refuse allow-all sessions as targets.
 2. Pin the other machines (L2b, #1383), typing these at the machine's own command line, never in an agent session or from a remote device. With `agentMessaging.remote` off, `show`, `list` and `pin` refuse.
    - On the OTHER machine run `agent-bridge-host peers show`. It prints that host's pin code, device id and fingerprint.
-   - On this machine run `agent-bridge-host peers pin <pin-code> [--name <name>]`. It shows the peer's device id and fingerprint; compare both with what `peers show` printed on the other machine, then type `yes`.
+   - On this machine run `agent-bridge-host peers pin <pin-code> [--name <name>]`. It shows the peer's device id and fingerprint; compare both with what `peers show` printed on the other machine, then type `yes`. The name is at most 64 characters and may not contain `|` or control characters.
    - `agent-bridge-host peers list` shows the pinned peers.
    - `agent-bridge-host peers clear [<device-id>]` removes one peer, or all peers without an id. It works even with the mode off and needs no restart.
    The list is kept in `own-peers.json`, signed by the host key.
@@ -55,9 +56,8 @@ own-agents-only.
 1. Fleet: set the repo variable `FLEET_RELAY_MSG` to `off` in the private fleet repository. The messenger script (fleet issues #36 and #56) reads it at least every 30 seconds, so messengers are back on Home Assistant within about
    a minute. This alone restores messaging.
 2. Then on each machine run `agent-bridge-host agents lite kill` (L6). It turns that
-   machine off at once, and a higher kill number seen from a pinned peer turns another host off at its next
-   exchange. The kill is not pushed to connected hosts in this version, so a killed machine's peers do not
-   learn of it until then; run it on every machine.
+   machine off at once. A kill that a host receives from a pinned peer turns it off, but hosts do not send it in
+   this version, so run the kill on every machine.
 3. One machine only: set `agentMessaging.remote` to `off`; it holds from the next message.
 4. Turning back on takes a person at that machine. Nothing remote can.
 
@@ -102,7 +102,7 @@ Run on staging, then production, with VM3 and VM1 first and VM4 and VM2 joining 
 - [ ] Busy target and non-empty input box: refused, nothing typed. Other account and unpinned peer: refused, nothing typed.
 - [ ] A fresh install has the mode off. A 60 KB message is refused at the cap; a one-character message is delivered.
 - [ ] The 7th message in a minute from one pair is refused as `rate` and not retried over Home Assistant; another pair is unaffected.
-- [ ] A deliberate refusal case, a host-down fallback to Home Assistant, and a coordinator and a builder session on each machine each receive a message.
+- [ ] A deliberate refusal case, a host-down fallback to Home Assistant, and a coordinator and a builder session on each machine each receive a message. The sessions must be ones the host launched since its last restart, or allow-all sessions.
 - [ ] Delivered text carries the prefix line. An allow-all session on a cut-over machine receives when idle; with `allowAllTargets` false on that machine it is refused.
 - [ ] Fleet switch off: every messenger is back on Home Assistant within 60 seconds. Per-machine kill: that machine stops using the relay at once (it refuses with `off`) and messengers fall back to Home Assistant.
 
