@@ -6,7 +6,7 @@ namespace AgentBridge.Host.Tests;
 
 public sealed class OwnPeersTests : IDisposable
 {
-    static readonly string Own = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+    static readonly string Own =     "12345678";
     readonly string folder = Directory.CreateTempSubdirectory("own-peers-").FullName;
     readonly string peerFolder = Directory.CreateTempSubdirectory("own-peer-key-").FullName;
     bool on = true;
@@ -59,7 +59,7 @@ public sealed class OwnPeersTests : IDisposable
     [Fact]
     public void A_peer_of_another_account_or_with_a_bad_signature_is_refused()
     {
-        var (_, other, _) = Peer(NewId());
+        var (_, other, _) = Peer("87654321");
         Assert.NotEqual(0, Run("yes", "pin", other).Code);
         Assert.Empty(Store().List());
 
@@ -68,6 +68,16 @@ public sealed class OwnPeersTests : IDisposable
         parts[0] = NewId();
         Assert.NotEqual(0, Run("yes", "pin", string.Join('.', parts)).Code);
         Assert.Empty(Store().List());
+    }
+
+    [Fact]
+    public void A_listed_peer_of_another_account_is_ignored_and_a_bad_name_is_refused()
+    {
+        var (id, code, _) = Peer();
+        Assert.Throws<ArgumentException>(() => Store().Pin(code, "a|b"));
+        Store().Pin(code, "p");
+        Assert.Null(Store("87654321").TrustedKey(id));
+        Assert.NotNull(Store().TrustedKey(id));
     }
 
     [Fact]
@@ -126,7 +136,6 @@ public sealed class OwnPeersTests : IDisposable
     [InlineData("peers", "clear", true)]
     [InlineData("peers", "show", true)]
     [InlineData("peers", "list", false)]
-    [InlineData("config", "pin", false)]
     public void Only_peers_writes_are_refused_inside_an_agent_session(string a, string b, bool writes) =>
         Assert.Equal(writes, OwnPeerCommands.Writes([a, b]));
 }

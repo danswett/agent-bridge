@@ -17,6 +17,12 @@ public static class OwnPeerCommands
 
     public static int Run(IReadOnlyList<string> args, string folder, Func<bool> modeOn, Local local, Func<string?> readLine, TextWriter output, TextWriter error)
     {
+        try { return Dispatch(args, folder, modeOn, local, readLine, output, error); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException) { error.WriteLine($"Failed: {e.Message}"); return 4; }
+    }
+
+    static int Dispatch(IReadOnlyList<string> args, string folder, Func<bool> modeOn, Local local, Func<string?> readLine, TextWriter output, TextWriter error)
+    {
         var store = new OwnPeers(folder, modeOn, () => local.Account);
         switch (args.ElementAtOrDefault(1))
         {

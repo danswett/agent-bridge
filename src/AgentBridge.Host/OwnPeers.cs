@@ -28,6 +28,10 @@ public static class OwnPeerPin
         catch (Exception e) when (e is CryptographicException or ArgumentException) { return false; }
     }
 
+    // Same rule as the envelope's account id (32 hex or a GitHub numeric id); switch to Primitives.IsAccountId once that PR merges.
+    public static bool IsAccount(string? s) => s is { Length: > 0 } && (Wire.IsDeviceId(s) || (s.Length <= 20 && s.All(char.IsAsciiDigit)));
+    public static bool IsName(string? s) => s is { Length: <= 64 } && !s.Any(c => char.IsControl(c) || c == '|');
+
     public static string Make(AgentSignKey key, string deviceId, string account) =>
         $"{deviceId}.{account}.{BlobFormat.Base64Url(key.PublicPoint)}.{BlobFormat.Base64Url(key.Sign(Payload(deviceId, account, key.PublicPoint)))}";
 
@@ -35,7 +39,7 @@ public static class OwnPeerPin
     public static (string DeviceId, string Account, byte[] Key)? Parse(string code)
     {
         var parts = code.Split('.');
-        if (parts.Length != 4 || !Wire.IsDeviceId(parts[0]) || !Wire.IsDeviceId(parts[1])) { return null; }
+        if (parts.Length != 4 || !Wire.IsDeviceId(parts[0]) || !IsAccount(parts[1])) { return null; }
         var key = BlobFormat.FromBase64Url(parts[2]);
         var sig = BlobFormat.FromBase64Url(parts[3]);
         if (key is null || sig is null || key.Length != 65 || key[0] != 0x04) { return null; }
@@ -82,8 +86,9 @@ public sealed class OwnPeers
     // One writer at a time across processes, so two removals cannot undo each other.
     T Locked<T>(Func<T> action)
     {
-        using var mutex = new Mutex(false, @"Local\agent-bridge-own-peers-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(path)).AsSpan(0, 8)));
-        try { mutex.WaitOne(TimeSpan.FromSeconds(10)); } catch (AbandonedMutexException) { }
+        using var mutex = new Mutex(false, @"Local\agent-bridge-own-peers-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(path).ToUpperInvariant())).AsSpan(0, 8)));
+        try { if (!mutex.WaitOne(TimeSpan.FromSeconds(10))) { throw new IOException("another change to the pinned peers is in progress; try again"); } }
+        catch (AbandonedMutexException) { }
         try { return action(); }
         finally { try { mutex.ReleaseMutex(); } catch (ApplicationException) { } }
     }
@@ -111,13 +116,14 @@ public sealed class OwnPeers
         var own = account() ?? throw new InvalidOperationException("this host is not signed in, so it has no account to pin peers of");
         var (deviceId, peerAccount, key) = OwnPeerPin.Parse(code) ?? throw new ArgumentException("that pin code is not valid or is not signed by its key");
         if (peerAccount != own) { throw new InvalidOperationException("that host is on a different account"); }
+        if (!OwnPeerPin.IsName(name)) { throw new ArgumentException("the name must be 64 characters or fewer, with no | or control characters"); }
         Locked(() =>
         {
             var peers = (Read() ?? throw new InvalidOperationException("the pinned peer file is unreadable; clear it first")).ToList();
             var encoded = BlobFormat.Base64Url(key);
             if (peers.Any(p => p.DeviceId == deviceId || p.PublicKey == encoded)) { throw new InvalidOperationException("that peer is already pinned"); }
             if (peers.Count >= MaxPeers) { throw new InvalidOperationException($"at most {MaxPeers} peers can be pinned"); }
-            peers.Add(new OwnPeer(deviceId, peerAccount, encoded, name.Length > 64 ? name[..64] : name, DateTimeOffset.UtcNow));
+            peers.Add(new OwnPeer(deviceId, peerAccount, encoded, name, DateTimeOffset.UtcNow));
             Write(peers);
             return 0;
         });
@@ -143,7 +149,7 @@ public sealed class OwnPeers
             if (saved is null || saved.Version != 1 || saved.Peers is null || saved.Peers.Length > MaxPeers) { return null; }
             foreach (var p in saved.Peers)
             {
-                if (p is null || !Wire.IsDeviceId(p.DeviceId) || !Wire.IsDeviceId(p.Account) || p.PublicKey is null || p.Name is null) { return null; }
+                if (p is null || !Wire.IsDeviceId(p.DeviceId) || !OwnPeerPin.IsAccount(p.Account) || p.PublicKey is null || !OwnPeerPin.IsName(p.Name)) { return null; }
                 var key = BlobFormat.FromBase64Url(p.PublicKey);
                 if (key is null || key.Length != 65) { return null; }
                 P256KeyPair.AssertOnCurve(key);
