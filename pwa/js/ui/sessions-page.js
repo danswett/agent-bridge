@@ -16,6 +16,7 @@ import { AnswerService } from '../answer-service.js';
 import { ReplyService } from '../reply-service.js';
 import { StopService } from '../stop-service.js';
 import { LaunchService } from '../launch-service.js';
+import { LaunchOptionsCache } from '../launch-options-cache.js';
 import { LAUNCH, TRUST } from '../launch.js';
 import { TRANSFER } from '../transfer.js';
 import { Capabilities } from '../protocol.js';
@@ -189,6 +190,8 @@ export class SessionsPage {
     this.replies = new ReplyService({ current, accepts, ...timing, blobs });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });
+    // Each machine's last launch.options, asked for in the background, so Start a session shows at once (#1527).
+    this.launchOptions = new LaunchOptionsCache();
     this.launchPanel = new LaunchPanel($('launch'), {
       service: this.launches,
       jump: (id, hostId) => this.showSession(id, hostId),
@@ -201,6 +204,7 @@ export class SessionsPage {
       sessions: (hostId) => hosts.sessions.list().filter((e) => e.hostId === hostId).map((e) => e.session.id),
       session: (hostId, id) => hosts.sessions.get(hostId, id),
     });
+    this.launchOptions.watch((hostId) => this.launchPanel.cacheChanged(hostId));
     this.order = new SessionOrder({ storage });
     const media = (q) => globalThis.matchMedia?.(q) ?? { matches: false, addEventListener() {} };
     this.wide = media(WIDE);
@@ -288,6 +292,10 @@ export class SessionsPage {
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {
       for (const s of [this.answers, this.replies, this.stops, this.launches]) { s.ready(id); }
+      // Marked, then redrawn: sync() must run after the mark, or a machine that reconnects with
+      // no other change is never asked again.
+      this.launchOptions.stale(id);
+      this.refresh();
       this.launchPanel.reopened(id);
     });
     hosts.onChange(() => this.refresh());
@@ -928,6 +936,9 @@ export class SessionsPage {
     const can = [...launches, ...inspect];
     const has = (id) => !!id && can.some((l) => l.id === id);
     const pick = hosts.all ? [this.#launchHost, this.#read(LAUNCH_HOST), panel.hostId].find(has) ?? can[0]?.id ?? null : can[0]?.id ?? null;
+    // Every machine that launches and is open is asked in the background, so its form is ready before it is picked.
+    // Raw ask, not launchTarget().load: that one goes through the cache, which would wait on itself.
+    this.launchOptions.sync(launches.filter((l) => l.phase === 'open').map((l) => ({ hostId: l.id, load: () => this.#askMachine(l.id) })));
     panel.setMachines(hosts.all ? can.map((l) => ({ hostId: l.id, name: hosts.nameOf(l.id) ?? l.id.slice(0, 8) })) : null, pick);
     panel.setTarget(pick ? this.launchTarget(pick) : null);
     // The others shown only for their questions: a question on one lights the Launch way too.
@@ -948,6 +959,11 @@ export class SessionsPage {
     return l.phase === 'open' ? !!l.machine?.readOnly : l.id === panel.hostId && panel.inspectOnly;
   }
 
+  #askMachine(id) {
+    const client = this.hosts.link(id)?.client;
+    return client ? client.launchOptions() : Promise.reject(new Error('not connected'));
+  }
+
   // What the launch panel is told about a machine: a new object each time, for the same machine,
   // as a presence update hands in. held: why nothing can be sent to it now (#269), or null.
   launchTarget(id) {
@@ -964,7 +980,9 @@ export class SessionsPage {
       hostId: id,
       machineName: name,
       held,
-      load: () => (hosts.link(id)?.client ? hosts.link(id).client.launchOptions() : Promise.reject(new Error('not connected'))),
+      // Through the cache: one ask at a time per machine, and its answer is kept for the next time the page shows.
+      load: ({ fresh = false } = {}) => this.launchOptions.ask(id, () => this.#askMachine(id), { fresh }),
+      cached: () => this.launchOptions.get(id),
     };
     if (link && !this.#launches(link) && this.#inspectOnly(link)) {
       return { ...base, transfers: null, trust: null, inspectOnly: true, readOnly: link.phase === 'open' ? link.machine?.readOnly ?? null : panel.readOnly };
