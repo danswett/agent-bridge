@@ -43,6 +43,7 @@ const SCHEMAS = {
       effort: str('Effort.'),
       context: str('Context.'),
       permissions: { type: 'string', enum: ['Ask permission', 'Allow all'] },
+      role: str('Coordinators only: the job this worker is for (letters, digits, hyphens). A worker with a role gets only the MCP servers the host lists for that role; leave it out for a person\'s own session.'),
     },
   },
   read_launch_result: { type: 'object', required: ['request'], properties: { machine: str('Ignored.'), request: str('The "request" launch_agent_session returned.') } },
@@ -103,7 +104,7 @@ function validate(name, args) {
     case 'launch_agent_session':
       requireString('prompt', { max: MAX_TEXT, optional: true });
       requireRequestKey({ optional: true });
-      for (const key of ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions']) requireString(key, { optional: true });
+      for (const key of ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions', 'role']) requireString(key, { optional: true });
       break;
     case 'read_launch_result':
       requireRequestKey();

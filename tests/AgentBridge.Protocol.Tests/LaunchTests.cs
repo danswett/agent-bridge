@@ -26,6 +26,16 @@ public class LaunchTests
         Assert.StartsWith("unknown permissions 'yolo'", LaunchProtocol.Check(Launch(permissions: "yolo")));
     }
 
+    [Fact]
+    public void A_role_is_letters_digits_and_hyphens_only_and_may_be_left_out()
+    {
+        Assert.Null(LaunchProtocol.Check(new LaunchRequest { Request = Uuid, Role = "review-2" }));
+        foreach (var bad in new[] { "", "-lead", "a b", "a_b", "a.b", "a;b", "--disable-mcp-server", new string('a', 65) })
+        {
+            Assert.Contains("is not a role name", LaunchProtocol.Check(new LaunchRequest { Request = Uuid, Role = bad }));
+        }
+    }
+
     [Theory]
     [InlineData("--dangerously-skip-permissions")]
     [InlineData("gpt 6")]

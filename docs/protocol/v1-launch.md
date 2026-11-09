@@ -99,6 +99,7 @@ Request `data`:
 | `profile` | Agency only: one of its `profiles`. Absent: its default |
 | `model`, `effort`, `context` | One of the agent's values, or `""` for the agent's own default over the machine's. Absent: the machine's default (`agents[].defaults`) |
 | `permissions` | `ask` (permission prompts as usual) or `allowAll` (launched without them: Copilot `--allow-all`, Claude `--dangerously-skip-permissions`, Codex `--ask-for-approval never`). Absent: `defaults.permissions` |
+| `role` | Coordinators only: the job a worker is started for (letters, digits and hyphens, at most 64, matched exactly). With a role, a direct `copilot` launch has every MCP server of the machine owner's own list disabled except those `launch.workerMcp` lists for that role (a role not listed keeps none) and Copilot's built-in servers off unless listed; Agency is already narrowed by its profile and is unchanged. Absent: a person's launch, which keeps their own MCP servers. A role the machine cannot narrow for (its server list cannot be read) is `refused` |
 | `prompt` | The opening prompt, at most **16 KiB** of UTF-8. Optional, except for an agent with `needsPrompt` |
 | `attachments` | Optional, for an agent with `attachments`: files the same device sent with `attachment.start` and `attachment.chunk` first, at most 10, as for a reply ([Attachments](v1-sessions.md#attachments)) |
 
@@ -116,7 +117,7 @@ host also refuses a prompt that does not fit the agent's command line on that ma
 
 `LaunchProtocol.Check` in C# is the validation every host applies first. Names are at most
 256 bytes; `model`, `effort` and `context` must look like an agent's own values (letters,
-digits, `.` `_` `-` `:` `[` `]`, not starting with `-`), since they reach a command line.
+digits, `.` `_` `-` `:` `[` `]`, not starting with `-`), since they reach a command line. A `role` is letters, digits and hyphens, not starting with a hyphen, at most 64.
 
 Result: `{ "outcome", "reason", "session", "launched" }`:
 
