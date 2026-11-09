@@ -798,7 +798,14 @@ public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
 {
     // Only for a request that asked for progress.
     public DeliveryTimings? Timings { get; init; }
+    [JsonIgnore]
+    public ReplyRefusal Refusal { get; init; }
+    // Refusal is advice to callers, not part of the result's identity.
+    public bool Equals(ReplyResult? other) => other is not null && Outcome == other.Outcome && Reason == other.Reason && Equals(Timings, other.Timings);
+    public override int GetHashCode() => HashCode.Combine(Outcome, Reason, Timings);
 }
+
+public enum ReplyRefusal { Other, Asking, ComposerUnverified }
 
 public static class Ops
 {

@@ -32,6 +32,7 @@
     <ProjectReference Include="..\AgentBridge.Host.Delivery\AgentBridge.Host.Delivery.csproj" />
     <ProjectReference Include="..\AgentBridge.Local\AgentBridge.Local.csproj" />
     <ProjectReference Include="..\AgentBridge.HomeAssistant\AgentBridge.HomeAssistant.csproj" />
+    <ProjectReference Include="..\AgentBridge.AgentEnvelope\AgentBridge.AgentEnvelope.csproj" />
   </ItemGroup>
 
   <ItemGroup>
