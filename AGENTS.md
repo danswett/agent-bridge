@@ -5,7 +5,8 @@ Read this before you change anything, whether you are a person or an agent.
 [the contributor workflow](docs/contributor-workflow.md), before taking work.
 These are required reading, not optional background. Read any instructions in the
 area you change too. For project context see [docs/status.md](docs/status.md);
-for architecture see [docs/design.md](docs/design.md).
+for architecture see [docs/design.md](docs/design.md). If the owner or a lead assigned you to a
+team, also read [docs/agents/onboarding.md](docs/agents/onboarding.md).
 
 Do not assume personal memories, a previous session, a shared GitHub login or private
 Project access establish current ownership or permission. Confirm the canonical issue
