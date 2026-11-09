@@ -446,6 +446,19 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: red-minutes-script
+    kind: unit
+    ring: 0
+    select: affected
+    # The red-minutes figure for the owner's target (p90 of red minutes per hour): spells, clipping and
+    # the cancelled-run rule, on a fixed run list. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/red-minutes.ps1, quality/test-red-minutes.ps1]
+    command: pwsh -NoProfile -File quality/test-red-minutes.ps1
+    where: ci.yml light
+    status: exists
+
   - id: rerun-known-flakes
     kind: unit
     ring: 0
