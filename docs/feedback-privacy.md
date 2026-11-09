@@ -34,7 +34,7 @@ here is designed or built for it.
    applies to manual feedback and any support disclosure. Optional diagnostics are governed
    by the opt-in and the content-free allowlist instead (no per-event preview). Neither
    describes normal encrypted delivery of sessions to the tester's own phone, which is the
-   product working.
+   product working. Diagnostics are the only channel without a per-item preview.
 6. **No feedback content or tester identity in public issues.** This repository is public.
 7. **No claim of end-to-end tracing.** A link between records exists only where both
    records exist and were approved for collection. A missing link is shown as missing.
@@ -173,7 +173,7 @@ does not delete the others. "Verified" below means SRE has shown it on the real 
 | --- | --- | --- | --- |
 | Sealed upload in the feedback container | Cannot be deleted for 30 days (immutability policy), deleted at day 31 | Time-based retention plus lifecycle rule | Configured per upload doc; lock state and deletion behaviour to be verified by SRE |
 | Decrypted private issue chunks | At most 30 days from the original upload time, sooner on a deletion request | Worker deletion sweep keyed to the upload time | Not implemented; the processor currently uses processing time and its source interface lacks upload time |
-| Receipts, suppression metadata, failure records | Only what idempotent retry and no-replay-after-delete need, time-bounded | Worker | Retention value to be set by SRE |
+| Receipts, suppression metadata, failure records | Only what idempotent retry and no-replay-after-delete need, at most 90 days, never unbounded | Worker | SRE confirms the value and backup-restore handling |
 | Private operational lookup | At most 30 days from the original upload or collection, not extended by joins or retries | SRE mechanism (#1189 item 4) | Owner decided 30 days; SRE confirms how |
 | Diagnostic events | At most 30 days from original collection, not restarted by retry, export or join | Per-table analytics retention, bounded local queue | Proposed maximum; SRE proof required before upload |
 | Relay logs | 7 days, outcomes and sizes only, no account, device or ticket | Existing | Unchanged |
@@ -191,16 +191,21 @@ exactly. No deletion promise is published until the real configuration supports 
 * **Withdrawing diagnostics consent** stops collection and upload, clears the install ID
   and deletes unsent events and the local queue. It does not erase events already received,
   which expire at 30 days. Re-enabling creates a new install ID and sends nothing from the
-  off period.
+  off period. An upload already in flight is cancelled where the client can still
+  abort it; one that has already reached the telemetry store is treated as received and
+  expires at 30 days.
 * **A feedback deletion request** goes through a private route that asks for a report
   reference and nothing else about the tester. On a valid request the worker removes the
   decrypted issue chunks and any partial writes, removes the lookup entry, and keeps only
-  minimal time-bounded suppression metadata so a retry or restore does not recreate the
+  minimal suppression metadata, kept at most 90 days (an SRE-owned value that may be
+  raised, never unbounded; backups must not restore a deleted report within it), so a retry or restore does not recreate the
   report. Closing an issue or destroying a key does not count as deletion.
 * **Limits stated honestly:** the immutable ciphertext remains until day 31; provider
   residuals and backups are described, not denied; whether a legal erasure request can
   override the immutability hold is a recorded residual legal question, not decided here.
-* A tester who did not keep a report reference cannot name a report. See the conflict list
+* **This request path is not usable until the Sent-screen reference is decided.** A tester who
+  closed the window has no reference. The published tester notice must not promise
+  self-service deletion until then. See the conflict list
   for the proposal that the Sent screen offers a copyable report reference.
 
 ## Per-account quota
@@ -271,8 +276,9 @@ factual-notice review, and this draft does not certify it.
   tool holds, uploaded through our relay (which cannot read it), and stored in a private
   repository the team reads. We do not put feedback or who sent it in public issues.
 * **How long we keep it:** the encrypted copy is held at least 30 days and deleted at
-  day 31; the readable copy is kept at most 30 days from upload. You can ask us to delete it
-  earlier by the private route; the encrypted copy cannot be removed before day 30.
+  day 31; the readable copy is kept at most 30 days from upload. Deletion on request is not
+  promised until the report-reference decision is made (see Deletion); the encrypted copy
+  cannot be removed before day 30.
 * **Optional diagnostics** (when available): off unless you allow them, in your first-run
   choice or Settings. Current beta wording: "Optional automatic diagnostics are not enabled
   in this beta and cannot be turned on yet. Their design excludes session content; they
@@ -299,7 +305,9 @@ the two documents do not diverge.
    (seal, then request a slot) is the baseline until revised.
 2. **Ambiguous PUT success** must be handled idempotently. Requirement on the outcome:
    a retry after a lost response leaves one private record, not two, and a deletion request
-   removes every copy. How uploads are keyed or deduplicated is #1189's decision; today's
+   removes every copy. This requirement fails today: a retry gets a new slot and blob name,
+   so one report can leave two sealed blobs and two readable copies, and only a key that
+   joins them, which #1189 must supply, fixes it. How uploads are keyed or deduplicated is #1189's decision; today's
    inbox keys on blob name, and a retry gets a new slot and name.
 3. **Connection's request-ID sources and retention.** Requirement on the outcome: nothing
    from them is added to a report unless it was actually recorded and is shown in the
