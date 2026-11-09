@@ -409,7 +409,7 @@ public sealed class AttachmentStoreTests : IDisposable
 
     static async Task UntilAsync(Func<bool> condition, string what)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
         while (!condition())
         {
             if (DateTime.UtcNow > deadline) { throw new TimeoutException($"timed out waiting for {what}"); }
@@ -498,14 +498,18 @@ public sealed class AttachmentStoreTests : IDisposable
 
     static async Task<Exception> WaitForFailureAsync(AttachmentStore s, AttachmentStart start)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline)
+        // The store publishes no failure signal, so this polls. A loaded runner can stall the delay
+        // or the fetch past a short deadline (#1488, #898), so the bound is long and the last look
+        // is taken after it, not skipped when the delay resumes late.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        while (true)
         {
+            var last = DateTime.UtcNow >= deadline;
             try { s.Start(Phone, start); }
             catch (InvalidOperationException e) { return e; }
+            if (last) { throw new TimeoutException("the fetch never failed"); }
             await Task.Delay(10);
         }
-        throw new TimeoutException("the fetch never failed");
     }
 
     [Fact]
