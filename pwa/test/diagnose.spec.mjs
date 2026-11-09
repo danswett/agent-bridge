@@ -190,6 +190,9 @@ test('an older machine offers no Diagnose and is never asked, and a refusal is s
   const laptop = item(page, LAPTOP);
   await laptop.locator('.machine-diagnose').click();
   await expect(laptop.locator('.machine-error')).toHaveText('Approve this device at Laptop to diagnose it');
+  // The line sits under the row's block, still in the row, and Diagnose points at it (#858).
+  const errId = await laptop.locator(':scope > .machine-error').getAttribute('id');
+  expect((await laptop.locator('.machine-diagnose').getAttribute('aria-describedby')).split(' ')).toContain(errId);
   await expect(laptop.locator('pre.machine-diagnostics')).toHaveCount(0);
   await expect(laptop.locator('.machine-diagnose-copy')).toHaveCount(0);
 

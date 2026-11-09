@@ -15,6 +15,8 @@ async function openDemo(page, query = '') {
 }
 
 const updateOf = (page) => page.locator('#machine-list [data-device-id="demo"] .machine-update');
+// A refusal line sits under the row's block, outside .machine-update (#858).
+const rowOf = (page) => page.locator('#machine-list [data-device-id="demo"]');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 test.afterEach(async ({ page }) => {
@@ -47,11 +49,31 @@ test("a press the machine refuses says why on the machine's row, and Check all a
 
   await block.locator('.machine-update-install').click();
 
-  await expect(block.getByRole('alert')).toHaveText("Only a person's phone, browser or Windows app can ask a machine to update.");
+  await expect(rowOf(page).getByRole('alert')).toHaveText("Only a person's phone, browser or Windows app can ask a machine to update.");
   await expect(block.locator('.machine-update-line')).toHaveText('0.2.0 is available (running 0.1.0).');
 
+  // On the selected row the line is on the row's plain surface, not the selected tint, directly under
+  // the block, and every button that can cause it points at it (#858).
+  const row = rowOf(page);
+  await expect(row).toHaveClass(/selected/);
+  const error = row.locator(':scope > .machine-error');
+  await expect(error).toHaveCount(1);
+  const look = await row.evaluate((li) => {
+    const bg = (el) => getComputedStyle(el).backgroundColor;
+    const err = li.querySelector(':scope > .machine-error');
+    const blk = li.querySelector(':scope > .machine-block');
+    return { error: bg(err), row: bg(li), block: bg(blk), gap: err.getBoundingClientRect().top - blk.getBoundingClientRect().bottom };
+  });
+  expect(look.error).toBe('rgba(0, 0, 0, 0)');
+  expect(look.block).not.toBe(look.row);
+  expect(look.gap).toBe(0);
+  const errId = await error.getAttribute('id');
+  for (const button of [block.locator('.machine-update-check'), block.locator('.machine-update-install')]) {
+    expect((await button.getAttribute('aria-describedby')).split(' ')).toContain(errId);
+  }
+
   await page.locator('#machine-list .machine-check-all').click();
-  await expect(block.getByRole('alert')).toHaveCount(0);
+  await expect(rowOf(page).getByRole('alert')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => window.agentBridgeDemo.updateLog.map((e) => e.op))).toEqual(['update.install', 'update.check']);
 });
 
@@ -174,7 +196,7 @@ test("a refused Update now is worded from its code, never the machine's text", a
 
   await block.getByRole('button', { name: NOW_LABEL }).click();
 
-  await expect(block.getByRole('alert')).toHaveText('Not updated: the update changed. Check for updates again.');
+  await expect(rowOf(page).getByRole('alert')).toHaveText('Not updated: the update changed. Check for updates again.');
   await expect(page.getByText('host words nobody sees')).toHaveCount(0);
 });
 

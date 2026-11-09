@@ -743,8 +743,16 @@ function machineRow({ id, name, select = null, selected = false, facts, state, o
     ? h('button', { type: 'button', class: `machine-button${selected ? ' selected' : ''}`, 'aria-current': selected ? 'true' : null, onclick: select }, parts)
     : h('div', { class: 'machine-row' }, parts);
   const extra = more.filter(Boolean);
-  return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}`, dataset: { deviceId: id, deviceName: name } },
-    head, extra.length ? h('div', { class: 'machine-more' }, extra) : null);
+  const block = h('div', { class: 'machine-block' }, head, extra.length ? h('div', { class: 'machine-more' }, extra) : null);
+  // A refusal line is drawn under the block, on the row's plain surface and not on a selected row's
+  // tint (#858). It stays in the row, and the buttons that can cause it still point at it.
+  const errors = [...block.querySelectorAll('.machine-error')];
+  errors.forEach((p, i) => { p.id = `machine-error-${id}-${i}`; });
+  if (errors.length) {
+    const ids = errors.map((p) => p.id).join(' ');
+    for (const b of block.querySelectorAll('.machine-more button')) { b.setAttribute('aria-describedby', ids); }
+  }
+  return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}`, dataset: { deviceId: id, deviceName: name } }, block, errors);
 }
 
 export function renderMachines(list, { presence, me, current, onSelect, status = () => '', facts = null, known = null, forget = null, updates = null, signInDevices = null, diagnose = null, now = Date.now(), allStatus = '' }) {
