@@ -518,6 +518,14 @@ async Task<int> ServeAsync(HostHandover handover)
     if (replies is ReplyService typist) { typist.LaunchHeld = launcher.HeldForReply; typist.Stopping = stop.Token; }
     // Nor /exit, whose Enter would answer it the same way: such a session is terminated untyped (#855).
     if (stops is StopService stopper) { stopper.LaunchHeld = launcher.HeldForReply; }
+    // A Copilot session whose host stopped taking messages (#687) is ended and resumed when that
+    // costs nothing (docs/host-launch.md); never when anything is running or typed.
+    if (OperatingSystem.IsWindows() && replies is ReplyService deafReplies)
+    {
+        var deaf = new DeafSessionWatch(source, new WorkerInjector(log: Log), stops, launcher, log: Log);
+        deafReplies.Measured = deaf.NoteReplyAsync;
+        source.Changed += (_, change) => { if (change.Session is { } changed) { _ = deaf.NoteSessionAsync(changed); } };
+    }
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
     // Approve on an approval with escaped characters, confirmed from a person's device approved here
