@@ -330,6 +330,47 @@ public sealed class ShadowTests : IDisposable
         Assert.Equal((11, 155L), (ShadowLedger.Read(reports, "2026-10-28")!.Compared, ShadowLedger.Read(reports, "2026-10-28")!.ComparedSeconds));
     }
 
+    [Fact]
+    public void A_sample_that_was_not_compared_leaves_a_disagreement_open_and_one_long_silence_ends_it()
+    {
+        f.Time.SetLocalTimeZone(TimeZoneInfo.Utc);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), f.Time);
+        var status = new ShadowDifference(ShadowKinds.Status, "s1", "daemon=working host=idle");
+        void Sample(bool compared, params ShadowDifference[] diffs)
+        {
+            ledger.Record(new ShadowComparison(compared, 1, 1, diffs, ["s1"]), new ShadowView(), new ShadowView());
+            f.Time.Advance(TimeSpan.FromSeconds(15));
+        }
+
+        // Differing, then a heartbeat lag, then differing past the grace: one mismatch spanning the gap.
+        Sample(true, status);
+        Sample(true, status);
+        Sample(false);
+        Sample(false);
+        Sample(true, status);
+        Sample(true, status);
+        Sample(true, status);
+        var open = Assert.Single(ShadowLedger.Read(reports, "2026-10-28")!.Mismatches);
+        Assert.Equal((90L, 5, true), (open.Seconds, open.Samples, open.Open));
+
+        // A compared sample without the difference still ends it at once.
+        Sample(true);
+        var closed = Assert.Single(ShadowLedger.Read(reports, "2026-10-28")!.Mismatches);
+        Assert.Equal((90L, 5, false), (closed.Seconds, closed.Samples, closed.Open));
+        Assert.Empty(ShadowLedger.Read(reports, "2026-10-28")!.Transient);
+
+        // Not-compared samples alone neither close a short one nor count it as timing skew...
+        Sample(true, status);
+        Sample(false);
+        Assert.Empty(ShadowLedger.Read(reports, "2026-10-28")!.Transient);
+
+        // ...until nothing has been compared for more than ten minutes.
+        f.Time.Advance(ShadowLedger.MaxSkippedGap);
+        Sample(false);
+        var day = ShadowLedger.Read(reports, "2026-10-28")!;
+        Assert.Equal(1L, day.Transient[ShadowKinds.Status].Count);
+    }
+
     // Seen live (#40): a session whose background agents talk all the time changes its latest
     // response every few seconds, and the daemon, writing on its own pass, kept showing the one
     // the host had shown a moment before, past the grace.

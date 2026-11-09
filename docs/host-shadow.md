@@ -656,8 +656,12 @@ agent-ha-bridge itself allows before calling a machine offline, because both sid
 for updates; `usage.*` and `resumable.*` at least 300 seconds, since the daemon refreshes
 them on its own two- and three-minute pace and each side asks the vendors separately.
 
-When either side cannot be read, the session-level disagreements open at that moment end;
-the gap is not counted against them.
+A sample that was not compared (a side could not be read, say the daemon's heartbeat is over a
+minute old) leaves open disagreements alone, so one interrupted by such lags counts once. Its
+`seconds` is the first compared sample to the last and so spans the gaps, and its `samples` counts
+only the compared samples where the difference showed. If no compared sample has come for more than
+10 minutes (`ShadowLedger.MaxSkippedGap`), the disagreement ends at its last one, so an outage of
+hours does not stretch it. A compared sample without the difference still ends it at once.
 
 A count that turns the other way (the daemon's higher, then the host's) is two disagreements,
 each judged against the grace on its own. On DEV-VM1 a shell ended and was started again a
