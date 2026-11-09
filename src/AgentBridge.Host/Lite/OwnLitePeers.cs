@@ -12,5 +12,13 @@ public sealed class OwnLitePeers(OwnPeers store) : ILitePeers
         return peer is not null;
     }
 
-    public IReadOnlyList<LitePeer> All() => [.. store.List().Select(p => new LitePeer(p.DeviceId, BlobFormat.FromBase64Url(p.PublicKey)!, p.Name))];
+    // A failing settings or key read must mean "no peers", never an exception into the receiver.
+    public IReadOnlyList<LitePeer> All()
+    {
+        try { return [.. store.List().Select(p => new LitePeer(p.DeviceId, BlobFormat.FromBase64Url(p.PublicKey)!, p.Name))]; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException or System.Text.Json.JsonException or System.Security.Cryptography.CryptographicException or ArgumentException)
+        {
+            return [];
+        }
+    }
 }
