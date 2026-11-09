@@ -187,6 +187,65 @@ test('storage that refuses writes does not stop the dividers working', async ({ 
   expect(await width(page, '#list-pane')).toBe(360);
 });
 
+const panes = ['#list-pane', '#session-pane', insp];
+const selectable = (page) => page.evaluate((sels) => sels.map((s) => { const c = getComputedStyle(document.querySelector(s)); return c.userSelect || c.webkitUserSelect; }), panes);
+const selectedText = (page) => page.evaluate(() => String(window.getSelection()));
+
+for (const [name, divider, dx] of [['list', list, 40], ['inspector', inspector, -40]]) {
+  test(`dragging the ${name} divider selects no text in any pane, and clears one made before`, async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector('#session-pane'));
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    });
+    expect(await selectedText(page)).not.toBe('');
+    const box = await page.locator(divider).boundingBox();
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    expect(await selectedText(page)).toBe('');
+    await page.mouse.move(x + dx, y, { steps: 6 });
+    // Over each pane in turn: a pointer sweeping across them is what made a selection flicker.
+    for (const sel of panes) {
+      const pane = await page.locator(sel).boundingBox();
+      await page.mouse.move(pane.x + pane.width / 2, pane.y + 200, { steps: 3 });
+      expect(await selectedText(page)).toBe('');
+    }
+    expect(await selectable(page)).toEqual(['none', 'none', 'none']);
+    const started = await page.evaluate(() => {
+      const e = new Event('selectstart', { bubbles: true, cancelable: true });
+      document.querySelector('#session-pane').dispatchEvent(e);
+      return e.defaultPrevented;
+    });
+    expect(started).toBe(true);
+    await page.mouse.up();
+    expect(await page.evaluate(() => document.querySelector('#sessions').dataset.paneDragging)).toBeUndefined();
+  });
+}
+
+test('text can be selected in every pane again once a drag is over, and after one is cancelled', async ({ page }) => {
+  await openDemo(page);
+  await drag(page, inspector, -40);
+  expect((await selectable(page)).every((v) => v !== 'none')).toBe(true);
+  const box = await page.locator(list).boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + 100);
+  await page.mouse.down();
+  await page.evaluate((sel) => document.querySelector(sel).dispatchEvent(new PointerEvent('pointercancel', { pointerId: 1, bubbles: true })), list);
+  await page.mouse.up();
+  expect((await selectable(page)).every((v) => v !== 'none')).toBe(true);
+  const text = await page.evaluate(() => {
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector('#session-pane'));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    return String(getSelection());
+  });
+  expect(text).not.toBe('');
+});
+
 test('a phone has no divider', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('?demo=1&static=1');
