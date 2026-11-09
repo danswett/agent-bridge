@@ -112,6 +112,20 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         }
     }
 
+    // The worker gives a widen 10 s, and a loaded runner took longer (#1203, #1199): the answer
+    // was "stopped responding", whatever the console's width. A widen only ever grows the
+    // console, so asking again is safe; every other answer, a refusal included, is final.
+    static async Task<ConsoleWidth> Widen(WorkerInjector injector, int pid, DateTimeOffset createdAt, int columns)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (true)
+        {
+            var width = await injector.WidenAsync(pid, createdAt, columns);
+            if (width.Problem?.Contains("stopped responding", StringComparison.Ordinal) != true || deadline.Elapsed > TimeSpan.FromSeconds(90)) { return width; }
+            await Task.Delay(200);
+        }
+    }
+
     static List<string> Keys(string[] lines) => [.. lines.Where(l => l.StartsWith("key ", StringComparison.Ordinal))];
 
     static bool Exited(int pid)
@@ -229,11 +243,11 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var echo = StartEcho(show: PermissionPrompt);
         var injector = new WorkerInjector(Worker);
 
-        var wide = await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 250);
+        var wide = await Widen(injector, echo.Pid, CreatedAt(echo.Pid), 250);
         Assert.Null(wide.Problem);
         Assert.Equal(250, wide.Columns);
 
-        Assert.Equal(250, (await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 120)).Columns);
+        Assert.Equal(250, (await Widen(injector, echo.Pid, CreatedAt(echo.Pid), 120)).Columns);
         var screen = await ReadScreen(injector, echo.Pid);
         Assert.Null(screen.Problem);
         Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
@@ -247,13 +261,13 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var injector = new WorkerInjector(Worker);
 
         // As if the launched process had gone and another had been given its id.
-        var other = await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid).AddSeconds(-5), 250);
+        var other = await Widen(injector, echo.Pid, CreatedAt(echo.Pid).AddSeconds(-5), 250);
         Assert.Null(other.Columns);
         Assert.False(other.NotYet);
         Assert.Contains("no longer the one started", other.Problem);
 
         // Its width as it was (a widen to 1 changes nothing and reads it back).
-        Assert.True((await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 1)).Columns < 250);
+        Assert.True((await Widen(injector, echo.Pid, CreatedAt(echo.Pid), 1)).Columns < 250);
     }
 
     [WindowsFact]
