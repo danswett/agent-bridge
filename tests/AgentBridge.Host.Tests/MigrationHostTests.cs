@@ -10,7 +10,7 @@ using Xunit;
 [Trait("Category", "Network")]
 public sealed class MigrationHostTests : IAsyncLifetime
 {
-    static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan Patience = TimeSpan.FromSeconds(90);
 
     // Short: a Unix socket path must fit about 100 bytes.
     readonly string profile = Path.Combine(Path.GetTempPath(), "abm-" + Guid.NewGuid().ToString("N")[..8]);
@@ -42,9 +42,14 @@ public sealed class MigrationHostTests : IAsyncLifetime
         try { Directory.Delete(profile, recursive: true); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
+    // A cold pipe on a loaded windows-11-arm runner took past the host's 2 s to connect (#1478):
+    // RestartAsync then returned its error, `waiting` was never signalled and the test sat out its
+    // 10 s. A passing run doesn't wait these out, so they can be long.
     LocalMigrationHost Host() => new(profile)
     {
         Time = clock,
+        ConnectTimeout = TimeSpan.FromSeconds(60),
+        CallTimeout = TimeSpan.FromSeconds(60),
         Watch = (pid, _) =>
         {
             watched.TrySetResult(pid);
