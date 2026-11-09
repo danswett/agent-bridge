@@ -346,17 +346,10 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
-    public void A_wide_console_starts_minimized_without_the_focus_so_the_console_host_keeps_it_to_be_widened()
+    public void A_launched_console_is_shown_normally_so_Windows_Terminal_takes_it_and_a_hidden_one_stays_hidden()
     {
-        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowMinimizedNoActivate), ConsoleStartup.For(250, hidden: false));
-    }
-
-    [Fact]
-    public void A_console_without_a_width_opens_as_before_and_a_hidden_one_stays_hidden()
-    {
-        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowNormal), ConsoleStartup.For(null, hidden: false));
-        Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(250, hidden: true).Show);
-        Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(null, hidden: true).Show);
+        Assert.Equal(new ConsoleStartup.Shape(ConsoleStartup.UseShowWindow, ConsoleStartup.ShowNormal), ConsoleStartup.For(hidden: false));
+        Assert.Equal(ConsoleStartup.Hide, ConsoleStartup.For(hidden: true).Show);
     }
 
     [WindowsFact]

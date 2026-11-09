@@ -351,15 +351,17 @@ public static partial class CopilotFormScreen
 
     // A bar windowed to some of the form's titles (bar-window): said with how wide the window
     // must be for the whole bar, the console's width less four (`$fn`), as a lower bound (each
-    // title counted a column a character; a wide character takes two). Wider than the console
-    // the host launches sessions with, widening is no advice: a maximized window on the owner's
+    // title counted a column a character; a wide character takes two). Wider than any window
+    // can be (WidestWindow), widening is no advice: a maximized window on the owner's
     // screen was still too narrow, and the card told him to widen it (#1123), so it says to
     // answer at the machine or ask with shorter titles. It names the product, never "phone": a
     // browser or the Windows app answers the same way.
+    internal const int WidestWindow = 250;
+
     internal static string Narrow(IReadOnlyList<string> labels)
     {
         var needed = BarColumns(labels);
-        return needed > Launch.LaunchService.ConsoleColumns
+        return needed > WidestWindow
             ? $"this question's titles are too long for {Product.Name} to check which field is open; answer it at the machine, or ask with shorter titles"
             : $"the session's window is too narrow for {Product.Name} to check which field this question's form is at (its titles need a window at least {needed} columns wide); widen it or make its font smaller, then answer again, or answer it at the machine";
     }

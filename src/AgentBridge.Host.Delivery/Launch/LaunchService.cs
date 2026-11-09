@@ -213,14 +213,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // approved folders it caches, and so decides the resume labels over.
     const int KindsAmong = 200;
 
-    // How wide a launched session's console is made (its screen buffer, widened by the injector
-    // once the console exists): wide enough for Copilot's form tab
-    // bar (the console's width less four) to show every field's title, so the host can tell an
-    // answer's form is the question's before typing (#1123; a six-field form with long titles
-    // took about 230). Sessions a person started keep their own width, and a too-narrow
-    // form's refusal.
-    internal const int ConsoleColumns = 250;
-
     public bool Available => Config.Enabled && options.PlatformSupported && probe.Recent() is null && starter.Unavailable() is null;
 
     // A session a launch started, with what it was started with: the host's restore record keeps it,
@@ -1009,7 +1001,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // GH_TOKEN and GITHUB_TOKEN are left alone: the CLI prefers this one, and the session's
             // own gh work needs them.
             if (copilotToken is not null) { environment[CopilotLaunchAccount.Variable] = copilotToken; }
-            var spec = new StartSpec(plan.Executable, args, directory, environment, ConsoleColumns);
+            var spec = new StartSpec(plan.Executable, args, directory, environment);
             if (starter.CommandLine(spec, out var tooLong) is null)
             {
                 return Refused($"the prompt is too long to start {plan.Launcher.Label} with on this machine: {tooLong}; shorten it, or send the rest as a reply once it has started");
@@ -1095,7 +1087,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         }
 
         _ = Task.Run(() => FollowAsync(follow));
-        _ = Task.Run(() => WidenAsync(follow));
         var waited = await Task.WhenAny(follow.Decided.Task, Task.Delay(options.RegistrationWait, options.Time));
         if (waited == follow.Decided.Task) { return await follow.Decided.Task; }
         // A session that registered but whose window is not yet seen ready (Copilot) did appear;
@@ -1110,43 +1101,6 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         follow.Decided.TrySetResult(unconfirmed);
         return await follow.Decided.Task;
     }
-
-    // A launched session's console made ConsoleColumns wide as soon as it has one (a process just
-    // started may not yet: asked again every WidenEvery, WidenTries times). The console host
-    // takes no width from how it was started (ConsoleStartup), so it is set on the console itself,
-    // by the injector, which types nothing. Not done, the session keeps the console's own width,
-    // and an answer to a form too wide for it is refused as such (#1123).
-    async Task WidenAsync(Pending p)
-    {
-        try
-        {
-            for (var tries = 1; ; tries++)
-            {
-                var widened = await injector.WidenAsync(p.Started.ProcessId, p.Started.StartedAt, ConsoleColumns);
-                if (widened.Columns is { } columns)
-                {
-                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console is {columns} columns wide");
-                    return;
-                }
-                if (!widened.NotYet || tries >= WidenTries)
-                {
-                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: {widened.Problem}");
-                    return;
-                }
-                // Its id may later be another process's: the worker checks that too; this ends the asking.
-                if (!starter.Running(p.Started))
-                {
-                    log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: its process (pid {p.Started.ProcessId}) has exited");
-                    return;
-                }
-                await Task.Delay(WidenEvery, options.Time);
-            }
-        }
-        catch (Exception e) { log($"launch {Short(p.Key)}: {p.Launcher.Label}'s console was not widened: {e.GetType().Name}"); }
-    }
-
-    const int WidenTries = 50;
-    static readonly TimeSpan WidenEvery = TimeSpan.FromMilliseconds(100);
 
     // One launch followed from its start until its session registers, its process exits, or
     // FollowFor runs out, a look every PollInterval: agent-ha-bridge's Update-DaemonPendingLaunch.

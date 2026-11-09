@@ -1824,10 +1824,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_six_field_form_with_long_titles_is_answered_in_a_console_as_wide_as_the_host_launches_sessions()
+    public async Task A_six_field_form_with_long_titles_is_answered_in_a_console_wide_enough_for_its_whole_bar()
     {
         var names = await AskSixAsync(SixAnswer);
-        var columns = AgentBridge.Host.Delivery.Launch.LaunchService.ConsoleColumns;
+        var columns = AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow;
         injector.Screen = () => SixScreen(names, columns, at => CliBar(SixTitles, at, columns, marked: true));
         Assert.All(Enumerable.Range(0, SixTitles.Length), at => Assert.DoesNotContain("\u2192", CliBar(SixTitles, at, columns, marked: true)));
         var ch = await OpenAsync();
@@ -2029,13 +2029,13 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         // The bar shows the first title alone, over two rows: the other two titles are hidden,
         // so the form cannot be told from one differing only in them. Read as one row, this was
         // refused as a form gone (check=bar@29 live); it is the bar's window, named so. The three
-        // titles need more columns than the widest console the host launches, so widening is
+        // titles need more columns than the widest window (WidestWindow), so widening is
         // not offered: a maximized window did not help (#1123).
         var answer = new { licence = "Ship", signing = "Hold", support = "Ship" };
         var names = await AskLongAsync(answer);
         injector.Screen = () => LongScreen(names, marked);
         Assert.Equal(2, Wrapped(LongTitles[0], 100).Count());
-        Assert.True(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(LongTitles) > AgentBridge.Host.Delivery.Launch.LaunchService.ConsoleColumns);
+        Assert.True(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(LongTitles) > AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow);
         var ch = await OpenAsync();
 
         var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
@@ -2048,11 +2048,11 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Titles_that_fit_the_widest_launched_console_say_widen_it_and_one_column_more_says_they_are_too_long()
+    public void Titles_that_fit_the_widest_window_say_widen_it_and_one_column_more_says_they_are_too_long()
     {
         // Two titles and a short one, as the owner's form: the bar needs each title, two columns
         // around it, one between and four beside the bar (`$fn`).
-        var columns = AgentBridge.Host.Delivery.Launch.LaunchService.ConsoleColumns;
+        var columns = AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow;
         var room = columns - 4 - 2 - 3 * 2 - 5;
         string[] fits = [new string('a', room / 2), new string('b', room - room / 2), "Notes"];
         string[] over = [fits[0] + "a", fits[1], fits[2]];
