@@ -457,6 +457,18 @@ internal sealed class AgentSignInService : IAsyncDisposable
         }
     }
 
+    // Read-only (#1454): is a flow running right now, from its start until it is done, cancelled or
+    // past its limit. Takes the gate for a moment; never starts, extends or ends a flow.
+    internal bool FlowRunning
+    {
+        get
+        {
+            lock (gate)
+            {
+                return !disposed && active.Values.Any(f => !f.Ending && f.Done is null && !f.Stop.IsCancellationRequested && !LifetimeExpired(f));
+            }
+        }
+    }
     internal int CodesHeld { get { lock (gate) { return active.Values.Count(f => f.Code is not null); } } }
     internal int ParticipantsHeld { get { lock (gate) { return requests.Values.Select(r => r.Flow).Distinct().Sum(f => f.Participants.Count); } } }
 

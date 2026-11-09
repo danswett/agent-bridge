@@ -601,6 +601,37 @@ public sealed class SignInTests
         Assert.Equal(done.GetRawText(), (await receipt.Done.Task.WaitAsync(Patience)).GetRawText());
     }
 
+    // #1454: the read-only "a flow is running now" answer a remote restart reads.
+    [Fact]
+    public async Task A_flow_is_running_from_its_start_until_it_is_cancelled_and_reading_it_changes_nothing()
+    {
+        await using var h = await Harness.CreateAsync();
+        var phone = h.Phone();
+        Assert.False(h.Service.FlowRunning);
+        Assert.Equal(0, h.Factory.Starts);
+
+        var start = h.Start(phone);
+        var flow = Json(start.Result).GetProperty("flow").GetString();
+        await start.Then(phone);
+        Assert.True(h.Service.FlowRunning);
+        Assert.True(h.Service.FlowRunning);
+
+        await h.Service.CancelAsync(phone, Json(new { flow }));
+        Assert.False(h.Service.FlowRunning);
+    }
+
+    [Fact]
+    public async Task A_flow_past_its_limit_is_no_longer_running_even_before_the_sweep_ends_it()
+    {
+        await using var h = await Harness.CreateAsync(TimeSpan.FromSeconds(2), manualSweeps: true);
+        var phone = h.Phone();
+        await h.Start(phone).Then(phone);
+        Assert.True(h.Service.FlowRunning);
+
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+
+        Assert.False(h.Service.FlowRunning);
+    }
     static string AuthError(int second) => Copilot.Event("session.error", new { errorType = "authorization",
         message = "Authorization error. Your credentials may be expired or invalid. [request-id redacted]",
         statusCode = 401, remediation = "sign_in" }, second);

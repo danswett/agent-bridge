@@ -402,10 +402,10 @@ public sealed class ManageFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_host_wired_from_its_settings_refuses_a_restart_while_its_agent_sign_in_entrypoint_is_on()
+    public async Task A_host_wired_from_its_settings_restarts_with_its_agent_sign_in_entrypoint_on_and_idle()
     {
         manage = Make(new HostSettings(true));
-        // No roster pins anyone (#972 slice 2): it is the entrypoint being on that holds a restart.
+        // The entrypoint being on no longer holds a restart (#1454): only a running flow does.
         var nobody = new AgentBridge.Host.SignIn.RosterSignInAuthority(new AgentBridge.Host.SignIn.NoPersonRoster(), () => false, _ => true);
         await using var signIn = new AgentBridge.Host.SignIn.AgentSignInService(source, nobody, null!, null!, null!, () => false, time);
         host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"))
@@ -416,13 +416,6 @@ public sealed class ManageFlowTests : IAsyncLifetime
         }.HandleAsync;
         var (phone, ch) = await OpenAsync();
 
-        var refused = await SendAsync(ch, ManageProtocol.Restart, Sign(phone.Key, ManageProtocol.Restart));
-
-        Assert.Equal((ManageOutcome.Refused, ManageReason.Changed), (refused.Outcome, refused.Reason));
-        Assert.Equal(0, Volatile.Read(ref restarts));
-
-        // The same host with the entrypoint off restarts.
-        host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0")) { Manage = manage, SignIn = signIn, SignInEntrypointApproved = false }.HandleAsync;
         var accepted = await SendAsync(ch, ManageProtocol.Restart, Sign(phone.Key, ManageProtocol.Restart));
         Assert.Equal(ManageOutcome.Accepted, accepted.Outcome);
         await RestartedAsync(1);
