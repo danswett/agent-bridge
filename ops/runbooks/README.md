@@ -20,6 +20,7 @@ for each alert.
 | [relay-messaging](relay-messaging.md) | None yet; the fleet's messaging cut-over from Home Assistant to the relay, and its rollback |
 | [windows-release](windows-release.md) | A-RELEASE; a release breaking machines |
 | [pwa](pwa.md) | A-PAGES; a PWA deploy breaking phones |
+| [github-outage](github-outage.md) | A-GHA, A-GHA-SILENT; CI, merges or deploys stalled on GitHub |
 
 ## Before any of them
 
