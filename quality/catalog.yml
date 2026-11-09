@@ -794,6 +794,20 @@ suites:
     where: relay.yml infra
     status: exists
 
+  - id: accept-relay-build
+    kind: static
+    ring: 1
+    select: affected
+    # The relay with a fake GitHub on 127.0.0.1 that the clean-install acceptance signs in
+    # against (#1272, #736). It is a tool, not a suite; building it keeps it compiling with the relay.
+    platforms: [linux-x64]
+    runner: hosted
+    builds: tools/AgentBridge.AcceptRelay
+    triggers: [tools/AgentBridge.AcceptRelay/**]
+    command: dotnet build tools/AgentBridge.AcceptRelay -c Release
+    where: ci.yml product
+    status: exists
+
   - id: relay-staging-smoke
     kind: e2e
     ring: 2
