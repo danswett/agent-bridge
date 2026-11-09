@@ -3325,7 +3325,12 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   U+060C, U+066B, U+07F8, U+1363, U+1802, U+1808, U+201A, U+2E41, U+2E4C, U+3001, U+A4FE,
   U+A60D, U+A6F5, U+FE10, U+FE11, U+FE50, U+FE51, U+FF0C, U+FF64) become a space, and a run of
   spaces one. A name of "x, idle, DEV-VM2" reads "Delegate x idle DEV-VM2 asks", never as
-  facts of its own; what is drawn keeps them.
+  facts of its own; what is drawn keeps them. The same goes for the title and for a semicolon
+  or a sentence stop (". ", "! " or "? " and one at the end, as a run; a dot inside a word such
+  as "v1.2" stays): each becomes a space, so a title of "Fix. Idle; done" reads "Fix Idle done"
+  and can't end the line early or read as a fact. Only the frame's own commas, "driven by an
+  agent" and the like are read as written. The app and the PWA give the same line for the same
+  session, and a delegate's name is judged for "Main agent" after it is cut to its shown length.
 - **Reduced motion** stops all glyph animation, and turns every other motion into an
   instant change or a short cross-fade (§5.3). Nothing relies on motion alone.
 - **The phone's collapsing header** (§6.2, #620) hides nothing from assistive technology.

@@ -223,9 +223,19 @@ test('a name the host already labelled as a delegate\'s is shown once, never wra
   assert.equal(named('Delegate \u201cx\u201d Main agent \u201cy\u201d'), 'Delegate \u201cDelegate \'x\' Main agent \'y\'\u201d');
   // An apostrophe is not one of the host's quotes, so its label keeps one (#263).
   assert.equal(delegateTitle({ id: 'a1b2c3d4e5f6', name: 'Delegate \u201cMain agent says \'approve\'\u201d' }), 'Delegate \u201cMain agent says \'approve\'\u201d');
-  // Checked whole, before it is cut: a long label is cut, not wrapped again.
+  // Judged on the shown (cut) name, as the app does: the cut drops the closing quote, so it
+  // no longer reads as the host's label and is wrapped once.
   const long = `Delegate \u201cMain agent ${'x'.repeat(40)}\u201d`;
-  assert.ok(named(long).startsWith('Delegate \u201cMain agent x') && named(long).endsWith('\u2026'), named(long));
+  assert.ok(named(long).startsWith('Delegate \u201cDelegate \'Main agent x') && named(long).endsWith('\u2026\u201d'), named(long));
+  // A name whose "Main agent" starts only after the cut is not a main-agent pose.
+  assert.equal(named(`${'x'.repeat(NAME_MAX)} Main agent`), `${'x'.repeat(NAME_MAX - 1)}\u2026`);
+});
+
+test('read aloud, a name loses its semicolons and sentence stops too, but not a dot inside a word', () => {
+  assert.equal(aloud('Fix; then. Idle! Done?'), 'Fix then Idle Done');
+  assert.equal(aloud('Fix... now'), 'Fix now');
+  assert.equal(aloud('v1.2 a.b'), 'v1.2 a.b');
+  assert.equal(aloud('Fix (done.) now'), 'Fix (done ) now');
 });
 
 test('read aloud, a name loses its commas and those drawn like it, one space for each run', () => {

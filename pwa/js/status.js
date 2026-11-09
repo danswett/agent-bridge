@@ -159,5 +159,5 @@ export function rowAt(s) {
 // The glyph's accessible name (ui.md §9): "Plan Migration to Windows App, delegating to 3
 // agents, DEV-VM1", with the driver said in words, since the badge is only a shape.
 export function statusLabel(status, { title, machine = null } = {}) {
-  return [title || 'Untitled session', status.spoken, status.driven ? 'driven by an agent' : null, machine].filter(Boolean).join(', ');
+  return [title ? aloud(title) : 'Untitled session', status.spoken, status.driven ? 'driven by an agent' : null, machine].filter(Boolean).join(', ');
 }
