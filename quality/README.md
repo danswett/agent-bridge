@@ -639,16 +639,20 @@ App, ruleset or allowed receipt posters.
 ### Review failover when a quota stalls
 
 Owner standing policy, 2026-11-08 20:33 PT: a quota never stalls a review, and rigor stays the
-same. Copilot's review bot and Codex are tied to the owner's plan and may augment a review, but
-nothing waits on them (the receipts-only waiver above).
+same. The agent reviewers and their receipts are the review gate. Copilot's review bot is tied to
+the owner's plan and may augment a review, but nothing waits on it (the receipts-only waiver
+above). Automatic Codex reviews are off (owner, 2026-11-08 20:41 PT): nothing waits for, counts
+on or is blocked by a Codex comment, and `@codex review` is used only on demand, when it is
+useful. Open threads left only by a bot are resolved, with a link to the ruling, once the pull
+request is otherwise reviewed.
 
 - **What fails over is the reviewer's model quota.** Review sessions run under the
   `dswett_microsoft` (EMU) Copilot entitlement. GitHub refuses that account any write on this
   repository, so receipts still post only through `independent_review.posters` (`danswett`), and
   that list does not change.
 - **A quota stall** is any of: a reviewer session returning a quota, rate-limit, billing, 429 or
-  401 error; no receipt on a ready head 20 minutes after it was asked for; no completed Copilot
-  or Codex review within 20 minutes where one is wanted.
+  401 error; no receipt on a ready head 20 minutes after it was asked for. An optional Copilot
+  review that hasn't completed within 20 minutes is dropped from the wait, never waited for.
 - **Order of fallback.** First the cheap agent reviewer (`claude-sonnet-5.5`, EMU). On a stall,
   a reviewer of a second family (`gpt-6-luna` or `gemini-3.8-flash`) for the same head. On a
   stall there too, the same two on the `danswett` Copilot entitlement. A reviewer never waits for
