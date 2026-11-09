@@ -33,6 +33,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
     DateTimeOffset? hiddenUpTo;
     bool sessionOpen, busy, wasOpen;
     Task? running;
+    int probesFinished;
     Task? answering;
     DateTimeOffset heldUntil = DateTimeOffset.MinValue;
     bool finished;
@@ -85,6 +86,10 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
 
     // The probe's run, while one is under way, for tests to wait on.
     internal Task Running { get { lock (gate) { return running ?? Task.CompletedTask; } } }
+
+    // Probes that have run to the end and applied their outcome. Running is already complete both
+    // before a probe has started and after it has ended, so a test cannot tell the two apart by it.
+    internal int ProbesFinished { get { lock (gate) { return probesFinished; } } }
 
     // A probe whose standard input goes with the host: until its answers are in and its grace has
     // passed, stopping the host would cut it short.
@@ -220,6 +225,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     lock (gate)
                     {
                         running = null;
+                        probesFinished++;
                         answering = null;
                         finished = true;
                     }
