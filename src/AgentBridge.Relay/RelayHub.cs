@@ -16,6 +16,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
     // agent acts, nor a test device, nor any kind added later until it is put here.
     static readonly HashSet<string> PersonKinds = ["app", "pwa", "phone"];
     readonly ConcurrentDictionary<string, ConcurrentDictionary<string, Connection>> accounts = new();
+    readonly SessionRegistry registry = new(options.Roster.Time);
     long presenceVersion;
 
     public int Online => accounts.Values.Sum(a => a.Count);
@@ -79,6 +80,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         public long WindowStart = Environment.TickCount64;
         public int WindowFrames;
         public int RosterInFlight;
+        public long RegistryGetAt = -2000;
 
         public async Task SendAsync(byte[] data, WebSocketMessageType type)
         {
@@ -190,6 +192,7 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             lock (devices)
             {
                 roster.Disconnected(conn.Account.Id, conn.DeviceId, conn.Kind);
+                if (conn.Kind == "host" && devices.TryGetValue(conn.DeviceId, out var held) && ReferenceEquals(held, conn)) { registry.Drop(conn.Account.Id, conn.DeviceId); }
                 ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn));
             }
             // Read before our own close below: this is what the device sent, not our answer.
@@ -313,6 +316,10 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
                 {
                     await ForgetAsync(conn, devices, m);
                 }
+                else if (m.TryGetProperty("t", out var gt) && gt.GetString() is "registry-put" or "registry-get")
+                {
+                    await RegistryAsync(conn, devices, m, gt.GetString() == "registry-put");
+                }
                 continue;
             }
             if (type != WebSocketMessageType.Binary) { continue; }
@@ -348,6 +355,42 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             metrics.ForwardLatency(conn.Kind, Stopwatch.GetElapsedTime(received));
         }
         return "closed";
+    }
+
+    // The session registry (docs/protocol/roster.md): a host puts its own machine's snapshot, any
+    // device of the account gets every machine's. Nothing here leaves the sender's account.
+    async Task RegistryAsync(Connection conn, ConcurrentDictionary<string, Connection> devices, JsonElement m, bool put)
+    {
+        var id = m.TryGetProperty("id", out var i) && i.TryGetInt64(out var n) ? n : 0;
+        var account = conn.Account.Id;
+        if (put)
+        {
+            string? error = conn.Kind != "host" ? "not-allowed"
+                : m.TryGetProperty("record", out var rec) ? registry.Put(account, conn.DeviceId, rec) : "bad-record";
+            // Only the outcome is logged, never the record.
+            log.LogInformation("registry-put {Conn}: {Outcome}", conn.Tag, error ?? "ok");
+            await conn.SendJsonAsync(new { t = "registry-result", id, error });
+            return;
+        }
+        var now = Environment.TickCount64;
+        if (now - conn.RegistryGetAt < 2000) { await conn.SendJsonAsync(new { t = "registry", id, error = "slow-down" }); return; }
+        conn.RegistryGetAt = now;
+        var parts = new List<Dictionary<string, object?>>();
+        foreach (var (machine, json, lastSeen, fresh) in registry.Read(account))
+        {
+            var host = devices.TryGetValue(machine, out var d) && d.Kind == "host" ? d : null;
+            var online = host is not null && fresh;
+            parts.Add(new() { ["t"] = "registry", ["id"] = id, ["machine"] = machine, ["name"] = host?.Name, ["online"] = online, ["lastSeen"] = lastSeen, ["record"] = online ? JsonDocument.Parse(json).RootElement : null });
+        }
+        var known = (roster.Known(account, k => devices.TryGetValue(k, out var d) && d.Kind == "host") ?? [])
+            .Select(k => new { machine = k.Id, name = k.Name, lastSeen = k.LastSeen });
+        for (var p = 0; p < parts.Count; p++)
+        {
+            parts[p]["part"] = p + 1;
+            parts[p]["of"] = parts.Count;
+            await conn.SendJsonAsync(parts[p]);
+        }
+        await conn.SendJsonAsync(new { t = "registry", id, known });
     }
 
     // A person's device forgetting one of the account's machines that is gone (docs/protocol/roster.md).

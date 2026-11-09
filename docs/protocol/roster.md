@@ -141,6 +141,29 @@ it does the same for a machine forgotten from another of the account's devices (
 forgotten machine holds its own until it is uninstalled; if it ever connects again, it is
 listed again and its notifications resume.
 
+## Session registry: each machine's sessions
+
+A host also tells the relay its sessions so one read gives an agent the whole account's picture
+(design: [fleet-session-registry.md](../design/fleet-session-registry.md)).
+
+* **`registry-put`** (host only): `{ t, id, record }`. The reply is `registry-result` with
+  `error` null, or `too-large` (over 16 KiB), `bad-record` or `stale` (a sequence not above the
+  one held; a new `epoch` needs a later `at`). The socket stays open on every refusal.
+* **`registry-get`** (any device): `{ t, id }`, at most one per two seconds per socket
+  (`slow-down`). The reply is one `registry` frame per machine holding a record, `{ machine,
+  name, online, lastSeen, record, part, of }`, then one `{ known: [{ machine, name, lastSeen }] }`
+  frame listing every machine of the account, online or not, so a count matches the app's.
+* **Allow-list.** A record is `v, machine, epoch, seq, at, truncated, total, sessions, sig`; a
+  session is `id, node, name, state, since` (`state`: `working`, `waiting`, `idle`, `ending`;
+  name at most 64 printable ASCII characters; at most 64 sessions). Any other member, such as
+  a prompt, a question, a path or a token, refuses the whole record. Time in state is now minus
+  `since`.
+* **Same account only; memory only.** Records are never logged, never in the roster blob, and
+  are dropped when the host's socket closes. `online` is false, and `record` null, when the host
+  is gone or has sent nothing for 60 seconds.
+
+Not yet: `registry-subscribe` / `changed`, a later slice of the design.
+
 ## Storage
 
 In memory by default, so a restart forgets every offline machine (online ones are recorded
