@@ -265,6 +265,17 @@ switch (command)
             if (ConfigCommands.Writes(rest) && Refused("change the host's config")) { return 4; }
             return ConfigCommands.Run(rest, LoadIdentity().Folder, Console.Out, Console.Error);
         }
+    case "peers":
+        {
+            // AP5-lite pinned own-peers: at the machine only, never from an agent session.
+            var rest = new List<string>(arguments);
+            var p = rest.IndexOf("--profile");
+            if (p >= 0) { rest.RemoveRange(p, Math.Min(2, rest.Count - p)); }
+            if (OwnPeerCommands.Writes(rest) && Refused("change the pinned own-peers")) { return 4; }
+            var identity = LoadIdentity();
+            var local = new OwnPeerCommands.Local(Wire.DeviceId(identity.Key.Public), identity.Account?.AccountId);
+            return OwnPeerCommands.Run(rest, identity.Folder, () => HostSettings.CurrentAgentMessaging(identity.Folder).RemoteEnabled, local, Console.In.ReadLine, Console.Out, Console.Error);
+        }
     case "hooks" when arguments.ElementAtOrDefault(1) == "status":
         // Read only: the profile's folder is looked in, never created, and no identity is loaded.
         if (intakeFolder is null) { Console.Error.WriteLine("agent-bridge-host: --profile is not a valid profile name"); return 2; }
@@ -293,6 +304,7 @@ switch (command)
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
+        Console.Error.WriteLine("       " + OwnPeerCommands.Usage);
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       agent-bridge-host hooks status | hooks install|remove <copilot|claude|codex> [...] [--dry-run]");
         Console.Error.WriteLine("       agent-bridge-host hooks cleanup [--profile <name>]");
