@@ -40,7 +40,7 @@ coordinator owns a lane, and you reach it by putting its tag in a GitHub comment
 
 1. **Ask before starting something new.** A new PR, a new writer on someone else's PR, or a change of scope needs a grant from Engineering and must be work Product has ranked. Fixing your own open PR doesn't need anyone's go-ahead.
 2. **Work in your own worktree,** and keep the PR a draft while you iterate (drafts run a fast subset of CI). Batch fixes so each push answers a whole round of review.
-3. **Mark it ready** once CI is green on the final head and Copilot has reviewed *that* head. A Copilot error, such as a billing failure or a timeout, counts as no review, so request another with `gh pr edit <n> --add-reviewer "@copilot"`.
+3. **Mark it ready** once the draft CI is green on the final head and Copilot has reviewed *that* head. A Copilot error, such as a billing failure or a timeout, counts as no review, so request another with `gh pr edit <n> --add-reviewer "@copilot"`.
 4. **Engineering reviews it without being asked.** It sweeps for ready PRs every few minutes, ordered by Product's rank, and posts a comment with its verdict. A CLEAN verdict is tagged `[to:quality]`; a NOT CLEAN one goes to your team with its findings.
    - **Only Engineering's receipt counts, and only a sensitive PR needs one** (AGENTS.md rules 4 and 5). The receipt is the `independent-review` status from an account in `independent_review.posters`; under `copilot-waived` a sensitive PR also needs `independent-review-2` from another model family. A "CLEAN" comment from you or your own reviewer isn't a receipt, however careful the review behind it. For other PRs, Engineering's verdict is advisory.
    - Fix every finding, or reply on its thread with your reasoning, then push once. Engineering then reviews only what changed (a "delta"), rather than starting over.
@@ -67,13 +67,13 @@ coordinator owns a lane, and you reach it by putting its tag in a GitHub comment
 
   Run it async, handle the wake, then restart it:
   ```
-  pwsh tools/agents/wake-watch.ps1 -Team apple -Prs 406,405
+  pwsh -Command "./tools/agents/wake-watch.ps1 -Team apple -Prs 406,405"
   ```
   `-IgnoreIds` skips comments that someone edits in place, such as rolling digests.
 - **Restart with `-Since`.** `-Since` defaults to the moment the watcher starts, so a comment posted while it was down (after a wake, while you handled it) would be missed. GitHub's `since` is inclusive and matches a comment's `updated_at`, so the comment that caused the wake would wake you again. Restart with `-Since` set to that comment's `updated_at` (printed in the WAKE line) plus 1 second, in UTC, and/or pass the ids of comments you've already handled in `-IgnoreIds`; the watcher prints the effective value on start. If a wake came from several comments, use the latest `updated_at` plus 1 second, or the earlier start time with every handled id in `-IgnoreIds`:
   ```
-  pwsh tools/agents/wake-watch.ps1 -Team apple -Prs 406,405 -Since 2026-11-06T22:10:01Z
-  pwsh tools/agents/wake-watch.ps1 -Team apple -Prs 406,405 -Since 2026-11-06T22:05:00Z -IgnoreIds 4231234567,4231234999
+  pwsh -Command "./tools/agents/wake-watch.ps1 -Team apple -Prs 406,405 -Since 2026-11-06T22:10:01Z"
+  pwsh -Command "./tools/agents/wake-watch.ps1 -Team apple -Prs 406,405 -Since 2026-11-06T22:05:00Z -IgnoreIds 4231234567,4231234999"
   ```
 - **Use REST for anything that polls.** Every session shares one GitHub account's GraphQL budget, about 5,000 points an hour. `gh pr view`, `gh pr checks`, `gh pr comment` and `gh issue comment` all spend it, and one afternoon it ran out and nothing could post for minutes. Read with `gh api repos/danswett/agent-bridge/pulls/<n>` and `.../commits/<sha>/check-runs`, and post with `gh api repos/danswett/agent-bridge/issues/<n>/comments -F body=@file`.
 - **Check-ins** go on #689: 8 lines or fewer, saying what landed, what's in review, what's blocking you and who you need. Edit a comment in place rather than posting a correction.
