@@ -120,6 +120,25 @@ links, and explicitly supersede old authority instructions during a handoff.
 Do not remove the old tracker until all active rows have a verified destination;
 a Project-permission failure is not an empty queue or a completed migration.
 
+## Commands and code for the owner
+
+In any question or message to the owner, put every command or code line in its own
+fenced block (three backticks, one block per command) so the PWA card shows a Copy
+button. The Windows app shows the same Copy button on fenced blocks. Inline
+backticks and plain paragraphs get no Copy button, and nothing detects commands
+automatically.
+
+````text
+```powershell
+$h = "$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe"; & $h rollback
+```
+````
+
+The owner often reads on a phone, and encoded commands don't wrap, so avoid them.
+
+Approvals (permission prompts) are drawn as written and never get a Copy button, by
+design. Put commands for the owner in a question, not in an approval.
+
 ## Conflicting or unavailable information
 
 Historical notes explain past decisions; they do not establish today's head,
