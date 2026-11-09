@@ -348,7 +348,9 @@ the owner), `chain`, `action`, `target`, `outcome`, `reason`, and, when the even
 characters, every other field at 256, and the chain at 16 entries.
 
 The host keeps at most 30 days and 64 MiB, deleting the oldest day's file first and never the
-file being written. Age pruning never trusts a clock that has jumped ahead of the newest earlier
+file being written. That file is bounded too: once a line would take it past 64 MiB the write
+returns false and the audited action is refused until the next day. A future-dated file (a clock
+stepped back) does not count toward the size. Age pruning never trusts a clock that has jumped ahead of the newest earlier
 file, and size pruning stops at a file it cannot delete. A line torn by a crash is not joined to
 the next event. An unwritable log (a read-only folder, a full disk) refuses the action being
 audited, as the #1401 row in design/agent-launch-scope.md requires: the log says so once in the

@@ -1,3 +1,5 @@
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
@@ -65,9 +67,9 @@ public sealed class AgentAuditLogTests : IDisposable
     [Fact]
     public void Past_the_size_limit_the_oldest_files_go_first_and_never_the_current_one()
     {
-        var log = Log(max: 400);
+        var log = Log(max: 700);
         for (var i = 0; i < 3; i++) { log.Append(Entry(), new string('x', 10)); clock.Advance(TimeSpan.FromDays(1)); }
-        log.Append(Entry(outcome: new string('o', 2000)));
+        log.Append(Entry(outcome: new string('o', 2000)) with { Reason = new string('r', 2000) });
 
         var names = Directory.GetFiles(Audit).Select(Path.GetFileName).Order().ToArray();
         Assert.Equal("agents-2026-11-11.jsonl", Assert.Single(names));
@@ -167,12 +169,89 @@ public sealed class AgentAuditLogTests : IDisposable
     [Fact]
     public void The_audit_file_is_owner_only_and_an_existing_loose_one_is_tightened()
     {
-        if (OperatingSystem.IsWindows()) { return; }
         Directory.CreateDirectory(Audit);
         var file = Path.Combine(Audit, "agents-2026-11-08.jsonl");
         File.WriteAllText(file, "");
-        File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
-        Log().Append(Entry());
-        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(file));
+        if (OperatingSystem.IsWindows())
+        {
+            var loose = new FileInfo(file).GetAccessControl();
+            loose.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null), FileSystemRights.Read, AccessControlType.Allow));
+            new FileInfo(file).SetAccessControl(loose);
+        }
+        else
+        {
+            File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        }
+        Assert.True(Log().Append(Entry()));
+        AssertOwnerOnly(file);
+
+        var fresh = Path.Combine(Audit, "agents-2026-11-09.jsonl");
+        clock.Advance(TimeSpan.FromDays(1));
+        Assert.True(Log().Append(Entry()));
+        AssertOwnerOnly(fresh);
+    }
+
+    static void AssertOwnerOnly(string file)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var me = WindowsIdentity.GetCurrent().User!;
+            var security = new FileInfo(file).GetAccessControl(AccessControlSections.Access | AccessControlSections.Owner);
+            Assert.True(security.AreAccessRulesProtected);
+            Assert.Equal(me, security.GetOwner(typeof(SecurityIdentifier)));
+            var rule = Assert.Single(security.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>());
+            Assert.Equal(me, rule.IdentityReference);
+            Assert.Equal(AccessControlType.Allow, rule.AccessControlType);
+        }
+        else
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(file));
+        }
+    }
+
+    long OneLine()
+    {
+        Assert.True(Log().Append(Entry()));
+        var file = Path.Combine(Audit, "agents-2026-11-08.jsonl");
+        var length = new FileInfo(file).Length;
+        File.Delete(file);
+        return length;
+    }
+
+    [Fact]
+    public void The_days_file_may_reach_exactly_the_size_limit_and_not_one_byte_past()
+    {
+        var one = OneLine();
+        var log = Log(max: one * 2);
+        Assert.True(log.Append(Entry()));
+        Assert.True(log.Append(Entry()));
+        Assert.Equal(one * 2, new FileInfo(Path.Combine(Audit, "agents-2026-11-08.jsonl")).Length);
+        Assert.False(log.Append(Entry()));
+        Assert.Equal(one * 2, new FileInfo(Path.Combine(Audit, "agents-2026-11-08.jsonl")).Length);
+
+        File.Delete(Path.Combine(Audit, "agents-2026-11-08.jsonl"));
+        Assert.False(Log(max: one - 1).Append(Entry()));
+    }
+
+    [Fact]
+    public void A_looping_agent_cannot_grow_the_days_file_past_the_limit()
+    {
+        var one = OneLine();
+        var log = Log(max: one * 3);
+        var written = Enumerable.Range(0, 50).Count(_ => log.Append(Entry()));
+        Assert.Equal(3, written);
+        Assert.True(Directory.GetFiles(Audit).Sum(f => new FileInfo(f).Length) <= one * 3);
+    }
+    [Fact]
+    public void A_huge_future_dated_file_does_not_wipe_the_real_days()
+    {
+        var log = Log(max: 2000);
+        log.Append(Entry());
+        clock.Advance(TimeSpan.FromDays(1));
+        File.WriteAllBytes(Path.Combine(Audit, "agents-2031-01-01.jsonl"), new byte[5000]);
+        Assert.True(log.Append(Entry()));
+        var names = Directory.GetFiles(Audit).Select(Path.GetFileName).ToArray();
+        Assert.Contains("agents-2026-11-08.jsonl", names);
+        Assert.Contains("agents-2031-01-01.jsonl", names);
     }
 }

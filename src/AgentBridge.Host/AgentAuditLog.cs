@@ -1,4 +1,7 @@
 using System.Globalization;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -75,10 +78,15 @@ public sealed class AgentAuditLog
                 using (var stream = new FileStream(file, options))
                 {
                     // A crash mid-write can leave a partial line: start on a fresh one so it can't swallow this event.
-                    if (stream.Length > 0 && EndsWithoutNewline(file)) { stream.Write("\n"u8); }
+                    var torn = stream.Length > 0 && EndsWithoutNewline(file);
+                    // Retention never deletes the day being written, so its file needs its own bound, or a
+                    // looping agent could pass the budget and prune every earlier day.
+                    if (stream.Length + data.Length + (torn ? 1 : 0) > maxBytes) { throw new IOException("the day's agent audit file is full"); }
+                    if (torn) { stream.Write("\n"u8); }
                     stream.Write(data);
                 }
-                if (!OperatingSystem.IsWindows()) { File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
+                if (OperatingSystem.IsWindows()) { NarrowFileWindows(file); }
+                else { File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
                 if (failing) { failing = false; log("agent audit log is writing again"); }
                 // The line is already written: a retention fault is its own problem, not a lost event.
                 try { Retain(folder, now); retentionFailing = false; }
@@ -98,6 +106,23 @@ public sealed class AgentAuditLog
             }
             return false;
         }
+    }
+
+    // The folder's DACL is inherited by new files, but a file already there can carry a looser one.
+    [SupportedOSPlatform("windows")]
+    static void NarrowFileWindows(string file)
+    {
+        var me = WindowsIdentity.GetCurrent().User!;
+        var info = new FileInfo(file);
+        var current = info.GetAccessControl(AccessControlSections.Access | AccessControlSections.Owner);
+        var rules = current.GetAccessRules(true, true, typeof(SecurityIdentifier));
+        if (current.AreAccessRulesProtected && me.Equals(current.GetOwner(typeof(SecurityIdentifier))) && rules.Count == 1
+            && rules.Cast<FileSystemAccessRule>().Single().IdentityReference.Equals(me)) { return; }
+        var security = new FileSecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(me, FileSystemRights.FullControl, AccessControlType.Allow));
+        security.SetOwner(me);
+        info.SetAccessControl(security);
     }
 
     static string Cap(string? value, int max) => value is null ? "" : value.Length > max ? value[..max] : value;
@@ -131,7 +156,8 @@ public sealed class AgentAuditLog
             if (TryDay(f.Name, out var day)) { files.Add((day, f)); }
         }
         files.Sort((a, b) => a.Day.CompareTo(b.Day));
-        var total = files.Sum(f => f.Info.Length);
+        // A future-dated file (clock stepped back) is never deleted, so it must not count or it would wipe every real day.
+        var total = files.Where(f => f.Day <= today).Sum(f => f.Info.Length);
         var earlier = files.Where(f => f.Day < today).Select(f => f.Day).DefaultIfEmpty(today).Max();
         var anchor = earlier.AddDays(1) < today ? earlier.AddDays(1) : today;
         foreach (var (day, info) in files)
