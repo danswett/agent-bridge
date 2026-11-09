@@ -881,8 +881,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     while it is away ("A machine away"), and "bridge isn't running" once its host is gone (§6.14).
   - **Keyboard:** the arrows move through the tabs shown, Tab goes on to More, and Enter or Space
     opens its menu. Touch and the mouse reach More as any button.
-  - It holds at the narrowest list (264, §5.2) and in one column. The PWA's tabs still scroll
-    sideways (#351).
+  - It holds at the narrowest list (264, §5.2) and in one column. The PWA does the same
+    (`js/ui/machine-tab-fit.js`, #351).
 - macOS: a "Machines" sidebar section.
 - iOS: a toolbar button.
 - Android: filter chips.
