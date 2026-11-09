@@ -243,6 +243,9 @@ adoption is irrevocable, as is local adoption of a head by the person at the mac
 (`Adopt`). A quarantined removal applies when it is valid in the state of its unquarantined
 ancestors.
 
+Known gap: when a concurrent branch is longer than the window, the final name of a device can
+depend on delivery order; see [#1435](https://github.com/danswett/agent-bridge/issues/1435).
+
 ### State
 
 The applied state is computed from the unquarantined entries and the quarantined removals that

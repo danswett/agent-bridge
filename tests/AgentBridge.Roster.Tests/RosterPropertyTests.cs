@@ -100,6 +100,21 @@ public sealed class RosterPropertyTests
         return [.. order];
     }
 
+    // Whether no add or rename arrives with more than RosterVerifier.Window entries it does not
+    // descend from already delivered. Past that the arrival window quarantines it by design
+    // (devices.md, Quarantine), so the final state depends on delivery order there; see #1435.
+    static bool StaysInWindow(World w, RosterVerifier whole, string[] order)
+    {
+        for (var i = 0; i < order.Length; i++)
+        {
+            if (w.Entry(order[i]).Body.Op is EntryOp.Remove or EntryOp.Merge or EntryOp.Genesis) { continue; }
+            if (whole.Graph.Find(w[order[i]].Hash) is not { } index) { continue; }
+            var unseen = order.Take(i).Count(e => whole.Graph.Find(w[e].Hash) is { } held && !whole.Graph.IsAncestor(held, index));
+            if (unseen > RosterVerifier.Window) { return false; }
+        }
+        return true;
+    }
+
     static string Summary(World w, RosterVerifier v) =>
         string.Join(",", w.Active(v)) + "|" + string.Join(",", v.State.Conflicted.Select(w.NameOf).Order(StringComparer.Ordinal))
         + "|" + string.Join(",", v.State.Active.Keys.Select(id => $"{w.NameOf(id)}={v.State.Name(id)}").Order(StringComparer.Ordinal));
@@ -112,18 +127,41 @@ public sealed class RosterPropertyTests
         var reference = w.Verifier();
         var expected = Summary(w, reference);
         var verdicts = w.Labels.ToDictionary(l => l, l => w.Feed(w.Verifier([.. w.Labels.TakeWhile(x => x != l)]), l)[0]);
-        var random = new Random(scenario.GetHashCode(StringComparison.Ordinal) ^ 0x5eed);
+        // A fixed seed per scenario: string.GetHashCode differs in every process, which made a
+        // failure here unrepeatable (#1429).
+        var seed = scenario.Aggregate(0x5eed, (h, c) => unchecked(h * 31 + c));
+        var random = new Random(seed);
         for (var round = 0; round < 12; round++)
         {
             var order = Shuffled(w, random);
+            for (var tries = 0; tries < 200 && !StaysInWindow(w, reference, order); tries++) { order = Shuffled(w, random); }
+            Assert.True(StaysInWindow(w, reference, order), $"{scenario}: no in-window delivery order found, seed {seed}, round {round}");
             var v = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
             var offered = w.Feed(v, order);
-            Assert.Equal(expected, Summary(w, v));
+            var actual = Summary(w, v);
+            Assert.True(expected == actual, $"{scenario}, seed {seed}, round {round}, delivery order [{string.Join(" ", order)}]: expected {expected} but got {actual}");
             for (var i = 0; i < order.Length; i++)
             {
                 Assert.True(verdicts[order[i]].Reason == offered[i].Reason, $"{scenario}: {order[i]} in [{string.Join(" ", order)}]");
             }
         }
+    }
+
+    // Known gap, tracked in https://github.com/danswett/agent-bridge/issues/1435 (needs-design):
+    // when a concurrent branch is longer than the arrival window, delivery order changes the final
+    // name. Delete or invert this test when that issue is decided.
+    [Fact]
+    public void Known_gap_1435_a_branch_longer_than_the_window_makes_the_final_name_depend_on_delivery_order()
+    {
+        var w = Builders["copy-renames"]();
+        var reference = w.Verifier();
+        Assert.Contains("A=Laptop 7", Summary(w, reference));
+
+        string[] order = ["G", "+H", "+A'", "h0", "h1", "h2", "h3", "h4", "h5", "h6", "+A", "h7", "m", "g0", "g1", "g2", "g3", "g4", "g5", "g6", "g7"];
+        Assert.False(StaysInWindow(w, reference, order));
+        var v = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        w.Feed(v, order);
+        Assert.Contains("A=Copy 7", Summary(w, v));
     }
 
     [Theory]
