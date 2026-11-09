@@ -40,16 +40,16 @@ public static class RosterFields
             if (!RecordMembers.Contains(p.Name) || !seen.Add(p.Name)) { return "bad-record"; }
         }
         if (!seen.IsSupersetOf(["v", "machine", "epoch", "seq", "at", "truncated", "sessions"])) { return "bad-record"; }
-        if (!record.GetProperty("v").TryGetInt32(out var v) || v != 1) { return "bad-record"; }
+        if (!Int(record.GetProperty("v"), out var v) || v != 1) { return "bad-record"; }
         // A host speaks only for itself.
         if (!Is(record.GetProperty("machine"), JsonValueKind.String) || record.GetProperty("machine").GetString() != machine) { return "bad-record"; }
-        epoch = record.GetProperty("epoch").GetString() ?? "";
-        if (!Is(record.GetProperty("epoch"), JsonValueKind.String) || !IsHex16(epoch)) { return "bad-record"; }
-        if (!record.GetProperty("seq").TryGetInt64(out seq) || seq < 1) { return "bad-record"; }
+        if (!Is(record.GetProperty("epoch"), JsonValueKind.String) || record.GetProperty("epoch").GetString() is not { } e || !IsHex16(e)) { return "bad-record"; }
+        epoch = e;
+        if (!Is(record.GetProperty("seq"), JsonValueKind.Number) || !record.GetProperty("seq").TryGetInt64(out seq) || seq < 1) { return "bad-record"; }
         if (!TryTime(record.GetProperty("at"), out at)) { return "bad-record"; }
         var truncated = record.GetProperty("truncated");
         if (truncated.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) { return "bad-record"; }
-        if (seen.Contains("total") && (!truncated.GetBoolean() || !record.GetProperty("total").TryGetInt32(out var total) || total <= MaxSessions)) { return "bad-record"; }
+        if (seen.Contains("total") && (!truncated.GetBoolean() || !Int(record.GetProperty("total"), out var total) || total <= MaxSessions)) { return "bad-record"; }
         if (seen.Contains("sig") && (!Is(record.GetProperty("sig"), JsonValueKind.String) || record.GetProperty("sig").GetString() is not { Length: > 0 and <= 256 } sig || !sig.All(IsBase64Url))) { return "bad-record"; }
         var sessions = record.GetProperty("sessions");
         if (sessions.ValueKind != JsonValueKind.Array || sessions.GetArrayLength() > MaxSessions) { return "bad-record"; }
@@ -79,6 +79,7 @@ public static class RosterFields
             && s.GetProperty("name").GetString() is { Length: > 0 and <= MaxNameLength } name && name.All(c => c is >= ' ' and <= '~'));
     }
 
+    static bool Int(JsonElement e, out int n) { n = 0; return e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out n); }
     static bool Is(JsonElement e, JsonValueKind kind) => e.ValueKind == kind;
     static bool IsHex16(string s) => s.Length == 16 && s.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
     static bool IsBase64Url(char c) => char.IsAsciiLetterOrDigit(c) || c is '-' or '_';

@@ -94,6 +94,85 @@ public sealed class RosterFieldsTests
     }
 
     [Fact]
+    public async Task Every_allow_listed_field_is_accepted_and_returned_and_an_unlisted_one_at_any_level_is_refused()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "dev-box", "host");
+        var w = new Wirer(host);
+        var rec = Record(host.Id);
+        rec["truncated"] = true; rec["total"] = 65; rec["sig"] = "abc-_123";
+
+        Assert.Null(await w.PutAsync(host, rec));
+        var part = (await w.GetAsync(host)).Single(f => f.TryGetProperty("machine", out _));
+        Assert.Equal(["at", "epoch", "machine", "seq", "sessions", "sig", "total", "truncated", "v"], part.GetProperty("record").EnumerateObject().Select(p => p.Name).Order());
+
+        var top = Record(host.Id, seq: 2); top["path"] = "x";
+        Assert.Equal("bad-record", await w.PutAsync(host, top));
+        var nested = Record(host.Id, seq: 3); nested["sessions"]![0]!["state"] = new JsonObject { ["prompt"] = "x" };
+        Assert.Equal("bad-record", await w.PutAsync(host, nested));
+    }
+
+    [Theory]
+    [InlineData("v", "\"1\"")]
+    [InlineData("machine", "7")]
+    [InlineData("epoch", "5")]
+    [InlineData("seq", "\"5\"")]
+    [InlineData("at", "5")]
+    [InlineData("truncated", "\"no\"")]
+    [InlineData("sessions", "\"x\"")]
+    [InlineData("total", "\"x\"")]
+    [InlineData("sig", "5")]
+    public async Task A_wrongly_typed_record_member_is_refused_and_the_socket_stays_open(string member, string raw)
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "dev-box", "host");
+        var w = new Wirer(host);
+        var rec = Record(host.Id);
+        if (member is "total" or "sig") { rec["truncated"] = true; }
+        rec[member] = JsonNode.Parse(raw);
+
+        Assert.Equal("bad-record", await w.PutAsync(host, rec));
+        Assert.Null(await w.PutAsync(host, Record(host.Id, seq: 2)));
+    }
+
+    [Theory]
+    [InlineData("id", "5")]
+    [InlineData("node", "5")]
+    [InlineData("state", "5")]
+    [InlineData("state", "\"sleeping\"")]
+    [InlineData("since", "5")]
+    [InlineData("name", "5")]
+    [InlineData("name", "\"line\\nbreak\"")]
+    public async Task A_wrongly_typed_or_invalid_session_member_is_refused_and_the_socket_stays_open(string member, string raw)
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "dev-box", "host");
+        var w = new Wirer(host);
+        var rec = Record(host.Id);
+        rec["sessions"]![0]![member] = JsonNode.Parse(raw);
+
+        Assert.Equal("bad-record", await w.PutAsync(host, rec));
+        Assert.Null(await w.PutAsync(host, Record(host.Id, seq: 2)));
+    }
+
+    [Fact]
+    public async Task More_than_the_session_limit_is_refused_and_known_lists_online_machines_too()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "dev-box", "host");
+        var w = new Wirer(host);
+        var many = Record(host.Id);
+        var s = many["sessions"]!.AsArray();
+        var first = s[0]!.ToJsonString();
+        for (var i = 0; i < 64; i++) { s.Add(JsonNode.Parse(first)); }
+        Assert.Equal("bad-record", await w.PutAsync(host, many));
+
+        Assert.Null(await w.PutAsync(host, Record(host.Id, seq: 2)));
+        var known = (await w.GetAsync(host)).Single(f => f.TryGetProperty("known", out _)).GetProperty("known");
+        Assert.Contains(known.EnumerateArray(), k => k.GetProperty("machine").GetString() == host.Id);
+    }
+
+    [Fact]
     public async Task Another_account_never_sees_the_records()
     {
         await using var relay = await TestRelay.StartAsync();
