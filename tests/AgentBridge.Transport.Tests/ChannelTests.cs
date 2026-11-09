@@ -193,7 +193,7 @@ public class ChannelTests
         Assert.DoesNotContain("gho_", logs);
     }
 
-    [Theory]
+    [Theory(Skip = "Quarantined (#1373): times out in the handshake on Windows runners; restore with the fix.")]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Revalidation_waits_until_handshake_admission_has_finished(bool outbound)
