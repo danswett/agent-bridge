@@ -793,6 +793,22 @@ public class ClaudeSubagentTests
         s = await r.Append(removed.ToJsonString());
         Assert.Equal(SubagentStatus.Working, Entry(s, Files).Status);
     }
+
+    [Fact]
+    public async Task A_queued_notice_absorbed_mid_turn_ends_no_delegate_and_leaves_its_delivery_to_end_it()
+    {
+        await using var r = new Replay();
+        await r.Through(7);
+        var absorbed = JsonNode.Parse(Notice(Files, 9))!;
+        absorbed["operation"] = "remove";
+        absorbed["reason"] = "absorbed_mid_turn";
+
+        var s = await r.Append(Notice(Files, 8), absorbed.ToJsonString());
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Files).Status, Entry(s, Files).Outcome));
+
+        s = await r.Append(Delivery(Files, 10));
+        Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done), (Entry(s, Files).Status, Entry(s, Files).Outcome));
+    }
 }
 
 public class CodexSubagentTests
