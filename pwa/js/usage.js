@@ -370,7 +370,11 @@ export class UsageBook {
   // Where readings are kept, none past their 14 days, whether or not anything has been heard since:
   // the view redraws on a timer, and a machine that went offline sends nothing more.
   entries() {
-    if (!this.#cache) { return mergeUsage([...this.#live(), { agents: this.#kept }]); }
+    if (!this.#cache) {
+      const latest = this.now() + MAX_AHEAD_MS;
+      const notAhead = (agents) => agents.filter((a) => (Date.parse(a.measuredAt ?? '') || 0) <= latest);
+      return mergeUsage([...this.#live().map((r) => ({ agents: notAhead(r.agents) })), { agents: notAhead(this.#kept) }]);
+    }
     return mergeUsage(this.#current());
   }
 

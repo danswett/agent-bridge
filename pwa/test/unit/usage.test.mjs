@@ -230,6 +230,13 @@ test('a reading stamped more than ten minutes ahead of the clock is refused, liv
   assert.deepEqual(book.entries().map((e) => e.windows[0].percent), [55]);
 });
 
+test('with no cache attached (signed out) a reading stamped more than ten minutes ahead is still refused', () => {
+  const book = new UsageBook({ now: () => NOW });
+  book.set('vm-id', { agents: [claude({ measuredAt: iso(-H), windows: [{ key: 'weekly_all', label: 'Weekly', percent: 41.3 }] })] }, 'VM');
+  book.set('desk-id', { agents: [claude({ measuredAt: iso(11 * 60000), windows: [{ key: 'weekly_all', label: 'Weekly', percent: 99 }] })] }, 'Desk');
+  assert.deepEqual(book.entries().map((e) => e.windows[0].percent), [41.3]);
+});
+
 test('a kept reading that names no machine is dropped when the cache loads, and what is kept is saved', () => {
   let kept = null;
   const book = new UsageBook({ now: () => NOW });
