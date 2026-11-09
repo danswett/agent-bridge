@@ -1824,10 +1824,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_six_field_form_with_long_titles_is_answered_in_a_console_as_wide_as_the_host_launches_sessions()
+    public async Task A_six_field_form_with_long_titles_is_answered_in_a_console_wide_enough_for_its_whole_bar()
     {
         var names = await AskSixAsync(SixAnswer);
-        var columns = AgentBridge.Host.Delivery.Launch.LaunchService.ConsoleColumns;
+        var columns = AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow;
         injector.Screen = () => SixScreen(names, columns, at => CliBar(SixTitles, at, columns, marked: true));
         Assert.All(Enumerable.Range(0, SixTitles.Length), at => Assert.DoesNotContain("\u2192", CliBar(SixTitles, at, columns, marked: true)));
         var ch = await OpenAsync();
@@ -1855,8 +1855,10 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 
         var needed = AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(SixTitles);
         Assert.Equal("refused", outcome);
-        Assert.Contains($"too narrow for {Product.Name} to check which field this question's form is at (its titles need a window at least {needed} columns wide)", reason);
-        Assert.Contains("widen it or make its font smaller, then answer again, or answer it at the machine", reason);
+        // The owner's six titles need more than a normal screen shows: the refusal leads with the machine.
+        Assert.InRange(needed, AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.NormalScreenColumns + 1, AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow);
+        Assert.Contains($"too narrow for {Product.Name} to check which field this question's form is at; answer it at the machine. Its titles need a window at least {needed} columns wide and a normal screen shows about 200", reason);
+        Assert.Contains("widening the window may not be enough", reason);
         Assert.DoesNotContain("phone", reason);
         Assert.Empty(injector.Attempts);
         Assert.Contains("check=bar-window@", (await AttemptLineAsync()));
@@ -2029,13 +2031,13 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         // The bar shows the first title alone, over two rows: the other two titles are hidden,
         // so the form cannot be told from one differing only in them. Read as one row, this was
         // refused as a form gone (check=bar@29 live); it is the bar's window, named so. The three
-        // titles need more columns than the widest console the host launches, so widening is
+        // titles need more columns than the widest window (WidestWindow), so widening is
         // not offered: a maximized window did not help (#1123).
         var answer = new { licence = "Ship", signing = "Hold", support = "Ship" };
         var names = await AskLongAsync(answer);
         injector.Screen = () => LongScreen(names, marked);
         Assert.Equal(2, Wrapped(LongTitles[0], 100).Count());
-        Assert.True(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(LongTitles) > AgentBridge.Host.Delivery.Launch.LaunchService.ConsoleColumns);
+        Assert.True(global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(LongTitles) > AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow);
         var ch = await OpenAsync();
 
         var (outcome, reason) = await AnswerAsync(ch, answer, question: "q2");
@@ -2048,23 +2050,40 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Titles_that_fit_the_widest_launched_console_say_widen_it_and_one_column_more_says_they_are_too_long()
+    public void Titles_that_fit_a_normal_screen_say_widen_it_and_one_column_more_than_the_widest_window_says_they_are_too_long()
     {
         // Two titles and a short one, as the owner's form: the bar needs each title, two columns
         // around it, one between and four beside the bar (`$fn`).
-        var columns = AgentBridge.Host.Delivery.Launch.LaunchService.ConsoleColumns;
-        var room = columns - 4 - 2 - 3 * 2 - 5;
-        string[] fits = [new string('a', room / 2), new string('b', room - room / 2), "Notes"];
-        string[] over = [fits[0] + "a", fits[1], fits[2]];
-        Assert.Equal(columns, global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(fits));
+        string[] Form(int columns)
+        {
+            var room = columns - 4 - 2 - 3 * 2 - 5;
+            string[] titles = [new string('a', room / 2), new string('b', room - room / 2), "Notes"];
+            Assert.Equal(columns, global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(titles));
+            return titles;
+        }
+        var normal = AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.NormalScreenColumns;
 
-        var widen = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(fits);
-        var tooLong = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(over);
+        var widen = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(Form(normal));
+        var tooLong = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(Form(AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.WidestWindow + 1));
 
-        Assert.Contains($"at least {columns} columns wide); widen it or make its font smaller", widen);
+        Assert.Contains($"at least {normal} columns wide); widen it or make its font smaller", widen);
         Assert.Contains($"too long for {Product.Name}", tooLong);
         Assert.DoesNotContain("widen", tooLong);
         Assert.All(new[] { widen, tooLong }, r => Assert.DoesNotContain("phone", r));
+    }
+
+    [Fact]
+    public void A_form_needing_more_than_a_normal_screen_shows_says_what_the_screen_reaches_and_leads_with_the_machine()
+    {
+        string[] titles = [new string('a', 100), new string('b', 103), "Notes"];
+        Assert.Equal(220, global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.BarColumns(titles));
+
+        var reason = global::AgentBridge.Host.Delivery.Copilot.CopilotFormScreen.Narrow(titles);
+
+        Assert.Contains("answer it at the machine. Its titles need a window at least 220 columns wide and a normal screen shows about 200", reason);
+        Assert.Contains("widening the window may not be enough", reason);
+        Assert.DoesNotContain("too long", reason);
+        Assert.DoesNotContain("phone", reason);
     }
 
     [Fact]

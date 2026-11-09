@@ -351,16 +351,25 @@ public static partial class CopilotFormScreen
 
     // A bar windowed to some of the form's titles (bar-window): said with how wide the window
     // must be for the whole bar, the console's width less four (`$fn`), as a lower bound (each
-    // title counted a column a character; a wide character takes two). Wider than the console
-    // the host launches sessions with, widening is no advice: a maximized window on the owner's
-    // screen was still too narrow, and the card told him to widen it (#1123), so it says to
-    // answer at the machine or ask with shorter titles. It names the product, never "phone": a
-    // browser or the Windows app answers the same way.
+    // title counted a column a character; a wide character takes two). Launched sessions take
+    // the window's own width, which on a normal screen is about NormalScreenColumns (1920 px).
+    // Up to that, widening the window is advice that can work. Past it, up to WidestWindow, it
+    // may not (a maximized window on the owner's screen was still too narrow and the card told
+    // him to widen it, #1123), so it says what the screen reaches and leads with answering at the
+    // machine. Past WidestWindow no window helps: ask with shorter titles. It names the product,
+    // never "phone": a browser or the Windows app answers the same way.
+    internal const int NormalScreenColumns = 200;
+    internal const int WidestWindow = 250;
+
     internal static string Narrow(IReadOnlyList<string> labels)
     {
         var needed = BarColumns(labels);
-        return needed > Launch.LaunchService.ConsoleColumns
-            ? $"this question's titles are too long for {Product.Name} to check which field is open; answer it at the machine, or ask with shorter titles"
+        if (needed > WidestWindow)
+        {
+            return $"this question's titles are too long for {Product.Name} to check which field is open; answer it at the machine, or ask with shorter titles";
+        }
+        return needed > NormalScreenColumns
+            ? $"the session's window is too narrow for {Product.Name} to check which field this question's form is at; answer it at the machine. Its titles need a window at least {needed} columns wide and a normal screen shows about {NormalScreenColumns}, so widening the window may not be enough (a smaller font may help)"
             : $"the session's window is too narrow for {Product.Name} to check which field this question's form is at (its titles need a window at least {needed} columns wide); widen it or make its font smaller, then answer again, or answer it at the machine";
     }
 

@@ -189,17 +189,19 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     for the whole bar ("its titles need a window at least N columns wide"; N each title's
     characters, two columns around each, one between and the four `$fn` leaves, a lower
     bound as a wide character takes two), and to widen it or make its font smaller, or answer
-    at the machine. Where N
-    is more than the 250 columns the host launches sessions with, widening is no advice (a
-    maximized window, its buffer then as wide as the screen allows, was still too narrow
-    live, #1123): "this question's titles are too long for Slipgates to check which field is
+    at the machine. Where N is more than about 200, what a normal screen shows (1920 px),
+    widening may not be enough (a maximized window was still too narrow live, #1123): the
+    reason then leads with answering at the machine and says N and that a normal screen shows
+    about 200. Where N
+    is more than the 250 columns no window is taken to reach, widening is no advice at all:
+    "this question's titles are too long for Slipgates to check which field is
     open; answer it at the machine, or ask with shorter titles". Reasons say "Slipgates",
     never "phone": a browser or the Windows app answers the same way. A form
     that differs from the question only in a hidden title reads the same, and each field's
     own heading is read only once the keys reach it, after earlier fields are already filled
     (#1137 review). A six-field form with long titles at 102 columns showed two labels and
-    "→", and was refused as no form at all, unnamed (#1123). Sessions the host launches open
-    250 columns wide so such a bar shows whole (host-launch.md, Width); the screen read takes
+    "→", and was refused as no form at all, unnamed (#1123). Sessions the host launches open in a
+    normal window, so their width is the window's (host-launch.md, Width); the screen read takes
     each row at the console buffer's full width, the width the CLI draws to. Copilot CLI 1.0.106's bar
     (`_l`, window `kHi`) shows the most labels that fit around the field (any such run, each
     read), and where not even one fits, the field's label alone, however long, wrapped over
@@ -857,8 +859,8 @@ still reads so. `agent-bridge-injector.exe <pid> --screen` types nothing and pri
 visible rows, each at the console buffer's full width (the width the agent draws to, wider
 than the window where a screen clamps it). `agent-bridge-injector.exe <pid> --widen <n> <created>`
 types nothing either: only while the process is still the one created then (held open
-throughout), it makes the console's buffer at least n columns wide (a launch's console,
-host-launch.md, Width) and prints the width. It is a separate process because Windows ends every process attached to
+throughout), it makes the console's buffer at least n columns wide and prints the width (the
+host does not call it now: launches take the window's own width, host-launch.md, Width). It is a separate process because Windows ends every process attached to
 a console when that console's window closes (spike S1). It ignores Ctrl+C, re-registering
 after each attach. One worker runs at a time. The host only reads everything else: it
 never writes, locks, renames or deletes anything the agents or agent-ha-bridge own.
