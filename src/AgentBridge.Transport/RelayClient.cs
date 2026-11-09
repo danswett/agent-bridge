@@ -298,6 +298,9 @@ public sealed class RelayClient : IAsyncDisposable
     internal Task Receiving => receiving.Task;
     readonly TaskCompletionSource receiving = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    // Test use: control frames this client has no case for, such as the session registry's.
+    internal event Action<JsonElement>? Unhandled;
+
     // Test use: send raw bytes the relay must refuse.
     internal async Task SendRawAsync(byte[] data, WebSocketMessageType type)
     {
@@ -366,6 +369,7 @@ public sealed class RelayClient : IAsyncDisposable
                                 f.TrySetResult(j.TryGetProperty("error", out var why) && why.ValueKind == JsonValueKind.String ? why.GetString() : null);
                             }
                             break;
+                        default: Unhandled?.Invoke(j.Clone()); break;
                     }
                 }
                 else { Enqueue(data); }
