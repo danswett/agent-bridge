@@ -905,8 +905,9 @@ public sealed partial class SettingsViewModel : Observable
         }
         if (!result.Completed) { throw new InvalidOperationException(result.Detail); }
         // A press the host called done that left the row offering the same verb changed nothing the
-        // bridge can see; say so instead of a success the row contradicts (#1473).
-        if (!remove && verb is not null && gone == hostsGone && Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb == verb)
+        // bridge can see; say so instead of a success the row contradicts (#1473). A setup that
+        // needs a restart keeps reporting the old state until then, so that is not "nothing".
+        if (!remove && !result.RestartRequired && verb is not null && gone == hostsGone && Agents.FirstOrDefault(a => a.Id == agent)?.SetUpVerb == verb)
         {
             Note(agent, new(AgentWords.SetupChangedNothing(verb), Tone.Warn));
         }

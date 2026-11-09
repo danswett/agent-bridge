@@ -301,12 +301,6 @@ public sealed class SettingsTests : IAsyncLifetime
         return new SettingsResult(saved, false);
     });
 
-    // What a host reports once setup has registered the hooks, and no session has run them yet.
-    static AgentReadinessReport SetUp(AgentReadinessReport report) => report with
-    {
-        Agents = [.. report.Agents.Select(a => a with { Hooks = new(ReadinessState.Unknown, RecordIntakeOn), HookSetup = HookSetupState.Completed })],
-    };
-
     static AgentReadinessReport Readiness(string version) => new(Make.T0,
     [
         new("claude", "Claude", "fixture-home", "claude.exe", version,
@@ -676,7 +670,7 @@ public sealed class SettingsTests : IAsyncLifetime
         // last status event to arrive is this one, with 2.3.4 in it.
         host.On(HostOps.AgentsRefresh, _ =>
         {
-            host.Status = host.Status with { Agents = SetUp(Readiness("2.3.4")) };
+            host.Status = host.Status with { Agents = Readiness("2.3.4") };
             return new AgentBridge.Transport.ChannelReply(host.Status.Agents!, ch => host.SendAsync(HostOps.StatusEvent, host.Status));
         });
 
@@ -1598,8 +1592,6 @@ public sealed class SettingsTests : IAsyncLifetime
         host.OnAsync(HostOps.AgentsSetup, async _ =>
         {
             await release.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
-            host.Status = host.Status with { Agents = host.Status.Agents! with { Agents = [.. host.Status.Agents.Agents.Select(a => a.Id == "claude"
-                ? a with { Hooks = new(ReadinessState.Unknown, RecordIntakeOn), HookSetup = HookSetupState.Completed } : a)] } };
             return new AgentSetupResult(true, "Registered. Start new agent sessions to verify hooks.", true);
         });
         host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
