@@ -386,12 +386,13 @@ public sealed class RelayClient : IAsyncDisposable
                             }
                             break;
                         case "registry":
-                            if (registries.TryGetValue(j.GetProperty("id").GetInt64(), out var r))
+                            if (j.TryGetProperty("id", out var rid) && rid.TryGetInt64(out var rkey) && registries.TryGetValue(rkey, out var r))
                             {
                                 if (j.TryGetProperty("error", out var rerr)) { r.Done.TrySetException(new InvalidOperationException(rerr.GetString())); }
                                 else if (j.TryGetProperty("known", out _)) { r.Done.TrySetResult(r.Machines); }
                                 else { r.Machines.Add(j.Clone()); }
                             }
+                            else { Unhandled?.Invoke(j.Clone()); }
                             break;
                         default: Unhandled?.Invoke(j.Clone()); break;
                     }
