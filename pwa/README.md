@@ -317,11 +317,11 @@ as unconfirmed rather than sent again. Outcomes:
 | `unconfirmed`, or one this app doesn't know | Sent, but not confirmed. Check the conversation. | Final; nothing offers to send it again. Once its question has left the session's list the card keeps the question as it was asked, with *Your answer: Sent, but not confirmed…* in neutral words |
 | `unconfirmed`, stage `typed` | Typed into the prompt, but not confirmed as submitted. Check the conversation. | The same, but on a reconnect the same request is sent once more, which the host answers from the session's record without typing: delivered if it was submitted since (#467), and then it reads You answered |
 | `unconfirmed`, stage `recorded` | The session recorded something for this question, but not confirmed as this answer. Check the conversation. The reason says what it recorded, or the error. | As `typed` |
-| `stale`, with no reason code | Already answered or gone, while the question is still listed | Once the question has left the list: the question as it was asked, kept in the conversation, with **No longer waiting** in neutral words (no cause: the host cannot tell a question the agent withdrew from one answered elsewhere) |
+| `stale`, with no reason code | Already answered or gone, while the question is still listed | Once the question has left the list: the question as it was asked, kept in the conversation, with **Question closed** in neutral words (no cause: the host cannot tell a question the agent withdrew from one answered elsewhere) |
 | `stale`, code `formReset` | Not delivered: the form could not take your answer at the machine. The words typed stay, and Try again sends them as a new request while the question is listed | Once the question has left the list: the same line, neutral, with what was typed in a read-only box with Copy |
-| `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request. Once the question has left the list: **No longer waiting** |
-| `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request. Once the question has left the list: **No longer waiting** |
-| `failed` (could not send), with Try again | Couldn't send it: *reason* | Once the question has left the list: **No longer waiting**, with nothing to try again |
+| `busy` | Another answer is being delivered. Try again in a moment. | Send comes back after 2 s, as a new request. Once the question has left the list: **Question closed** |
+| `refused` | The machine refused this answer: *reason* | The form can be changed and sent, as a new request. Once the question has left the list: **Question closed** |
+| `failed` (could not send), with Try again | Couldn't send it: *reason* | Once the question has left the list: **Question closed**, with nothing to try again |
 
 A closed question stays in the conversation, through the next question and the next turn, up
 to 20 a card. Only the words of an answer the person gave (in flight, or that may have gone in)
