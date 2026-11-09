@@ -441,7 +441,10 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);
 }
 .machine.offline { background: none; border-style: dashed; }
-.machine.selected { background: var(--ab-selected); }
+/* The selected tint is on the block, not the row, so a refusal line under it stays on the row's surface (#858). */
+.machine-block { border-radius: inherit; }
+.machine.selected > .machine-block { background: var(--ab-selected); }
+.machine-block:has(~ .machine-error) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .machine.selected::before {
   content: ""; position: absolute; left: -1px; top: var(--ab-space-4); width: 3px; height: 16px; border-radius: 2px; background: var(--ab-bridge);
 }
@@ -482,6 +485,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .machine-actions { display: flex; flex-wrap: wrap; gap: var(--ab-space-2); margin-top: var(--ab-space-2); }
 .machine-update > .machine-actions:first-child, .machine-more > .machine-actions:first-child { margin-top: 0; }
 .machine-error { margin: 0; color: var(--ab-danger-text); font-size: var(--type-meta); line-height: var(--type-meta-line); }
+.machine > .machine-error { padding: var(--ab-space-2) var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3)); }
 .machine-forget.armed { color: var(--ab-danger-text); border-color: currentColor; }
 /* Check for updates, for every machine at once: the same button, in the same column. */
 .machine-updates { list-style: none; padding: var(--ab-space-1) 0 0 calc(1px + var(--ab-space-3) + 20px + var(--ab-space-3)); }
