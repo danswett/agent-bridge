@@ -691,22 +691,30 @@ public sealed class HostManagerTests : IAsyncLifetime
         var m = QuickProbes(callTimeout: TimeSpan.FromMilliseconds(500));
         processes.Alive.Add(4242);
         var asked = 0;
+        // Held until the test ends rather than for a fixed time: on a loaded runner the call's
+        // timer can fire late, after a fixed sleep had already let the answer through, and the
+        // stop then went on asking until its wait ran out ("nothing was stopped: ... after 5 s").
+        using var release = new ManualResetEventSlim();
         host.On(HostOps.ProbeHold, d =>
         {
             if (Interlocked.Increment(ref asked) == 2)
             {
                 if (pipeGone) { _ = Task.Run(host.StopAsync); }
-                else { Thread.Sleep(TimeSpan.FromSeconds(2)); }
+                else { release.Wait(TimeSpan.FromSeconds(60)); }
             }
             return Finishing;
         });
         host.Start();
 
-        var e = await Assert.ThrowsAsync<HostBusyException>(() => m.StopAsync());
+        try
+        {
+            var e = await Assert.ThrowsAsync<HostBusyException>(() => m.StopAsync());
 
-        Assert.StartsWith("the host could not say whether a usage probe it started is still finishing, so nothing was stopped", e.Message, StringComparison.Ordinal);
-        Assert.False(File.Exists(StopMarker));
-        Assert.Empty(host.Sent(HostOps.Stop));
+            Assert.StartsWith("the host could not say whether a usage probe it started is still finishing, so nothing was stopped", e.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(StopMarker));
+            Assert.Empty(host.Sent(HostOps.Stop));
+        }
+        finally { release.Set(); }
     }
 
     [Fact]
