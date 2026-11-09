@@ -122,6 +122,7 @@ public sealed class SessionService
 
     // diagnostics.get, through the relay only, to a device pinned as a person's (RemoteDiagnostics).
     public RemoteDiagnostics? Diagnostics { get; init; }
+    public Lite.LiteReceiver? LiteReceiver { get; init; }
 
     public SessionService(ISessionSource source, MachineInfo machine, Action<string>? log = null, ISessionAnswerer? answers = null,
         ISessionReplier? replies = null, PushNotifier? push = null, AttachmentStore? attachments = null, ISessionStopper? stops = null,
@@ -213,6 +214,8 @@ public sealed class SessionService
             // session with a command a person's device signed.
             case TransferProtocol.Op when transfers is not null && channel is SecureChannel secure:
                 return await transfers.ServeAsync(secure, data);
+            case Lite.LiteReceiver.Op when LiteReceiver is not null && channel is SecureChannel secure:
+                return await LiteReceiver.ServeAsync(secure, data, CancellationToken.None);
             // A person's device through the relay, with a command it signed. Never this machine's
             // pipe, which agents and the MCP server reach, nor the Home Assistant connector.
             case TrustProtocol.Answer when TrustAnswers is not null && channel is SecureChannel secure:

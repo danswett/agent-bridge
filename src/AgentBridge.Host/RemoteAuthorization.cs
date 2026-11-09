@@ -8,7 +8,7 @@ namespace AgentBridge.Host;
 public sealed class RemoteAuthorization : IDisposable
 {
     static readonly HashSet<string> Reads = [Ops.Hello, Ops.SessionsList, Ops.SessionGet, Ops.SessionsSubscribe];
-    static readonly HashSet<string> HostOperations = [Ops.Hello, UsageProtocol.Get, TransferProtocol.Op];
+    static readonly HashSet<string> HostOperations = [Ops.Hello, UsageProtocol.Get, TransferProtocol.Op, Lite.LiteReceiver.Op];
     static readonly HashSet<string> PersonOperations =
     [
         .. Reads, Ops.SessionsFocus, Ops.SessionAnswer, Ops.SessionReply, Ops.SessionStop,
