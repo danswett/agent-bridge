@@ -171,6 +171,10 @@ session replaces its old one, so a resumed session's old token is dead. This sli
 holds a credential; what each scope may do, and minting at launch, follow in later slices. Until
 then an agent connection is refused the acting ops exactly as before.
 
+### `fleet.list` and `fleet.find`
+
+Agent-only reads of the account's cross-machine session list, on a connection that has passed `agent.hello` with at least the `read` scope. Described in [agent-operations.md](agent-operations.md).
+
 ### `agent.send` (AP5-lite)
 
 Windows only, pipe only, and only on a connection that has passed `agent.hello`. Any other

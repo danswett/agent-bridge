@@ -29,6 +29,7 @@ public static class LocalApi
     {
             if (op == AgentBridge.Host.Lite.LiteAgentSend.Op) { return await AgentBridge.Host.Lite.LiteAgentSend.HandleAsync(credentials, lite, channel, data); }
             if (op == AgentBridge.Host.Fleet.FleetList.Op) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).HandleAsync(channel, data); }
+            if (op == AgentBridge.Host.Fleet.FleetList.FindOp) { return await (fleet ?? new AgentBridge.Host.Fleet.FleetList(credentials, null)).FindAsync(channel, data); }
             // Pipe only, and Windows only for now (§3.4): a relay channel never reaches this handler.
             if (op == AgentProtocol.Hello)
             {
