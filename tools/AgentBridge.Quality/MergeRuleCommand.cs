@@ -542,8 +542,15 @@ static class MergeRuleCommand
             || root.GetProperty("total_commits").GetInt32() != commits.GetArrayLength())
             return $"{config.Base}'s commits after CI {MergeRule.Short(sha)} can't all be listed: waiting for {config.Base}'s CI";
         var after = commits.EnumerateArray().Select(c => c.GetProperty("sha").GetString() ?? "").ToList();
+        // A first attempt still queued or running is found, not red: the verdict follows its
+        // finishing (merge-rule runs on that event). Judging only on completion left every armed
+        // pull request failed for the length of a CI run after each merge to main.
+        static bool Pending(JsonElement run) =>
+            run.GetProperty("status").GetString() is "queued" or "in_progress" or "waiting" or "requested" or "pending"
+            && !(run.TryGetProperty("run_attempt", out var a) && a.ValueKind == JsonValueKind.Number && a.GetInt32() > 1);
         string? Red(JsonElement run) =>
             after.Contains(run.GetProperty("head_sha").GetString() ?? "", StringComparer.Ordinal)
+            && !Pending(run)
             && !(run.GetProperty("status").GetString() == "completed" && run.GetProperty("conclusion").GetString() == "success")
                 ? $"{config.Base}'s CI hasn't passed on {MergeRule.Short(run.GetProperty("head_sha").GetString() ?? "")}, a commit after CI {MergeRule.Short(sha)}: waiting for {config.Base} to be green"
                 : null;

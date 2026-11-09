@@ -21,7 +21,9 @@ name: Merge rule
 #    hand, is required by nothing else); finished, so a late red flips it. A test keeps the list
 #    complete. That includes the review relay in merge-rule-review.yml: pull_request_review runs
 #    the pull request's copy of a workflow, which mustn't post statuses. And CI's push run on main
-#    finishing, so every verdict follows main going red or green again (main_green).
+#    being requested, started and finished, so every verdict follows main going red or green
+#    again (main_green); a queued or running run counts as found, which ends the window where a
+#    judgement made seconds after a merge saw no run yet and held every pull request until it ended.
 #  - check_suite: a check from an app other than GitHub Actions finished (code
 #    scanning's CodeQL). Actions' own suites start no check_suite workflow, hence workflow_run.
 #  - schedule and workflow_dispatch: a backstop for anything the events missed. That includes
@@ -60,11 +62,12 @@ jobs:
     # Main's own runs and check suites (pushes, the weekly CodeQL, a dispatch on main) start no
     # evaluation: no pull request's head is on main. But a push run of CI finishing on main does:
     # main going red fails every pull request (but a fixes-main one), and going green again frees
-    # them (quality/merge-rule.yml, main_green). Every other completion does too, whatever its
+    # them (quality/merge-rule.yml, main_green). So does one being requested or started: the
+    # evaluator counts a queued or running run as found. Every other completion does too, whatever its
     # event: Perf dispatched on a pull request's branch counts toward the verdict too.
     if: >-
       (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch != 'main' || github.event.workflow_run.head_repository.full_name != github.repository
-      || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push' && github.event.action == 'completed'))
+      || (github.event.workflow_run.name == 'CI' && github.event.workflow_run.event == 'push'))
       && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
       && (github.event_name != 'status' || github.event.context != 'merge-rule')
     runs-on: ubuntu-latest
