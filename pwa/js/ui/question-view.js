@@ -184,7 +184,7 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
 // A question its session no longer lists, kept as it was asked: the item that stays in the
 // conversation once the cause of an amber or red line is gone (ui.md §7, "Lines that outlive
 // their cause"). Read-only, with no options chosen for the person: an approval shows its message
-// alone. The line under it (NO_LONGER_WAITING) is the card's.
+// alone. The line under it (QUESTION_CLOSED) is the card's.
 //
 // It is collapsed: the record (who asked, the question, the options as plain text with what was
 // answered marked) is hidden behind one button, "Show question" or "Hide question", and the card's
@@ -307,7 +307,7 @@ export function describeAnswer(entry, machineName, { question = null, stalled = 
 // What a question that has left its session's list says of an answer that did not go through. The
 // host cannot tell a question the agent withdrew from one answered elsewhere, so this is one
 // neutral closed state and no cause is promised (ui.md §7).
-export const NO_LONGER_WAITING = 'Question closed';
+export const QUESTION_CLOSED = 'Question closed';
 
 // describeAnswer for an answer whose question is no longer asked: an answer that was not sent, was
 // refused or came too late is only "No longer waiting" (tone closed, never amber or red); one that
@@ -316,7 +316,7 @@ export const NO_LONGER_WAITING = 'Question closed';
 export function describeClosed(entry, machineName, opts) {
   const d = describeAnswer(entry, machineName, opts);
   const gone = entry.state === 'failed' || (entry.state === 'done' && (['busy', 'refused'].includes(entry.outcome) || (entry.outcome === 'stale' && d.key !== 'notDelivered')));
-  if (gone) { return { key: 'closed', text: NO_LONGER_WAITING, more: null, tone: 'closed', line: true, speech: NO_LONGER_WAITING }; }
+  if (gone) { return { key: 'closed', text: QUESTION_CLOSED, more: null, tone: 'closed', line: true, speech: QUESTION_CLOSED }; }
   // Words the host gave a reason for, or that may have gone in, are kept, neutral.
   if (d.key === 'unconfirmed' || d.key === 'notDelivered') { return { ...d, tone: 'closed' }; }
   return d;

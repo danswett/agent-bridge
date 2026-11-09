@@ -3090,7 +3090,7 @@ line does:
 - **A closed line stays at least 5 s** (`LINGER_READ_MS`, as an entry in the Needs you lane,
   §6.1), so it can be read, and then goes unless it is part of the conversation (below).
 - **A question that has left the session's list** is shown as the question as it was asked, kept
-  in the conversation, with "Question closed" in neutral words (§6.4, Resolved): never amber,
+  in the conversation, with "No longer waiting" in neutral words (§6.4, Resolved): never amber,
   never red, never Try again, and never "Your answer:" (only the words of an answer the person
   gave say that: one in flight, or one that may have gone in). It stays through the next question
   and the next turn. The host cannot tell a question the agent withdrew from one answered at
@@ -3126,7 +3126,7 @@ they are un-parked.
 **Windows (WinUI 3):**
 - **Lines that outlive their cause (#1193, #1195):** an error or warning line lasts only
   while its cause stands. When the question it was about closes, a refused, stale or failed
-  answer line becomes the neutral "Question closed" (no tone, never prefixed "Your answer:"),
+  answer line becomes the neutral "No longer waiting" (no tone, never prefixed "Your answer:"),
   is kept 5 s so it can be read, then goes; a busy line goes with its 2 s pause. A held
   answer ("offline", the machine was not connected so nothing was sent) says why it could not
   go, so it is treated like a refused one. Only delivered and unconfirmed ("Sent, but not
@@ -3323,7 +3323,7 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
     prompt", "same as last time", "Show prompt" and "Hide prompt". Never "your message".
 - **Attention words (#253):** "Needs you · N", "Showing N of M", "N on *machine*", "N more on
   other machines", "Nothing else needs you"; on a question, "Main agent asked", "You
-  answered", "Question closed" and "Answer at the machine"; in Tools and the delegate
+  answered", "No longer waiting" and "Answer at the machine"; in Tools and the delegate
   inspector, "Waiting on you" and "Asks you". "Answered" only for an answer this device sent
   and the host confirmed.
 - **Answer words (#773):** "Send answer" (sentence case on every client, Apple included),

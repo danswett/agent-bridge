@@ -145,7 +145,7 @@ export class NeedsYouLane {
         // The lane's line keeps the receipt's quiet window, dwell and stalls, as the card's does.
         view.receipt = new ReceiptClock({
           // Amber while its question is listed; once the question has gone (lingering) the line is the
-          // closed one, neutral: "No longer waiting", never amber (ui.md §7).
+          // closed one, neutral: "Question closed", never amber (ui.md §7).
           describe: (entry, { stalled }) => (view.lingering ? describeClosed : describeAnswer)(entry, this.machine(view.entry.hostId).name, { question: view.entry.question, stalled }),
           followDescribe: (entry, { stalled }) => describeClosed(entry, this.machine(view.entry.hostId).name, { question: view.entry.question, stalled }),
           draw: (d) => {
