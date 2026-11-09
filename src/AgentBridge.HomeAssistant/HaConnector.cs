@@ -396,6 +396,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             await Step("answers", () => AnswersAsync(now, cancellationToken));
             await Step("buttons", () => ButtonsAsync(now, cancellationToken));
             await Step("signin", () => SignInAsync(now, cancellationToken));
+            await Step("stuck", () => StuckAsync(now, cancellationToken));
             await Step("finished", () => FinishedAsync(now, cancellationToken));
             await Step("launch", () => LaunchAsync(now, cancellationToken));
             await Step("update", () => UpdatesAsync(now, cancellationToken));

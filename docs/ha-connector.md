@@ -808,7 +808,7 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
     own delivery, never sooner, and a failing service is logged once until it works. Once the need
     is over, what was delivered is forgotten at once, even while a withdrawal is still being
     retried, so a need that comes back is told everywhere again.
-  * An error and Not responding send nothing. They show on the status only, as on the clients.
+  * Not responding, and the Copilot wedge the host recognised (`AgentErrors.HostWedgeMessage`), send a "looks stuck" notice (#687) at once to the same phones and push service as a sign-in notice: one per stuck episode, tagged `bridge_stuck_<slug>_<digest of the session id>`, withdrawn when the session takes a new event or acknowledgement, never over an open question, and each notice and withdrawal is written to the host log. Only the wedge is said to not recover by itself. A session that gets stuck again within `SignInRepeat` of its last notice is not told again, and a `FAULT` line says so (a flood guard, not a timer on the decision). The notice moves to the Slipgates push path when #1396 retires this connector. It restarts nothing; the owner follows [runbooks/stuck-session.md](runbooks/stuck-session.md). Other errors (rate limit, authorisation, quota) show on the status only, as on the clients.
 
 Where stage 5b knowingly differs from the daemon:
 

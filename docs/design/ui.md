@@ -2783,8 +2783,8 @@ never adds a count to it; the count, and for Home Assistant the sessions' names,
 - **What sends today:** only sign-in pushes from the host (#928): one per (machine, agent,
   account), as soon as the first session needs it and again at most hourly while any still
   does. Home Assistant sends the same sign-in notice to the phones its answer buttons go to.
-  Not responding, Not authorised, Rate limited and Agent error get no push of their own; the
-  row says them, and Home Assistant shows them as the session's status, as shipped.
+  Not authorised and Rate limited get no push of their own; the row says them, and Home Assistant
+  shows them as the session's status, as shipped. Not responding, and the Copilot wedge the host recognised, send a "looks stuck" notice from Home Assistant (#687) on the first evidence: one per stuck episode, withdrawn when the session takes a new event, never over an open question (a flood guard logs a fault if it ever suppresses one; it moves to the Slipgates push path with #1396) ([runbooks/stuck-session.md](../runbooks/stuck-session.md)).
 - **Sound:** the question sound (owner decision, 2026-11-04, extending #764). A sign-in blocks
   every session on that machine, agent and account, as a question does. The hourly limit keeps
   it from nagging. The payload does not set `notification.silent`.
