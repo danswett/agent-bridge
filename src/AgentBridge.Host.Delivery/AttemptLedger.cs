@@ -566,7 +566,9 @@ public sealed class AttemptLedger
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".");
-            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            // The temporary file too: a scanner that has just seen it written holds it as it does the
+            // ledger (#1237), and a refused save leaves the next request to a failed read.
+            using (var stream = Transient(() => new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough)))
             {
                 JsonSerializer.Serialize(stream, new FileData(Version, claims, receipts));
                 stream.Flush(flushToDisk: true);

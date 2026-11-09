@@ -239,6 +239,26 @@ public class AttemptLedgerTests
         Assert.Equal(AnswerOutcome.Unconfirmed, new AttemptLedger(path).Outcome(request)!.Outcome);
     }
 
+    // #1237: the same scanner on the temporary file the ledger is written through refused a later
+    // request "couldn't deliver it".
+    [Fact]
+    public void A_ledger_temporary_file_held_open_for_a_moment_is_written_once_it_is_let_go()
+    {
+        using var f = new Fixture();
+        var path = Path.Combine(f.Root, "profile", "answer-attempts.json");
+        var request = Guid.NewGuid();
+        var ledger = new AttemptLedger(path);
+        Assert.Null(ledger.Claim("first", Guid.NewGuid()));
+
+        using var hold = new FileStream(path + ".tmp", FileMode.Create, FileAccess.Write, FileShare.None);
+        var letGo = new Thread(() => { Thread.Sleep(100); hold.Dispose(); });
+        letGo.Start();
+        Assert.Null(ledger.Claim("second", request));
+        letGo.Join();
+
+        Assert.Equal(AnswerOutcome.Unconfirmed, new AttemptLedger(path).Outcome(request)!.Outcome);
+    }
+
     [Fact]
     public void A_transient_write_failure_recovers_once_the_obstruction_clears_and_keeps_earlier_claims()
     {
