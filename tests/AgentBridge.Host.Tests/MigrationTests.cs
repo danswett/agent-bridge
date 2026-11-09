@@ -789,7 +789,9 @@ public sealed class MigrationTests : MigrationFixture
         Directory.Delete(SpoolContract.SpoolDirectory(_f.Runtime), true);
         File.WriteAllText(SpoolContract.SpoolDirectory(_f.Runtime), "not a folder");
 
-        var report = await _f.Migrator(verify: TimeSpan.FromSeconds(2)).MigrateAsync(dryRun: false);
+        // The default timeout: the only wait it bounds here is the host starting, which a busy runner
+        // can take more than 2 s over (#1456); the spool cannot be watched, so the check fails at once.
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
 
         Assert.False(report.Ok);
         Assert.Contains("the installed hook did not spool its event", report.ToString());
