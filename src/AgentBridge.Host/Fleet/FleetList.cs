@@ -25,10 +25,16 @@ public sealed class RelayFleetRoster : IFleetRoster
     public async Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct)
     {
         var current = Volatile.Read(ref relay) ?? throw new InvalidOperationException("refused: this host isn't connected to the relay");
+        return Parse(await current.RegistryGetAsync(ct));
+    }
+
+    // A machine with no fresh record (offline or quiet) has no sessions to list; a frame without a machine is skipped.
+    public static IReadOnlyList<FleetMachine> Parse(IEnumerable<JsonElement> frames)
+    {
         var machines = new List<FleetMachine>();
-        foreach (var f in await current.RegistryGetAsync(ct))
+        foreach (var f in frames)
         {
-            if (f.GetProperty("machine").GetString() is not { } id) { continue; }
+            if (!f.TryGetProperty("machine", out var m) || m.GetString() is not { } id) { continue; }
             var sessions = new List<FleetSession>();
             if (f.TryGetProperty("record", out var rec) && rec.ValueKind == JsonValueKind.Object && rec.TryGetProperty("sessions", out var list) && list.ValueKind == JsonValueKind.Array)
             {

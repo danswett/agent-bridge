@@ -77,6 +77,39 @@ public sealed class FleetListTests : IDisposable
         Assert.Equal([AgentProtocol.Principal("machine1", "sess-1")], audited);
     }
 
+    [Fact]
+    public async Task A_read_reply_credential_is_accepted_and_the_local_api_routes_fleet_list()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var handler = LocalApi.Handler(null!, null!, null!, null, null, store, null, Op());
+        var json = JsonSerializer.Serialize(await handler(Hello(AgentProtocol.ScopeReadReply), FleetList.Op, Body("{}")), Web);
+        Assert.Contains("\"node\":\"n1\"", json);
+        var bare = LocalApi.Handler(null!, null!, null!, null, null, store, null);
+        var e = await Assert.ThrowsAsync<InvalidOperationException>(() => bare(Hello(AgentProtocol.ScopeRead), FleetList.Op, Body("{}")));
+        Assert.StartsWith("refused:", e.Message);
+    }
+
+    [Fact]
+    public void Parsing_skips_a_frame_without_a_machine_and_lists_no_sessions_for_an_offline_machine()
+    {
+        var frames = new[]
+        {
+            """{"t":"registry","id":2,"name":"x","online":true,"record":null}""",
+            """{"t":"registry","id":2,"machine":"off","online":false,"record":null}""",
+            """{"t":"registry","id":2,"machine":"on","online":true,"record":{"sessions":[{"id":"a","node":"n","name":"p","state":"idle","since":"2026-11-07T12:00:00Z"}]}}""",
+        }.Select(Body).ToList();
+        var parsed = RelayFleetRoster.Parse(frames);
+        Assert.Equal(["off", "on"], parsed.Select(m => m.Id));
+        Assert.Empty(parsed[0].Sessions);
+        Assert.Equal("idle", Assert.Single(parsed[1].Sessions).State);
+    }
+
+    [Fact]
+    public async Task A_roster_with_no_relay_refuses_at_once()
+    {
+        var e = await Assert.ThrowsAsync<InvalidOperationException>(() => new RelayFleetRoster().ReadAsync(default));
+        Assert.Contains("isn't connected to the relay", e.Message);
+    }
     static string[] Names(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("sessions")[0].EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal).ToArray();
 

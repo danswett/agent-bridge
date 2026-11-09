@@ -201,6 +201,18 @@ public sealed class RosterFieldsTests
     }
 
     [Fact]
+    public async Task RegistryGetAsync_returns_the_machines_then_a_second_read_inside_two_seconds_is_refused_readably()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        await using var host = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "dev-box", "host");
+        Assert.Null(await new Wirer(host).PutAsync(host, Record(host.Id)));
+        var machines = await host.Relay.RegistryGetAsync(CancellationToken.None);
+        Assert.Equal("dev-box", Assert.Single(machines).GetProperty("name").GetString());
+        var e = await Assert.ThrowsAsync<InvalidOperationException>(() => host.Relay.RegistryGetAsync(CancellationToken.None));
+        Assert.StartsWith("refused:", e.Message);
+        Assert.Contains("try again in a few seconds", e.Message);
+    }
+    [Fact]
     public async Task A_machine_that_leaves_is_not_online_and_one_that_goes_quiet_for_a_minute_loses_its_record()
     {
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);

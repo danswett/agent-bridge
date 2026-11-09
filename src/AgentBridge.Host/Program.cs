@@ -895,6 +895,7 @@ async Task<int> ServeAsync(HostHandover handover)
             relayBlobs.Attach(null);
             transfers.Attach(null, null);
             liteLink.Attach(null, null);
+            fleetRoster.Attach(null);
             usagePeers?.Attach(null, null);
             trustAnswers.Attach(null);
             escapedApprovals.Attach(null);

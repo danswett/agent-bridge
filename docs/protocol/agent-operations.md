@@ -17,6 +17,6 @@ Operations an agent calls on the local pipe after `agent.hello`, on its own cred
 
 - Only the caller's own account is listed; the relay sends no other account's machines, and the request carries no account or principal.
 - Only those fields come back: no prompt or question text, paths or tokens. `name` is a person's text, so it is returned only with `include: "content"`.
-- A machine that is offline or has not reported lately shows `machineOnline: false` and no sessions.
+- A machine that is offline or has not reported lately has no fresh record, so its sessions are not listed (`machineOnline` is true for every row returned).
 - Each accepted call invokes the `AuditFleetList` hook with the agent's principal. It records nothing until the audit log (#1401) is assigned to it.
 - Reads the relay registry (see [roster.md](roster.md)); needs a relay connection.

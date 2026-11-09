@@ -388,7 +388,7 @@ public sealed class RelayClient : IAsyncDisposable
                         case "registry":
                             if (j.TryGetProperty("id", out var rid) && rid.TryGetInt64(out var rkey) && registries.TryGetValue(rkey, out var r))
                             {
-                                if (j.TryGetProperty("error", out var rerr)) { r.Done.TrySetException(new InvalidOperationException(rerr.GetString())); }
+                                if (j.TryGetProperty("error", out var rerr)) { r.Done.TrySetException(new InvalidOperationException(rerr.GetString() == "slow-down" ? "refused: the relay allows one registry read every 2 seconds; try again in a few seconds" : "refused: " + rerr.GetString())); }
                                 else if (j.TryGetProperty("known", out _)) { r.Done.TrySetResult(r.Machines); }
                                 else { r.Machines.Add(j.Clone()); }
                             }
