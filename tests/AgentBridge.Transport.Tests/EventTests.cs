@@ -10,9 +10,9 @@ namespace AgentBridge.Transport.Tests;
 public class EventTests
 {
     // A host and a client with one open channel, and the host's end of it.
-    static async Task<(TestRelay Relay, Device Host, SecureChannel AtHost, SecureChannel AtClient)> ChannelAsync(Action<ChannelHub>? configureClient = null)
+    static async Task<(TestRelay Relay, Device Host, SecureChannel AtHost, SecureChannel AtClient)>     ChannelAsync(Action<ChannelHub>? configureClient = null, Action<AgentBridge.Relay.RelayOptions>? configureRelay = null)
     {
-        var relay = await TestRelay.StartAsync();
+            var relay = await TestRelay.StartAsync(configureRelay);
         var token = relay.TokenFor(1, "octo");
         var host = await relay.ConnectAsync(token, "host", "host");
         var client = await relay.ConnectAsync(token, "client", "pwa");
@@ -60,10 +60,15 @@ public class EventTests
         Assert.Equal(("session.remove", 1L), (other[0].Name, other[0].Seq));
     }
 
+    const int RelayLimit = 100_000;
+
     [Fact]
     public async Task Events_sent_from_many_threads_interleave_with_concurrent_requests_and_every_response_finds_its_request()
     {
-        var (relay, _, atHost, atClient) = await ChannelAsync();
+        // The relay's frame limit is covered by the pacing tests below. At its default 200 a
+        // runner that starves the relay's read loop for a second reads the host's paced frames
+        // in one fixed window, goes over, and closes the host mid-send (#1157).
+        var (relay, _, atHost, atClient) = await ChannelAsync(configureRelay: o => o.MaxFramesPerSecond = RelayLimit);
         await using var __ = relay;
         const int Events = 400, Requests = 100;
 
