@@ -343,6 +343,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 }
 .pane-divider[data-pane="list"] { left: calc(var(--list-w) - var(--divider-hit) / 2); }
 .pane-divider::before { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1.5px); width: 3px; background: transparent; }
+/* For the length of a drag no pane takes a selection (iPad Safari flickers one across them). */
+[data-pane-dragging], [data-pane-dragging] * { -webkit-user-select: none; user-select: none; }
 .pane-divider:hover::before { background: var(--ab-stroke2); }
 .pane-divider:focus-visible::before, .pane-divider[data-dragging]::before { background: var(--ab-bridge); }
 .pane-divider:focus-visible { outline: none; }

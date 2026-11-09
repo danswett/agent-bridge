@@ -21,6 +21,8 @@ export class PaneDividers {
     this.shownNow = { list: this.widths.list, inspector: 0 };
     for (const which of ['list', 'inspector']) { this.#wire(which); }
     this.win.addEventListener?.('resize', () => this.refresh());
+    // A drag must not start or change a selection in the panes either side of it (iPad Safari).
+    (root.ownerDocument ?? this.win.document)?.addEventListener?.('selectstart', (e) => { if (root.dataset.paneDragging) { e.preventDefault(); } });
     if (typeof this.win.ResizeObserver === 'function') { new this.win.ResizeObserver(() => this.refresh()).observe(root); }
     this.refresh();
   }
@@ -69,6 +71,8 @@ export class PaneDividers {
       drag = { id: e.pointerId, x: e.clientX, from: this.shownNow[which], width: this.shownNow[which], moved: false, kept: this.widths.kept(which) };
       el.setPointerCapture?.(e.pointerId);
       el.dataset.dragging = 'true';
+      this.root.dataset.paneDragging = 'true';
+      this.win.getSelection?.()?.removeAllRanges();
       e.preventDefault();
     });
     el.addEventListener('pointermove', (e) => {
@@ -84,6 +88,7 @@ export class PaneDividers {
       const { moved } = drag0;
       drag = null;
       delete el.dataset.dragging;
+      delete this.root.dataset.paneDragging;
       el.releasePointerCapture?.(e.pointerId);
       if (moved) {
         tap = null;
@@ -103,6 +108,7 @@ export class PaneDividers {
       const { moved, kept } = drag;
       drag = null;
       delete el.dataset.dragging;
+      delete this.root.dataset.paneDragging;
       el.releasePointerCapture?.(e.pointerId);
       // The drag never happened: no queued frame may commit its width, and the one before shows again.
       // The drag never happened: no queued frame may commit its width, and the one before shows again.
