@@ -92,6 +92,17 @@ public sealed class LaunchServiceOptions
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
+    // The whole of one launch.options call, measured from its start. Each resumable session's folder
+    // is checked one at a time and a git check can take 30 s, so without it the call outlasted a
+    // client's 90 s deadline and the Launch form never loaded. Sessions not checked by then are left out.
+    public TimeSpan OptionsBudget { get; init; } = TimeSpan.FromSeconds(60);
+
+    // Test-only: runs before each folder is checked, where a test holds the pass as a stuck git would.
+    internal Action<string?, CancellationToken>? BeforeFolderCheck { get; init; }
+
+    // Test-only: runs when a pass ends, however it ends.
+    internal Action? PassEnded { get; init; }
+
     // Folders no session is launched in (Folders.IsSystemDirectory). Temp is one, which is
     // where tests keep their workspaces, so they replace it.
     public Func<string, bool> IsSystemDirectory { get; init; } = Folders.IsSystemDirectory;
@@ -259,15 +270,26 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // ---- launch.options ----
 
-    public async Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => (await ResolveAsync(cancellationToken, cached: true)).Options;
+    public async Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => (await OptionsResolvedAsync(cancellationToken)).Options;
+
+    // OptionsAsync with what was left out kept on the result (client-visible disclosure is #95 S2 to S4).
+    internal async Task<Resolved> OptionsResolvedAsync(CancellationToken cancellationToken = default)
+    {
+        using var budget = new CancellationTokenSource(options.OptionsBudget, options.Time);
+        return await ResolveAsync(cancellationToken, cached: true, budget.Token);
+    }
+
+    // Resumable sessions left out because their folders were not checked in time.
+    internal sealed record Omission(int Count, string Reason);
 
     // The options, with what a launch needs that a client is not sent: each launcher's
     // executable and each resumable session's entry.
-    sealed record Resolved(LaunchOptions Options, IReadOnlyDictionary<string, string> Executables, IReadOnlyList<ResumeEntry> Resumable);
+    internal sealed record Resolved(LaunchOptions Options, IReadOnlyDictionary<string, string> Executables, IReadOnlyList<ResumeEntry> Resumable, Omission? Omitted = null);
 
     // cached: answer from the last sessions scan without waiting for one (launch.options); a launch
     // waits for a scan, since it validates a resume against the list. Only launch.options is logged.
-    async Task<Resolved> ResolveAsync(CancellationToken ct, bool cached = false)
+    // budget: expires the folder checks of launch.options; a launch has none.
+    async Task<Resolved> ResolveAsync(CancellationToken ct, bool cached = false, CancellationToken budget = default)
     {
         var clock = TimeProvider.System;
         var phase = clock.GetTimestamp();
@@ -313,7 +335,13 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             .ToList();
 
         Lap();
-        var (entries, pending) = await ResumableAsync(executables, live, cached, ct);
+        var (entries, pending, omitted) = await ResumableAsync(executables, live, cached, ct, budget);
+        if (omitted is not null)
+        {
+            // Off the caller's path: a slow log writer must not hold the reply the budget exists to bound.
+            var line = $"launch.options: left out {omitted.Count} resumable sessions whose folders were not checked within {options.OptionsBudget.TotalSeconds:0.#} s (reason: {omitted.Reason})";
+            _ = Task.Run(() => { try { log(line); } catch (Exception e) when (e is not OutOfMemoryException) { } });
+        }
         var resumableMs = Lap();
         var resumableList = entries.Select(e => new ResumableSession
         {
@@ -352,7 +380,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             // Counts and milliseconds only, one line per call, so a slow phase can be told from a slow reply.
             log($"launch.options: lookup {lookupMs} ms ({executables.Count} launchers), profiles {profilesMs} ms, resumable {resumableMs} ms ({result.Resumable.Count} sessions, {(pending ? "scan still running" : "from the last scan")})");
         }
-        return new Resolved(result, executables, [.. entries.Select(e => e.Entry)]);
+        return new Resolved(result, executables, [.. entries.Select(e => e.Entry)], omitted);
     }
 
     // Model, effort and context for a launcher, as agent-ha-bridge's Get-BridgeTuningOptions
@@ -422,26 +450,15 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // when it has any, Copilot's own store otherwise), each once and under its own agent, with
     // the live ones left out (two CLIs on one transcript would corrupt it) and only those in
     // approved folders kept, before the list is cut to resumeCount. Newest first.
-    async Task<(List<Offered> Offered, bool Pending)> ResumableAsync(IReadOnlyDictionary<string, string> executables, IReadOnlyList<Session> live, bool cached, CancellationToken ct)
+    async Task<(List<Offered> Offered, bool Pending, Omission? Omitted)> ResumableAsync(IReadOnlyDictionary<string, string> executables, IReadOnlyList<Session> live, bool cached, CancellationToken ct, CancellationToken budget)
     {
-        if (Config.ResumeCount <= 0) { return ([], false); }
+        if (Config.ResumeCount <= 0) { return ([], false, null); }
         var (candidates, pending) = await CandidatesAsync(executables, cached, ct);
         var once = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // Approval can ask git (a worktree's top and marker), so each folder is asked once per
-        // pass, and newest first, so the older sessions past the limit are never asked about.
-        var approvals = new Dictionary<string, WorkspaceConfig?>(StringComparer.Ordinal);
-        WorkspaceConfig? ApprovedOnce(string? folder)
-        {
-            if (folder is not { Length: > 0 }) { return null; }
-            if (!approvals.TryGetValue(folder, out var w)) { approvals[folder] = w = Approved(folder); }
-            return w;
-        }
-        var eligible = candidates.Where(e => once.Add(e.Id))
+        var ordered = candidates.Where(e => once.Add(e.Id))
             .OrderByDescending(e => e.Updated ?? DateTimeOffset.MinValue)
-            .Select(e => (Entry: e, Workspace: ApprovedOnce(e.Folder)))
-            .Where(x => x.Workspace is not null)
-            .Take(KindsAmong)
             .ToList();
+        var (eligible, omitted) = await ApprovedWithinBudgetAsync(ordered, ct, budget);
         // The live list read after the hold, not the one taken before the awaits above: a session
         // that discovery found meanwhile is listed before its hold is said to clear, so a clear
         // hold here means it is in this snapshot.
@@ -471,7 +488,58 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             if (!excluded.Contains(e.Id)) { offered.Add(new Offered(e, title, workspace!.Label)); }
         }
-        return (offered, pending);
+        return (offered, pending, omitted);
+    }
+
+    // Approval can ask git (a worktree's top and marker), so each folder is asked once per pass,
+    // and newest first, so the older sessions past the limit are never asked about. The pass runs
+    // on a worker: at the budget the caller stops waiting and takes what was checked, and the
+    // worker, which checks its token before each folder and each step, starts nothing more.
+    // A session not checked is never approved. The caller's own cancellation still throws.
+    async Task<(List<(ResumeEntry Entry, WorkspaceConfig? Workspace)> Eligible, Omission? Omitted)> ApprovedWithinBudgetAsync(List<ResumeEntry> ordered, CancellationToken ct, CancellationToken budget)
+    {
+        var checkedSoFar = new List<(ResumeEntry Entry, WorkspaceConfig? Workspace)>();
+        var gate = new object();
+        var closed = false;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct, budget);
+        var token = stop.Token;
+        void Pass()
+        {
+            try { Walk(); }
+            finally { options.PassEnded?.Invoke(); }
+        }
+        void Walk()
+        {
+            var approvals = new Dictionary<string, WorkspaceConfig?>(StringComparer.Ordinal);
+            var approved = 0;
+            foreach (var e in ordered)
+            {
+                token.ThrowIfCancellationRequested();
+                options.BeforeFolderCheck?.Invoke(e.Folder, token);
+                WorkspaceConfig? w = null;
+                if (e.Folder is { Length: > 0 } folder && !approvals.TryGetValue(folder, out w)) { approvals[folder] = w = Approved(folder, token); }
+                lock (gate)
+                {
+                    if (closed) { return; }
+                    checkedSoFar.Add((e, w));
+                }
+                if (w is not null && ++approved >= KindsAmong) { return; }
+            }
+        }
+        var pass = Task.Run(Pass, CancellationToken.None);
+        // Whatever the abandoned pass ends with is of no interest to anyone.
+        _ = pass.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        var expired = false;
+        try { await pass.WaitAsync(token); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && budget.IsCancellationRequested) { expired = true; }
+        List<(ResumeEntry Entry, WorkspaceConfig? Workspace)> done;
+        lock (gate)
+        {
+            closed = true;
+            done = [.. checkedSoFar];
+        }
+        var left = ordered.Count - done.Count;
+        return ([.. done.Where(x => x.Workspace is not null).Take(KindsAmong)], expired && left > 0 ? new Omission(left, "deadline") : null);
     }
 
     // The sessions scan runs on data events, not a clock: when the host starts and whenever a
@@ -566,10 +634,12 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // isolated one; null when neither. Not a folder below a workspace: approving ~\repos
     // approved resuming every session in every repository under it, which agent-ha-bridge
     // never offered (found by the shadow comparison, #40).
-    WorkspaceConfig? Approved(string folder)
+    WorkspaceConfig? Approved(string folder, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         if (!Path.IsPathFullyQualified(folder) || Folders.Physical(folder) is not { } physical || options.IsSystemDirectory(physical)) { return null; }
-        return Folders.Exactly(Config.Workspaces, physical) ?? Worktrees.Managed(Config.Workspaces, physical)?.Workspace;
+        ct.ThrowIfCancellationRequested();
+        return Folders.Exactly(Config.Workspaces, physical) ?? Worktrees.Managed(Config.Workspaces, physical, ct)?.Workspace;
     }
 
     // ---- session.transfer, the source's half ----
