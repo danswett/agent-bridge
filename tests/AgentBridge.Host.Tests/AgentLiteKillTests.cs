@@ -255,6 +255,35 @@ public sealed class AgentLiteKillTests : IDisposable
     }
 
     [Fact]
+    public async Task A_kill_by_another_process_does_not_block_turning_the_mode_on_again()
+    {
+        var folder = NewHost("a");
+        var host = Host(folder);
+        Host(folder).Kill();
+        Assert.False(host.On);
+        TurnOn(folder);
+        Assert.True(host.On);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task The_watcher_of_a_finished_send_leaves_no_unobserved_exception()
+    {
+        var unobserved = new List<Exception>();
+        void Handler(object? s, UnobservedTaskExceptionEventArgs e) => unobserved.Add(e.Exception);
+        TaskScheduler.UnobservedTaskException += Handler;
+        try
+        {
+            var lite = Host(NewHost("a"));
+            await lite.GuardAsync("r", _ => Task.FromResult(new LiteOutcome(LiteKind.Delivered, null, "r")), default);
+            await Task.Delay(1500);
+            GC.Collect(); GC.WaitForPendingFinalizers();
+            Assert.Empty(unobserved);
+        }
+        finally { TaskScheduler.UnobservedTaskException -= Handler; }
+    }
+
+    [Fact]
     public async Task A_send_that_fails_on_its_own_is_not_reported_as_killed()
     {
         var lite = Host(NewHost("a"));

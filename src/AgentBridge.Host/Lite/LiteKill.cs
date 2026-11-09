@@ -128,11 +128,15 @@ public sealed class LiteKill : ILiteMode
         {
             if (!On) { return new LiteOutcome(LiteKind.Off, "off", request); }
             // A kill from another process is noticed within a second; On cancels the flights.
+            var token = watch.Token;
             _ = Task.Run(async () =>
             {
-                using var tick = new PeriodicTimer(TimeSpan.FromSeconds(1));
-                try { while (await tick.WaitForNextTickAsync(watch.Token)) { if (!On) { CancelFlights(); } } }
-                catch (OperationCanceledException) { }
+                try
+                {
+                    using var tick = new PeriodicTimer(TimeSpan.FromSeconds(1));
+                    while (await tick.WaitForNextTickAsync(token)) { if (!On) { CancelFlights(); } }
+                }
+                catch (Exception e) when (e is OperationCanceledException or ObjectDisposedException) { }
             });
             return await send(flight.Token);
         }
@@ -220,8 +224,8 @@ public sealed class LiteKill : ILiteMode
         var raised = Raise(n);
         if (raised && !baseline)
         {
-            // Another process killed: stop the sends in flight here too.
-            off = true;
+            // Another process killed: stop the sends in flight here too. Its own write turns the
+            // setting off, so nothing is latched and a person can turn the mode on without a restart.
             CancelFlights();
             log($"lite: kill epoch {n} seen from another process; own-agents messaging is off");
         }
