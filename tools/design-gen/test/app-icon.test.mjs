@@ -7,7 +7,8 @@ import { repoRoot } from '../generate.mjs';
 import { appIconSpec, appIconTargets, staleAppIcons, writeAppIcons, ICO_SIZES, rasterize, windowsContainer } from '../lib/app-icon.mjs';
 import { render, encodePng, decodePng, readIco, pngSize } from '../lib/raster.mjs';
 
-const scratch = path.join(repoRoot, 'tools', 'design-gen', '.scratch', 'app-icon');
+// Per process: two runs in one checkout (#565) deleted each other's scratch folder.
+const scratch = path.join(repoRoot, 'tools', 'design-gen', '.scratch', `app-icon-${process.pid}`);
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
 // design/ in a copy the test may change, with the app icon generated into it.

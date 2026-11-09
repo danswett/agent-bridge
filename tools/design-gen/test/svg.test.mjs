@@ -6,7 +6,8 @@ import { parseXml, parsePathData, formatCommands, readDesignSvg, parts } from '.
 import { repoRoot } from '../generate.mjs';
 import { spriteSvg } from '../lib/emit-pwa.mjs';
 
-const scratch = path.join(repoRoot, 'tools', 'design-gen', '.scratch', 'svg');
+// Per process: two runs in one checkout (#565) deleted each other's scratch folder.
+const scratch = path.join(repoRoot, 'tools', 'design-gen', '.scratch', `svg-${process.pid}`);
 function svgFile(name, body, root = 'viewBox="0 0 16 16"') {
   mkdirSync(scratch, { recursive: true });
   const f = path.join(scratch, `${name}.svg`);
