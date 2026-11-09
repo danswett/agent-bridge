@@ -163,19 +163,25 @@ public static class Worktrees
     // sessions there for resume, and a machine moved off it would otherwise lose them; they are
     // still never counted, locked or removed here (IsManaged). Returns that workspace and the
     // worktree's top folder.
-    public static (WorkspaceConfig Workspace, string Worktree)? Managed(IReadOnlyList<WorkspaceConfig> workspaces, string folder)
+    public static (WorkspaceConfig Workspace, string Worktree)?     Managed(IReadOnlyList<WorkspaceConfig> workspaces, string folder, CancellationToken ct = default)
     {
         if (!workspaces.Any(w => w.Isolate)) { return null; }
+            // Checked before each filesystem or git step, so a pass launch.options has stopped waiting for starts nothing more.
+            ct.ThrowIfCancellationRequested();
         var physical = Folders.Physical(folder);
         if (physical is null) { return null; }
+            ct.ThrowIfCancellationRequested();
         var top = Git.Run(physical, ["rev-parse", "--show-toplevel"]);
         if (!top.Ok || Folders.Physical(top.Output.Trim()) is not { } worktree || !(IsManaged(worktree) || IsAgentHaBridges(worktree))) { return null; }
+            ct.ThrowIfCancellationRequested();
         var common = CommonDir(worktree);
         if (common is null) { return null; }
         foreach (var w in workspaces.Where(w => w.Isolate))
         {
+                ct.ThrowIfCancellationRequested();
             var wsTop = Git.Run(w.Path, ["rev-parse", "--show-toplevel"]);
             if (!wsTop.Ok || Folders.Physical(wsTop.Output.Trim()) is not { } repository || Folders.Physical(w.Path) is not { } wsDir) { continue; }
+                ct.ThrowIfCancellationRequested();
             if (CommonDir(repository) is not { } wsCommon || !Folders.Same(wsCommon, common)) { continue; }
             var relative = Path.GetRelativePath(repository, wsDir);
             var scope = relative == "." ? worktree : Path.GetFullPath(Path.Combine(worktree, relative));
