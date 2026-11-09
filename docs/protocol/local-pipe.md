@@ -171,6 +171,32 @@ session replaces its old one, so a resumed session's old token is dead. This sli
 holds a credential; what each scope may do, and minting at launch, follow in later slices. Until
 then an agent connection is refused the acting ops exactly as before.
 
+### `agent.send` (AP5-lite)
+
+Windows only, pipe only, and only on a connection that has passed `agent.hello`. Any other
+caller (a plain pipe client, a connector, the HTTP MCP server, a script) is refused with
+`refused: agent.send is for an agent connection that has passed agent.hello`. The sender is
+always the connection's credential: any `principal` or other extra field in the request is
+ignored.
+
+```json
+{ "id": 2, "op": "agent.send", "data": { "machine": "<machine>", "session": "<session id>", "text": "..." } }
+```
+
+All three are required; `text` is at most 4096 characters (longer is refused before anything is
+sent). The host hands it to the AP5-lite sender, which answers
+`{ "outcome", "code", "request" }`:
+
+| `outcome` | Meaning | Caller |
+|---|---|---|
+| `delivered` | the target host typed it into the session | done |
+| `refused` | the target refused; `code` is its reason (`notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, ...) | fall back to Home Assistant on `notReplyTarget` or `busy` |
+| `undeliverable` | no channel to the target; **the message was not queued anywhere** and is never retried | fall back to Home Assistant |
+| `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
+| `off` | the mode is off, killed, or the peer isn't pinned; no channel was opened | fall back to Home Assistant |
+
+`request` is the sender's request id.
+
 
 Local only: a relay channel answers each of these with `unknown op`. All but `host.status`
 and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).
