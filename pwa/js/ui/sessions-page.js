@@ -292,7 +292,10 @@ export class SessionsPage {
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {
       for (const s of [this.answers, this.replies, this.stops, this.launches]) { s.ready(id); }
+      // Marked, then redrawn: sync() must run after the mark, or a machine that reconnects with
+      // no other change is never asked again.
       this.launchOptions.stale(id);
+      this.refresh();
       this.launchPanel.reopened(id);
     });
     hosts.onChange(() => this.refresh());

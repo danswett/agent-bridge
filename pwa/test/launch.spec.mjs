@@ -1107,4 +1107,38 @@ test.describe('the cached choices', () => {
     });
     await expect(panel(page).locator('.launch-note')).toContainText("hasn't given its choices yet: the channel closed");
   });
+
+  test('a machine whose events had a gap is asked for its choices again once its list is whole, with no other change', async ({ page }) => {
+    await openDemo(page);
+    await settled(page);
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      window.__log = [];
+      const lo = d.page.launchOptions;
+      for (const k of ['stale', 'sync']) { const f = lo[k].bind(lo); lo[k] = (...a) => { window.__log.push(k); return f(...a); }; }
+      const rf = d.page.refresh.bind(d.page);
+      d.page.refresh = (...a) => { window.__log.push('refresh'); return rf(...a); };
+      // A jump in seq holds the machine until a new snapshot is whole, with its channel open throughout.
+      d.frame({ ev: 'session.upsert', seq: d.host.seq + 5, data: d.host.get('6f1c2b7e-claude-example') });
+    });
+    // The mark alone asks nothing: a sync has to follow it, or a machine that reconnects with no other change keeps its old choices.
+    await expect.poll(() => page.evaluate(() => {
+      const log = window.__log;
+      return log.includes('stale') && log.slice(log.lastIndexOf('stale')).includes('sync');
+    })).toBe(true);
+  });
+
+  test('a machine held while it reconnects cannot launch, though its form shows from the kept choices', async ({ page }) => {
+    await openDemo(page, '&timeout=1000');
+    await openPanel(page);
+    await settled(page);
+    await expect(launchButton(page)).toBeEnabled();
+    await page.evaluate(() => {
+      const host = window.agentBridgeDemo.host;
+      host.failOpen = 'the handshake timed out';
+      host.disconnect();
+    });
+    await expect(field(page, 'model')).toBeVisible();
+    await expect(launchButton(page)).toBeDisabled();
+  });
 });
