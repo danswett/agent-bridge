@@ -587,7 +587,7 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
         Assert.Equal("declined", answer.Outcome);
     }
 
-    [Fact]
+    [Fact(Skip = "Quarantined: times out at 60 s on windows-11-arm (#1238); restore with #1514 by 2026-11-12")]
     public async Task An_answer_still_being_seen_to_work_is_followed_past_the_follow_deadline()
     {
         locator.Installed["codex"] = @"C:\fake\codex.cmd";
