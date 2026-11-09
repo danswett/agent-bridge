@@ -59,12 +59,31 @@ public sealed class AnswerDigestTests
         Assert.NotEqual(Digest(a), Digest(b));
 
     // The number is never expanded: a very long significand or exponent costs only its own length.
-    // It took 30.9 s on a loaded windows-11-arm runner (#1374), so the limit is a hang guard (an
-    // expanding or quadratic version takes many minutes), not a speed check.
-    [Fact]
-    public void An_absurdly_long_number_is_canonicalised_in_time_and_equal_spellings_still_match()
+    // The test counts the memory the work allocates, which doesn't change with how busy the runner
+    // is; the wall-clock bounds it replaced took 30.9 s on a loaded windows-11-arm runner and
+    // failed a 30 s limit (#1374), then needed a 120 s one.
+    [Theory]
+    [InlineData("1{0}")]
+    [InlineData("0.{0}1e200001")]
+    [InlineData("1e{1}")]
+    [InlineData("10e{1}")]
+    public void An_absurdly_long_number_is_canonicalised_in_memory_proportional_to_its_length(string pattern)
     {
-        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var zeros = new string('0', 200_000);
+        var nines = new string('9', 200_000);
+        var number = string.Format(pattern, zeros, nines);
+        AnswerDigest.Canonical("1e5");
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        Assert.NotNull(AnswerDigest.Canonical(number));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.True(allocated <= 32L * number.Length, $"allocated {allocated} bytes for {number.Length} characters");
+    }
+
+    [Fact]
+    public void Equal_spellings_of_an_absurdly_long_number_still_match()
+    {
         var zeros = new string('0', 200_000);
         var nines = new string('9', 200_000);
         var minus = new string('9', 199_999) + "8";
@@ -73,7 +92,6 @@ public sealed class AnswerDigestTests
         Assert.Equal(Digest("1"), Digest($"0.{zeros}1e200001"));
         Assert.Equal(Digest($"1e{nines}"), Digest($"10e{minus}"));
         Assert.NotEqual(Digest($"1{zeros}1"), Digest($"1{zeros}2"));
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(120), $"took {clock.Elapsed}");
     }
 
     // Text that is not a JSON number has no canonical form; the digest keeps it tagged, as written.
