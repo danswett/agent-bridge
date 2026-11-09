@@ -54,9 +54,9 @@ sealed class MergeRuleConfig
         if (string.IsNullOrWhiteSpace(config.Codeql.Check)) missing.Add("codeql.check");
         if (string.IsNullOrWhiteSpace(config.MainGreen.Workflow)) missing.Add("main_green.workflow");
         if (config.SensitivePaths.Count == 0) missing.Add("sensitive_paths");
-        // A waiver with nowhere to read the second review from would let one review stand in for
-        // two on a sensitive change, so the config refuses to load rather than guess.
-        if (config.CopilotWaiver.Labels.Count > 0 && string.IsNullOrWhiteSpace(config.CopilotWaiver.SecondReview))
+        // With nowhere to read the second review from, one review would stand in for two on a
+        // sensitive change, so the config refuses to load rather than guess.
+        if (string.IsNullOrWhiteSpace(config.CopilotWaiver.SecondReview))
             missing.Add("copilot_waiver.second_review");
         if (missing.Count > 0)
             throw new FormatException($"quality/merge-rule.yml has no {string.Join(", ", missing)}.");
@@ -245,34 +245,34 @@ static class MergeRule
             : marked ? "it's marked as a security change"
             : "its file list is incomplete";
 
-        // The standing rule (#955): a waiver label lets the independent review's success receipt on
-        // the head stand in for Copilot's review. A change that needs that review needs a second
-        // one too, from another model family, unless every sensitive file it touches is one that
-        // one review is enough for. A completed Copilot review is that other family, so with one on
-        // the head the label changes nothing (Quality's choice on #962, option a). The label alone
-        // waives nothing.
-        var waivedBy = pr.Labels.FirstOrDefault(l => config.CopilotWaiver.Labels.Contains(l, StringComparer.OrdinalIgnoreCase));
+        // The standing rule (owner decision 2026-11-08, after #955's per-pull-request label): the
+        // independent review's success receipt on the head is the review requirement, and Copilot's
+        // review is an optional extra. A change that needs that review needs a second one too, from
+        // another model family, unless every sensitive file it touches is one that one review is
+        // enough for. A completed Copilot review is that other family (Quality's choice on #962,
+        // option a), and a Copilot error or timeout is not a verdict either way. The copilot-waived
+        // label is still accepted in the config but changes nothing.
         var oneReview = config.CopilotWaiver.OneReviewPaths.Select(p => new Glob(p, ignoreCase: true)).ToList();
         var needsSecond = marked || (pr.FullyRead && (!pr.FilesComplete || sensitive.Any(f => !oneReview.Any(g => g.IsMatch(f)))));
-        // Read whatever the labels say: a reviewer's failure in the second context blocks below even
-        // after the label comes off (sr-962b: removing the label used to discard that veto).
+        // A reviewer's failure in the second context blocks below whatever else is on the head
+        // (sr-962b).
         var second = LatestReceipt(config, pr, config.CopilotWaiver.SecondReview);
         var families = needsSecond && receipt is not null && second is not null && DifferentFamilies(receipt.Description, second.Description);
-        var waived = !copilot && waivedBy is not null && receipt?.State == "success"
+        var waived = !copilot && receipt?.State == "success"
             && (!needsSecond || (second?.State == "success" && families));
-        if (!copilot && !waived && waivedBy is not null)
+        if (!copilot && !waived)
         {
-            if (receipt?.State != "success")
-                failures.Add($"Copilot review waived by the label '{waivedBy}', but the waiver needs an independent review's receipt on {sha} in its place");
-            else if (second?.State != "success")
-                failures.Add($"Copilot review waived by the label '{waivedBy}', but {what}, so the waiver needs a second review's receipt ({config.CopilotWaiver.SecondReview}) on {sha}, from another model family");
-            else
-                failures.Add($"Copilot review waived by the label '{waivedBy}', but the two receipts on {sha} must each name a model, from different families");
+            if (receipt?.State == "success" && second?.State != "success")
+            {
+                // A failed second receipt is reported below.
+                if (second is not { State: "failure" or "error" })
+                    failures.Add($"{Capitalize(what)}, so it needs a second review's receipt ({config.CopilotWaiver.SecondReview}) on {sha}, from another model family");
+            }
+            else if (receipt?.State == "success")
+                failures.Add($"the two receipts on {sha} must each name a model, from different families");
+            else if (!needsReceipt && receipt is not { State: "failure" or "error" })
+                pending.Add($"waiting for an independent review of {sha}");
         }
-        else if (!copilot && !waived && onHead.Count > 0)
-            failures.Add($"Copilot's review of {sha} didn't complete ({CopilotReviewFailure(onHead[^1].Body)}): request another");
-        else if (!copilot && !waived)
-            pending.Add($"waiting for a Copilot review of {sha}");
 
         // A reviewer's failure blocks any pull request, sensitive or not.
         if (receipt is { State: "failure" or "error" })
@@ -320,7 +320,7 @@ static class MergeRule
         var reasons = failures.Concat(pending).ToList();
         var state = failures.Count > 0 ? (mainBlocks && main.State == "error" ? "error" : "failure") : pending.Count > 0 ? "pending" : "success";
         var description = state == "success"
-            ? $"{(waived ? (needsSecond ? "Copilot review waived (label); two model families' reviews on file" : "Copilot review waived (label); independent review on file") : $"Copilot reviewed {sha}")}; every check passed{(needsReceipt && !waived ? "; independent review on file" : "")}{(main.State != "success" ? $"; main isn't green, but it's labelled {exemptBy}" : "")}"
+            ? $"{(waived ? (needsSecond ? "Two model families' reviews on file" : "Independent review on file") : $"Copilot reviewed {sha}")}; every check passed{(needsReceipt && !waived ? "; independent review on file" : "")}{(main.State != "success" ? $"; main isn't green, but it's labelled {exemptBy}" : "")}"
             : Capitalize(string.Join("; ", reasons));
         return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
     }

@@ -100,16 +100,16 @@ public class MergeRuleTests
         var earlier = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { CommitOid = Older }]))!;
         var impostor = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { IsBot = false }]))!;
 
-        Assert.Equal(("pending", "Waiting for a Copilot review of abcdef0"), (earlier.State, earlier.Description));
+        Assert.Equal(("pending", "Waiting for an independent review of abcdef0"), (earlier.State, earlier.Description));
         Assert.Equal("pending", impostor.State);
     }
 
     [Fact]
-    public void Copilots_billing_error_on_the_exact_head_fails_rather_than_passing_as_its_review()
+    public void Copilots_billing_error_on_the_exact_head_neither_passes_nor_blocks_it_and_the_receipt_is_awaited()
     {
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = BillingError }]))!;
 
-        Assert.Equal(("failure", "Copilot's review of abcdef0 didn't complete (it reported an error): request another"), (verdict.State, verdict.Description));
+        Assert.Equal(("pending", "Waiting for an independent review of abcdef0"), (verdict.State, verdict.Description));
     }
 
     [Theory]
@@ -125,7 +125,8 @@ public class MergeRuleTests
     {
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = body }]))!;
 
-        Assert.Equal(("failure", $"Copilot's review of abcdef0 didn't complete ({why}): request another"), (verdict.State, verdict.Description));
+        Assert.Equal(why, MergeRule.CopilotReviewFailure(body));
+        Assert.Equal("pending", verdict.State);
     }
 
     [Fact]
@@ -141,13 +142,13 @@ public class MergeRuleTests
     [Theory]
     [InlineData("> [!WARNING]\n> Copilot couldn't run its full agentic review because it didn't start before the timeout. Make sure your repository has a runner available, or add a `copilot-code-review.yml` file specifying one with the `runs-on` attribute. See the [docs](https://gh.io/AA11tgch) for more details.\n\n")]
     [InlineData("> [!NOTE]\n> Copilot was unable to run its full agentic suite in this review.\n\n")]
-    public void A_review_that_says_it_didnt_run_in_full_fails_even_with_an_overview_and_findings(string notice)
+    public void A_review_that_says_it_didnt_run_in_full_is_not_a_review_even_with_an_overview_and_findings(string notice)
     {
         const string overview = "<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n<details open>\n<summary><strong>2 open issues</strong></summary>\n\n- [Encode the default iOS app icon without an alpha channel](https://github.com/danswett/agent-bridge/pull/558#discussion_r4463254963)\n</details>";
 
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = notice + overview }]))!;
 
-        Assert.Equal(("failure", "Copilot's review of abcdef0 didn't complete (it was incomplete): request another"), (verdict.State, verdict.Description));
+        Assert.Equal("pending", verdict.State);
     }
 
     [Fact]
@@ -155,7 +156,7 @@ public class MergeRuleTests
     {
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { CommitOid = Older }, Copilot with { Body = BillingError }]))!;
 
-        Assert.Equal("failure", verdict.State);
+        Assert.Equal("pending", verdict.State);
     }
 
     [Fact]
@@ -163,92 +164,83 @@ public class MergeRuleTests
     {
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], reviews: [Copilot with { Body = BillingError }]))!;
 
-        Assert.Equal(["Copilot's review of abcdef0 didn't complete (it reported an error): request another", "needs an independent review of abcdef0: it touches .github/workflows/ci.yml"], verdict.Reasons);
+        Assert.Equal(["needs an independent review of abcdef0: it touches .github/workflows/ci.yml"], verdict.Reasons);
     }
 
     // What every Copilot review ended with from 2026-11-05 18:02 PT (#955).
     const string QuotaError = "Copilot was unable to review this pull request because the user who requested the review has insufficient remaining quota.";
 
     [Fact]
-    public void A_quota_failed_Copilot_review_is_waived_by_the_label_with_a_posters_success_receipt()
+    public void A_quota_failed_or_absent_Copilot_review_needs_no_label_with_a_posters_success_receipt()
     {
-        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = QuotaError }], labels: ["Copilot-Waived"], statuses: [Receipt("success")]))!;
-        var noReview = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [Receipt("success")]))!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = QuotaError }], statuses: [Receipt("success")]))!;
+        var noReview = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], statuses: [Receipt("success")]))!;
+        var labelled = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [Receipt("success")]))!;
 
-        Assert.Equal(("success", "Copilot review waived (label); independent review on file; every check passed"), (verdict.State, verdict.Description));
-        Assert.Equal("success", noReview.State);
+        Assert.Equal(("success", "Independent review on file; every check passed"), (verdict.State, verdict.Description));
+        Assert.Equal((verdict.State, verdict.Description), (noReview.State, noReview.Description));
+        Assert.Equal((verdict.State, verdict.Description), (labelled.State, labelled.Description));
     }
 
     [Fact]
-    public void The_waiver_label_without_a_receipt_fails_and_says_the_receipt_is_missing()
+    public void Without_a_receipt_the_label_waives_nothing_and_the_receipt_is_awaited()
     {
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = QuotaError }], labels: ["copilot-waived"]))!;
 
-        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but the waiver needs an independent review's receipt on abcdef0 in its place"], verdict.Reasons);
-        Assert.Equal("failure", verdict.State);
+        Assert.Equal(["waiting for an independent review of abcdef0"], verdict.Reasons);
+        Assert.Equal("pending", verdict.State);
     }
 
     [Fact]
-    public void The_waiver_label_with_a_receipt_from_someone_not_a_poster_fails()
+    public void A_receipt_from_someone_not_a_poster_doesnt_count()
     {
-        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [Receipt("success", creator: "github-actions")]))!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], statuses: [Receipt("success", creator: "github-actions")]))!;
 
-        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but the waiver needs an independent review's receipt on abcdef0 in its place"], verdict.Reasons);
+        Assert.Equal(["waiting for an independent review of abcdef0"], verdict.Reasons);
     }
 
     [Fact]
-    public void A_quota_failed_review_without_the_label_still_fails_even_with_a_receipt()
-    {
-        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { Body = QuotaError }], statuses: [Receipt("success")]))!;
-
-        Assert.Equal(("failure", "Copilot's review of abcdef0 didn't complete (its outcome isn't recognized): request another"), (verdict.State, verdict.Description));
-    }
-
-    [Fact]
-    public void The_waiver_doesnt_lift_a_red_main_a_hold_a_draft_or_a_failed_receipt()
+    public void The_default_doesnt_lift_a_red_main_a_hold_a_draft_or_a_failed_receipt()
     {
         var red = new MainFact("failure", "main is red (CI c500000): waiting for main to be fixed");
         ReviewFact[] quota = [Copilot with { Body = QuotaError }];
         StatusFact[] clean = [Receipt("success")];
 
-        var onRedMain = MergeRule.Evaluate(Config, red, Pr(reviews: quota, labels: ["copilot-waived"], statuses: clean))!;
-        var held = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, labels: ["copilot-waived", "hold"], statuses: clean))!;
-        var draft = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, labels: ["copilot-waived"], statuses: clean, draft: true))!;
-        var failed = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, labels: ["copilot-waived"], statuses: [Receipt("success", minute: 0), Receipt("failure", minute: 5)]))!;
+        var onRedMain = MergeRule.Evaluate(Config, red, Pr(reviews: quota, statuses: clean))!;
+        var held = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, labels: ["hold"], statuses: clean))!;
+        var draft = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, statuses: clean, draft: true))!;
+        var failed = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: quota, statuses: [Receipt("success", minute: 0), Receipt("failure", minute: 5)]))!;
 
         Assert.Equal(["main is red (CI c500000): waiting for main to be fixed"], onRedMain.Reasons);
         Assert.Equal(["held by the label 'hold'"], held.Reasons);
         Assert.Equal(["draft: mark it ready for review"], draft.Reasons);
         Assert.All(new[] { onRedMain, held, draft, failed }, v => Assert.Equal("failure", v.State));
-        Assert.Equal(
-            ["Copilot review waived by the label 'copilot-waived', but the waiver needs an independent review's receipt on abcdef0 in its place",
-             "the independent review of abcdef0 failed: sec-42 failure"],
-            failed.Reasons);
+        Assert.Equal(["the independent review of abcdef0 failed: sec-42 failure"], failed.Reasons);
     }
 
     [Fact]
-    public void A_waived_sensitive_change_needs_a_second_receipt_from_another_model_family()
+    public void A_sensitive_change_without_Copilot_needs_a_second_receipt_from_another_model_family()
     {
         string[] files = [".github/workflows/ci.yml"];
         ReviewFact[] quota = [Copilot with { Body = QuotaError }];
 
-        var oneFamily = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [First()]))!;
-        var twoFamilies = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [First(), Second()]))!;
+        var oneFamily = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, statuses: [First()]))!;
+        var twoFamilies = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, statuses: [First(), Second()]))!;
 
         Assert.Equal("failure", oneFamily.State);
-        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but it touches .github/workflows/ci.yml, so the waiver needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], oneFamily.Reasons);
-        Assert.Equal(("success", "Copilot review waived (label); two model families' reviews on file; every check passed"), (twoFamilies.State, twoFamilies.Description));
+        Assert.Equal(["It touches .github/workflows/ci.yml, so it needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], oneFamily.Reasons);
+        Assert.Equal(("success", "Two model families' reviews on file; every check passed"), (twoFamilies.State, twoFamilies.Description));
     }
 
     [Fact]
-    public void Two_receipts_from_one_model_family_or_naming_no_model_dont_waive_a_sensitive_change()
+    public void Two_receipts_from_one_model_family_or_naming_no_model_dont_satisfy_a_sensitive_change()
     {
         string[] files = ["src/AgentBridge.Host/Pairing/Codes.cs"];
         ReviewFact[] quota = [Copilot with { Body = QuotaError }];
-        const string why = "Copilot review waived by the label 'copilot-waived', but the two receipts on abcdef0 must each name a model, from different families";
+        const string why = "the two receipts on abcdef0 must each name a model, from different families";
 
-        var sameFamily = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [First(), Second("claude-sonnet-5.5")]))!;
-        var unnamed = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, labels: ["copilot-waived"], statuses: [Receipt("success"), Second()]))!;
+        var sameFamily = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, statuses: [First(), Second("claude-sonnet-5.5")]))!;
+        var unnamed = MergeRule.Evaluate(Config, MainGreen, Pr(files, reviews: quota, statuses: [Receipt("success"), Second()]))!;
 
         Assert.Equal([why], sameFamily.Reasons);
         Assert.Equal([why], unnamed.Reasons);
@@ -257,7 +249,7 @@ public class MergeRuleTests
     [Fact]
     public void A_second_receipt_from_someone_not_a_poster_doesnt_count()
     {
-        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], reviews: [], labels: ["copilot-waived"], statuses: [First(), Second(creator: "github-actions")]))!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr([".github/workflows/ci.yml"], reviews: [], statuses: [First(), Second(creator: "github-actions")]))!;
 
         Assert.Equal("failure", verdict.State);
         Assert.Contains("needs a second review's receipt (independent-review-2)", verdict.Reasons[0]);
@@ -266,15 +258,15 @@ public class MergeRuleTests
     [Fact]
     public void A_security_marked_change_needs_the_second_family_even_when_it_touches_nothing_sensitive()
     {
-        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [First()]) with { Title = "Security: bind approvals to what was shown" })!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], statuses: [First()]) with { Title = "Security: bind approvals to what was shown" })!;
 
-        Assert.Equal(["Copilot review waived by the label 'copilot-waived', but it's marked as a security change, so the waiver needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], verdict.Reasons);
+        Assert.Equal(["It's marked as a security change, so it needs a second review's receipt (independent-review-2) on abcdef0, from another model family"], verdict.Reasons);
     }
 
     [Fact]
-    public void A_failed_second_receipt_blocks_even_a_change_that_one_review_would_waive()
+    public void A_failed_second_receipt_blocks_even_a_change_that_one_review_would_satisfy()
     {
-        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], labels: ["copilot-waived"], statuses: [First(), Second(state: "failure")]))!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [], statuses: [First(), Second(state: "failure")]))!;
 
         Assert.Equal("failure", verdict.State);
         Assert.Equal(["the second review of abcdef0 failed: sr-42b HIGH: security-review, gpt-6.1-sol"], verdict.Reasons);
@@ -304,15 +296,15 @@ public class MergeRuleTests
               - .github/**
             """);
 
-        var rowAlone = MergeRule.Evaluate(config, MainGreen, Pr(["docs/status.md", "docs/design/ui.md"], reviews: [], labels: ["copilot-waived"], statuses: [First()]))!;
-        var withCi = MergeRule.Evaluate(config, MainGreen, Pr(["docs/status.md", ".github/workflows/ci.yml"], reviews: [], labels: ["copilot-waived"], statuses: [First()]))!;
+        var rowAlone = MergeRule.Evaluate(config, MainGreen, Pr(["docs/status.md", "docs/design/ui.md"], reviews: [], statuses: [First()]))!;
+        var withCi = MergeRule.Evaluate(config, MainGreen, Pr(["docs/status.md", ".github/workflows/ci.yml"], reviews: [], statuses: [First()]))!;
 
-        Assert.Equal(("success", "Copilot review waived (label); independent review on file; every check passed"), (rowAlone.State, rowAlone.Description));
+        Assert.Equal(("success", "Independent review on file; every check passed"), (rowAlone.State, rowAlone.Description));
         Assert.Equal("failure", withCi.State);
     }
 
     [Fact]
-    public void A_waiver_label_with_no_second_review_context_refuses_to_load()
+    public void A_config_with_no_second_review_context_refuses_to_load()
     {
         var error = Assert.Throws<FormatException>(() => MergeRuleConfig.Parse("""
             base: main
@@ -373,7 +365,7 @@ public class MergeRuleTests
     [InlineData("claude-opus-5.5 and gpt-5.6-terra", "gpt-6.1-sol", "failure")]
     public void The_waiver_gate_passes_any_two_families_and_refuses_a_shared_one(string firstModel, string secondModel, string state)
     {
-        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(["src/AgentBridge.Transport/Relay.cs"], reviews: [], labels: ["copilot-waived"], statuses: [First(firstModel), Second(secondModel)]))!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(["src/AgentBridge.Transport/Relay.cs"], reviews: [], statuses: [First(firstModel), Second(secondModel)]))!;
 
         Assert.Equal(state, verdict.State);
     }
@@ -421,7 +413,7 @@ public class MergeRuleTests
         var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(draft: true, labels: ["HOLD"], reviews: []))!;
 
         Assert.Equal("failure", verdict.State);
-        Assert.Equal(["draft: mark it ready for review", "held by the label 'HOLD'", "waiting for a Copilot review of abcdef0"], verdict.Reasons);
+        Assert.Equal(["draft: mark it ready for review", "held by the label 'HOLD'", "waiting for an independent review of abcdef0"], verdict.Reasons);
     }
 
     [Theory]
@@ -523,7 +515,7 @@ public class MergeRuleTests
     }
 
     [Fact]
-    public void The_billing_error_Copilot_posted_on_406_and_358s_heads_is_read_from_GitHub_and_fails_the_rule()
+    public void The_billing_error_Copilot_posted_on_406_and_358s_heads_no_longer_blocks_but_the_receipts_still_do()
     {
         var github = new FakeGitHub(GraphQLPullRequest(Head, reviewBody: BillingError));
         var config = WriteConfig();
@@ -531,7 +523,7 @@ public class MergeRuleTests
         {
             MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
-            Assert.Equal([$"{Head} failure merge-rule Copilot's review of abcdef0 didn't complete (it reported an error): request another "], github.Posted);
+            Assert.StartsWith($"{Head} failure merge-rule It touches docs/old.md, so it needs a second review's receipt (independent-review-2) on abcdef0", Assert.Single(github.Posted));
         }
         finally
         {
@@ -1486,6 +1478,7 @@ public class MergeRuleTests
             independent_review: { context: independent-review, posters: [danswett] }
             codeql: { workflow: CodeQL, check: CodeQL }
             main_green: { workflow: ci.yml, exempt_labels: [fixes-main] }
+            copilot_waiver: { second_review: independent-review-2 }
             sensitive_paths: [docs/old.md]
             """);
         return path;

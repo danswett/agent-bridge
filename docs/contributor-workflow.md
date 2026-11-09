@@ -68,12 +68,13 @@ obligations until an explicit handoff or stand-down.
 
 ## Readiness and review evidence
 
-Use [AGENTS.md's current merge requirements](../AGENTS.md#pull-requests), including
-its authorized review-waiver procedure where applicable. This page does not
+Use [AGENTS.md's current merge requirements](../AGENTS.md#pull-requests). Copilot
+and Codex reviews are optional extras and never required; the independent-review
+receipts are the gate. This page does not
 maintain a second merge checklist. A ready packet is not a merge grant.
 
 Every head change needs fresh head-specific evidence under those requirements;
-neither old CI nor an old Copilot review is inherited. Only an **independent**
+neither old CI nor an old receipt is inherited. Only an **independent**
 review may use a bounded delta: the previously reviewed commit must be a proved
 ancestor of the new head, and the independent reviewer must explicitly clear that
 delta at the new head. A rebase without that ancestry needs a full independent
@@ -91,6 +92,15 @@ Verification and exact-head reviews: <commands/results and links>.
 Open findings, dependencies or blockers: <none, or details and needed responder>.
 Next action requested from Quality: <action>.
 ```
+
+## Resolving bot-only threads
+
+GitHub's ruleset needs 0 unresolved threads, so threads left only by the Copilot or
+Codex reviewer bots would block a merge. Once the PR has its receipts on the head,
+`pwsh quality/resolve-bot-threads.ps1 -Pr <n>` lists the threads whose every comment
+came from those bots (a dry run); add `-Apply` to resolve them with GraphQL
+`resolveReviewThread`. It refuses without the receipts, and never touches a thread a
+person commented in.
 
 ## Handoffs
 

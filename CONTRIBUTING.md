@@ -45,7 +45,9 @@ guide suggests otherwise.
 Follow [AGENTS.md's PR rules](AGENTS.md#pull-requests), including local review,
 batched pushes, exact-head evidence and any independent review. The
 [PR template](pull_request_template.md) prompts for scope, verification and handoff
-information; filling it out is not proof that checks or reviews passed.
+information; filling it out is not proof that checks or reviews passed. Copilot and
+Codex reviews are optional extras: don't request, wait for, or depend on them. The
+independent-review receipts are the gate.
 
 Keep scope and dependencies on the issue, and head-specific evidence on the PR.
 Submit readiness to the designated merge coordinator. Only arm exact-head auto-merge

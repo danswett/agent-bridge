@@ -467,11 +467,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      the rules in [`merge-rule.yml`](merge-rule.yml): main green, that is the latest finished
      push run of `ci.yml` on main (at its latest attempt) passed, unless the pull request has the
      `fixes-main` label; not a draft; no `hold` or `do-not-merge`
-     label; a completed Copilot review whose commit is the head (#706: Copilot posts an error,
-     a billing failure, a diff too large to review or a review that didn't run in full as a
-     review by the same bot on the same commit, so only one that opens with its overview
-     counts, and anything else fails, naming why, even an overview with findings below a
-     notice that the agentic review timed out); CodeQL's latest run on the head green and
+     label; an independent-review receipt on the head (see the standing rule below; a Copilot review is optional and an errored one is ignored, #706); CodeQL's latest run on the head green and
      code scanning's `CodeQL` check not failed; every other check run and status on the head
      passed (success, skipped or neutral), since `apple.yml`, `codeql.yml`, `relay.yml`,
      `dependencies.yml`, `workflow-lint.yml` and `perf.yml` sit outside `quality-gate`, each
@@ -504,20 +500,20 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      label (`main_green.exempt_labels`) from the merge coordinator, since labels take triage
      rights: it skips this check and nothing else, the independent review included. CI finishing
      on main starts a run, so verdicts follow main to red and back.
-   - The standing rule (owner decision 2026-11-05, #955): Copilot reviews only the security PRs
-     Quality spends the monthly included requests on. A PR labelled `copilot-waived`
-     (`copilot_waiver.labels`; only the merge coordinator adds it) may merge without a Copilot
-     review if it has a success independent-review receipt on its head from a listed poster. A PR
+   - The standing rule (owner decision 2026-11-08, replacing the 2026-11-05 label of #955):
+     Copilot and Codex reviews are optional extras, and the receipts are the gate. A PR needs a
+     success independent-review receipt on its head from a listed poster and no Copilot review,
+     with no label. A PR
      that needs that receipt (a sensitive path, a security mark, or an incomplete file list) also
      needs a second success receipt, `copilot_waiver.second_review` (`independent-review-2`), from
      a listed poster on the same head, and the two receipts' descriptions must each name a model
      whose family the other doesn't share (`claude-opus-5.5` and `gpt-6.1-sol`, say). A sensitive
      file in `copilot_waiver.one_review_paths` (`docs/status.md`, whose row the receipt checks
      against its decision) doesn't call for the second. A completed Copilot review on the head is
-     itself the other family, so with one there the label changes nothing. A failed second receipt
-     from a poster blocks like a failed first one, whether or not the label is on. Without what it
-     needs, the label fails and names the missing receipt; it lifts nothing else, and the verdict
-     says `Copilot review waived (label)`.
+     still the other family when present; a Copilot error or timeout review is ignored. A failed
+     receipt from a poster blocks. The `copilot-waived` label is still accepted and changes
+     nothing. Bot-only threads, which would still block the ruleset's 0-unresolved-threads
+     requirement, are resolved with `quality/resolve-bot-threads.ps1`.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
      (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
      10-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
