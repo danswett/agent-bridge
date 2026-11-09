@@ -58,6 +58,7 @@ public sealed record FleetListSession(string Machine, string Node, string State,
 public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roster, TimeProvider? time = null)
 {
     public const string Op = "fleet.list";
+    public const string FindOp = "fleet.find";
 
     // The audit hook (#1401): called once per accepted call with the agent's principal. Nothing
     // is recorded until the audit log exists and is assigned here.
@@ -65,23 +66,55 @@ public sealed class FleetList(AgentCredentials? credentials, IFleetRoster? roste
 
     public async Task<object?> HandleAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default)
     {
-        if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException("refused: fleet.list isn't available on this host"); }
-        if (credentials.Of(channel) is not { } caller)
-        {
-            throw new InvalidOperationException("refused: fleet.list is for an agent connection that has passed agent.hello");
-        }
-        if (Array.IndexOf(AgentProtocol.Scopes.ToArray(), caller.Scope) < Array.IndexOf(AgentProtocol.Scopes.ToArray(), AgentProtocol.ScopeRead))
-        {
-            throw new InvalidOperationException($"refused: this agent's credential has scope '{caller.Scope}'; fleet.list needs at least '{AgentProtocol.ScopeRead}'");
-        }
-        if (roster is null) { throw new InvalidOperationException("refused: fleet.list has no session registry on this host"); }
+        var caller = Authorize(channel, Op);
         // The only member read; a principal or account in the body is ignored. Names are what a
         // person typed, so they come only when asked for (design §5.8).
         var withNames = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("include", out var inc) && inc.ValueKind == JsonValueKind.String && inc.GetString() == "content";
-        AuditFleetList?.Invoke(credentials.PrincipalOf(caller));
+        AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
+        return new { sessions = await ListAsync(withNames, ct) };
+    }
+
+    // fleet.find (#1399): a filter over the same list, not a second source. The caller supplies the
+    // name, so it is not read back; only typed fields return. Two sessions with one name are an
+    // ambiguity, never a silent pick.
+    public async Task<object?> FindAsync(IProtocolChannel channel, JsonElement data, CancellationToken ct = default)
+    {
+        var caller = Authorize(channel, FindOp);
+        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("name", out var n) || n.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(n.GetString()))
+        {
+            throw new InvalidOperationException("refused: fleet.find needs a non-empty \"name\"");
+        }
+        var name = n.GetString()!;
+        AuditFleetList?.Invoke(credentials!.PrincipalOf(caller));
+        var matches = (await ListAsync(true, ct)).Where(s => string.Equals(s.Name, name, StringComparison.Ordinal))
+            .Select(s => s with { Name = null }).ToList();
+        return matches.Count switch
+        {
+            0 => new { result = "not-found", matches = Array.Empty<FleetListSession>() },
+            1 => new { result = "found", matches },
+            _ => new { result = "ambiguous", matches },
+        };
+    }
+
+    AgentCredential Authorize(IProtocolChannel channel, string op)
+    {
+        if (credentials is null || !OperatingSystem.IsWindows()) { throw new InvalidOperationException($"refused: {op} isn't available on this host"); }
+        if (credentials.Of(channel) is not { } caller)
+        {
+            throw new InvalidOperationException($"refused: {op} is for an agent connection that has passed agent.hello");
+        }
+        if (Array.IndexOf(AgentProtocol.Scopes.ToArray(), caller.Scope) < Array.IndexOf(AgentProtocol.Scopes.ToArray(), AgentProtocol.ScopeRead))
+        {
+            throw new InvalidOperationException($"refused: this agent's credential has scope '{caller.Scope}'; {op} needs at least '{AgentProtocol.ScopeRead}'");
+        }
+        if (roster is null) { throw new InvalidOperationException($"refused: {op} has no session registry on this host"); }
+        return caller;
+    }
+
+    async Task<List<FleetListSession>> ListAsync(bool withNames, CancellationToken ct)
+    {
         var now = (time ?? TimeProvider.System).GetUtcNow();
-        var sessions = (await roster.ReadAsync(ct)).SelectMany(m => m.Sessions.Select(s => new FleetListSession(
+        return (await roster!.ReadAsync(ct)).SelectMany(m => m.Sessions.Select(s => new FleetListSession(
             m.Id, s.Node, s.State, s.Since, Math.Max(0, (long)(now - s.Since).TotalSeconds), m.Online, withNames ? s.Name : null))).ToList();
-        return new { sessions };
     }
 }
