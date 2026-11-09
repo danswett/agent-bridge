@@ -22,10 +22,9 @@ public sealed class FleetFindTests : IDisposable
 
     public void Dispose() { try { Directory.Delete(root, true); } catch (IOException) { } }
 
-    sealed class Roster(params FleetSession[] sessions) : IFleetRoster
+    sealed class Roster(params FleetMachine[] machines) : IFleetRoster
     {
-        public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<FleetMachine>>([new FleetMachine("m2", true, sessions), new FleetMachine("m3", true, [new FleetSession("n9", "SG Quality", "idle", Started)])]);
+        public Task<IReadOnlyList<FleetMachine>> ReadAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<FleetMachine>>(machines);
     }
 
     sealed class Chan : IProtocolChannel
@@ -46,56 +45,79 @@ public sealed class FleetFindTests : IDisposable
         return chan;
     }
 
-    FleetList Op(params FleetSession[] sessions) => new(store, new Roster(sessions)) { AuditFleetList = audited.Add };
+    FleetList Op(params FleetMachine[] machines) => new(store, new Roster(machines)) { AuditFleetList = audited.Add };
 
-    static JsonElement Body(string json) => JsonDocument.Parse(json).RootElement;
+    static FleetMachine M(string id, bool online, string? name, bool truncated = false, bool verified = false) =>
+        new(id, online, name is null ? [] : [new FleetSession("n-" + id, name, "working", Started, "s-" + id)], truncated, verified);
 
-    async Task<JsonElement> Find(FleetList op, string name, string scope = AgentProtocol.ScopeRead) =>
-        JsonSerializer.SerializeToElement(await op.FindAsync(Hello(scope), Body(JsonSerializer.Serialize(new { name }))), Web);
+    static JsonElement Body(object o) => JsonSerializer.SerializeToElement(o);
+
+    async Task<JsonElement> Find(FleetList op, object data) =>
+        JsonSerializer.SerializeToElement(await op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(data)), Web);
 
     [Fact]
-    public async Task An_exact_name_finds_one_session_with_typed_fields_only_and_is_audited()
+    public async Task A_name_alone_never_yields_found_or_a_node_and_an_impostor_beside_an_offline_original_is_unverified()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var r = await Find(Op(new FleetSession("n1", "SG Engineering", "working", Started)), "SG Engineering");
-        Assert.Equal("found", r.GetProperty("result").GetString());
-        var match = Assert.Single(r.GetProperty("matches").EnumerateArray());
-        Assert.Equal(["machine", "machineOnline", "node", "secondsInState", "since", "state"], match.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
-        Assert.Equal("m2", match.GetProperty("machine").GetString());
-        Assert.Equal([AgentProtocol.Principal("machine1", "sess-1")], audited);
+        var op = Op(M("orig", false, "SG Quality"), M("impostor", true, "SG Quality"));
+        var r = await Find(op, new { name = "SG Quality" });
+        Assert.Equal("unverified", r.GetProperty("result").GetString());
+        Assert.DoesNotContain("node", r.GetRawText());
+        Assert.Equal("unverified", (await Find(op, new { name = "SG Quality", machine = "impostor" })).GetProperty("result").GetString());
+        Assert.Equal("offline", (await Find(op, new { name = "SG Quality", machine = "orig" })).GetProperty("result").GetString());
+        Assert.Equal([AgentProtocol.Principal("machine1", "sess-1")], audited.Distinct());
     }
 
     [Fact]
-    public async Task An_unknown_or_inexact_name_is_not_found()
+    public async Task Verified_matches_are_pinned_ambiguous_or_found_only_with_the_machine_and_the_name_is_never_echoed()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var op = Op(new FleetSession("n1", "SG Engineering", "working", Started));
-        Assert.Equal("not-found", (await Find(op, "SG Product")).GetProperty("result").GetString());
-        Assert.Equal("not-found", (await Find(op, "sg engineering")).GetProperty("result").GetString());
+        var one = Op(M("a", true, "SG Quality", verified: true), M("b", true, null, verified: true));
+        var unpinned = await Find(one, new { name = "SG Quality" });
+        Assert.Equal("unpinned", unpinned.GetProperty("result").GetString());
+        var trimmed = await Find(one, new { name = " SG Quality " });
+        Assert.Equal("unpinned", trimmed.GetProperty("result").GetString());
+        var pinned = await Find(one, new { name = "SG Quality", machine = "a" });
+        Assert.Equal("found", pinned.GetProperty("result").GetString());
+        Assert.Equal(["id", "machine", "node", "online", "since", "state"], pinned.GetProperty("session").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal));
+        var two = Op(M("a", true, "SG Quality", verified: true), M("b", true, "SG Quality", verified: true), M("c", false, null));
+        var amb = await Find(two, new { name = "SG Quality" });
+        Assert.Equal("ambiguous", amb.GetProperty("result").GetString());
+        var none = await Find(one, new { name = "SG Nobody" });
+        foreach (var r in new[] { unpinned, trimmed, pinned, amb, none })
+        {
+            Assert.DoesNotContain("SG Quality", r.GetRawText());
+            Assert.DoesNotContain("SG Nobody", r.GetRawText());
+        }
+        Assert.Equal("notFound", (await Find(one, new { name = "sg quality" })).GetProperty("result").GetString());
     }
 
     [Fact]
-    public async Task Two_sessions_with_one_name_are_an_ambiguity()
+    public async Task A_truncated_live_machine_makes_the_answer_incomplete_even_with_a_verified_match()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var r = await Find(Op(new FleetSession("n1", "SG Quality", "working", Started)), "SG Quality");
-        Assert.Equal("ambiguous", r.GetProperty("result").GetString());
-        Assert.Equal(2, r.GetProperty("matches").GetArrayLength());
+        var op = Op(M("a", true, "SG Quality", verified: true), M("b", true, null, truncated: true));
+        var r = await Find(op, new { name = "SG Quality" });
+        Assert.Equal("incomplete", r.GetProperty("result").GetString());
+        Assert.Equal("b", r.GetProperty("machines")[0].GetString());
+        Assert.Equal("found", (await Find(op, new { name = "SG Quality", machine = "a" })).GetProperty("result").GetString());
     }
 
     [Fact]
-    public async Task Find_is_refused_without_hello_or_the_read_scope_or_a_name_and_routes_through_the_local_api()
+    public async Task Find_is_refused_without_hello_or_the_read_scope_or_a_usable_name_and_routes_through_the_local_api()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var op = Op();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(new Chan(), Body("""{"name":"x"}""")));
-        var low = await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(Hello(AgentProtocol.ScopeNone), Body("""{"name":"x"}""")));
+        var op = Op(M("a", true, "SG Quality"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(new Chan(), Body(new { name = "x" })));
+        var low = await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(Hello(AgentProtocol.ScopeNone), Body(new { name = "x" })));
         Assert.Contains("fleet.find needs at least 'read'", low.Message);
-        var bad = await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(Hello(AgentProtocol.ScopeRead), Body("{}")));
-        Assert.Contains("needs a non-empty", bad.Message);
+        foreach (var bad in new object[] { new { }, new { name = "   " }, new { name = new string('x', 65) }, new { name = "x", machine = "bad machine" } })
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => op.FindAsync(Hello(AgentProtocol.ScopeRead), Body(bad)));
+        }
         Assert.Empty(audited);
         var handler = LocalApi.Handler(null!, null!, null!, null, null, store, null, op);
-        var json = JsonSerializer.Serialize(await handler(Hello(AgentProtocol.ScopeRead), FleetList.FindOp, Body("""{"name":"SG Quality"}""")), Web);
-        Assert.Contains("\"found\"", json);
+        var json = JsonSerializer.Serialize(await handler(Hello(AgentProtocol.ScopeRead), FleetList.FindOp, Body(new { name = "SG Quality" })), Web);
+        Assert.Contains("\"unverified\"", json);
     }
 }
