@@ -14,9 +14,9 @@ public static partial class LiteAgentSend
     public const string Op = "agent.send";
     public const int MaxText = 4096;
 
-    public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default)
+    public static async Task<object?> HandleAsync(AgentCredentials? credentials, ILiteSender? sender, IProtocolChannel channel, JsonElement data, CancellationToken ct = default, bool? windows = null)
     {
-        if (credentials is null || !OperatingSystem.IsWindows())
+        if (credentials is null || !(windows ?? OperatingSystem.IsWindows()))
         {
             throw new InvalidOperationException("refused: agent.send isn't available on this host");
         }

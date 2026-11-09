@@ -25,7 +25,7 @@ public sealed class LiteAgentSendTests : IDisposable
     public void Dispose() { try { Directory.Delete(root, true); } catch (IOException) { } }
 
     Task<object?> Send(IProtocolChannel channel, string json) =>
-        LiteAgentSend.HandleAsync(store, sender, channel, JsonDocument.Parse(json).RootElement);
+        LiteAgentSend.HandleAsync(store, sender, channel, JsonDocument.Parse(json).RootElement, windows: true);
 
     const string Sess = "agent_bridge_0123456789abcdef";
     const string Body = """{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"hi"}""";
@@ -105,7 +105,7 @@ public sealed class LiteAgentSendTests : IDisposable
     [Fact]
     public async Task An_unwired_sender_answers_off()
     {
-        var reply = Assert.IsType<LiteSendReply>(await LiteAgentSend.HandleAsync(store, null, hello, JsonDocument.Parse(Body).RootElement));
+        var reply = Assert.IsType<LiteSendReply>(await LiteAgentSend.HandleAsync(store, null, hello, JsonDocument.Parse(Body).RootElement, windows: true));
         Assert.Equal("off", reply.Outcome);
     }
 
