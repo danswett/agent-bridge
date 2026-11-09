@@ -335,6 +335,29 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
     }
 
     [Fact]
+    public async Task A_launch_closed_by_the_Quit_that_was_still_being_typed_is_logged_as_declined_not_as_exited()
+    {
+        screens.Rows = CopilotAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var q = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust");
+
+        // The agent closes on Esc and the host's own follow-up look sees it gone before the typing
+        // call has returned: whichever look logs the end must already know it was a Quit (#1372).
+        // The wait is only an alarm for a look that never comes; the look itself is what is waited for.
+        screens.OnTyped = _ =>
+        {
+            starter.Exit(starter.Pids[0]);
+            SpinWait.SpinUntil(() => logged.Any(l => l.Contains("closed", StringComparison.Ordinal) || l.Contains("exited before", StringComparison.Ordinal)), Patience);
+        };
+        var answer = await AnswerAsync(ch, Answer(ch, q.GetProperty("id").GetString()!, "quit", client.Key));
+
+        Assert.Equal("declined", answer.Item1);
+        Assert.Contains(logged, l => l.Contains("closed: a person declined to trust the folder", StringComparison.Ordinal));
+        Assert.DoesNotContain(logged, l => l.Contains("exited before its session registered", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_look_at_the_window_begun_before_a_Quit_and_done_after_it_does_not_ask_the_question_again()
     {
         screens.Rows = CopilotAsks();

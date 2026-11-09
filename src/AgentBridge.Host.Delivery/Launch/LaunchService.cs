@@ -1570,8 +1570,13 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             var plan = new KeyPlan([new KeySend(trust ? "" : KeyPlan.Escape, trust, 0, 0, screen.Hold)]) { Proceed = () => Stopped(device) };
             var before = wrote;
             wrote = true;
+            // Said before Esc goes: the agent can close on it while it is still being typed, and the
+            // follow-up look that sees it gone then logs why from this, so a Quit read as a launcher
+            // that exited on its own.
+            if (!trust) { p.Declined = by; }
             var typed = await injector.InjectAsync(window, plan);
             wrote = before || typed.Status != InjectionStatus.NothingTyped;
+            if (!trust && typed.Status == InjectionStatus.NothingTyped) { p.Declined = null; }
             p.TrustTyped |= wrote;
             log($"launch {Short(p.Key)}: folder trust for {by}: {choice}: {plan.Describe()} -> {typed.Status} {typed.Detail}");
             if (typed.Status == InjectionStatus.NothingTyped)
