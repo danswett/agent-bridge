@@ -1,6 +1,6 @@
 # Restoring offered sessions from a client (#948)
 
-**PROPOSED, not built.** Design first: nothing here is implemented until Product, Creative,
+**PROPOSED, partly built.** Slice 1a (#948) added the C# records (`RestoreRunRequest`, `RestoreRunResult`, `RestoreRunSession`, `RestoreRunProgress`, `offered[].loop`, the capability names) and their vectors in `vectors/sessions.json`; the op and the capability are not built, and the PWA's half is slice 2. Design first: nothing here is implemented until Product, Creative,
 Trust and Engineering accept it on its PR. Field and op names are the proposal's, not a shipped
 contract. Folder trust is out of scope (#947): this op never answers it.
 
@@ -53,7 +53,7 @@ Request `data`:
 |---|---|
 | `request` | A fresh UUID per confirmed press, with exactly `session.answer`'s semantics, as `session.launch`'s: every outcome is remembered for at least 10 minutes and returned for a repeat, which starts nothing; a repeat of a run still under way waits for it (and hears its progress so far, as a repeated reply does). After an overall `busy` or `refused`, a new press uses a new `request` |
 | `offer` | The `machine.restore.at` of the notice the confirmation was made from. It names this run's offer: a host that started again since has a new one, and the request is refused whole, "the offer has changed; look at it again", so nothing a person did not see is restored |
-| `sessions` | The ids the confirmation listed, 1 to 20, in the offer's order, no repeats. Each must be in `machine.restore.offered` now; one that is not (resumed from Launch meanwhile, restored from another device, seen live again or let go) is answered `refused`, "no longer offered", and the rest go on |
+| `sessions` | The ids the confirmation listed, 1 to 20, in the offer's order, no repeats. The host's op enforces this, not the `RestoreRunRequest` record (which reads any list, as most requests do): an empty list, more than 20 ids or a repeated id is refused whole, with nothing tried. Each must be in `machine.restore.offered` now; one that is not (resumed from Launch meanwhile, restored from another device, seen live again or let go) is answered `refused`, "no longer offered", and the rest go on |
 | `progress` | Optional. `true` from a client that wants a frame as each session is tried (below) |
 
 **Which sessions (decided, Product P1 and P3, 6692164742): all that are named, in one press.** A

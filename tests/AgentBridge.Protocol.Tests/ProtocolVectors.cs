@@ -402,6 +402,26 @@ public static class ProtocolVectors
         f.Record<SessionRestored>(Host)
             .Valid("after-a-crash", new SessionRestored { At = T1, Cause = RestoreCause.Crash })
             .Valid("mid-turn-with-a-question-lost", new SessionRestored { At = T1, Cause = RestoreCause.Reboot, MidTurn = true, QuestionLost = true });
+        // restore.run (#948; restore-run.md).
+        var runStarted = new RestoreRunSession { Id = RestoredMidTurn.Id, Outcome = LaunchOutcome.Started };
+        var runRefused = new RestoreRunSession { Id = RestoredAsking.Id, Outcome = LaunchOutcome.Refused, Reason = "no longer offered" };
+        f.Record<RestoreRunRequest>(Client)
+            .Valid("two-sessions-with-progress", new RestoreRunRequest { Request = Request, Offer = T1, Sessions = [RestoredMidTurn.Id, RestoredAsking.Id], Progress = true })
+            .Valid("one-session", new RestoreRunRequest { Request = Request, Offer = T1, Sessions = [RestoredMidTurn.Id] });
+        f.Record<RestoreRunSession>(Host)
+            .Valid("started", runStarted)
+            .Valid("refused-no-longer-offered", runRefused)
+            .Reads("an-unknown-outcome-reads-as-unconfirmed", $$"""{"id":"{{SessionId}}","outcome":"queued"}""");
+        f.Record<RestoreRunResult>(Host)
+            .Valid("restored", new RestoreRunResult { Outcome = RestoreRunOutcome.Restored, Sessions = [runStarted] })
+            .Valid("partial", new RestoreRunResult { Outcome = RestoreRunOutcome.Partial, Sessions = [runStarted, runRefused] })
+            .Valid("busy-nothing-tried", new RestoreRunResult { Outcome = RestoreRunOutcome.Busy, Reason = "another restore is under way" })
+            .Reads("an-unknown-outcome-reads-as-partial", """{"outcome":"later"}""")
+            .Refused("a-session-entry-without-an-id", $$"""{"outcome":"partial","sessions":[{"id":"{{SessionId}}","outcome":"started"},{"outcome":"started"}]}""")
+            .Refused("a-session-entry-that-is-not-an-object", $$"""{"outcome":"partial","sessions":[{"id":"{{SessionId}}","outcome":"started"},7]}""");
+        f.Record<RestoreRunProgress>(Host)
+            .Valid("first-of-two", new RestoreRunProgress { Session = RestoredMidTurn.Id, Outcome = LaunchOutcome.Started, Done = 1, Of = 2 })
+            .Valid("a-session-refused", new RestoreRunProgress { Session = RestoredAsking.Id, Outcome = LaunchOutcome.Refused, Done = 2, Of = 2 });
         f.Record<ListRequest>(Client)
             .Valid("first-page", new ListRequest())
             .Valid("next-page", new ListRequest("c2Vzc2lvbnM6Mg"));
