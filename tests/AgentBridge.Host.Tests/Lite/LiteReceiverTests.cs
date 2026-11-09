@@ -173,4 +173,26 @@ public class LiteReceiverTests
         Refused(await r.Send(r.Request()), "notReplyTarget");
         Assert.Equal(new LiteDelivery(false, "notReplyTarget"), await new NoLiteDelivery().DeliverAsync(null!, "x", default));
     }
+
+    [Fact]
+    public async Task A_pair_is_capped_at_6_a_minute_and_60_an_hour_()
+    {
+        using var r = new Rig();
+        for (var i = 1; i <= 6; i++) { Assert.Equal("delivered", (await r.Send(r.Request(id: Id(i.ToString())))).Status); }
+        Refused(await r.Send(r.Request(id: Id("7"))), LiteReceiver.Rate);
+        Assert.Equal(6, r.Deliver.Calls);
+        r.Time.Advance(TimeSpan.FromSeconds(61));
+        Assert.Equal("delivered", (await r.Send(r.Request(id: Id("8")))).Status);
+    }
+
+    [Fact]
+    public void The_hourly_cap_and_the_pair_table_are_bounded()
+    {
+        var time = new FakeTimeProvider(Start);
+        var cap = new RateCap(time);
+        for (var i = 0; i < RateCap.PerHour; i++) { Assert.True(cap.Allow("a")); time.Advance(TimeSpan.FromSeconds(20)); }
+        Assert.False(cap.Allow("a"));
+        for (var i = 0; i < RateCap.MaxPairs; i++) { cap.Allow("p" + i); }
+        Assert.False(cap.Allow("new"));
+    }
 }

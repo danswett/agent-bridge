@@ -25,10 +25,11 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
     public const string Op = "agent.lite.send";
     public const int MaxText = 4096;
     public const string Off = "off", NotSameAccount = "notSameAccount", NotPeer = "notPeer", Replay = "replay", Busy = "busy",
-        Malformed = "malformed", Sender = "lite-sender", AddMismatch = "lite-add", Target = "lite-target", DeliveryFailed = "deliveryFailed";
+        Malformed = "malformed", Rate = "rate", Sender = "lite-sender", AddMismatch = "lite-add", Target = "lite-target", DeliveryFailed = "deliveryFailed";
 
     readonly TimeProvider time = time ?? TimeProvider.System;
     public ReplayStore Replays { get; } = new(time ?? TimeProvider.System);
+    public RateCap Rates { get; } = new(time ?? TimeProvider.System);
 
     public async Task<object?> ServeAsync(SecureChannel channel, JsonElement data, CancellationToken ct)
     {
@@ -70,6 +71,7 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
             case ReplayStore.Result.Seen: return Refuse(Replay, data, body.Request);
             case ReplayStore.Result.Full: return Refuse(Busy, data, body.Request);
         }
+        if (!Rates.Allow(body.Principal.Session + ">" + channel.PeerId + "/" + body.Target.Session)) { return Refuse(Rate, data, body.Request); }
         LiteDelivery result;
         try { result = await deliver.DeliverAsync(verified, text, ct); }
         catch (Exception x) when (x is not OperationCanceledException) { return Refuse(DeliveryFailed, data, body.Request); }
@@ -120,6 +122,36 @@ public sealed class ReplayStore(TimeProvider time)
             }
             ids[key] = now + Lifetime;
             return Result.Added;
+        }
+    }
+}
+
+// Per sending session to receiving session: at most 6 a minute and 60 an hour, in memory. Only verified, non-replayed
+// requests count. The table is bounded; a full one of live pairs refuses new pairs rather than forgetting.
+public sealed class RateCap(TimeProvider time)
+{
+    public const int PerMinute = 6, PerHour = 60, MaxPairs = 1024;
+    readonly Dictionary<string, Queue<DateTimeOffset>> hits = new(StringComparer.Ordinal);
+    readonly object gate = new();
+
+    public bool Allow(string pair)
+    {
+        lock (gate)
+        {
+            var now = time.GetUtcNow();
+            if (!hits.TryGetValue(pair, out var q))
+            {
+                if (hits.Count >= MaxPairs)
+                {
+                    foreach (var k in hits.Where(p => p.Value.Count == 0 || now - p.Value.Peek() >= TimeSpan.FromHours(1)).Select(p => p.Key).ToList()) { hits.Remove(k); }
+                    if (hits.Count >= MaxPairs) { return false; }
+                }
+                hits[pair] = q = new();
+            }
+            while (q.Count > 0 && now - q.Peek() >= TimeSpan.FromHours(1)) { q.Dequeue(); }
+            if (q.Count >= PerHour || q.Count(t => now - t < TimeSpan.FromMinutes(1)) >= PerMinute) { return false; }
+            q.Enqueue(now);
+            return true;
         }
     }
 }
