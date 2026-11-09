@@ -20,7 +20,7 @@ public sealed class HaRunning : IAsyncDisposable
         Func<string?>? agentHaBridge, bool devBuild, string version, Action<string> log, ISessionAnswerer? answers = null,
         Func<HaReply, CancellationToken, Task<AgentBridge.Protocol.ReplyResult>>? reply = null, ISessionStopper? stops = null,
         AgentBridge.Host.Delivery.Launch.ISessionLauncher? launcher = null, IHostUpdates? updates = null, SessionDrivers? drivers = null,
-        HaAuthGuard? auth = null)
+        HaAuthGuard? auth = null, Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load = null)
     {
         foreach (var p in settings.HomeAssistantProblems) { log($"config.json: {p}"); }
         var ha = settings.HomeAssistant;
@@ -80,8 +80,11 @@ public sealed class HaRunning : IAsyncDisposable
             UsageAccountSensors = usage is null ? [] : HaContract.UsageAccountSensors(settings.Usage.CopilotAccounts.Select(a => a.Slot)),
             CheckForUpdates = ha.CheckForUpdates,
             UpdateCheck = TimeSpan.FromHours(ha.CheckHours),
+            // Process load leaves the machine only once Compliance clears it (#1150); until then
+            // it is in host.log alone.
+            PublishLoad = false,
         }, new HomeAssistantClient(ha.BaseUrl!, token, http, auth: auth ?? new HaAuthGuard(HaAuthGuard.FileFor(folder), log: log)), source, agentHaBridge!, usage is null ? null : () => usage.Current, log, answer: answer, reply: reply, stop: stop, launch: launch,
-            updates: updates);
+            updates: updates, load: load);
         connector.Start();
         log($"the Home Assistant connector is on: {ha.BaseUrl} as agent_bridge_{slug}{(ha.Disposable ? " (disposable)" : "")}; " +
             (answer is null ? "status only" : "status, answers" + (reply is null ? "" : ", replies") + (stop is null ? "" : ", End session")) +

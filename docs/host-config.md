@@ -303,6 +303,29 @@ refused, #67):
 Restart. A value that is not `true` or `false` turns every permission off and is said in the log.
 Devices cannot change it yet; that waits for #801's settings path.
 
+## Machine and session load in the log
+
+So a saturated machine is visible (#1150), the host takes one shared snapshot of the machine's
+processes every 5 seconds and writes a line to `logs\host.log` at most once a minute:
+
+```
+load: machine cpu 92% of 8 cores, 310 MiB memory available; sessions: 3f2a9c1d cpu 41% working set 880 MiB 6 procs; 9be0aa12 cpu 7% working set 420 MiB 3 procs
+```
+
+- Each session's figure covers its process and everything below it, found through the process
+  the host already records for the session (id plus start time, so a reused id is not counted).
+- `cpu` is the processor time used between two snapshots, as a share of the whole machine, so
+  it is a rate over the last 5 seconds, not a point reading. The first snapshot has no earlier
+  one, so it reads `unknown`.
+- `working set` is the memory resident in RAM. Pages shared between processes count once per
+  process, so the sum can overstate.
+- `unknown` means the host could not read it (for example a process it may not open); it is never
+  shown as 0. A session marked `partial` or `unavailable` is missing some or all of its processes.
+- No paths or command lines are read or written. Session ids are cut to 8 characters in the log.
+- The Home Assistant sensor can carry the same figures under a `load` attribute, keyed by node,
+  but that is off (`HaConnectorOptions.PublishLoad`) until Compliance clears sending it off the
+  machine. Until then the figures stay in `host.log`.
+
 ## Notifications in the log
 
 Each push the host makes leaves one line in `logs\host.log` for each try, so the time a

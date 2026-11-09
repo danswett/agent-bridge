@@ -15,6 +15,9 @@ public sealed record HaConnectorOptions
     public bool Dev { get; init; }
     // What a card carries when the machine has no Detailed activity switch.
     public bool DetailedActivityFallback { get; init; } = true;
+    // Publishes per-session process load on the sessions sensor (#1150). Off until Compliance clears
+    // sending it off the machine; the host.log line is unaffected.
+    public bool PublishLoad { get; init; }
     public string DashboardUrlPath { get; init; } = HaSettings.DefaultDashboard;
     // Where sessions waiting to be retired are remembered across a restart. None in tests that
     // do not need it.
@@ -189,6 +192,10 @@ public sealed partial class HaConnector : IAsyncDisposable
     Task watch = Task.CompletedTask;
     readonly Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer;
 
+    readonly Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load;
+    // The load last put on the sensor: the sensor is republished when its figures are this old.
+    static readonly TimeSpan LoadRefresh = TimeSpan.FromSeconds(30);
+
     // Whether the cards' answer controls are served: only with the host's answer delivery.
     bool ServesAnswers => answer is not null;
 
@@ -277,8 +284,10 @@ public sealed partial class HaConnector : IAsyncDisposable
         Func<AnswerRequest, CancellationToken, Task<AnswerResult>>? answer = null,
         Func<HaReply, CancellationToken, Task<ReplyResult>>? reply = null,
         Func<StopRequest, CancellationToken, Task<StopResult>>? stop = null,
-        HaLauncher? launch = null, IHostUpdates? updates = null)
+        HaLauncher? launch = null, IHostUpdates? updates = null,
+        Func<AgentBridge.Host.Core.Load.ProcessLoadReport?>? load = null)
     {
+        this.load = load;
         this.options = options;
         drivers = options.Drivers ?? new SessionDrivers { Arm = options.DriverArm };
         launcher = launch;
@@ -959,15 +968,22 @@ public sealed partial class HaConnector : IAsyncDisposable
     async Task GlobalAsync(DateTimeOffset now, CancellationToken ct)
     {
         List<HaPayloads.Descriptor> descriptors;
+        Dictionary<string, string> nodes;
         lock (gate)
         {
             descriptors = [.. published.Values.OrderBy(p => p.Node, StringComparer.Ordinal)
                 .Select(p => new HaPayloads.Descriptor(p.Name, options.MachineName, p.Node, p.Kind))];
+            nodes = published.ToDictionary(p => p.Key, p => p.Value.Node, StringComparer.Ordinal);
         }
         var capabilities = HaPayloads.Capabilities(helperExists, options.Dev, LaunchCapabilities());
         var attributes = HaPayloads.GlobalAttributes(descriptors, options.MachineName, Slug, capabilities, now, source.Held?.Reason ?? "");
+        // The signature leaves the load out: its figures change every sample and would republish
+        // every pass; they ride along on a change or after LoadRefresh.
         var signature = Signature(attributes);
-        if (signature == globalSignature && now - globalAt < HaContract.GlobalReassert) { return; }
+        var report = options.PublishLoad ? load?.Invoke() : null;
+        var stale = report is not null && now - globalAt >= LoadRefresh;
+        if (signature == globalSignature && now - globalAt < HaContract.GlobalReassert && !stale) { return; }
+        if (report is not null) { attributes["load"] = HaPayloads.Load(report, nodes); }
         var (topic, config) = HaContract.SessionsConfig(Slug, options.MachineName);
         await PublishAsync(topic, config, true, ct);
         await ha.PublishAsync(HaContract.GlobalStateTopic(Slug), descriptors.Count.ToString(System.Globalization.CultureInfo.InvariantCulture), true, ct);
