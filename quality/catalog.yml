@@ -456,7 +456,7 @@ suites:
     runner: local
     triggers: [quality/rerun-known-flakes.ps1, quality/test-rerun-known-flakes.ps1, .github/workflows/rerun-known-flakes.yml]
     command: pwsh -NoProfile -File quality/test-rerun-known-flakes.ps1
-    where: ci.yml light
+    where: ci.yml light; rerun-known-flakes.yml rerun
     status: exists
 
   - id: beta-acceptance
