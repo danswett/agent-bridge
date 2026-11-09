@@ -560,7 +560,11 @@ public sealed class MachineRoster
         {
             // A copy that cannot be read is replaced by the next write, not trusted.
             try { doc = JsonSerializer.Deserialize<RosterDocument>(stored.Body, Json); }
-            catch (JsonException) { metrics.Roster("load", "corrupt"); }
+            catch (JsonException e)
+            {
+                metrics.Roster("load", "corrupt");
+                log.LogWarning("roster copy unreadable, replaced on next write: {Type}", e.GetType().Name);
+            }
         }
         bool changed;
         lock (a)
