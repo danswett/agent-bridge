@@ -53,8 +53,9 @@ and cannot launch anything itself.
    default everywhere.
 3. Limits: **3 launches per agent session and 10 per machine per hour from all agents; fleet
    grant 8 per machine per hour** (the dispatcher allows 6 workers per machine); **at most 6 live
-   agent-started sessions per machine, ended after 2 hours idle.** You can raise a limit at the
-   machine for up to 4 hours, for example to recover after a reboot.
+   agent-started sessions per machine, ended after 2 hours idle; fleet workers have their own 6
+   and are not ended for being idle.** You can raise a limit at the machine for up to 4 hours,
+   for example to recover after a reboot.
 4. Long prompts: **keep the 16 KiB limit and refuse longer ones** with a reason; a longer
    handover goes in a file the prompt points to.
 5. Other machines: **this machine only** until device approval (#55). Meanwhile the
@@ -115,8 +116,12 @@ connection with a live agent credential (`AgentCredentials.Of`, `AgentCredential
 goes to a new `AgentLaunchGate`; every other op in `Acts` (`LocalApi.cs:22-23`) stays refused for
 agents exactly as today. The gate runs, in order, refusing at the first failure:
 
-0. a repeat of a `request` this principal already sent, with identical bytes, gets the remembered
-   outcome (§7) and stops here: it is neither counted nor started again;
+0. a `request` this principal has used before never starts a second launch. The gate checks the
+   launch service's memory (10 to 15 minutes, `LaunchService.cs:570-571`) **and** the set of
+   requests rebuilt from the audit, which covers the two daily files it reads (§5), so at least
+   24 hours. A repeat with identical bytes gets the recorded outcome (`unconfirmed` when only
+   `reserved` or `interrupted` is recorded); one with different bytes is refused
+   (`requestReused`). Either way it is neither counted nor started again;
 1. the credential is live and its scope is `read+reply+launch` (re-read on every call, so a
    revocation takes effect at once);
 2. the machine policy is readable and `agents.launch.enabled` is `true`;
@@ -248,9 +253,11 @@ running with Allow all does not widen it.
 | `limits.launchesPerMachinePerHour` | **10** | this machine, all agents together |
 | `limits.fleetLaunchesPerMachinePerHour` | **8** | this machine, the fleet grant (§11); the dispatcher allows 6 workers per machine. Separate from the agent caps: fleet launches do not use up agents' 10, nor agents the fleet's 8 |
 
-**What counts:** each distinct (principal, `request`) with a `reserved` line (written at §2 step
-5, before the start) or any of `started`, `unconfirmed`, `failed`. So a launch counts once, and a
-host that crashed between the two lines still counts it. A `reserved` line with no outcome found
+**What counts:** each distinct (principal, `request`) whose **last** line is `reserved` (written
+at §2 step 5, before the start), `interrupted`, `started`, `unconfirmed` or `failed`. A request
+whose last line is `busy` or `refused` does not count, before or after a restart, which is what
+releasing its slot (§2) means. So a launch counts once, and a host that crashed between the two
+lines still counts it. A `reserved` line with no outcome found
 at host start gets an `outcome: interrupted` line ("the host stopped before this launch
 answered"), keeps counting, and a repeat of that `request` returns `unconfirmed`, since something
 may have started. Refusals and `busy` do not count, so a
@@ -264,10 +271,14 @@ caps.
 
 **How long sessions live.** The caps are per hour, not on how many run at once, so two more
 limits keep idle sessions from piling up: at most **6 live agent-launched sessions per machine**
-(`limits.liveAgentLaunched`, the fleet's own worker count), and the host **ends an agent-launched
-session idle with no person input for 2 hours** (`limits.agentLaunchedIdleHours`). Ending it is
-the host's own upkeep, not an op an agent may call; it is audited, and a person's input to the
-session cancels it for good.
+(`limits.liveAgentLaunched`), and the host **ends an agent-launched session idle with no person
+input for 2 hours** (`limits.agentLaunchedIdleHours`). Ending it is the host's own upkeep, not an
+op an agent may call; it is audited, and a person's input to the session cancels it for good.
+**Fleet workers are counted apart:** they have their own live limit, **6 per machine**
+(`limits.liveFleetWorkers`, the dispatcher's own worker count), so workers never block
+coordinators' launches or the reverse; and the 2-hour idle end does **not** apply to them, since an
+unattended worker waiting on its build is not abandoned. The dispatcher ends its workers, as it
+does today.
 
 **At the cap:** `outcome: refused`, `code: rateLimited`, `retryAfter` in seconds, and the
 reason "This machine has started 10 agent launches in the last hour (its limit). The next one
@@ -294,7 +305,11 @@ evidence (20 started, the 21st refused) must survive a restart.
 
 **Overrides.** `agent-bridge-host agents limits override <limit> <value> --for <minutes>` (at the
 machine, refused inside agent sessions like every setting) raises or lowers a cap for at most 4
-hours, then lapses by itself. It is audited and shown in `host.status`.
+hours, then lapses by itself. It is stored with its expiry in the machine's `config.json`
+(`agents.limits.overrides`), so it **survives a restart** and still lapses on time; it is audited
+and shown in `host.status`. Every launch line and every `rateLimited` refusal records the
+**effective** limit and whether an override set it (`limit`, `overridden`), so the evidence shows
+which number was in force.
 
 ## 6. Audit
 
@@ -322,7 +337,7 @@ gate rest on.
 Fields: `v`, `at` (UTC), `principal` (`agent:<machine>/<session>`, `AgentPrincipals.cs:27`), `scope`,
 `depth`, `action: "session.launch"`, `request`, `machine`, `agent`, `workspace` (label),
 `model`, `permissions`, `promptBytes`, `outcome`, `code`, `reason`, `session` (the new one, when
-known), `grant` (`agent` or `fleet`). **Never** the prompt, the token or a file path beyond the
+known), `grant` (`agent` or `fleet`), `limit` and `overridden` (§5). **Never** the prompt, the token or a file path beyond the
 workspace label (#1401's rule). Every attempt gets a line: a refusal at any gate step is one
 line with its `code`; a launch that passes writes `outcome: reserved` **before** it starts (§2
 step 5), and the outcome is a second line with the same `request`.
@@ -413,10 +428,10 @@ rejected: they need an exactly-once claim, a GitHub token on every machine and m
 
 | Slice | Contents | Size | Tests (fail-closed cases named) |
 |---|---|---|---|
-| **#1401** audit log (first) | as filed, plus the launch file, hash chain across files, line version, folder lock, pruning rules (§6) and the `audit` command | M | an unwritable log refuses the action; a removed line shows "broken"; pruning and rotation keep the chain intact; a torn last line is ignored; a newer major version is refused, unknown fields ignored; a second writer is refused |
+| **#1401** audit log (first) | as filed, plus the launch file, hash chain across files, line version, folder lock, pruning rules (§6), and the `audit` command with `--outcome` and `audit archive` | M | an unwritable log refuses the action; a removed line shows "broken"; pruning and rotation keep the chain intact; a torn last line is ignored; a newer major version is refused, unknown fields ignored; a second writer is refused |
 | **2b #1404** scope and enforcement | `agentScope` on person launches; the `agents.launch` and `agents.limits` config keys; `agent-bridge-host agents revoke`; `AgentLaunchGate` (§2, §3) with the worktree check and per-agent configuration lists; **in-memory caps and attempt limit with the §5 defaults**, so agents are never uncapped between 2b and 2c; refuse `session.launch` from `Other`; MCP schema trimmed; agent prompt wording | L (about 450; may split the worktree check off) | refused: no scope, scope revoked mid-session, switch off, policy unreadable, `permissions` absent, `allowAll`, `transfer`, `resume`, attachments, workspace not listed, workspace not isolated, worktree with a tool-approving settings file, Agency, `auto`, extra arguments, `agentScope` from an agent, launcher at depth 1, an adopted session, a script caller, two launches racing for the last slot; worktree holding `.claude/` or `.mcp.json` refused and the worktree removed, an agent kind without a confirmed list, a slot released after `busy` and after `refused`, the 21st attempt in an hour; accepted: ask-only launch in a listed workspace; 16 KiB prompt whole, 16 KiB + 1 refused, the npm agent's command-line refusal; child credential is `read` |
-| **2c #1413** cap, result, options | caps and attempt limit made durable (rebuilt from the audit at start, `interrupted` lines); result keyed by principal; agent projection of options and busy | M-L (about 380; may split the live limit and idle end off) | 4th launch by one agent refused; 11th on the machine refused; 7th live agent-launched session refused; idle session ended after 2 h, and not after a person's input; cap survives a host restart; a crash between `reserved` and the outcome still counts; a future-dated line counts; a defect inside the hour refuses with `capRebuilding`, an older one warns; a locked policy file retried, then `policyUnreadable`; override lapses by itself; another caller's repeat of the request id never gets the result; options carry no path, resumable or trust |
-| **2e (new)** fleet launch grant | the grant in §11 on the script credential | S (about 120), after #1414 and #1404 | refused: from inside an agent session, workspace not fleet-ticked, cap 9th, under 1 GiB free (`diskLow`), scope above `read+reply` for the worker |
+| **2c #1413** cap, result, options | caps and attempt limit made durable (rebuilt from the audit at start, `interrupted` lines, the 30 s rebuild retry); request ids remembered from the audit (§2 step 0); the live limits and idle end; `agents limits override` stored with its expiry; fail-closed reporting and cap use in `host.status`; result keyed by principal; agent projection of options and busy; the runbook lines for `auditUnwritable`, `capRebuilding` and the override | M-L (about 380; may split the live limit and idle end off) | 4th launch by one agent refused; 11th on the machine refused; 7th live agent-launched session refused; idle session ended after 2 h, and not after a person's input; cap survives a host restart; a crash between `reserved` and the outcome still counts; a future-dated line counts; a defect inside the hour refuses with `capRebuilding`, an older one warns; a locked policy file retried, then `policyUnreadable`; override lapses by itself; another caller's repeat of the request id never gets the result; the same request 16 minutes later starts nothing and counts once; a request refused or busy before a restart does not count after it; an override survives a restart and lapses on time, and a refusal records the effective limit; the 7th live fleet worker refused while coordinators still launch; a fleet worker is not ended at 2 h idle; options carry no path, resumable or trust |
+| **2e (new)** fleet launch grant | the grant in §11 on the script credential: a new branch in `LocalApi.Handler` for script-credential connections (the agent gate sits only on `CallerKind.Agent`, `LocalApi.cs:68`), the fleet cap and live limit, the `diskLow` check, and the runbook line for `diskLow` | S (about 120), after #1414 and #1404 | refused: from inside an agent session, workspace not fleet-ticked, cap 9th, under 1 GiB free (`diskLow`), scope above `read+reply` for the worker |
 | **2f (new)** app controls | the app's Settings ticks ("agents may launch here", "fleet workers may run here", the machine switch), the "may start agents" tick on Launch, and "Stop this session starting agents"; until then the owner uses `agent-bridge-host config` and `agents revoke` | S-M, after #1404 | each tick writes only its key; refused inside agent sessions |
 | **2d fleet #106** dispatcher | central dispatcher plus per-machine launchers (§9) through `session.launch` with the fleet grant; result and options from the call; kill switch; one machine first | S-M (about 2 days) | as filed, plus: a retried assignment starts nothing twice; an assignment on a sleeping machine returns; a host without the grant launches nothing and never falls back |
 
@@ -475,8 +490,8 @@ Each has a recommended default; the summary's list is the same.
 2. Who grants launch scope: a person, per session, at launch, on machines with the switch on
    **(recommended)**; or every session a person launches on such a machine.
 3. Limits: 3 per agent session and 10 per machine per hour; fleet grant 8 per machine per
-   hour; at most 6 live agent-started sessions per machine, ended after 2 hours idle
-   **(recommended)**.
+   hour; at most 6 live agent-started sessions per machine, ended after 2 hours idle; fleet
+   workers a separate 6 live, not ended for idling **(recommended)**.
 4. Prompts over 16 KiB: refused, with "put it in a file" **(recommended)**; or raise the limit
    with a prompt-file channel (about 2 more days, new content path).
 5. Cross-machine: this machine only until #55, with a central dispatcher and a launcher on
