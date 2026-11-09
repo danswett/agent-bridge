@@ -27,9 +27,9 @@ time, version and path is made up.
 ## 1. The problem
 
 Today a machine becomes useful only after a person has, by hand and in the right order:
-installed each CLI, signed in to each, registered Agent Bridge's hooks (and, for Codex,
+installed each CLI, signed in to each, registered Slipgates's hooks (and, for Codex,
 trusted them in Codex), approved launch folders in `host.json`, chosen a permission mode,
-signed in to Agent Bridge, and then started a session to see whether any of it worked. The
+signed in to Slipgates, and then started a session to see whether any of it worked. The
 app's Settings page shows some of this, mixed together, and says "working" when a file was
 written or a process is up, not when a hook actually arrived.
 
@@ -91,14 +91,14 @@ Three groups:
   "Earlier setup found").
 - **Agents:** Copilot CLI, Agency, Claude Code, Codex CLI, each Found with version and path, or
   Not found ("Not on PATH or in its usual folders"). **Scan again** re-runs detection.
-- **Accounts:** the Agent Bridge account, Not signed in or Signed in.
+- **Accounts:** the Slipgates account, Not signed in or Signed in.
 
 **Migrated or legacy-managed machines** ([dark](384-first-run/proposal-384-discover-migrated.png),
 [light](384-first-run/proposal-384-discover-migrated-light.png)). An info bar says "Earlier
 setup found · agent-ha-bridge 1.3.22 set up this machine. Its working settings are kept",
 with **Review migration**, which opens the existing reversible migration path (G4). Below it,
 "Managed by agent-ha-bridge" lists what will be **Kept** (hooks that delivered recently,
-approved folders). "Owned by another tool" lists config Agent Bridge will not touch: Codex
+approved folders). "Owned by another tool" lists config Slipgates will not touch: Codex
 CLI hooks written by another hook manager, Blocked, **Not changed**, with **Details**. Fresh
 setup never takes over residual legacy state; the person migrates or leaves it.
 
@@ -149,7 +149,7 @@ optional install doesn't trap the person, it only keeps Finish from counting tha
 
 ### 3.3 Accounts and sign-in
 
-"Agent Bridge first, then each agent through its own sign-in." Agent Bridge's own account
+"Slipgates first, then each agent through its own sign-in." Slipgates's own account
 comes first because the relay and devices depend on it.
 - **Device code** ([dark](384-first-run/proposal-384-accounts.png),
   [light](384-first-run/proposal-384-accounts-light.png)): GitHub account, "Device code ·
@@ -158,7 +158,7 @@ comes first because the relay and devices depend on it.
   asks for a password and never shows a token.
 - Each CLI signs in through its own supported flow: Copilot CLI by its device flow, Codex CLI
   by "Opens codex login in a terminal", and Agency by Copilot CLI's sign-in ("Uses Copilot
-  CLI's sign-in"). Agent Bridge shows what the CLI reports, never the credential.
+  CLI's sign-in"). Slipgates shows what the CLI reports, never the credential.
 - **Expired and entitlement** ([dark](384-first-run/proposal-384-accounts-expired.png),
   [light](384-first-run/proposal-384-accounts-expired-light.png)): Copilot CLI "Sign-in
   expired · last worked Oct 31", Needs you, **Sign in again**; Agency "Blocked by Copilot
@@ -168,13 +168,13 @@ comes first because the relay and devices depend on it.
 
 ### 3.4 Hooks
 
-"Agent Bridge adds only its own hooks and keeps everything else."
+"Slipgates adds only its own hooks and keeps everything else."
 ([dark](384-first-run/proposal-384-hooks.png), [light](384-first-run/proposal-384-hooks-light.png))
-- **Copilot CLI and Agency:** Registration ("Owned by Agent Bridge · …\hooks · backup
+- **Copilot CLI and Agency:** Registration ("Owned by Slipgates · …\hooks · backup
   kept", Registered), Instructions ("Owned block in copilot-instructions.md", Added), Agency
   ("Reports through Copilot CLI's hooks", Shared).
 - **Codex CLI:** Registration (plugin agent-bridge, Registered), **Hook trust** ("Codex asks
-  you to trust a new hook. Agent Bridge never answers this.", Not trusted, Needs you, **Open
+  you to trust a new hook. Slipgates never answers this.", Not trusted, Needs you, **Open
   Codex**), and **Hook command** ("C:\Program Files\Agent Bridge\hook.exe · quoted for
   Codex", Runs): a command path with spaces is quoted and executed once before it's written;
   a command known not to run is never installed (#384 Safety).
@@ -192,8 +192,8 @@ Four groups, each a different decision with a different owner:
 
 | Group | Row | Default | Who decides, and where it's enforced |
 |---|---|---|---|
-| Folders Agent Bridge may start sessions in | each approved folder, **Subfolders** Off, **Remove**; **Add folder** | none until added; exact folder only | Bridge launch authorization (`launch.workspaces`, host) |
-| Each agent's own folder trust | Copilot CLI and Agency; Codex CLI: "Asks in the CLI" | the CLI's own | The CLI. Agent Bridge reports it and never pre-trusts |
+| Folders Slipgates may start sessions in | each approved folder, **Subfolders** Off, **Remove**; **Add folder** | none until added; exact folder only | Bridge launch authorization (`launch.workspaces`, host) |
+| Each agent's own folder trust | Copilot CLI and Agency; Codex CLI: "Asks in the CLI" | the CLI's own | The CLI. Slipgates reports it and never pre-trusts |
 | Permission prompts | New sessions: **Standard prompts** | Standard prompts (`launch.permissions: ask`) | Host, per launch |
 | Answers from my devices | "Let this app and my devices approve Copilot permission prompts"; "Answer folder-trust questions from my devices"; paired devices | On (today's `remoteApproval` default, decision 6); **Off**; "No devices paired", **Pair a phone** | Host, through the existing approval path |
 
@@ -260,7 +260,7 @@ pane (ui.md §7):
 |---|---|---|---|
 | **Overview** | Readiness of everything, grouped This machine / Agents / Other devices; Check again; Diagnostics; Resume setup when unfinished | Verify (the same checks, without test sessions unless asked) | [dark](384-first-run/proposal-384-settings-overview.png), [light](384-first-run/proposal-384-settings-overview-light.png) |
 | **Agents** | One tab per agent: Installation (Executable, Home), Account (Sign-in, Access), Hooks (Registration, Hook trust, Last hook, Running sessions); Run test session, Repair hooks, Remove bridge integration | Discover, Agents, Hooks | [dark](384-first-run/proposal-384-settings-agents.png), [light](384-first-run/proposal-384-settings-agents-light.png) |
-| **Accounts** | Agent Bridge (GitHub account, Relay, this machine's name), each agent's sign-in, Devices | Accounts | [dark](384-first-run/proposal-384-settings-accounts.png), [light](384-first-run/proposal-384-settings-accounts-light.png) |
+| **Accounts** | Slipgates (GitHub account, Relay, this machine's name), each agent's sign-in, Devices | Accounts | [dark](384-first-run/proposal-384-settings-accounts.png), [light](384-first-run/proposal-384-settings-accounts-light.png) |
 | **Workspaces and trust** | The four groups of §3.5, unchanged | Workspaces | [dark](384-first-run/proposal-384-settings-workspaces.png), [light](384-first-run/proposal-384-settings-workspaces-light.png) |
 | **General** | Bridge Host (Restart, Stop, start at sign-in, Dev Box keep-awake), This app (start at sign-in, notifications, updates, pre-releases, version), Troubleshooting (Host log, Set up again) | none (these have defaults) | [dark](384-first-run/proposal-384-settings-general.png), [light](384-first-run/proposal-384-settings-general-light.png) |
 
@@ -269,7 +269,7 @@ pane (ui.md §7):
   but unselected agent says **Not selected** with **Set up** (#384: later-installed agents are
   offered, never silently opted in).
 - **Agents tabs** carry an amber dot when that agent needs the person, and the nav item the
-  same badge. **Remove bridge integration** removes only Agent Bridge's registrations and
+  same badge. **Remove bridge integration** removes only Slipgates's registrations and
   blocks; uninstalling a CLI or its credentials is never on this page.
 - **Dev Box keep-awake** appears only on a Dev Box ("DEV-VM1 · Dev Box"), with its
   consequences on the row: "Signs in with az login · an awake Dev Box keeps billing", Off by
@@ -318,7 +318,7 @@ Words are examples from the boards; each row also carries its last observation t
 | Executable, version, home | Not selected | Not found · *Install…* | Update needed: 0.98 is too old · *Update* | Found 1.0.3 | Blocked: npm not found · *Install Node.js* (not built yet, #384 slice 3) | Install failed · *reason* · *Install CLI* (#784) |
 | Sign-in | Not selected | Not signed in · *Sign in* | Sign-in expired · *Sign in again* | Signed in as danswett | Blocked by Copilot CLI | Sign-in failed · *Try again* |
 | Access (entitlement) | Not selected | Not checked | Choose a plan · *Check plan* | Plan includes Codex | No access · *Check plan* | Couldn't check: 503 · *Check again* |
-| Ownership | Not selected | Nothing registered | Earlier setup to migrate · *Review migration* | Owned by Agent Bridge | Owned by another tool · *Details* | Couldn't read hooks.json · *Check again* |
+| Ownership | Not selected | Nothing registered | Earlier setup to migrate · *Review migration* | Owned by Slipgates | Owned by another tool · *Details* | Couldn't read hooks.json · *Check again* |
 | Registration | Not selected | Not registered · *Register* | Out of date · *Repair hooks* | Registered | Command can't run here | Couldn't register · *Try again* |
 | Activation and trust | Not selected | Not active | Not trusted in Codex · *Open Codex* | Trusted | Turned off by policy | Couldn't check |
 | Host heartbeat | Always required | Host not running · *Start* | Restart needed · *Restart* | Heartbeat 14:52:10 | Another host is running | Host stopped at 14:20 · *Start* |
@@ -346,8 +346,8 @@ Rules:
 | Auth expired | Accounts, Agents › Account | Sign-in expired · last worked Oct 31 | Sign in again (the CLI's own flow) |
 | Entitlement missing | Accounts | No access · This account's plan doesn't include Codex | Check plan (opens the provider's page) |
 | Offline or relay unreachable | Verify, Overview | Relay timed out after 10 s · 14:38 (Failed) | Try again, or Use local only |
-| Foreign ownership | Discover, Agents › Hooks | Owned by another tool · Not changed (Blocked) | Details: whose, which file, and that Agent Bridge won't edit it |
-| Untrusted Codex hooks | Hooks, Verify | Not trusted in Codex (Needs you); its hook Blocked by hook trust | Open Codex; Agent Bridge never answers the trust prompt |
+| Foreign ownership | Discover, Agents › Hooks | Owned by another tool · Not changed (Blocked) | Details: whose, which file, and that Slipgates won't edit it |
+| Untrusted Codex hooks | Hooks, Verify | Not trusted in Codex (Needs you); its hook Blocked by hook trust | Open Codex; Slipgates never answers the trust prompt |
 | Folder-trust prompt pending | Verify, Overview | Folder trust question waiting (Needs you) | Answer in the CLI, or on a device if allowed (Off by default) |
 | Path with spaces | Workspaces, Hooks | C:\Projects\My Tools · path has a space; Hook command · quoted for Codex | Quoted automatically; a command that fails its dry run is Blocked: Command can't run here |
 | Running sessions after a change | Hooks, Agents › Hooks | New session needed · 1 session started before this change | None forced; Show sessions |
@@ -370,7 +370,7 @@ marks or emoji, and status words from a fixed list. Setup adds its own fixed wor
   Pair a phone, Use local only.
 - **Lines that are not status** are an exception to ui.md §1's principle 5, now written there:
   consent ("Nothing runs until you choose Install"), security ("Codex asks you to trust a new
-  hook. Agent Bridge never answers this."), cost ("an awake Dev Box keeps billing"), and the
+  hook. Slipgates never answers this."), cost ("an awake Dev Box keeps billing"), and the
   step subtitles. Each is one line, factual, and states a consequence rather than explaining
   the control (decision 3).
 
@@ -384,7 +384,7 @@ marks or emoji, and status words from a fixed list. Setup adds its own fixed wor
 | "Ready on this machine" with Local-only badge and Phone not paired | 1 | Kept; Local only is a neutral chip, Relay reads Off | Local only is a choice, not a warning |
 | Settings nav with Overview and Health | 2 | **Merged** into Overview | One readiness list; fewer places to look |
 | Per-agent tabs with separate rows for executable, account, registration, trust, fresh hook | 2 | Kept, grouped Installation / Account / Hooks, with Access split from Sign-in and Running sessions added | Entitlement and staleness are their own facts |
-| Run test session, Repair hooks, Remove bridge integration | 2 | Kept; Remove is a subtle button | It removes only Agent Bridge's own registrations |
+| Run test session, Repair hooks, Remove bridge integration | 2 | Kept; Remove is a subtle button | It removes only Slipgates's own registrations |
 | Workspaces & trust: folders, include subfolders off, CLI permissions, remote folder-trust off, approved devices | 2 | Kept, in four labelled groups; added each CLI's own folder trust | Each decision separate, with its owner named |
 | Concept icons and illustration | 1, 2 | **Dropped** for the existing glyphs and icons | Not approved assets |
 | Hooks inside Agents | 2 | First run has its own Hooks step | Hook trust is its own decision and needs its own moment |
