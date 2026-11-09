@@ -139,6 +139,8 @@ public class LiteReceiverTests
         Refused(await r.Send(r.Request(target: new string('9', 32))), LiteReceiver.Target);
         Refused(await r.Send(JsonSerializer.SerializeToElement(new { envelope = "AAAA", text = "x" })), Refusal.Json);
         Refused(await r.Send(JsonSerializer.SerializeToElement(new { text = "x" })), LiteReceiver.Malformed);
+        Refused(await r.Send(JsonSerializer.SerializeToElement(new[] { 1 })), LiteReceiver.Malformed);
+        Refused(await r.Send(r.Request(text: new string('a', LiteReceiver.MaxText + 1))), LiteReceiver.Malformed);
 
         using var other = new Rig();
         Refused(await r.Send(other.Request(id: Id("3"))), Refusal.Signature);
@@ -191,12 +193,22 @@ public class LiteReceiverTests
     }
 
     [Fact]
-    public void The_hourly_cap_and_the_pair_table_are_bounded()
+    public void The_hourly_cap_holds_and_one_peer_cannot_fill_the_table_or_reset_an_active_pair()
     {
         var time = new FakeTimeProvider(Start); var cap = new RateCap(time);
-        for (var i = 0; i < RateCap.PerHour; i++) { Assert.True(cap.Allow("a")); time.Advance(TimeSpan.FromSeconds(20)); }
-        Assert.False(cap.Allow("a"));
-        for (var i = 0; i < RateCap.MaxPairs; i++) { cap.Allow("p" + i); }
-        Assert.False(cap.Allow("new"));
+        for (var i = 0; i < RateCap.PerHour; i++) { Assert.True(cap.Allow("peer", "a")); time.Advance(TimeSpan.FromSeconds(20)); }
+        Assert.False(cap.Allow("peer", "a"));
+        for (var i = 0; i < RateCap.MaxPerPeer * 2; i++) { cap.Allow("greedy", "g" + i); }
+        Assert.False(cap.Allow("greedy", "more"));
+        Assert.True(cap.Allow("other", "o"));
+        Assert.False(cap.Allow("peer", "a"));
+    }
+
+    [Fact]
+    public async Task Refusals_before_verification_echo_no_request_id_and_later_ones_do()
+    {
+        using var r = new Rig();
+        Assert.Equal("", (await r.Send(r.Request(text: "tampered", signedText: "hello"))).Request);
+        Assert.Equal(Id("1"), (await r.Send(r.Request(target: new string('9', 32)))).Request);
     }
 }
