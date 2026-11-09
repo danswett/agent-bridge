@@ -28,6 +28,10 @@ Assert ((Find-FlakyIssue 'A.B.C.Method' $issues).number -eq 1) 'matches a test n
 Assert ($null -eq (Find-FlakyIssue 'A.B.C' $issues)) 'a prefix of a name does not match'
 Assert ($null -eq (Find-FlakyIssue 'A.B.C.Method.More' $issues)) 'a longer name does not match'
 Assert ($null -eq (Find-FlakyIssue 'file.spec.mjs:43' $issues)) 'file:43 does not match file:430'
+$issues += [pscustomobject]@{ number = 4; title = 'flaky: reduced-motion.spec.mjs:20 and e2e/deep.spec.mjs:7'; body = ''; author = [pscustomobject]@{ login = 'danswett' } }
+Assert ($null -eq (Find-FlakyIssue 'motion.spec.mjs:20' $issues)) 'motion.spec.mjs:20 does not match reduced-motion.spec.mjs:20'
+Assert ($null -eq (Find-FlakyIssue 'deep.spec.mjs:7' $issues)) 'a bare file name does not match inside a path'
+Assert ((Find-FlakyIssue 'reduced-motion.spec.mjs:20' $issues).number -eq 4) 'a hyphenated file name matches itself'
 Assert ((Find-FlakyIssue 'file.spec.mjs:430' $issues).number -eq 2) 'the hunt bot counts as a trusted author'
 Assert ($null -eq (Find-FlakyIssue 'X.Y.Z' $issues)) 'an issue from anyone else does not count'
 
@@ -52,7 +56,11 @@ function Fake-Gh {
                 conclusion = $s.conclusion; run_attempt = $s.attempt; created_at = '2026-11-09T05:00:00Z'; html_url = 'https://example/run/100'
                 head_sha = 'abcdef0123456789' } | ConvertTo-Json -Depth 4; return }
         '^api repos/r/actions/runs\?' { @{ workflow_runs = @($s.newer) } | ConvertTo-Json -Depth 4; return }
-        '^api repos/r/actions/runs/100/jobs' { @{ jobs = @(@{ id = 7; name = 'windows'; conclusion = $s.jobConclusion }) } | ConvertTo-Json -Depth 4; return }
+        '^api repos/r/actions/runs/100/jobs' {
+            $js = @(@{ id = 7; name = 'windows'; conclusion = $s.jobConclusion })
+            if ($s.gate) { $js += @{ id = 8; name = 'quality-gate'; conclusion = 'failure' } }
+            @{ jobs = $js } | ConvertTo-Json -Depth 4; return }
+        '^api repos/r/actions/jobs/8/logs' { 'Error: Process completed with exit code 1.'; return }
         '^api repos/r/actions/jobs/7/logs' { $s.log; return }
         '^issue list' { ($issues | ConvertTo-Json -Depth 4 -AsArray); return }
         '^run rerun' { return }
@@ -60,7 +68,7 @@ function Fake-Gh {
     }
 }
 function Run-Scenario([hashtable]$Over, [switch]$DryRun) {
-    $script:Scenario = @{ conclusion = 'failure'; attempt = 1; newer = @(); jobConclusion = 'failure'
+    $script:Scenario = @{ conclusion = 'failure'; attempt = 1; newer = @(); jobConclusion = 'failure'; gate = $false
         log = '  Failed A.B.C.Method [1 s]' } + @{}
     foreach ($k in $Over.Keys) { $script:Scenario[$k] = $Over[$k] }
     $script:Calls = @()
@@ -72,6 +80,12 @@ $x = Run-Scenario @{}
 Assert ($x.Result.Rerun -and $x.Reran -eq 1 -and $x.Comments -eq 1) 'a known flake is re-run once and logged on its issue'
 $x = Run-Scenario @{} -DryRun
 Assert ($x.Result.Rerun -and $x.Reran -eq 0 -and $x.Comments -eq 0) 'a dry run re-runs and comments on nothing'
+$x = Run-Scenario @{ gate = $true }
+Assert ($x.Result.Rerun -and $x.Reran -eq 1) "the red quality-gate job, which has no test of its own, does not stop a known flake's re-run"
+$x = Run-Scenario @{ gate = $true; log = '  Failed New.Real.Failure [1 s]' }
+Assert (-not $x.Result.Rerun -and $x.Reran -eq 0) 'with the gate skipped, an unfiled failure still stays red'
+$x = Run-Scenario @{ gate = $true; jobConclusion = 'success' }
+Assert (-not $x.Result.Rerun -and $x.Reran -eq 0) 'a red gate with no other failed job is left alone'
 $x = Run-Scenario @{ attempt = 2 }
 Assert (-not $x.Result.Rerun -and $x.Reran -eq 0) 'a second attempt is never re-run'
 $x = Run-Scenario @{ conclusion = 'cancelled' }

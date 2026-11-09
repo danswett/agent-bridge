@@ -727,7 +727,7 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
 - **Known flakes on `main` are re-run once, automatically**
   ([rerun-known-flakes.yml](../.github/workflows/rerun-known-flakes.yml), owner decision
   2026-11-08). When a push run of CI on `main` ends red, `quality/rerun-known-flakes.ps1` reads
-  each failed job's log and re-runs the failed jobs once only if there is at least one failed
+  each failed job's log (not `quality-gate`, the summary job, which fails whenever another does and has no test of its own) and re-runs the failed jobs once only if there is at least one failed
   job, every failed job shows a failed test, and every failed test is named in an open `flaky`
   issue by `danswett` or the hunt's bot. It leaves the run red when any failed test has no issue,
   a job failed without a test failure in its log (a build error, a hang), a job timed out, the run

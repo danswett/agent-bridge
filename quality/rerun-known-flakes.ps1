@@ -26,6 +26,9 @@ Set-StrictMode -Version Latest
 # owner and the hunt's own bot. The `flaky` label alone is not enough.
 $script:TrustedAuthors = @('danswett', 'app/github-actions', 'github-actions', 'github-actions[bot]')
 $script:GhCommand = 'gh'
+# ci.yml's aggregate job runs `if: always()` and fails whenever any other job did, with no test in
+# its log of its own; the jobs it summarises are the ones read.
+$script:GateJob = 'quality-gate'
 
 function Invoke-Gh {
     $global:LASTEXITCODE = 0
@@ -47,7 +50,7 @@ function Get-FailedTests([string]$Log) {
 # The open flake issue that names the test, or $null. The name must stand alone in the issue's
 # title or body: Class.Method.Other and file:430 are not Class.Method and file:43.
 function Find-FlakyIssue([string]$Test, $Issues) {
-    $pattern = '(?<![\w.:])' + [regex]::Escape($Test) + '(?!\w|\.\w)'
+    $pattern = '(?<![\w.:/])(?<!\w-)' + [regex]::Escape($Test) + '(?!\w|[-/]\w|\.\w)'
     foreach ($issue in $Issues) {
         if ($issue.author.login -notin $script:TrustedAuthors) { continue }
         if ("$($issue.title)`n$($issue.body)" -match $pattern) { return $issue }
@@ -96,7 +99,7 @@ function Invoke-RerunKnownFlakes([long]$RunId, [string]$Repository, [switch]$Dry
         return [pscustomobject]@{ Rerun = $false; Reason = 'a job timed out'; Matched = @() }
     }
     $failedByJob = [ordered]@{}
-    foreach ($job in @($jobs | Where-Object { $_.conclusion -eq 'failure' })) {
+    foreach ($job in @($jobs | Where-Object { $_.conclusion -eq 'failure' -and $_.name -ne $script:GateJob })) {
         $log = (Invoke-Gh api "repos/$Repository/actions/jobs/$($job.id)/logs") -join "`n"
         $failedByJob[$job.name] = Get-FailedTests $log
     }
