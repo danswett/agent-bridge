@@ -164,6 +164,7 @@ public static class ProcessChain
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
+            CreateNoWindow = true,
         };
         // lstart in the C locale's fixed form, whatever the user's.
         start.Environment["LC_ALL"] = "C";

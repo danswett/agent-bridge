@@ -415,6 +415,7 @@ public sealed class SystemProcessInspector : IProcessInspector
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
+            CreateNoWindow = true,
         };
         using var ps = ProcessLaunch.Start(start);
         if (ps is null) { return null; }
