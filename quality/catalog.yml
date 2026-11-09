@@ -73,6 +73,7 @@ no_test_paths:
   - .gitignore
   - LICENSE
   - tools/design-mockups/**     # renders reference images only; nothing ships or tests from it
+  - tools/agents/**             # session helpers (wake-watch.ps1) that poll GitHub for a team; nothing ships or tests from them
   - ops/**                      # SRE plan, runbooks, KQL and read-only operator probes; nothing ships from it
   - .github/dependabot.yml      # schedules update PRs; each PR's own changes select its tests
   - .github/CODEOWNERS          # who reviews what; CI's plan runs the whole ring for .github/ anyway
