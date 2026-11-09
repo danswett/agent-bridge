@@ -26,7 +26,7 @@ public sealed class AgentSignKeyTests : IDisposable
         Assert.Equal(65, first.PublicPoint.Length);
         Assert.Equal(first.PublicPoint, second.PublicPoint);
         Assert.Equal(first.PublicPoint, reopened.PublicPoint);
-        Assert.Single(Directory.GetFiles(Path.Combine(folder, AgentSignKey.FolderName)));
+        Assert.Single(LeftBehind());
     }
 
     [Fact]
@@ -64,8 +64,40 @@ public sealed class AgentSignKeyTests : IDisposable
             .Select(_ => { using var k = AgentSignKey.OpenOrCreate(folder, true); return Convert.ToHexString(k.PublicPoint); })
             .ToList();
         Assert.Single(points.Distinct());
-        Assert.Equal([AgentSignKey.FileName], Directory.GetFiles(Path.Combine(folder, AgentSignKey.FolderName)).Select(Path.GetFileName));
+        Assert.Equal([AgentSignKey.FileName], LeftBehind());
     }
+
+    [Fact]
+    public async Task First_callers_in_separate_processes_all_get_the_same_key()
+    {
+        var dotnet = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet";
+        var assembly = typeof(Program).Assembly.Location;
+        // The race is a narrow window, so several rounds of fresh folders make it near certain.
+        for (var round = 0; round < 6; round++)
+        {
+            var profile = Path.Combine(folder, $"round{round}");
+            var start = DateTime.UtcNow.AddSeconds(3).Ticks;
+            var children = Enumerable.Range(0, 6).Select(_ => Task.Run(async () =>
+            {
+                var info = new System.Diagnostics.ProcessStartInfo(dotnet) { RedirectStandardOutput = true, RedirectStandardError = true };
+                foreach (var a in new[] { assembly, "agent-sign-child", profile, start.ToString() }) { info.ArgumentList.Add(a); }
+                using var child = System.Diagnostics.Process.Start(info)!;
+                var error = child.StandardError.ReadToEndAsync();
+                var output = await child.StandardOutput.ReadToEndAsync();
+                await child.WaitForExitAsync();
+                Assert.True(child.ExitCode == 0, await error);
+                return output.Trim();
+            })).ToList();
+            var points = await Task.WhenAll(children);
+            Assert.Single(points.Distinct());
+            Assert.Equal(130, points[0].Length);
+            Assert.Equal([AgentSignKey.FileName], LeftBehind(profile));
+        }
+    }
+
+    // Files in the key's folder other than the lock file, which stays for the next caller.
+    string[] LeftBehind(string? profile = null) => Directory.GetFiles(Path.Combine(profile ?? folder, AgentSignKey.FolderName))
+        .Select(Path.GetFileName).Where(n => n != AgentSignKey.FileName + ".lock").ToArray()!;
 
     [Fact]
     public void A_tampered_file_is_refused_and_not_replaced()
