@@ -444,7 +444,9 @@ press of Send made after the failure, answers again, each as a request of its ow
 does not answer it from the earlier refusal.
 `Not sent - answer every field` (with `waiting_on`), `Not sent - this question takes options`
 and `Not sent - no Send button on this session` say what was wrong with the press itself; such
-a press is spent. A question that ends is cleared (selector `Idle`, attributes `{}`, the slots
+a press is spent. `Not sent - type your answer again` says reply-box words were typed before the
+question was verifiably on screen; they are not sent, the question stays open, and words typed
+after are sent as usual. A re-arm or host restart takes a fresh window check. A question that ends is cleared (selector `Idle`, attributes `{}`, the slots
 it used reset); a question the card still shows when the connector takes over, but which the
 session no longer asks, is cleared too.
 
@@ -474,6 +476,7 @@ Where stage 2 knowingly differs from the daemon:
 | `Cancel request` says `Answer NOT sent` and resets the selector | The host has no way to cancel an agent's question |
 | A reply while a question is open answers the question; at a question only the terminal can answer, it says `Reply NOT sent` (`the session is waiting on a question`) | The host refuses a reply while its session asks a question |
 | A free-text answer from the reply box must differ from the box at arming | The box keeps the previous reply; the daemon reads it the same way through its baseline |
+| Box words that differ from the baseline but were typed before the question is verifiably on screen (selector `Awaiting answer...` under its decision id) are not sent: `Not sent - type your answer again` | Those words were typed looking at something else; the daemon has no such window |
 | An answer from the card makes the turn it answers its sender's (the purple edge for an agent), arming nothing for the next prompt | The daemon attributes only replies and launches, so an agent answering from the card never showed purple. An arm left for the next prompt, as a reply's is, would mark the person's own next prompt at the machine as the agent's |
 | Baselines, `answer_consumed_at` and a pending driver are kept in memory | A host restart re-arms every open question with a fresh baseline, so a press before it is not replayed |
 

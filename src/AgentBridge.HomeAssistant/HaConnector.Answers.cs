@@ -59,6 +59,11 @@ public sealed partial class HaConnector
         public string? BoxAtHold;
         // Said once, not on every hit.
         public string? Told;
+        // Reply-box words that differed from the baseline once the question was verifiably on
+        // screen: typed before it could be seen, so never its answer (#76). WindowChecked is false
+        // until the selector has been read waiting under this question.
+        public string? WindowText;
+        public bool WindowChecked;
         // Home Assistant lost the card's controls or their values (stage 7): put on screen again,
         // with fresh baselines, keeping what this question has been through (settled, attempts,
         // what was used), so an answer that may have reached the terminal is never typed again.
@@ -245,6 +250,7 @@ public sealed partial class HaConnector
                 ["hint"] = "answer it first, then reply",
             }, ct);
         }
+        var onScreen = await ShowsWaitingAsync(p.Node, question.Id, ct);
         p.Armed = new Armed
         {
             Question = question, Plan = plan, PayloadBaseline = payload, SubmitBaseline = submit, ReplyBaseline = reply,
@@ -252,9 +258,10 @@ public sealed partial class HaConnector
             // A tap counts only once the selector is seen waiting under this question: one left
             // from the last question, or made while this one was being put on screen, was made
             // looking at something else.
-            AwaitTap = plan.AnswerOnTap && !await ShowsWaitingAsync(p.Node, question.Id, ct),
+            AwaitTap = plan.AnswerOnTap && !onScreen,
             StaleSlots = await StaleSlotsAsync(plan, p.Node, unset, ct),
         };
+        await CheckWindowAsync(p.Armed, p.Node, onScreen, ct);
         if (was is not null) { Again(was, p.Armed); }
         log($"Home Assistant connector armed {p.Node} for its question{(plan.TerminalOnly ? " (answered at the machine)" : "")}");
     }
@@ -357,6 +364,8 @@ public sealed partial class HaConnector
         if (armed.SubmitAtFailure is not null) { armed.SubmitAtFailure = submit; }
         var waiting = await ShowsWaitingAsync(p.Node, armed.Question.Id, ct);
         armed.AwaitTap = armed.Plan.AnswerOnTap && !waiting;
+        if (!waiting) { armed.WindowChecked = false; }
+        else if (!armed.WindowChecked) { await CheckWindowAsync(armed, p.Node, true, ct); }
         // An approval whose tap reached nothing, seen waiting again: the same option may be tapped
         // again, as it may once the selector is read waiting after a failure. (One whose tap may
         // have reached the terminal is Settled, and never read again.)
@@ -392,6 +401,25 @@ public sealed partial class HaConnector
 
     static bool UnusedTap(Armed armed, string? state) =>
         armed.Plan.AnswerOnTap && state is "Approve" or "Deny" && "tap:" + state != armed.UsedPress;
+
+    // Once the question is verifiably on screen, box words that differ from the baseline were typed
+    // before it could be seen: remembered, so they are not taken for its answer. Never carried to
+    // another question or a re-arm; each takes its own check.
+    async Task CheckWindowAsync(Armed armed, string node, bool onScreen, CancellationToken ct)
+    {
+        armed.WindowText = null;
+        armed.WindowChecked = onScreen;
+        if (!onScreen) { return; }
+        var box = await ObserveAsync(SessionEntities.Reply(node), ct);
+        if (box.Present && !string.IsNullOrWhiteSpace(box.Value) && Changed(armed.ReplyBaseline, box)) { armed.WindowText = box.Value; }
+    }
+
+    static Read WindowRead(string key, string? spend) => new()
+    {
+        Notice = new Notice("Not sent - type your answer again", []),
+        NoticeKey = "window:" + key,
+        Spend = spend,
+    };
 
     // Whether the selector waits under this question; if it shows a choice, it is set waiting again.
     async Task<bool> ShowsWaitingAsync(string node, string questionId, CancellationToken ct)
@@ -853,6 +881,10 @@ public sealed partial class HaConnector
         var fresh = since.Any(h => h.EntityId == SessionEntities.Submit(node) || h.EntityId == SessionEntities.Reply(node))
             || await PressedSinceFailureAsync(node, armed, ct);
         var decision = await ha.GetStateAsync(SessionEntities.Decision(node), ct);
+        if (!armed.WindowChecked && decision?.State == HaDecision.Awaiting && DecisionIdOf(decision) == armed.Question.Id)
+        {
+            await CheckWindowAsync(armed, node, true, ct);
+        }
         // Unavailable says nothing about a tap on it: not determinate, so no re-arm follows this read.
         if (decision?.State == "unavailable") { Interlocked.Increment(ref indeterminate); }
         if (decision?.State == HaDecision.Cancel)
@@ -908,6 +940,10 @@ public sealed partial class HaConnector
             // failed go again only on a press after the failure.
             if (card is { } c) { return c.Retry && !fresh ? null : Answer(sessionId, armed, null, c.Text, c.Text, c.Stamp, null, c.Driver); }
             var box = await ObserveAsync(SessionEntities.Reply(node), ct);
+            if (armed.WindowText is not null && box.Present && box.Value == armed.WindowText && box.Value != armed.UsedPress)
+            {
+                return WindowRead(box.Value, null);
+            }
             if (box.Present && !string.IsNullOrWhiteSpace(box.Value) && Changed(armed.ReplyBaseline, box) && box.Value != armed.UsedPress
                 && (box.Value != armed.FailedBox || fresh))
             {
@@ -923,6 +959,7 @@ public sealed partial class HaConnector
         var picked = new List<string>();
         var missing = new List<string>();
         string? problem = null;
+        var windowText = false;
         for (var i = 0; i < fields.Count; i++)
         {
             var field = fields[i];
@@ -936,6 +973,7 @@ public sealed partial class HaConnector
                     // question's after a restart, a takeover or a reset that did not take.
                     var box = await ObserveAsync(SessionEntities.Reply(node), ct);
                     text = box.Present && !string.IsNullOrWhiteSpace(box.Value) && Changed(armed.ReplyBaseline, box) ? box.Value : "";
+                    if (text == armed.WindowText) { text = ""; windowText = true; }
                 }
                 picked.Add(text);
                 if (source.Type == FieldType.Number)
@@ -1040,9 +1078,14 @@ public sealed partial class HaConnector
             var typed = await ObserveAsync(SessionEntities.Reply(node), ct);
             if (typed.Present && !string.IsNullOrWhiteSpace(typed.Value) && Changed(armed.ReplyBaseline, typed))
             {
+                if (typed.Value == armed.WindowText) { return WindowRead(typed.Value, submit.Value); }
                 var typedAnswer = new Dictionary<string, JsonElement> { [fields[0].Source!.Name] = JsonSerializer.SerializeToElement(new { other = typed.Value }) };
                 return Answer(sessionId, armed, typedAnswer, null, typed.Value, null, submit.Value, DriverOf(submit.Snapshot?.UserId), PrincipalOf(submit.Snapshot?.UserId));
             }
+        }
+        if (pressed && windowText)
+        {
+            return WindowRead(armed.WindowText!, submit.Value);
         }
         if (pressed && !complete)
         {
