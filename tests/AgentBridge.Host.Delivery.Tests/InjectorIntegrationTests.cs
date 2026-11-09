@@ -128,6 +128,29 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
 
     static List<string> Keys(string[] lines) => [.. lines.Where(l => l.StartsWith("key ", StringComparison.Ordinal))];
 
+    // A reply reads the screen first and refuses, typing nothing, when the worker's 10 s read
+    // came back empty on a loaded runner, so the test then waited out its echo log for keys that
+    // were never sent (#1492). A read types nothing, so it is safe to ask again until it answers.
+    sealed class PatientScreens(WorkerInjector inner) : IConsoleInjector
+    {
+        public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) =>
+            inner.InjectAsync(processId, plan, cancellationToken);
+
+        public Task<ConsoleWidth> WidenAsync(int processId, DateTimeOffset createdAt, int columns, CancellationToken cancellationToken = default) =>
+            inner.WidenAsync(processId, createdAt, columns, cancellationToken);
+
+        public async Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
+        {
+            var deadline = Stopwatch.StartNew();
+            while (true)
+            {
+                var screen = await inner.ReadScreenAsync(processId, cancellationToken);
+                if (screen.Rows is not null || deadline.Elapsed > TimeSpan.FromSeconds(90)) { return screen; }
+                await Task.Delay(200, cancellationToken);
+            }
+        }
+    }
+
     static bool Exited(int pid)
     {
         try { using var p = Process.GetProcessById(pid); return p.WaitForExit(10_000); }
@@ -442,7 +465,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         f.Processes.Run(AgentBridge.Protocol.AgentKind.Claude, echo.Pid);
         await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
-        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+                var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new PatientScreens(new WorkerInjector(Worker)),
             new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) });
         const string Text = "Ship it";
         var cli = typed ? Task.Run(() =>
@@ -529,7 +552,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         await using var source = new AgentBridge.Host.Core.SessionSource(f.Options(), f.Processes, TimeProvider.System);
         await source.RefreshAsync();
         using var store = new AgentBridge.Host.Delivery.Staging.AttachmentStore(new() { StagingRoot = Path.Combine(f.Root, "attachments") }, sweep: false);
-        var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
+                var replies = new ReplyService(source, f.Processes, new NoBridge(), new NoGuard(), new WorkerInjector(Worker),
             new ReplyOptions { CopilotHome = f.CopilotHome, PlatformSupported = true, ConfirmTimeout = TimeSpan.FromSeconds(60), PollInterval = TimeSpan.FromMilliseconds(50) },
             attachments: store);
         byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
