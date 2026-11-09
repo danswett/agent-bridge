@@ -1370,6 +1370,75 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_session_that_is_not_responding_tells_the_owner_it_looks_stuck_once_an_hour_and_is_withdrawn_when_it_recovers()
+    {
+        await using var c = Connector(Phones with { Enabled = true });
+        Ask(null);
+        await Pass(c);
+        Assert.Empty(StuckNotices());
+
+        Fail(NotResponding, status: SessionStatus.Working);
+        await Pass(c);
+        var notice = Assert.Single(StuckNotices());
+        Assert.Single(StuckNotices(Tablet));
+        Assert.Equal($"Copilot on {Machine} looks stuck", notice["title"]!.GetValue<string>());
+        Assert.Contains("Fix the relay", notice["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal($"{Machine} - looks stuck", notice["data"]!["subtitle"]!.GetValue<string>());
+        Assert.Single(Pushes());
+
+        await Pass(c, 30 * 60);
+        Assert.Single(StuckNotices());
+        await Pass(c, 31 * 60);
+        Assert.Equal(2, StuckNotices().Count);
+
+        // Any event clears it: the notice is withdrawn from the phones.
+        Ask(null);
+        await Pass(c);
+        Assert.Equal(1, StuckClears());
+        await Pass(c, 20);
+        Assert.Equal(1, StuckClears());
+        Assert.Contains(log, m => m.Contains("looks stuck", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_agent_error_is_stuck_only_when_it_lasts_and_has_no_class_of_its_own_and_no_question_is_open()
+    {
+        await using var c = Connector(Phones);
+        Fail(Failure, status: SessionStatus.Working);
+        await Pass(c);
+        Assert.Empty(StuckNotices());
+
+        // Five minutes after it began, still the same error.
+        await Pass(c, 6 * 60);
+        Assert.Single(StuckNotices());
+
+        // A rate limit has its own words and its own remedy.
+        Fail(Failure with { ErrorClass = ErrorClass.Rate }, id: B, status: SessionStatus.Working);
+        await Pass(c, 10 * 60);
+        Assert.Empty(StuckNotices(id: B));
+
+        // A session waiting on a question is waiting on the person.
+        sessions.Set(FakeSessions.Copilot(A, title: "Fix the relay", status: SessionStatus.Waiting) with { Question = Form("q1", Release), Attention = NotResponding });
+        await Pass(c);
+        Assert.Equal(1, StuckClears());
+    }
+
+    static readonly Attention NotResponding = new()
+    {
+        Kind = AttentionKind.NotResponding, Since = FakeSessions.T0.AddMinutes(1), LastEventAt = FakeSessions.T0.AddMinutes(1), Agent = AgentKind.Copilot, Message = "Copilot isn't responding.",
+    };
+
+    void Fail(Attention? attention, string id, SessionStatus status) =>
+        sessions.Set(FakeSessions.Copilot(id, title: "Fix the relay", status: status) with { Attention = attention });
+    void Fail(Attention? attention, SessionStatus status) => Fail(attention, A, status);
+
+    string StuckTagFor(string id) => HaNotify.StuckTag(HaContract.MachineSlug(Machine), id);
+    List<JsonObject> StuckNotices(string service = Phone, string id = A) =>
+        [.. Sent(service).Select(n => n.Data).Where(d => d["data"]?["tag"]?.GetValue<string>() == StuckTagFor(id) && d["message"]?.GetValue<string>() != HaNotify.ClearMessage)];
+    int StuckClears(string service = Phone, string id = A) =>
+        Sent(service).Count(n => n.Data["message"]?.GetValue<string>() == HaNotify.ClearMessage && n.Data["data"]?["tag"]?.GetValue<string>() == StuckTagFor(id));
+
+    [Fact]
     public async Task Sign_in_is_one_notice_per_agent_and_account_at_most_hourly_and_withdrawn_once_signed_in()
     {
         await using var c = Connector(Phones with { Enabled = true });

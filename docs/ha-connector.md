@@ -808,7 +808,7 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
     own delivery, never sooner, and a failing service is logged once until it works. Once the need
     is over, what was delivered is forgotten at once, even while a withdrawal is still being
     retried, so a need that comes back is told everywhere again.
-  * An error and Not responding send nothing. They show on the status only, as on the clients.
+  * Not responding, and a Copilot Agent error with no class of its own that has lasted 5 minutes (`StuckErrorAfter`), send a "looks stuck" notice (#687) to the same phones and push service as a sign-in notice: one per session, tagged `bridge_stuck_<slug>_<digest of the session id>`, repeated at most hourly (`SignInRepeat`), withdrawn when the session recovers, never over an open question, and each notice and withdrawal is written to the host log. It restarts nothing; the owner follows [runbooks/stuck-session.md](runbooks/stuck-session.md). Other errors (rate limit, authorisation, quota) show on the status only, as on the clients.
 
 Where stage 5b knowingly differs from the daemon:
 

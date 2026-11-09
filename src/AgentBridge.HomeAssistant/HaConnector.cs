@@ -96,6 +96,10 @@ public sealed record HaConnectorOptions
     // How soon a sign-in notice is sent again while an agent still needs signing in (#800, the
     // host's signIn push: at most hourly).
     public TimeSpan SignInRepeat { get; init; } = TimeSpan.FromHours(1);
+    // How long a Copilot session must stay on an "Agent error" before it is called stuck (#687):
+    // the CLI's 120 s event watchdog never recovers by itself, but a one-off error that the next
+    // prompt clears should not buzz a phone. Not responding has already waited longer than this.
+    public TimeSpan StuckErrorAfter { get; init; } = TimeSpan.FromMinutes(5);
     // The host's own updates through the machine's update entity (homeAssistant.updates.checkForUpdates,
     // agent-ha-bridge's updates.checkForUpdates): off, nothing is looked up and the Install and
     // Check buttons are not served.
@@ -396,6 +400,7 @@ public sealed partial class HaConnector : IAsyncDisposable
             await Step("answers", () => AnswersAsync(now, cancellationToken));
             await Step("buttons", () => ButtonsAsync(now, cancellationToken));
             await Step("signin", () => SignInAsync(now, cancellationToken));
+            await Step("stuck", () => StuckAsync(now, cancellationToken));
             await Step("finished", () => FinishedAsync(now, cancellationToken));
             await Step("launch", () => LaunchAsync(now, cancellationToken));
             await Step("update", () => UpdatesAsync(now, cancellationToken));
