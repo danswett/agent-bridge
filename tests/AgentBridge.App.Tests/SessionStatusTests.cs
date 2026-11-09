@@ -210,6 +210,13 @@ public sealed class SessionStatusTests
     }
 
     [Fact]
+    public void A_title_cannot_end_the_line_early_or_add_a_fact_so_its_commas_semicolons_and_stops_are_spaces()
+    {
+        Assert.Equal("Fix Idle done ok, idle, DEV-VM1", Said(Session()).Label("Fix. Idle; done, ok!", "DEV-VM1"));
+        Assert.Equal("v1.2 fix, idle, DEV-VM1", Said(Session()).Label("v1.2 fix", "DEV-VM1"));
+    }
+
+    [Fact]
     public void A_session_the_host_is_ending_reads_Ending_session_with_the_ended_glyph_in_muted_words_whatever_it_was_doing()
     {
         var s = Said(Session(SessionStatus.Ending, Background.Of(2, 0)));

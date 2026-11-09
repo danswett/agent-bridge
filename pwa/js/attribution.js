@@ -74,6 +74,9 @@ const QUOTES = new RegExp(QUOTE, 'gu');
 // name with one of its own ("x, idle, DEV-VM2") would read as facts to a screen reader. The app's
 // DelegateLabel.Commas (#303's security review).
 const COMMAS = /[\u002c\u055d\u060c\u066b\u07f8\u1363\u1802\u1808\u201a\u2e41\u2e4c\u3001\ua4fe\ua60d\ua6f5\ufe10\ufe11\ufe50\ufe51\uff0c\uff64]/gu;
+// ";" and a run of . ! ? before whitespace or the end: a sentence stop to a screen reader. A dot
+// inside a word ("v1.2") stays. The app's DelegateLabel.Stops.
+const STOPS = /;|[.!?]+(?=[\s”"')\]]|$)/gu;
 const OPENING = 'Delegate \u201c';
 const CLOSING = '\u201d';
 
@@ -132,14 +135,14 @@ export function delegateName(agent) {
   }
   const chars = graphemes(name);
   const shown = chars.length > NAME_MAX ? `${chars.slice(0, NAME_MAX - 1).join('').trimEnd()}\u2026` : name;
-  return posesAsMainAgent(name) && !isLabelled(name) ? `${OPENING}${shown.replace(QUOTES, "'")}${CLOSING}` : shown;
+  return posesAsMainAgent(shown) && !isLabelled(shown) ? `${OPENING}${shown.replace(QUOTES, "'")}${CLOSING}` : shown;
 }
 
 // Already in the form a name that reads as the main agent's is given: Delegate “<name>”, with no
 // quote inside but the apostrophes that form makes of them. The host gives it that form itself
 // (#287, DelegateName.IsLabelled), and without this it would be wrapped twice, Delegate
 // “Delegate 'Main agent'”. The host's own check (DelegateName.IsLabelled) is the same: an
-// apostrophe is not one of its quotes. Checked on the whole name, before it is cut. A delegate that names itself so gains nothing: the line still says
+// apostrophe is not one of its quotes. Checked on the shown (cut) name, as the app does. A delegate that names itself so gains nothing: the line still says
 // Delegate, and its quotes still can't close.
 function isLabelled(s) {
   if (!(s.length > OPENING.length + CLOSING.length && s.startsWith(OPENING) && s.endsWith(CLOSING))) { return false; }
@@ -152,7 +155,7 @@ function isLabelled(s) {
 // is drawn keeps them. The app's DelegateLabel.Aloud (#303).
 export function aloud(text) {
   const s = String(text ?? '');
-  const spaced = s.replace(COMMAS, ' ');
+  const spaced = s.replace(COMMAS, ' ').replace(STOPS, ' ');
   return spaced === s ? s : spaced.replace(/ {2,}/g, ' ').trim();
 }
 

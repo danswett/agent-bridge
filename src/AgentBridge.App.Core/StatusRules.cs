@@ -42,7 +42,7 @@ public sealed record StatusLine(int Rule, StatusGlyph Glyph, string View, IReadO
     // The glyph's accessible name (ui.md §9): "Plan Migration to Windows App, delegating to 3
     // agents, DEV-VM1", with the driver said in words, since the diamond is only a shape.
     public string Label(string? title, string? machine) =>
-        string.Join(", ", new[] { string.IsNullOrEmpty(title) ? "Untitled session" : title, Spoken, Driven ? "driven by an agent" : null, machine }.Where(s => !string.IsNullOrEmpty(s)));
+        string.Join(", ", new[] { string.IsNullOrEmpty(title) ? "Untitled session" : DelegateLabel.Aloud(title), Spoken, Driven ? "driven by an agent" : null, machine }.Where(s => !string.IsNullOrEmpty(s)));
 }
 
 // docs/design/ui.md §2.2, as pwa/js/status.js has it: rules 1-6 first match wins, rule 8
