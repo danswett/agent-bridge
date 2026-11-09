@@ -45,7 +45,10 @@ public partial class App : Application
     }
 
     internal static HostManager ManagerFor(string profile, string? dataRoot = null, ILogonTasks? tasks = null, IProcesses? processes = null) =>
-        new(new InstallLayout(AppContext.BaseDirectory, dataRoot ?? Paths.DataRoot, profile), tasks ?? new WindowsLogonTasks(), processes ?? new SystemProcesses());
+        new(new InstallLayout(AppContext.BaseDirectory, dataRoot ?? Paths.DataRoot, profile), tasks ?? new WindowsLogonTasks(), processes ?? new SystemProcesses())
+        {
+            Log = AppLog.Write,
+        };
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
@@ -422,6 +425,7 @@ sealed class NoProcesses : IProcesses
     public int Start(string path, IReadOnlyList<string> arguments) => throw new InvalidOperationException("the demo does not start a host");
     public bool IsRunning(int pid) => false;
     public void Kill(int pid) { }
+    public bool Adopt(int pid, long startedTicks) => false;
 }
 
 sealed class NoRunKey : IAppAtSignIn

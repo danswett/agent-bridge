@@ -37,7 +37,7 @@ public sealed class HostStartGateTests : IDisposable
 
     // As Program runs it, in a host the logon task's launcher started.
     static Task Supervised(Func<HostHandover, Task> serve) =>
-        HostHandover.RunAsync(async h => { await serve(h); return 0; }, () => { }, supervised: true);
+        HostHandover.RunAsync(async h => { await serve(h); return 0; }, _ => { }, supervised: true, checkStop: true);
 
     [Fact]
     public async Task A_host_started_after_the_apps_Stop_starts_no_restore_and_resumes_no_agent()

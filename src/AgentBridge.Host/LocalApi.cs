@@ -145,21 +145,21 @@ public sealed class HostHandover
     // Asked for by host.restart, before the host is told to stop.
     public void Request() => Volatile.Write(ref requested, 1);
 
-    // Run by the logon task's launcher (#106).
-    public bool Supervised { get; private init; }
+    bool checkStop;
 
-    // Whether the app stopped this host while it was starting, which no pipe could tell it (#106's
-    // review): the app's Stop leaves the launcher's stop marker, and a host the launcher started is
-    // to look for it once its pipe is open. If the marker came first, the host sees it then; if
-    // the pipe came first, the app's Stop reaches the host through it. Either way it stops, even
-    // with its launcher gone or unknown to the app. Never for a host started any other way (by
-    // hand, after the app's Stop), which the marker does not concern.
+    // Whether the app stopped this host while it was starting, for a host its launcher could not
+    // vouch for: one started outside the launcher's kill-on-close job, or under a launcher the app
+    // cannot find by its record (HostLauncherContract.CheckStopVariable, #420's review). The app
+    // writes the marker before it connects and the host looks once its pipe is open, so either
+    // the app's Stop reaches the pipe or the host sees the marker. Only for such a host: for one
+    // the launcher holds, the look opened a moment in which a host on its way out still answered a
+    // Start that had just cleared the marker, which then reported a host that was gone (#420).
     public bool StoppedFromTheApp(string profileFolder) =>
-        Supervised && File.Exists(Path.Combine(profileFolder, HostLauncherContract.StopMarker));
+        checkStop && File.Exists(Path.Combine(profileFolder, HostLauncherContract.StopMarker));
 
-    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action startReplacement, bool supervised = false)
+    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action<bool> startReplacement, bool supervised = false, bool checkStop = false)
     {
-        var handover = new HostHandover { Supervised = supervised };
+        var handover = new HostHandover { checkStop = checkStop };
         try
         {
             var code = await serve(handover);
@@ -171,7 +171,7 @@ public sealed class HostHandover
         {
             // A supervised host that fails on its way out ends as a crash instead, which the
             // launcher starts again too.
-            if (handover.Requested && !supervised) { startReplacement(); }
+            if (handover.Requested && !supervised) { startReplacement(checkStop); }
         }
     }
 }

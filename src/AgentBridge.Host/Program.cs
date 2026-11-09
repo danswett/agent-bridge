@@ -222,10 +222,13 @@ switch (command)
     case "serve":
         {
             // Started by the logon task's launcher (#106), which then starts the replacement after
-            // host.restart. Cleared, so nothing this host starts inherits it.
+            // host.restart; and told by it to look for the app's stop itself when the app's Stop
+            // might not reach it otherwise (#420). Cleared, so nothing this host starts inherits them.
             var supervised = Environment.GetEnvironmentVariable(HostLauncherContract.Variable) == "1";
+            var checkStop = Environment.GetEnvironmentVariable(HostLauncherContract.CheckStopVariable) == "1";
             Environment.SetEnvironmentVariable(HostLauncherContract.Variable, null);
-            return await HostHandover.RunAsync(ServeAsync, RestartSelf, supervised);
+            Environment.SetEnvironmentVariable(HostLauncherContract.CheckStopVariable, null);
+            return await HostHandover.RunAsync(ServeAsync, RestartSelf, supervised, checkStop);
         }
     case "ha" when arguments.ElementAtOrDefault(1) == "shadow":
         {
@@ -783,8 +786,8 @@ async Task<int> ServeAsync(HostHandover handover)
         Log($"the local API is off, so apps on this machine cannot reach this host: {e.Message}");
     }
     await using var localLifetime = local;
-    // Stopped from the app while starting, before anything could reach this through the pipe
-    // (HostHandover.StoppedFromTheApp, #106's review): not served at all.
+    // Stopped from the app while starting, where its Stop might not have reached this through the
+    // pipe or the launcher (HostHandover.StoppedFromTheApp, #420): not served at all.
     if (handover.StoppedFromTheApp(identity.Folder))
     {
         Log($"stopped from the {Product.App} while starting; not serving");
@@ -1001,11 +1004,14 @@ static KeepAwakeOwner? AgentHaBridgeKeepAwakeOwner() => OperatingSystem.IsWindow
 
 // host.restart: the same command again, without a window, started once this process has stopped
 // serving and let go of the profile's lock (HostHandover). Only for a host the logon task's
-// launcher does not watch; a watched one leaves this to the launcher.
-void RestartSelf()
+// launcher does not watch; a watched one leaves this to the launcher. One whose launcher could not
+// vouch for it (HostLauncherContract.CheckStopVariable) hands its look for the app's stop on to
+// the replacement, which no launcher can be asked about either (#420's review).
+void RestartSelf(bool checkStop)
 {
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
     foreach (var a in args) { start.ArgumentList.Add(a); }
+    if (checkStop) { start.Environment[HostLauncherContract.CheckStopVariable] = "1"; }
     using var _ = ProcessLaunch.Start(start);
 }
 

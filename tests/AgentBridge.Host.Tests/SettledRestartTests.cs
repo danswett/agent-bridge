@@ -191,7 +191,7 @@ public sealed class SettledRestartTests
             // when the restart went on to hand over.
             settling.SetResult();
             return 0;
-        }, () => Interlocked.Increment(ref replacements));
+        }, _ => Interlocked.Increment(ref replacements));
 
         Assert.Equal(0, code);
         Assert.Equal(0, replacements);
