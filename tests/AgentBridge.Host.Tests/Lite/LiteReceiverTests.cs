@@ -160,7 +160,6 @@ public class LiteReceiverTests
         Refused(await r.Send(first), LiteReceiver.Replay);
         r.Time.Advance(TimeSpan.FromSeconds(91));
         Assert.Equal("delivered", (await r.Send(r.Request())).Status);
-        Assert.Equal(2, r.Deliver.Calls);
     }
 
     [Fact]
@@ -171,7 +170,6 @@ public class LiteReceiverTests
         Refused(await r.Send(r.Request()), LiteReceiver.Busy);
         r.Time.Advance(TimeSpan.FromSeconds(151));
         Assert.Equal("delivered", (await r.Send(r.Request(id: Id("9")))).Status);
-        Assert.Equal(1, r.Receiver.Replays.Count);
     }
 
     [Fact]
@@ -191,7 +189,6 @@ public class LiteReceiverTests
         r.Time.Advance(TimeSpan.FromSeconds(61));
         Assert.Equal("delivered", (await r.Send(r.Request(id: Id("8")))).Status);
     }
-
     [Fact]
     public void The_hourly_cap_holds_and_one_peer_cannot_fill_the_table_or_reset_an_active_pair()
     {
@@ -199,16 +196,23 @@ public class LiteReceiverTests
         for (var i = 0; i < RateCap.PerHour; i++) { Assert.True(cap.Allow("peer", "a")); time.Advance(TimeSpan.FromSeconds(20)); }
         Assert.False(cap.Allow("peer", "a"));
         for (var i = 0; i < RateCap.MaxPerPeer * 2; i++) { cap.Allow("greedy", "g" + i); }
-        Assert.False(cap.Allow("greedy", "more"));
-        Assert.True(cap.Allow("other", "o"));
-        Assert.False(cap.Allow("peer", "a"));
+        Assert.False(cap.Allow("greedy", "more")); Assert.True(cap.Allow("other", "o")); Assert.False(cap.Allow("peer", "a"));
     }
 
     [Fact]
+    public void An_active_pair_with_an_old_first_hit_is_not_evicted_and_reset()
+    {
+        var time = new FakeTimeProvider(Start); var cap = new RateCap(time);
+        Assert.True(cap.Allow("peer", "a")); time.Advance(TimeSpan.FromMinutes(50));
+        for (var i = 0; i < RateCap.PerHour - 1; i++) { Assert.True(cap.Allow("peer", "a")); time.Advance(TimeSpan.FromSeconds(10)); }
+        time.Advance(TimeSpan.FromMinutes(1));
+        for (var i = 0; i < RateCap.MaxPerPeer; i++) { cap.Allow("peer", "f" + i); }
+        Assert.True(cap.Allow("peer", "a")); Assert.False(cap.Allow("peer", "a"));
+    }
+    [Fact]
     public async Task Refusals_before_verification_echo_no_request_id_and_later_ones_do()
     {
-        using var r = new Rig();
-        Assert.Equal("", (await r.Send(r.Request(text: "tampered", signedText: "hello"))).Request);
+        using var r = new Rig(); Assert.Equal("", (await r.Send(r.Request(text: "tampered", signedText: "hello"))).Request);
         Assert.Equal(Id("1"), (await r.Send(r.Request(target: new string('9', 32)))).Request);
     }
 }

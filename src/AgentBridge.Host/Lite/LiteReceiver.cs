@@ -78,9 +78,8 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
 
 }
 
-// Request ids seen from verified senders, in memory only: a restart forgets them, and the envelope's 120 s lifetime
-// bounds a replay across one (the durable store is R6). Holds at most Max ids and drops only expired ones, so a full
-// table of live ids refuses rather than forgetting.
+// Verified request ids, in memory (a restart forgets them; the 120 s envelope lifetime bounds that; durable store is R6).
+// At most Max ids; only expired ones are dropped, so a full table refuses rather than forgets.
 public sealed class ReplayStore(TimeProvider time)
 {
     public enum Result { Added, Seen, Full }
@@ -89,9 +88,7 @@ public sealed class ReplayStore(TimeProvider time)
 
     readonly Dictionary<string, DateTimeOffset> ids = new(StringComparer.Ordinal);
     readonly object gate = new();
-
     public int Count { get { lock (gate) { return ids.Count; } } }
-
     public Result Add(string key)
     {
         lock (gate)
@@ -127,7 +124,7 @@ public sealed class RateCap(TimeProvider time)
             {
                 if (hits.Count >= MaxPairs || hits.Count(p => p.Key.Peer == peer) >= MaxPerPeer)
                 {
-                    foreach (var k in hits.Where(p => p.Value.Count == 0 || now - p.Value.Peek() >= TimeSpan.FromHours(1)).Select(p => p.Key).ToList()) { hits.Remove(k); }
+                    foreach (var k in hits.Where(p => p.Value.Count == 0 || now - p.Value.Last() >= TimeSpan.FromHours(1)).Select(p => p.Key).ToList()) { hits.Remove(k); }
                     if (hits.Count >= MaxPairs || hits.Count(p => p.Key.Peer == peer) >= MaxPerPeer) { return false; }
                 }
                 hits[key] = q = new();
