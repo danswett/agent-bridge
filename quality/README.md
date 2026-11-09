@@ -724,6 +724,19 @@ To roll back, revoke the App's key or suspend it in GitHub settings; nothing els
     `gh workflow run flake-hunt.yml --ref <branch> -f runs=50 -f projects=AgentBridge.Host.Tests -f filter="FullyQualifiedName~AnswerFlowTests"`.
   - Nothing is skipped without the owner's say-so (AGENTS.md: never weaken tests).
   - The `--blame-hang` setting stays in place.
+- **Known flakes on `main` are re-run once, automatically**
+  ([rerun-known-flakes.yml](../.github/workflows/rerun-known-flakes.yml), owner decision
+  2026-11-08). When a push run of CI on `main` ends red, `quality/rerun-known-flakes.ps1` reads
+  each failed job's log (not `quality-gate`, the summary job, which fails whenever another does and has no test of its own) and re-runs the failed jobs once only if there is at least one failed
+  job, every failed job shows a failed test, and every failed test is named in an open `flaky`
+  issue by `danswett` or the hunt's bot. It leaves the run red when any failed test has no issue,
+  a job failed without a test failure in its log (a build error, a hang), a job timed out, the run
+  is already a re-run (attempt 2 or later), or a newer push run exists on `main`. Each re-run is
+  a comment on every flake issue it concerned, one line per test
+  (`rerun-known-flakes: test=<name> run=<id> attempt=1 job=<job>`), so the flips of a test can be
+  counted against the quarantine thresholds. The workflow runs main's copy of the script with a
+  token that can re-run workflows and comment on issues, and never runs the failed run's code.
+  Offline test: `quality/test-rerun-known-flakes.ps1` (catalog suite `rerun-known-flakes`).
 - **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
   is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00
   PT, `agent-bridge-quality report` reads the past 7 days from GitHub and the workflow comments it

@@ -1,0 +1,48 @@
+name: Re-run known flakes
+
+# Re-runs the failed jobs of a red push run of CI on main, once, when every test that failed is
+# already filed as an open `flaky` issue (owner decision, 2026-11-08; quality/README.md §5).
+# A real failure stays red: an unfiled failing test, a failed job with no test failure in its
+# log, a run that was already re-run, or a newer push run on main all leave the run alone.
+# Each re-run is logged on the issue of every test it concerned.
+#
+# This runs main's copy of quality/rerun-known-flakes.ps1 (workflow_run always uses the default
+# branch's workflow and checkout) and never checks out or runs the code of the run it reads.
+# Its token can re-run workflows and comment on issues, nothing else.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  rerun:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+      issues: write
+    concurrency:
+      group: rerun-known-flakes-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Re-run once if every failed test is a known flake
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPOSITORY: ${{ github.repository }}
+        run: pwsh -NoProfile -File quality/rerun-known-flakes.ps1 -RunId $env:RUN_ID -Repository $env:REPOSITORY
