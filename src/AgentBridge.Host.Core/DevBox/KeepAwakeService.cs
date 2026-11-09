@@ -217,7 +217,10 @@ public sealed class KeepAwakeService : IAsyncDisposable
         using var waiting = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
         var remaining = due - options.Time.GetUtcNow();
         var delay = Task.Delay(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, options.Time, waiting.Token);
-        await Task.WhenAny(signal, delay);
+        // The clock can move between reading it above and the timer being registered; a timer made
+        // after that move is due a full wait later, and would never fire on a clock that is not
+        // moved again. Looking again once it is registered closes that gap.
+        if (options.Time.GetUtcNow() < due) { await Task.WhenAny(signal, delay); }
         waiting.Cancel();
         stop.Token.ThrowIfCancellationRequested();
         lock (sync)
