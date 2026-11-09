@@ -119,6 +119,22 @@ public class AgentLiteSenderTests
     }
 
     [Fact]
+    public async Task The_pinned_own_peer_list_on_disk_is_what_decides_who_may_be_sent_to()
+    {
+        using var r = new Rig();
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var peers = new OwnLitePeers(new OwnPeers(dir, () => true, () => Account));
+            var sender = new AgentLiteSender(r.Mode, peers, r.Link, _ => true, () => { r.Signed++; return new EcdsaEnvelopeSigner(r.Key); }, OwnStatic);
+            var o = await sender.SendAsync(Caller, new LiteSendInput("vm2", "agent-b2", "hi"), default);
+            Assert.Equal((LiteKind.Refused, "notPeer"), (o.Kind, o.Code));
+            Assert.Equal((0, 0), (r.Link.Opened, r.Signed));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public async Task No_acknowledgement_in_time_is_unconfirmed_never_delivered()
     {
         using var r = new Rig();
