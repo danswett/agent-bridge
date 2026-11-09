@@ -841,6 +841,30 @@ public sealed class UsageTests
     }
 
     [Fact]
+    public void A_reading_stamped_more_than_ten_minutes_ahead_of_the_clock_is_refused_and_never_kept()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "abua-" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            var clock = new FakeTimeProvider(Now);
+            var vm = new UsageViewModel(clock, new UsageCache(file, clock));
+            var genuine = Agent("Laptop", 30, Now.AddHours(-1)) with { ReadBy = new UsageReader(new string('a', 32), "Laptop") };
+            vm.Update(new UsageReport([genuine]), account: "1");
+
+            var ahead = Agent("Laptop", 99, Now.AddMinutes(11)) with { ReadBy = new UsageReader(new string('b', 32), "Desk") };
+            vm.Update(new UsageReport([ahead]), account: "1");
+            Assert.Equal(30d, Assert.Single(vm.Rows).Headline);
+            var restarted = new UsageViewModel(clock, new UsageCache(file, clock));
+            restarted.Update(UsageReport.Empty, account: "1");
+            Assert.Equal(30d, Assert.Single(restarted.Rows).Headline);
+
+            vm.Update(new UsageReport([ahead with { MeasuredAt = Now.AddMinutes(10) }]), account: "1");
+            Assert.Equal(99d, Assert.Single(vm.Rows).Headline);
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
     public void A_failure_kept_beside_a_reading_stands_once_the_reading_has_passed_two_weeks_on_redraw_and_after_a_restart()
     {
         var file = Path.Combine(Path.GetTempPath(), "abuf-" + Guid.NewGuid().ToString("N")[..8] + ".json");

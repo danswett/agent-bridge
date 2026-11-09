@@ -150,7 +150,9 @@ Agent-ha-bridge's usage card, kept exactly:
   app in its local state (`<profile>-usage.json`), the PWA in IndexedDB. Kept readings merge with
   live ones by the rules above, live first, and go after 14 days (none is shown past that, whether
   or not anything has been heard since, and none that old takes part in the merge, so it never
-  hides a current failure; at most 32 allowances are kept). Only another machine the client lists
+  hides a current failure; at most 32 allowances are kept). As a host does, a client refuses a
+  reading stamped more than 10 minutes ahead of its own clock, live or kept, so a wrong clock
+  cannot pin one as the freshest; one 10 minutes ahead or less stands. Only another machine the client lists
   for the signed-in account adds to what is kept, and once the Windows app's own host has changed
   account, what it passed on before waits for its next report. A forgotten machine's go with it,
   even where another host still passes them on; where the relay keeps a roster, so do those of any
