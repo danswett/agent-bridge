@@ -631,7 +631,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
-        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null);
+        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null, string? Role = null);
 
     // ct: a restore's, cancelled as the host stops or its caller withdraws it. Honoured until the
     // agent is started, never after: a started session is followed whatever happens.
@@ -833,7 +833,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         var allowAll = (r.Permissions ?? Config.Permissions) == LaunchProtocol.AllowAll;
 
         return (new Plan(launcher, resolved.Executables[launcher.Id], directory, workspace?.Label, workspace?.Isolate == true ? workspace : null, resume, where,
-            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer), null);
+            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer, r.Role), null);
     }
 
     // No account checker is a refusal, not a pass: production always wires one, and a launch must
@@ -895,6 +895,17 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
                 var account = await CheckAccount(key, ct);
                 if (account.Refusal is { } why) { return Refused(why); }
                 copilotToken = account.Token;
+            }
+
+            // A worker launched for a role keeps only the MCP servers launch.workerMcp lists for it
+            // (#1525). Only the direct copilot launcher: Agency is already narrowed by --profile-only,
+            // and a launch with no role is a person's. Counts only are logged, never names.
+            if (plan.Role is { } role && plan.Launcher.Id == "copilot")
+            {
+                var mcp = WorkerMcp.For(options.CopilotHome, Config.WorkerMcp, role);
+                if (mcp.Refusal is { } mcpWhy) { return Refused(mcpWhy); }
+                extras = [.. extras, .. mcp.Arguments];
+                log($"launch {Short(key)}: worker role MCP: {mcp.Disabled} of the person's servers disabled, {mcp.Kept} kept");
             }
 
             var directory = plan.Directory;

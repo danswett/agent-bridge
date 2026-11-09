@@ -982,6 +982,21 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    public void Worker_MCP_is_read_by_role_and_a_role_that_could_never_be_named_or_a_list_that_is_not_names_is_not_taken()
+    {
+        var (config, problems) = Config("""{"workerMcp":{"review":["github-mcp-server"," "],"bad role":["x"],"none":[]}}""");
+        Assert.Equal(["github-mcp-server"], config.WorkerMcp["review"]);
+        Assert.Empty(config.WorkerMcp["none"]);
+        Assert.False(config.WorkerMcp.ContainsKey("bad role"));
+        Assert.Contains(problems, p => p.StartsWith("launch.workerMcp.bad role"));
+        Assert.Empty(LaunchConfig.Read(null).Config.WorkerMcp);
+
+        var (off, why) = Config("""{"workerMcp":{"review":"github"}}""");
+        Assert.False(off.Enabled);
+        Assert.Contains(why, p => p.Contains("launch.workerMcp.review"));
+    }
+
+    [Fact]
     public void Nothing_is_approved_and_permission_prompts_stay_on_until_a_person_says_otherwise()
     {
         var (config, problems) = LaunchConfig.Read(null);

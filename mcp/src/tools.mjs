@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { PipeError } from './pipe.mjs';
 
-export const LAUNCH_SETTINGS = ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions'];
+export const LAUNCH_SETTINGS = ['agent', 'workspace', 'profile', 'resume', 'model', 'effort', 'context', 'permissions', 'role'];
 const PERMISSIONS = { 'Ask permission': 'ask', 'Allow all': 'allowAll' };
 const REMEMBERED = 200;
 

@@ -192,9 +192,10 @@ test('launch maps permissions, remembers the outcome, and read_launch_result ret
     'session.launch': () => ({ outcome: 'started', session: 's9' }),
   });
   const { client, connection } = await clientFor(host);
-  const out = await call(client, 'launch_agent_session', { prompt: 'go', permissions: 'Allow all', workspace: 'Bridge' });
+  const out = await call(client, 'launch_agent_session', { prompt: 'go', permissions: 'Allow all', workspace: 'Bridge', role: 'review' });
   assert.equal(out.outcome, 'started');
   assert.equal(host.seen.find((r) => r.op === 'session.launch').data.permissions, 'allowAll');
+  assert.equal(host.seen.find((r) => r.op === 'session.launch').data.role, 'review');
   assert.equal((await call(client, 'read_launch_result', { request: out.request })).outcome, 'started');
   assert.equal((await call(client, 'read_launch_result', { request: 'nope' })).status, 'unknown');
   connection.close(); host.close();

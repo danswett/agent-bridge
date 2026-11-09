@@ -41,6 +41,10 @@ public sealed record LaunchConfig
     // The GitHub login a Copilot launch must be made as (launch.copilotAccount). Unset asks only
     // that COPILOT_GITHUB_TOKEN be valid and have quota (#1518).
     public string? CopilotAccount { get; init; }
+    // launch.workerMcp: for each role a coordinator may launch a worker as, the MCP servers (by
+    // name, as in the person's own mcp-config.json) that worker keeps (#1525). A role not here
+    // keeps none. Matched exactly, never by pattern.
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> WorkerMcp { get; init; } = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 
     public AgentConfig Agent(string id) => Agents.TryGetValue(id, out var a) ? a : AgentConfig.Default;
 
@@ -81,6 +85,18 @@ public sealed record LaunchConfig
             if (Get(l, "resumeCount") is { } rc) { config = config with { ResumeCount = (int)Number(rc, "launch.resumeCount", 0, LaunchProtocol.MaxResumable, whole: true) }; }
             if (Get(l, "transfer") is { } tr) { config = config with { Transfer = ReadTransfer(tr) }; }
             if (Get(l, "copilotAccount") is { } ca) { config = config with { CopilotAccount = Text(ca, "launch.copilotAccount") }; }
+            if (Get(l, "workerMcp") is { } wm)
+            {
+                if (wm.ValueKind != JsonValueKind.Object) { throw new FormatException("launch.workerMcp is not an object"); }
+                var roles = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+                foreach (var entry in wm.EnumerateObject())
+                {
+                    // A role that cannot be named on a launch could never match, so it is left out.
+                    if (!LaunchProtocol.IsRole(entry.Name)) { problems.Add($"launch.workerMcp.{entry.Name} is not a role name (letters, digits, hyphens); ignored"); continue; }
+                    roles[entry.Name] = Strings(entry.Value, $"launch.workerMcp.{entry.Name}");
+                }
+                config = config with { WorkerMcp = roles };
+            }
             if (Get(l, "remoteFolderTrust") is { } rft) { config = config with { RemoteFolderTrust = Bool(rft, "launch.remoteFolderTrust") }; }
             if (Get(l, "remoteFolderTrustDevices") is { } rfd)
             {

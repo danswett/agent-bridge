@@ -265,6 +265,101 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.Empty(starter.Specs);
     }
 
+    void OwnerMcp(params string[] names)
+    {
+        Directory.CreateDirectory(f.CopilotHome);
+        File.WriteAllText(Path.Combine(f.CopilotHome, "mcp-config.json"), "{\"mcpServers\":{" + string.Join(",", names.Select(n => $"\"{n}\":{{\"command\":\"fake\"}}")) + "}}");
+    }
+
+    static string[] Denied(IReadOnlyList<string> args) => [.. args.Select((a, i) => (a, i)).Where(x => x.a == "--disable-mcp-server").Select(x => args[x.i + 1])];
+
+    [Fact]
+    public async Task A_launch_with_a_role_disables_every_owner_server_the_role_does_not_list_and_the_built_ins()
+    {
+        OwnerMcp("alpha", "beta", "gamma");
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = "review" };
+
+        await Launcher(Config(c => c with { WorkerMcp = new Dictionary<string, IReadOnlyList<string>> { ["review"] = ["beta"] } })).LaunchAsync(request, "phone");
+
+        var args = Assert.Single(starter.Specs).Arguments;
+        Assert.Equal(["alpha", "gamma"], Denied(args));
+        Assert.Contains("--disable-builtin-mcps", args);
+    }
+
+    [Fact]
+    public async Task A_role_that_lists_a_built_in_keeps_it()
+    {
+        OwnerMcp("alpha");
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = "ops" };
+
+        await Launcher(Config(c => c with { WorkerMcp = new Dictionary<string, IReadOnlyList<string>> { ["ops"] = ["github-mcp-server"] } })).LaunchAsync(request, "phone");
+
+        var args = Assert.Single(starter.Specs).Arguments;
+        Assert.DoesNotContain("--disable-builtin-mcps", args);
+        Assert.Equal(["alpha", "githubiq"], Denied(args));
+    }
+
+    [Fact]
+    public async Task A_role_not_in_the_map_gets_no_servers_and_a_similar_role_name_is_not_matched()
+    {
+        OwnerMcp("alpha");
+        var request = new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = "review-2" };
+
+        await Launcher(Config(c => c with { WorkerMcp = new Dictionary<string, IReadOnlyList<string>> { ["review"] = ["alpha"] } })).LaunchAsync(request, "phone");
+
+        Assert.Equal(["alpha"], Denied(Assert.Single(starter.Specs).Arguments));
+    }
+
+    [Fact]
+    public async Task A_launch_without_a_role_keeps_the_owner_s_MCP_servers()
+    {
+        OwnerMcp("alpha");
+
+        await Launcher(Config(c => c with { WorkerMcp = new Dictionary<string, IReadOnlyList<string>> { ["review"] = [] } })).LaunchAsync(
+            new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        var args = Assert.Single(starter.Specs).Arguments;
+        Assert.DoesNotContain("--disable-mcp-server", args);
+        Assert.DoesNotContain("--disable-builtin-mcps", args);
+    }
+
+    [Fact]
+    public async Task The_owner_s_server_list_is_read_again_at_every_launch_and_the_log_holds_counts_only()
+    {
+        var launcher = Launcher(Config());
+        OwnerMcp("first-secret-name");
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = "review" }, "phone");
+        OwnerMcp("second-secret-name");
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = "review" }, "phone");
+
+        Assert.Equal(["first-secret-name"], Denied(starter.Specs[0].Arguments));
+        Assert.Equal(["second-secret-name"], Denied(starter.Specs[1].Arguments));
+        Assert.DoesNotContain(logged, l => l.Contains("secret-name"));
+    }
+
+    [Fact]
+    public async Task A_role_launch_whose_server_list_cannot_be_read_is_refused_and_starts_nothing()
+    {
+        Directory.CreateDirectory(f.CopilotHome);
+        File.WriteAllText(Path.Combine(f.CopilotHome, "mcp-config.json"), "{ not json");
+
+        var result = await Launcher(Config()).LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App", Role = "review" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Empty(starter.Specs);
+    }
+
+    [Fact]
+    public async Task A_role_does_not_change_an_Agency_launch()
+    {
+        OwnerMcp("alpha");
+        locator.Installed["agency"] = @"C:\fake\agency.exe";
+
+        await Launcher(Config()).LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "agency", Workspace = "App", Role = "review" }, "phone");
+
+        Assert.DoesNotContain("--disable-mcp-server", Assert.Single(starter.Specs).Arguments);
+    }
+
     [Fact]
     public async Task A_Claude_launch_is_not_asked_about_a_Copilot_account()
     {
