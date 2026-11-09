@@ -189,10 +189,12 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     for the whole bar ("its titles need a window at least N columns wide"; N each title's
     characters, two columns around each, one between and the four `$fn` leaves, a lower
     bound as a wide character takes two), and to widen it or make its font smaller, or answer
-    at the machine. Where N
-    is more than the 250 columns no window is taken to reach, widening is no advice (a
-    maximized window, its buffer then as wide as the screen allows, was still too narrow
-    live, #1123): "this question's titles are too long for Slipgates to check which field is
+    at the machine. Where N is more than about 200, what a normal screen shows (1920 px),
+    widening may not be enough (a maximized window was still too narrow live, #1123): the
+    reason then leads with answering at the machine and says N and that a normal screen shows
+    about 200. Where N
+    is more than the 250 columns no window is taken to reach, widening is no advice at all:
+    "this question's titles are too long for Slipgates to check which field is
     open; answer it at the machine, or ask with shorter titles". Reasons say "Slipgates",
     never "phone": a browser or the Windows app answers the same way. A form
     that differs from the question only in a hidden title reads the same, and each field's
