@@ -60,14 +60,17 @@ purpose, which marks it as having read untrusted content.
 1. Owner and Trust: accept that session names and coarse states become relay-visible metadata.
 2. Owner: whether each machine can switch sharing off, and the default (proposed: on for
    own-account, with a per-machine off switch).
-3. Engineering and Trust: names are untrusted display text and agents get them only as marked
-   content (proposed), or not at all.
+3. Engineering and Trust: names are set only by a person on the host (a `session.rename` op,
+   app only), are untrusted display text, and agents get them only as marked content
+   (proposed), or not at all.
 4. Engineering: records stay unverified until `hostSign` (roster v2) exists; nothing may rely on
    them for routing before then. Confirm, and decide whether roster v2 must land before slice 2.
 5. Engineering: confirm the build order, the resized slices and the numeric limits.
-6. Engineering and Trust: a name alone never finds a session; the caller must give the machine,
+6. Owner: non-person client pairing (Decision 6 below).
+7. Engineering and Trust: a name alone never finds a session; the caller must give the machine,
    and a person confirms it once (otherwise an impostor on another machine could win while the
    real one is offline).
+
 ## What exists today
 
 * The relay roster lists hosts only: device id, name, last seen ([roster](../protocol/roster.md):4, 11,
@@ -240,9 +243,11 @@ relay -> {"t":"registry-changed","machine":"…","removed":true}   machine forgo
 * **Revoked or forgotten machines.** When a machine is forgotten or removed (the roster's
   `forgotten` list, roster.md:157) the relay drops its record at once and sends every subscribed
   socket `registry-changed` with `removed: true`; a `registry-get` simply omits the machine. A
-  reader that gets `removed` deletes its cache for it and refuses any later record from that
-  machine id. A reader that was offline learns it from the next `registry-get`, which no longer
-  lists the machine, and drops cache entries for machines not listed in `registry` or `known`.
+  reader that gets `removed` deletes its cache for it. It does not refuse the machine forever: a
+    forgotten machine that connects again is the account's again (roster.md:128), so the reader
+    accepts a record with a new epoch once the machine is listed again in `registry` or `known`. A
+    reader that was offline learns it from the next `registry-get`, which no longer lists the
+    machine, and drops cache entries for machines not listed in `registry` or `known`.
 
 ## Offline machines and the cache
 
@@ -253,7 +258,7 @@ host goes offline. A host that reconnects sends a full snapshot first.
 A reader may keep its last copy of a machine's record as a **cache**, with a maximum age of 24 h
 (then deleted). Cached records are always marked `stale: true` and `online: false` in `fleet.list`
 and are never returned as live by `fleet.find`. The cache exists for two reasons only: showing
-"this session was on machine X, last seen at …", and the name-shadow check in "Names and lookup".
+"this session was on machine X, last seen at …", and the `ambiguous` and `offline` results in "Names and lookup".
 
 ## Names
 
@@ -271,9 +276,21 @@ from, who can set one, and how it is marked.
   by session id, never read from a transcript, `workspace.yaml` or a folder. A session with no
   fleet name is listed without one. Slice 3b builds the setting; until it exists no name is
   published and lookup by name returns `notFound`.
-* **Who can set it.** The person, through the host's own setting. Writing a file cannot change
-  it; the rename op is not in the agent allow-list, so an agent is refused. A name is still
-  display text, not proof of anything.
+* **Who can set it.** The person, through a new pipe op `session.rename` (`{ "id", "name" }`,
+  empty name clears it). By the pipe's caller table it is allowed only to the app
+  (local-pipe.md:102, "Everything") and, if slice 3b adds it, the host's own command line
+  (local-pipe.md:103); an agent session or any untraced process is refused like other acting ops
+  (local-pipe.md:101, 104). The same name can be given at launch (an optional `fleetName` on the
+  launch request, from the same two callers). A person who wants names on a fleet of launched
+  sessions sets them there, not through the agents. The setting is stored in the host's state
+  beside its other settings, keyed by session id, so it is as strong as the host's state-file
+  protection: a same-user process that can write that file can change it (the pipe's agent rail
+  is a safety rail, not a boundary, local-pipe.md:168). It is not an agent-writable path, but it
+  is not tamper-proof either. A name is still display text, not proof of anything.
+* **Across a resume.** A resumed session gets a new agent credential (local-pipe.md:169) and may
+  get a new session id. The host carries a fleet name over only when it can link the resumed
+  session to the old one by the id it already tracks; otherwise the resumed session has no name
+  until a person sets one. The registry never guesses a name.
 * **Filter.** The host publishes a name only if, after trimming, it is 1 to 64 characters of
   `A-Za-z0-9 _.+()-` (ASCII only; no control characters, no markup, no `|`). Otherwise the session
   is listed without a name. This keeps markup and control characters out of every client. It is
@@ -307,9 +324,16 @@ truth.
 
 Every `session` and candidate holds typed fields only; **the name is never echoed back**. Only
 verified, live records ever contribute a `node`: `unverified`, `unpinned` and `incomplete` answers
-list machines and flags, never a node to route to.
+list machines and flags, never a node to route to. `unpinned` lists, for each machine holding a
+match, `machine`, `online`, `verified`, and the matching session's `state` and `since`, so a person
+can confirm the first pin.
 
-**Result precedence.** The reader computes matches from all its records, then returns the first
+**Scope.** With `machine` given, only that machine's records are matched: a same-name session on
+another machine does not make a pinned lookup `ambiguous`, `offline` or `unverified`. Without
+`machine`, all machines in the reader's records (live and cached) are matched, so an impostor
+elsewhere is seen and the answer is `unpinned`, `ambiguous` or another non-`found` result.
+
+**Result precedence.** The reader computes matches within that scope, then returns the first
 rule that applies:
 
 1. `incomplete`: any machine that could hold a match (every live machine, or only the one given
@@ -319,9 +343,10 @@ rule that applies:
 3. `ambiguous`: two or more verified live matches, or one verified live match plus any match on an
    offline or stale machine in the reader's cache (flagged `online: false`).
 4. `offline`: matches exist only on offline or stale machines.
-5. `unpinned`: exactly one verified live match, but the caller gave no `machine`.
-6. `found`: exactly one verified live match, the caller gave that `machine`, and rules 1 to 5 do
-   not apply.
+5. `unpinned`: exactly one verified live match and no other live match, verified or not, but the
+   caller gave no `machine`.
+6. `found`: exactly one verified live match and no other live match, verified or not, in scope,
+   the caller gave that `machine`, and rules 1 to 5 do not apply.
 7. `notFound`: otherwise.
 
 * **`found` needs `machine`.** A name alone never yields `found`. The relay serves an offline
@@ -454,16 +479,16 @@ first draft of this note.
 | 2a | #1400 part one, relay: allow-list, host-only put, in-memory registry, `registry-get` paged one machine per frame, size and rate refusals | L* | 1 | Allow-list pin (seeded prompt, path and token never appear); other account never sees it; not in blob, log or metrics; unknown member refused; over 16 KiB refused with the socket open; a 64-machine-equivalent get never builds a frame over 24 KiB; stale `seq` and old epoch refused |
 | 2b | #1400 part two, relay: `registry-subscribe` and `registry-changed`, same-account fan-out, offline within 60 s, forgotten machines dropped | M* | 2a | Offline within 60 s with the clock faked; fan-out stays in the account; count equals the host's; forgotten machine's record gone |
 | 3a | Host publisher: debounce, heartbeat, epoch and seq, truncation with `total`, per-machine off switch | L* | 1 | Debounce and heartbeat timing with a fake clock; restart gives a new epoch that readers accept; 65 sessions give 64 and `truncated`; off switch sends an empty list |
-| 3b | Host fleet-name setting (person-set only; never read from a transcript, `workspace.yaml` or a folder), rename op kept out of the agent allow-list, ASCII filter, signing hook that stays off until `hostSign` | M* | 3a | Name filter table; a seeded prompt, a seeded Claude `aiTitle`, a seeded `workspace.yaml` name and a seeded folder name never appear; no setting means no name; agents refused the rename; records carry no `sig` until `hostSign`, and verify against the vectors once it exists |
-| RC | **Reader core**, shared by the host and the client libraries: host as a registry client (`registry-get`, `registry-subscribe`, `removed` handling), 60 s liveness, epoch/seq/at order, 24 h cache and revocation purge, signature and roster-key check once `hostSign` exists | M* | 1, 2b | Fake clock for liveness; old epoch and replayed `seq` refused; restart accepted; cache purged on `removed` and on a get that omits the machine; unsigned record never `verified`; vectors replay the same in every client |
+| 3b | Host fleet-name setting: `session.rename` pipe op (app, and host CLI if added; never agents), launch-time `fleetName`, host-state storage, resume carry-over, app and CLI rename entry points, ASCII filter, signing hook that stays off until `hostSign` | L* | 3a | Name filter table; a seeded prompt, a seeded Claude `aiTitle`, a seeded `workspace.yaml` name and a seeded folder name never appear; no setting means no name; agents and untraced callers refused the rename; name kept across a linked resume and dropped otherwise; records carry no `sig` until `hostSign`, and verify against the vectors once it exists |
+| RC | **Reader core** in the host (C#) and the shared test vectors: host as a registry client (`registry-get`, `registry-subscribe`, `removed` handling), 60 s liveness, epoch/seq/at order, 24 h cache and revocation purge, signature and roster-key check once `hostSign` exists | M* | 1, 2b | Fake clock for liveness; old epoch and replayed `seq` refused; restart accepted; cache purged on `removed` and on a get that omits the machine; unsigned record never `verified`; shared vectors replay the same in every client; PWA and Apple readers are in slices 6 and 8 |
 | 4 | #1412 agent op `fleet.list` on the pipe, scope check, in-session allow-list entry (typed forms only for callers without `agent.hello`; `include: "content"` needs `agent.hello`), MCP tool (after the #1401 audit log) | L | RC, 3a, #1401 | No read scope refused with a readable reason; only own account; allow-list pinned; an unattributed pipe caller is refused `include: "content"`; no `name` unless `include: "content"`, which taints; audited with the agent principal; works from the cached snapshot (marked stale) |
-| 5 | #1399 `fleet.find`: all seven results in the stated precedence, `found` only with the caller's `machine`, `unpinned` answer, 24 h cache, shadow check | M* | 4 | Found only from one verified live match on the given `machine`; a name alone gives `unpinned`; an impostor beside an offline original, and with no cache of the original, never gives `found`; precedence table cases (two unverified live matches give `unverified`; truncated plus a verified match gives `incomplete`); no `node` in `unverified`, `unpinned` or `incomplete`; unsigned and other-account refused; the name is never echoed; a script checks every current `SG <role>` name on all four machines with HA blocked |
-| 6 | PWA adoption | M | RC, 2b | Vector mirror passes; fleet view from one socket; offline machine shown stale; unverified label |
+| 5 | #1399 `fleet.find`: all seven results in the stated precedence, `found` only with the caller's `machine`, `unpinned` answer, 24 h cache, shadow check | M* | 4 | Found only from one verified live match on the given `machine`; a name alone gives `unpinned`; an impostor beside an offline original, and with no cache of the original, never gives `found`; precedence table cases (two unverified live matches give `unverified`; truncated plus a verified match gives `incomplete`); no `node` in `unverified`, `unpinned` or `incomplete`; unsigned and other-account refused; the name is never echoed; a script checks names a person set with `session.rename` on all four machines with HA blocked (current `SG <role>` sessions get no name until a person sets one) |
+| 6 | PWA adoption, including the PWA reader (JS port of RC) | M | RC, 2b | Vector mirror passes; fleet view from one socket; offline machine shown stale; unverified label |
 | 7 | Windows app adoption | M | RC, 2b | Count matches the registry; fleet view works without per-host channels |
-| 8 | Apple adoption | M | RC, 2b | Vector mirror passes; same view tests |
+| 8 | Apple adoption, including the Swift reader (port of RC) | M | RC, 2b | Vector mirror passes; same view tests |
 | 9 | Fleet messenger and reply-session switch (fleet repo) | S | 5, R | Resolve every name without HA; ambiguity, `unverified` and `incomplete` refused loudly; sends pin machine and node |
 | 10 | Conformance cases for the registry in the shared suite (#1407) | S | 2b, RC, 5 | One suite, run against every client and the HA component |
-| 11 | 24 h dual run against HA, then S8 | n/a | 2a to 9 | At most 5 s lag, zero missing sessions, 100% of live names resolved |
+| 11 | 24 h dual run against HA, then S8 | n/a | 2a to 9, RC | At most 5 s lag, zero missing sessions, 100% of person-set names resolved |
 
 Issues to resize when this note is accepted: #1400 splits into 2a and 2b (both L/M, was one L);
 #1399 grows from S to M; #1412 stays L; the reader core RC is a new issue. The epic's seven-day
@@ -476,7 +501,8 @@ Decision 4. Separately, `found` needs the caller's `machine` even after R (see "
 lookup"); R does not remove that.
 
 Order: 1 first; 2a and 3a in parallel; then 2b, 3b; RC; 4; 5; clients 6 to 8 any order after RC; 9
-after 5 and R; 10 after 2b, RC and 5. Slices 2a, 2b, 3a, 3b, RC, 4 (it changes the pipe
+after 5 and R; 10 after 2b, RC and 5. Slices 2a, 2b, 3a, 3b (it adds the `session.rename` pipe op
+and its caller check), RC, 4 (it changes the pipe
 allow-list, local-pipe.md:101) and 5 touch sensitive paths: both independent receipts and a Trust
 review. Android waits on its client; a Linux client follows the same vectors.
 
@@ -488,7 +514,8 @@ review. Android waits on its client; a Linux client follows the same vectors.
    host setting (proposed `fleet.share`) that sends an empty list. A machine that is off shows
    as online with no sessions, not as missing.
 3. **Names are untrusted display text** (Engineering, Trust). Recommended: a name is published only
-   if a person set it on the host on purpose; never read from a transcript (Claude `aiTitle` is
+   if a person set it on the host on purpose (`session.rename` or a launch-time `fleetName`, app
+   and host CLI callers only, stored in host state, no agent path); never read from a transcript (Claude `aiTitle` is
    model-written), `workspace.yaml` (Copilot may fill it from the first prompt), prompt or folder;
    ASCII filter; agents get typed fields from `fleet.find` and `fleet.list`, and names only on
    `include: "content"` after `agent.hello`, which taints. Alternative: never give agents names.
