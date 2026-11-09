@@ -337,6 +337,21 @@ Sessions and devices are named by the first 8 characters of their ids; the group
 restore and machine notices by their own keys. No line has the notice's text, an endpoint or a
 whole id.
 
+## The agent audit log
+
+What agents did on this machine is written one JSON line per event to
+`<profile>\audit\agents-YYYY-MM-DD.jsonl` (#1296, design/agent-principals.md §5.6). The folder
+and files are readable by this user alone, like `agent-credentials.json`. Each line has `at`,
+`direction` (`out`, `in` or `local`), `request`, `principal` (`agent:<machine>/<session>`, never
+the owner), `chain`, `action`, `target`, `outcome`, `reason`, and, when the event carried text,
+`dataSha256` and `textLength`. The text itself is never written, and a reason is cut at 200
+characters.
+
+The host keeps 30 days and 64 MiB at most, deleting the oldest day's file first and never the
+file being written. If a write fails (a read-only folder, a full disk) the host log says so once
+and again when writing resumes; the action being audited carries on. Nothing calls the log yet:
+the agent operations that write to it arrive with #720 slice 4 and #1170.
+
 ## Approving a workspace at the machine
 
 ```
