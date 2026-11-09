@@ -799,6 +799,7 @@ public class MergeRuleTests
     [InlineData("src/AgentBridge.Host/TrustedPeerStore.cs", true)]
     [InlineData("pwa/js/host-client.js", true)]
     [InlineData(".github/workflows/ci.yml", true)]
+    [InlineData("tools/epic-dashboard/dashboard.py", true)]
     [InlineData("docs/status.md", true)]
     [InlineData("AGENTS.md", true)]
     [InlineData("docs/app-windows.md", false)]
