@@ -105,6 +105,18 @@ public static class Codec
         }
         return true;
     }
+
+    // An account id is 32 lowercase hex or a GitHub numeric id (1 to 20 ASCII digits, no leading zero so one id has one spelling); every other id stays 32 hex.
+    public static bool IsAccountId(string text)
+    {
+        if (IsId(text)) { return true; }
+        if (text.Length is 0 or > 20 || (text.Length > 1 && text[0] == '0')) { return false; }
+        foreach (var c in text)
+        {
+            if (c is < '0' or > '9') { return false; }
+        }
+        return true;
+    }
 }
 
 // P-256 as a roster key and a signature are (#391 §3.2): uncompressed points checked on the curve

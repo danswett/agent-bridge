@@ -456,7 +456,7 @@ strict minimal DER, low-S, `p256-sha256-der`, as #391 specifies for roster entri
 |---|---|
 | `v` | 1. Anything else is refused |
 | `request` | A UUID, fresh per command. It is also the **nonce** (§4.4). A resend of the same command reuses it with identical bytes |
-| `account` | The issuer's account. In v1 it must equal the target host's own account (§7.9) |
+| `account` | The issuer's account. In v1 it must equal the target host's own account (§7.9). An account id is 32 lowercase hex, or 1 to 20 ASCII digits with no leading zero (a numeric GitHub id); the same grammar applies to `chain.via[].account`, `provenance.origins[].account` and `target.account`. Device, machine, session and generation ids stay 32 lowercase hex |
 | `generation` | The issuer's roster generation (#391 §3.2). A command from another generation (a reset roster) is refused |
 | `heads` | The issuer's current roster heads, as #391 person commands carry them (#391 §7.2) |
 | `principal` | §3.1, plus `add`: the hash of the issuing host's add entry. Principals are keyed by **account + generation + add hash**, because device ids aren't namespaced across accounts and a copy shares its original's id (§8.10, V3, V7). `machine` must be the channel peer that delivered it: a host never relays another host's envelope as its own (§4.6) |
@@ -4054,6 +4054,7 @@ A temporary, off-by-default mode for a person's own agents on their own account,
 
 - `LiteProfile` (AgentBridge.AgentEnvelope) seals and checks a `session.reply` envelope. It carries all-zero generation and head markers, provenance origins "unknown", `oEligible` false, the sender's account, and a lifetime of at most 120 seconds. `Check` refuses a missing marker, an account or target account that is not the receiver's, any other action, a non-false `oEligible`, an expired or future-issued envelope, a bad signature and a `dataSha256` that does not bind the text, each with its own code. `RequireRoster` refuses the markers, so a lite envelope can never pass the roster path.
 - `AgentSignKey` (AgentBridge.Host) is a per-host P-256 key made only when asked and only with the mode on. It lives in the host's private folder, DPAPI-protected on Windows, is never logged or returned, and a damaged or tampered file is refused rather than replaced. The roster path (#55) replaces it with `hostSign` (V1).
+- Account id grammar (#1385): the envelope accepts an account id of 32 lowercase hex, or 1 to 20 ASCII digits with no leading zero, on `account`, `chain.via[].account`, `provenance.origins[].account` and `target.account` only. The real host account is the numeric GitHub id. Every other id field is still 32 lowercase hex.
 
 ## AP5-lite, slice L2b: pinned own-peers and local owner commands (#728, #1369)
 
