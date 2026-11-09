@@ -446,6 +446,19 @@ suites:
     where: ci.yml light
     status: exists
 
+  - id: rerun-known-flakes
+    kind: unit
+    ring: 0
+    select: affected
+    # The automatic re-run of a known flake on main: parsing of failed tests, matching to flake
+    # issues and every refusal, against a stand-in for gh. Nothing reaches GitHub.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    triggers: [quality/rerun-known-flakes.ps1, quality/test-rerun-known-flakes.ps1, .github/workflows/rerun-known-flakes.yml]
+    command: pwsh -NoProfile -File quality/test-rerun-known-flakes.ps1
+    where: ci.yml light
+    status: exists
+
   - id: beta-acceptance
     kind: e2e
     ring: 4
