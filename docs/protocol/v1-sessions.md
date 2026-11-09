@@ -1271,6 +1271,24 @@ Request `data`: `{}`. Result: the devices this host notifies, oldest first:
 `current` marks the calling device. Endpoints are never sent back: one is a capability to
 notify that device.
 
+### `agent.lite.send` (own-agents messaging, #1351)
+
+A credentialed agent on one host sends a signed own-agent envelope to another host on the
+same account. Request `data`: `{ "envelope": "<base64url>", "text": "…", "killEpoch": 0 }`;
+the envelope's `dataSha256` binds the exact UTF-8 text, which is at most 4096 bytes. Result:
+`{ "status": "delivered" | "refused", "code": "…", "request": "<uuid>", "killEpoch": 0 }`.
+The sender turns that into exactly one outcome:
+
+| Outcome | When |
+|---|---|
+| `delivered` | The receiver acknowledged delivery into the session. |
+| `refused` | The receiver (or the sender, before signing) said no; `code` carries the reason, for example `notPeer`, `composerNotEmpty`, `malformed`. A failed credential is refused before anything is signed. |
+| `undeliverable` | The relay reports the peer offline, or it is absent from relay presence. Text: "that machine is offline; nothing was queued". |
+| `unconfirmed` | No acknowledgement within 10 s, the channel was lost, or the mode was switched off mid-send ("mode switched off"). The message may or may not have arrived. |
+| `off` | Messaging is off or killed. No channel is opened. |
+
+Each attempt uses a fresh request id. A resend is a new message and is never automatic.
+
 ### Managing a machine
 
 **New (#801 slice A).** A person's phone, browser or Windows app restarts a machine's host, or

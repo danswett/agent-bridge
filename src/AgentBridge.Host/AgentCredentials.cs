@@ -205,6 +205,14 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         return found;
     }
 
+    // Whether this grant is still held, unexpired and its session process alive: the sender asks before it signs.
+    public bool IsLive(AgentCredential credential)
+    {
+        var now = time.GetUtcNow();
+        lock (gate) { if (!records.Any(r => r.Credential.Id == credential.Id && r.Credential.ExpiresAt > now)) { return false; } }
+        return rootAlive(credential.RootPid, credential.RootStartUtc);
+    }
+
     public bool RevokeSession(string session, string why)
     {
         lock (gate) { return Remove(r => r.Credential.Session == session, why); }
