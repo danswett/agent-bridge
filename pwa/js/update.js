@@ -217,9 +217,10 @@ export function notUpdated(why, { at = null, failed = false } = {}) {
   return `Not updated: ${Object.hasOwn(reasons, why) ? reasons[why] : 'the machine refused it'}.`;
 }
 
-// A press that never got an answer (the machine unreachable, or no key to sign with): this
-// device's words, never an error's text.
-export const NOT_SENT = "Not updated: the request didn't go through; try again.";
+// A press that never got an answer (a timeout, a closed channel, no key to sign with): this
+// device's words, never an error's text. The machine may already have taken the press and be
+// restarting, and a press sent again is a new ask, so it never says "not sent".
+export const NO_ANSWER = 'No answer from the machine; check it before pressing again.';
 
 // What the machine's updater is doing, in a line.
 export function updateLine(s, now = Date.now()) {
@@ -456,7 +457,7 @@ export class UpdateControl {
       return result;
     } catch (e) {
       console.error(e);
-      if (current()) { this.#notes.set(id, NOT_SENT); }
+      if (current()) { this.#notes.set(id, NO_ANSWER); }
       return null;
     } finally {
       this.#busy.delete(id);

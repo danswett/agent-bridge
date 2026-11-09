@@ -70,8 +70,8 @@ read-only. The pipe never offers it.
 
 `request` is the device's UUID for one press; the same press sent again is the same ask.
 `update.check` and `update.install` without one fail with an error. `now` is **Update now**
-([below](#update-now-1159)): the host's half is built (slice 1) and the PWA's (slice 3); the
-app's and the Windows app's are not yet. Its press carries the
+([below](#update-now-1159)): the host's (slice 1), the app's (slice 2) and the PWA's (slice 3)
+halves are built; the Windows app's (slice 4) is not yet. Its press carries the
 request **only inside the signed command**, never beside it, so a host that doesn't know `now`
 finds no `request` and refuses the press with that error: it can never fall back to a plain
 Install (Connection, settled decision 6). A client never sends both: a host that knows `now`

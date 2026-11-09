@@ -268,6 +268,16 @@ test('a confirm outcome shows the confirmation again with what is busy now, and 
   assert.equal(control.stateOf('a').note, 'Not updated: too many presses just now; try again in a few minutes.');
 });
 
+test('a press that gets no answer says so and never says it was not sent', async () => {
+  const fleet = nowFleet(ready, []);
+  fleet.call = async () => { throw new Error('timed out'); };
+  const control = new UpdateControl({ fleet, newRequest: () => 'r1', sign: fakeSign });
+  const logged = console.error;
+  console.error = () => {};
+  try { await control.pressNow('a', { machine: 'Laptop', confirm: async () => true }); } finally { console.error = logged; }
+  assert.equal(control.stateOf('a').note, 'No answer from the machine; check it before pressing again.');
+});
+
 test('a confirmation open when the account is cleared closes as Cancel, and nothing is signed or sent', async () => {
   signs.length = 0;
   const fleet = nowFleet({ ...ready, busy: busyTwo }, []);
