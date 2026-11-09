@@ -1720,6 +1720,8 @@ public sealed class SettingsTests : IAsyncLifetime
     [InlineData("https://relay.slipgates.com", "https://relay.slipgates.com", "")]
     [InlineData("https://staging.relay.example", "https://staging.relay.example", "This install uses staging.relay.example")]
     [InlineData("https://relay.slipgates.com.evil.example", "https://relay.slipgates.com.evil.example", "This install uses relay.slipgates.com.evil.example")]
+    [InlineData("https://staging.relay.example:8443", "https://staging.relay.example:8443", "This install uses staging.relay.example:8443")]
+    [InlineData("not an address", "not an address", "This install uses not an address")]
     public async Task A_release_build_replaces_a_saved_production_relay_and_keeps_any_other(string saved, string signedInTo, string note)
     {
         host.On(HostOps.SignIn, _ => new SignInStatus(SignInState.Pending));
@@ -1734,6 +1736,21 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Equal(note, release.RelayNote);
         Assert.Equal(signedInTo, Assert.Single(host.Sent(HostOps.SignIn)).GetProperty("relay").GetString());
         Assert.Equal(saved, prefs.Relay);
+    }
+
+    // A host that signed in to a staging relay keeps it in relay.txt, and an app with no saved relay of its own must not move it to production.
+    [Fact]
+    public void A_release_build_keeps_the_relay_the_host_last_signed_in_to_and_names_its_port()
+    {
+        var folder = Path.Combine(host.Folder, "test");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "relay.txt"), "https://staging.relay.example:8443/\n");
+
+        var release = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.slipgates.com", relayEditable: false);
+
+        Assert.Equal("https://staging.relay.example:8443/", release.RelayUrl);
+        Assert.Equal("This install uses staging.relay.example:8443", release.RelayNote);
+        Assert.Equal("Sign in with GitHub to staging.relay.example:8443", release.SignInLabel);
     }
     // Home Assistant refusing this machine is shown in the host's words, a rejected token and a ban
     // alike, and goes when the host says it has; each change is announced, so the page redraws.

@@ -249,7 +249,7 @@
                 <TextBlock TextWrapping="Wrap" AutomationProperties.AutomationId="Account" Text="{x:Bind ViewModel.AccountText, Mode=OneWay}" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.RelayText, Mode=OneWay}" />
                 <TextBox Header="Relay" AutomationProperties.AutomationId="RelayUrl" Text="{x:Bind ViewModel.RelayUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Visibility="{x:Bind local:Ui.Show(ViewModel.RelayEditable)}" />
-                <TextBlock AutomationProperties.AutomationId="RelayFixed" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind ViewModel.RelayUrl, Mode=OneWay}" Visibility="{x:Bind local:Ui.Show(ViewModel.RelayFixed)}" />
+                <TextBlock AutomationProperties.AutomationId="RelayFixed" AutomationProperties.Name="Relay" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind ViewModel.RelayUrl, Mode=OneWay}" Visibility="{x:Bind local:Ui.Show(ViewModel.RelayFixed)}" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" TextWrapping="Wrap" Text="{x:Bind ViewModel.RelayNote}" Visibility="{x:Bind local:Ui.Some(ViewModel.RelayNote)}" />
                 <local:WrapRow Spacing="8">
                     <Button
