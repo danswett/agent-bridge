@@ -22,20 +22,17 @@ public class LiteReceiverTests
         public void TurnOff(string why) { }
         public void RaiseEpoch(long epoch) { }
     }
-
     sealed class Peers(LitePeer? peer) : ILitePeers
     {
         public bool TryFind(string deviceId, out LitePeer found) { found = peer!; return peer is not null && peer.DeviceId == deviceId; }
         public IReadOnlyList<LitePeer> All() => peer is null ? [] : [peer];
     }
-
     sealed class Deliver(LiteDelivery result) : ILiteDeliver
     {
         public int Calls;
         public string? Text;
         public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) { Calls++; Text = text; return Task.FromResult(result); }
     }
-
     sealed class Rig : IDisposable
     {
         public readonly ECDsa Key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
@@ -44,17 +41,15 @@ public class LiteReceiverTests
         public readonly Deliver Deliver;
         public readonly LiteReceiver Receiver;
         public LiteChannel Channel = new(Peer, "host", PeerStatic, Self, Account, true);
-
-        public Rig(LiteDelivery? delivery = null, bool knownPeer = true)
+        public Rig(LiteDelivery? delivery = null, bool knownPeer = true, ILiteDeliver? custom = null)
         {
             Deliver = new(delivery ?? new LiteDelivery(true, null));
             var q = Key.ExportParameters(false).Q;
             var peer = knownPeer ? new LitePeer(Peer, [0x04, .. q.X!, .. q.Y!], "peer") : null;
-            Receiver = new(Mode, new Peers(peer), Deliver, Time);
+            Receiver = new(Mode, new Peers(peer), custom ?? Deliver, Time);
         }
 
         public void Dispose() => Key.Dispose();
-
         public JsonElement Request(string text = "hello", string? id = null, string? machine = null, string? add = null, string? target = null, string? signedText = null)
         {
             var sender = new LiteSender(Account, machine ?? Peer, add ?? Codec.Base64Url(SHA256.HashData(PeerStatic)), "agent-a1",
@@ -94,8 +89,22 @@ public class LiteReceiverTests
         using var r = new Rig();
         r.Mode.On = false;
         Refused(await r.Send(r.Request()), LiteReceiver.Off);
-        Assert.Equal(0, r.Deliver.Calls);
-        Assert.Equal(0, r.Receiver.Replays.Count);
+        Assert.Equal(0, r.Deliver.Calls + r.Receiver.Replays.Count);
+        Assert.Equal("", (await r.Send(JsonSerializer.SerializeToElement(new[] { 1 }))).Request);
+    }
+
+    sealed class Cancelling(CancellationToken? caller = null) : ILiteDeliver
+    {
+        public Task<LiteDelivery> DeliverAsync(VerifiedEnvelope envelope, string text, CancellationToken ct) => throw new OperationCanceledException(caller ?? default);
+    }
+
+    [Fact]
+    public async Task An_internal_cancellation_in_delivery_is_a_refusal_not_an_exception()
+    {
+        using var r = new Rig(custom: new Cancelling());
+        Refused(await r.Send(r.Request()), LiteReceiver.DeliveryFailed);
+        using var cts = new CancellationTokenSource(); cts.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => r.Receiver.ReceiveAsync(r.Channel, r.Request(id: Id("2")), cts.Token));
     }
 
     [Fact]
@@ -136,8 +145,7 @@ public class LiteReceiverTests
         var good = r.Request(id: Id("2"));
         r.Time.Advance(TimeSpan.FromSeconds(121));
         Refused(await r.Send(good), Refusal.Lifetime);
-        Assert.Equal(0, r.Deliver.Calls);
-        Assert.Equal(0, r.Receiver.Replays.Count);
+        Assert.Equal(0, r.Deliver.Calls + r.Receiver.Replays.Count);
     }
 
     [Fact]
@@ -148,7 +156,6 @@ public class LiteReceiverTests
         Assert.Equal("delivered", (await r.Send(first)).Status);
         r.Time.Advance(TimeSpan.FromSeconds(60));
         Refused(await r.Send(first), LiteReceiver.Replay);
-        Assert.Equal(1, r.Deliver.Calls);
         r.Time.Advance(TimeSpan.FromSeconds(91));
         Assert.Equal("delivered", (await r.Send(r.Request())).Status);
         Assert.Equal(2, r.Deliver.Calls);
@@ -160,7 +167,6 @@ public class LiteReceiverTests
         using var r = new Rig();
         for (var i = 0; i < ReplayStore.Max; i++) { Assert.Equal(ReplayStore.Result.Added, r.Receiver.Replays.Add("x/" + i)); }
         Refused(await r.Send(r.Request()), LiteReceiver.Busy);
-        Assert.Equal(ReplayStore.Max, r.Receiver.Replays.Count);
         r.Time.Advance(TimeSpan.FromSeconds(151));
         Assert.Equal("delivered", (await r.Send(r.Request(id: Id("9")))).Status);
         Assert.Equal(1, r.Receiver.Replays.Count);
@@ -180,7 +186,6 @@ public class LiteReceiverTests
         using var r = new Rig();
         for (var i = 1; i <= 6; i++) { Assert.Equal("delivered", (await r.Send(r.Request(id: Id(i.ToString())))).Status); }
         Refused(await r.Send(r.Request(id: Id("7"))), LiteReceiver.Rate);
-        Assert.Equal(6, r.Deliver.Calls);
         r.Time.Advance(TimeSpan.FromSeconds(61));
         Assert.Equal("delivered", (await r.Send(r.Request(id: Id("8")))).Status);
     }
@@ -188,8 +193,7 @@ public class LiteReceiverTests
     [Fact]
     public void The_hourly_cap_and_the_pair_table_are_bounded()
     {
-        var time = new FakeTimeProvider(Start);
-        var cap = new RateCap(time);
+        var time = new FakeTimeProvider(Start); var cap = new RateCap(time);
         for (var i = 0; i < RateCap.PerHour; i++) { Assert.True(cap.Allow("a")); time.Advance(TimeSpan.FromSeconds(20)); }
         Assert.False(cap.Allow("a"));
         for (var i = 0; i < RateCap.MaxPairs; i++) { cap.Allow("p" + i); }

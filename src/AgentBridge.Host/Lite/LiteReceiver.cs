@@ -40,8 +40,7 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
 
     public async Task<LiteAck> ReceiveAsync(LiteChannel channel, JsonElement data, CancellationToken ct)
     {
-        // Nothing is verified while the mode is off; the request id is only read back for the ack.
-        if (!mode.On) { return Refuse(Off, data); }
+        if (!mode.On) { return new LiteAck("refused", Off, "", mode.KillEpoch); }
         if (channel.PeerKind != "host" || !channel.InPresence) { return Refuse(NotSameAccount, data); }
         if (!peers.TryFind(channel.PeerId, out var peer) || channel.PeerStatic is not { } staticKey
             || Wire.DeviceId(staticKey) != channel.PeerId) { return Refuse(NotPeer, data); }
@@ -56,8 +55,7 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
         try { envelope = Envelope.Parse(bytes); }
         catch (EnvelopeException x) { return Refuse(x.Code, data); }
 
-        VerifiedEnvelope verified;
-        try { verified = LiteProfile.Check(envelope, peer.SignPoint, channel.Account, Encoding.UTF8.GetBytes(text), time.GetUtcNow().ToUnixTimeSeconds()); }
+        VerifiedEnvelope verified; try { verified = LiteProfile.Check(envelope, peer.SignPoint, channel.Account, Encoding.UTF8.GetBytes(text), time.GetUtcNow().ToUnixTimeSeconds()); }
         catch (EnvelopeException x) { return Refuse(x.Code, data); }
 
         // Signed fields now trusted: they must name this channel's peer and this machine.
@@ -65,16 +63,14 @@ public sealed class LiteReceiver(ILiteMode mode, ILitePeers peers, ILiteDeliver 
         if (body.Principal.Machine != channel.PeerId) { return Refuse(Sender, data, body.Request); }
         if (body.Principal.Add != Codec.Base64Url(SHA256.HashData(staticKey))) { return Refuse(AddMismatch, data, body.Request); }
         if (body.Target.Machine != channel.Self) { return Refuse(Target, data, body.Request); }
-        // Only a verified request may take a place in the table, so a stranger cannot fill it.
         switch (Replays.Add(channel.PeerId + "/" + body.Request))
         {
             case ReplayStore.Result.Seen: return Refuse(Replay, data, body.Request);
             case ReplayStore.Result.Full: return Refuse(Busy, data, body.Request);
         }
         if (!Rates.Allow(body.Principal.Session + ">" + channel.PeerId + "/" + body.Target.Session)) { return Refuse(Rate, data, body.Request); }
-        LiteDelivery result;
-        try { result = await deliver.DeliverAsync(verified, text, ct); }
-        catch (Exception x) when (x is not OperationCanceledException) { return Refuse(DeliveryFailed, data, body.Request); }
+        LiteDelivery result; try { result = await deliver.DeliverAsync(verified, text, ct); }
+        catch (Exception x) when (x is not OperationCanceledException || !ct.IsCancellationRequested) { return Refuse(DeliveryFailed, data, body.Request); }
         return result.Typed
             ? new LiteAck("delivered", null, body.Request, mode.KillEpoch)
             : Refuse(result.Code ?? DeliveryFailed, data, body.Request);
