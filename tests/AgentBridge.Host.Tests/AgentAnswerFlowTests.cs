@@ -91,11 +91,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     // Where an unconfirmed answer's words are kept across a restart (#1159 slice 0).
     string Words => Path.Combine(f.Root, "profile", AnswerWords.FolderName, AnswerWords.FileName);
 
-    static async Task Until(Func<bool> done)
-    {
-        for (var i = 0; i < 400 && !done(); i++) { await Task.Delay(25); }
-        Assert.True(done());
-    }
+    static Task Until(Func<bool> done) => HostWait.UntilAsync(done, "the recorded words to be dropped");
 
     // Another question in the Claude session, so the one answered is no longer asked.
     async Task AskAnotherAsync()

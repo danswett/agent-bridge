@@ -284,10 +284,10 @@ public sealed class IntakeTests : IDisposable
             SweepInterval = TimeSpan.FromMinutes(5),
         }, _f.Processes, _f.Time, _log.Add);
         var heard = intake.Subscribe();
+        // A pass makes the folder and starts watching it before it returns, so the watcher is
+        // armed here, not "soon" after the loop's first pass.
+        intake.Pass();
         intake.Start();
-        // The first pass makes the folder and starts watching it.
-        for (var i = 0; i < 100 && !Directory.Exists(Spool); i++) { await Task.Delay(20); }
-        await Task.Delay(100);
 
         var watch = System.Diagnostics.Stopwatch.StartNew();
         SpoolContract.Write(_f.Runtime, "claude", "register", "{\"session_id\":\"watched\",\"hook_event_name\":\"SessionStart\"}"u8, [30], DateTimeOffset.Now, 1);
