@@ -48,6 +48,7 @@ import { UNSUPPORTED_SESSIONS } from '../brand.js';
 import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 import { holdKey } from './hold.js';
 import { CONNECTION_CHANGED } from '../channels.js';
+import { HistoryView } from './history-view.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // The Details rows whose values move with the clock: drawn again where they are, not as new nodes.
@@ -508,8 +509,8 @@ export class SessionCard {
   // (on a phone) Back. layout() -> { inspector, wide }: whether the inspector is a pane of its own
   // now, and whether the window is wide enough for one (the strip's width).
   // stale: why its machine's sessions can't be acted on now ({ reason, since }), or null.
-  constructor(session, { hostId = null, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false, wide: false }), viewing = () => true, stale = null }) {
-    Object.assign(this, { hostId, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
+  constructor(session, { hostId = null, history = null, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false, wide: false }), viewing = () => true, stale = null }) {
+    Object.assign(this, { hostId, historyStore: history, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
     this.#stale = stale;
     const n = ++seq;
     this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt`, events: `s${n}-events` };
@@ -656,7 +657,8 @@ export class SessionCard {
     // box, drawn, not read, and no tab stop; a tap on it brings the box back, focused.
     e.replyCopy = h('div', { class: 'reply-copy', 'aria-hidden': 'true' }, h('span'));
     e.replyBar = h('div', { class: 'reply-bar' }, e.replyCopy);
-    e.scroll = h('div', { class: 'stream-scroll' }, e.stream);
+    this.turns = new HistoryView();
+    e.scroll = h('div', { class: 'stream-scroll' }, this.turns.element, e.stream);
     this.#watchHold(e.scroll);
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
       e.scroll, e.reply, e.replyBar);
@@ -731,6 +733,8 @@ export class SessionCard {
     // Whether the conversation is read to its end, before this update draws anything into it.
     const atEnd = this.#reading();
     this.#s = s;
+    this.historyStore?.live(this.hostId, s);
+    if (this.#unwatch) { this.#drawTurns(); }
     const e = this.els;
     const state = sessionStatus(s);
     for (const el of [this.element, this.view]) {
@@ -1220,6 +1224,7 @@ export class SessionCard {
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
+    if (selected) { this.#openTurns(); }
     // Shown again (a row chosen, the browser's Back or Forward): its header whole, the scroll kept.
     if (selected) { this.collapse?.shown(); }
     // Shown now, in the page it was put into: what holds it there can move its question too.
@@ -1362,6 +1367,32 @@ export class SessionCard {
     this.collapse?.destroy();
     this.#phone?.removeEventListener('change', this.#onPhone);
     clearTimeout(this.#history.timer);
+    this.#unwatch?.();
+    this.#unwatch = null;
+  }
+
+  // The conversation before the latest exchange, from the history store, opened the first time the
+  // session is shown. It opens at the latest message: one scroll to the end, once, when the turns
+  // first draw, and none after it.
+  #unwatch = null;
+  #atLatest = false;
+
+  #openTurns() {
+    if (!this.historyStore) { return; }
+    if (this.#unwatch) { this.#drawTurns(); return; }
+    this.#unwatch = this.historyStore.watch(this.hostId, this.#s.id, () => this.#drawTurns());
+    this.historyStore.open(this.hostId, this.#s.id, { session: this.#s }).catch(() => {});
+    this.#drawTurns();
+  }
+
+  #drawTurns() {
+    const snapshot = this.historyStore.get(this.hostId, this.#s.id);
+    const drawn = this.turns.render(snapshot, this.#s.activity?.turn ?? null);
+    const sc = this.els.scroll;
+    if (!this.#atLatest && snapshot.phase !== 'idle' && snapshot.phase !== 'loading' && sc.getClientRects().length) {
+      this.#atLatest = true;
+      if (drawn) { sc.scrollTop = sc.scrollHeight; }
+    }
   }
 
   // The machine's capabilities changed (a reconnect to another version of its host).

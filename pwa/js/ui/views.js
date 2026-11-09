@@ -52,8 +52,9 @@ export class SessionListView {
   // stale(hostId) -> why a machine's sessions can't be acted on now ({ reason, since }), or null.
   // heading() -> the list's heading, where focus goes when a session that had it ends with no
   // row left to take it.
-  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null, heading = () => null } = {}) {
-    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale, heading });
+  // history: the HistoryStore the cards draw their earlier conversation from, or null.
+  constructor(container, sessions, { history = null, fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null, heading = () => null } = {}) {
+    Object.assign(this, { container, sessions, history, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale, heading });
     this.views = views ?? h('div');
     sessions.onChange((change) => {
       this.order.observe(change);
@@ -143,7 +144,7 @@ export class SessionListView {
           if (this.#drawn && this.settled(hostId)) { arrived.push(key); }
           const m = this.machine(hostId);
           card = new SessionCard(s, {
-            hostId, fetchDetail: (id) => this.fetchDetail(hostId, id),
+            hostId, history: this.history, fetchDetail: (id) => this.fetchDetail(hostId, id),
             fetchDelegate: this.fetchDelegate ? (id, agent) => this.fetchDelegate(hostId, id, agent) : null,
             machineName: m.name, labelled: m.show, answering: () => this.answering(hostId),
             stale: this.stale(hostId),
@@ -193,6 +194,7 @@ export class SessionListView {
       if (!live.has(key)) {
         if (active && (card.element.contains(active) || card.view.contains(active))) { goneAt = rowsWere.indexOf(card.element); }
         card.dispose();
+        this.history?.forget(card.hostId, card.id);
         card.element.remove();
         card.view.remove();
         this.#cards.delete(key);

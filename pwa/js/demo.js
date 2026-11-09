@@ -1114,7 +1114,11 @@ function demoTurns(s) {
 
 function withoutHistory(s) {
   const c = clone(s);
-  if (c.activity) { delete c.activity.history; }
+  if (c.activity) {
+    delete c.activity.history;
+    // Names the latest turn as a host does, so the card does not draw it twice (#1285).
+    if (c.activity.turn === undefined && c.activity.turnCount > 0) { c.activity.turn = `${s.id}-turn-${c.activity.turnCount}`; }
+  }
   return c;
 }
 

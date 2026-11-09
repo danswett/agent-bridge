@@ -33,6 +33,7 @@ import { stopReceipts } from './receipt.js';
 import { CUE_MS } from '../return-grace.js';
 import { PaneDividers } from './pane-dividers.js';
 import { UPDATING } from './hold.js';
+import { HistoryStore } from '../history-store.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -212,6 +213,7 @@ export class SessionsPage {
     this.#inspectorHidden = this.#read(INSPECTOR) === 'hidden';
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       views: $('session-views'),
+      history: new HistoryStore({ current: (hostId) => { const client = hosts.link(hostId)?.client; return client ? { client } : null; } }),
       layout: () => ({ inspector: this.wide.matches && !this.#inspectorHidden, wide: this.wide.matches }),
       // Only while Sessions shows, in a page that does: news that comes while another page, or
       // the tab or app in the background, waits for it, with no scroll and no question's wait

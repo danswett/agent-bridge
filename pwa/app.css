@@ -1045,6 +1045,27 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   font-size: var(--type-reading); line-height: var(--type-reading-line);
 }
 .stream > [hidden] { display: none; }
+/* The conversation before the latest exchange (#1285), in the same column as it, read-only. */
+.stream.history { margin-bottom: var(--ab-space-6); }
+.history-turn { display: grid; gap: var(--ab-space-3); min-width: 0; }
+/* Earlier turns look as the live exchange does, under names of their own. */
+.history-prompt { justify-self: end; max-width: 85%; min-width: 0; }
+.history-bubble { padding: var(--ab-space-2) var(--ab-space-3); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); }
+.history-bubble .plain { margin: 0; }
+.history-origin { min-width: 0; }
+.history-origin-label { margin: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.history-block { min-width: 0; }
+.history-reasoning > summary { min-height: 32px; padding: var(--ab-space-1) 0; font-size: var(--type-meta); }
+.history-reasoning .plain { color: var(--ab-text2); font-size: var(--type-row); line-height: var(--type-row-line); }
+.history-reply > :first-child { margin-top: 0; }
+.history-reply > :last-child { margin-bottom: 0; }
+.history-tool { margin: var(--ab-space-2) 0 0; display: flex; gap: var(--ab-space-2); align-items: baseline; min-width: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); }
+.history-tool .glyph { align-self: center; }
+.history-tool-name, .history-tool-summary { font-family: var(--ab-font-mono); }
+.history-tool-summary { color: var(--ab-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.history-meta { color: var(--ab-text2); font-size: .9rem; margin: 6px 0; }
+.history-cut { font-style: italic; }
+.history-state { text-align: center; }
 .user-message { justify-self: end; max-width: 85%; min-width: 0; }
 .bubble { padding: var(--ab-space-2) var(--ab-space-3); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); }
 .bubble .plain { margin: 0; }

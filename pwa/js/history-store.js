@@ -1,7 +1,7 @@
 // A session's conversation as the host's history pages and live activity give it (#292,
 // docs/protocol/v1-history.md, ui.md §6.4 H0-H8): the turns held per session, keyed by turn id, so a
-// turn loaded twice is held once. The data layer only: nothing here draws, and session-card.js
-// does not use it yet (slice 2 draws the column from it).
+// turn loaded twice is held once. The data layer only: nothing here draws; session-card.js draws
+// the turns before the latest exchange from it (ui/history-view.js).
 //
 //   open()         the newest page (session.history without a cursor). Asked again later it
 //                  merges by id: each turn it holds is replaced in place, each it does not is
