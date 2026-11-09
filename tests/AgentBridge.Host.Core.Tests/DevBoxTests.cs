@@ -523,6 +523,53 @@ public sealed class DevBoxTests : IDisposable
         await Until(() => dc.Calls.Count == 2, "the second pass");
     }
 
+    // The clock moves after the service has read it but before its timer is registered (#241): the
+    // pass is due and must still run, not wait a further interval on a clock nobody advances again.
+    [Fact]
+    public async Task A_pass_comes_due_when_the_clock_moves_just_before_its_timer_is_registered()
+    {
+        var time = new AdvancesBeforeFirstTimer(Now, TimeSpan.FromSeconds(30));
+        var dc = new FakeDevCenter { Answer = Serving(Actions()) };
+        await using var service = Service(dc, time: time, settings: new DevBoxSettings { KeepAwake = true, IntervalMinutes = 15 });
+
+        service.Start();
+
+        await Until(() => dc.Calls.Count == 1, "the first pass");
+    }
+
+    // Short of due: the timer must be due when the rest of the time has passed, not a full wait
+    // after the clock's later reading.
+    [Fact]
+    public async Task A_pass_comes_due_when_the_clock_moves_part_way_before_its_timer_is_registered()
+    {
+        var time = new AdvancesBeforeFirstTimer(Now, TimeSpan.FromSeconds(10));
+        var dc = new FakeDevCenter { Answer = Serving(Actions()) };
+        await using var service = Service(dc, time: time, settings: new DevBoxSettings { KeepAwake = true, IntervalMinutes = 15 });
+
+        service.Start();
+        await Until(() => service.State.NextAt is not null, "the first pass to be scheduled");
+        await Until(() => time.Timers >= 2, "the timer to be made again from the later reading");
+        time.Advance(service.State.NextAt!.Value - time.GetUtcNow());
+
+        await Until(() => dc.Calls.Count == 1, "the first pass");
+    }
+
+    sealed class AdvancesBeforeFirstTimer(DateTimeOffset start, TimeSpan by) : FakeTimeProvider(start)
+    {
+        int moved;
+        int timers;
+
+        public int Timers => Volatile.Read(ref timers);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (Interlocked.Exchange(ref moved, 1) == 0) { Advance(by); }
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            Interlocked.Increment(ref timers);
+            return timer;
+        }
+    }
+
     [Fact]
     public async Task Keep_awake_turned_off_runs_no_pass_and_turned_on_runs_one_at_once()
     {
