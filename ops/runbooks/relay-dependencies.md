@@ -19,9 +19,14 @@ Query `dependencies` (and `push-outcomes` for push) in
 
 **What the logs can't tell you.** Roster and blob lines carry only the exception's type name,
 by design. An authorization failure and a Storage 5xx are both `RequestFailedException`. Blob
-timeouts aren't logged at all, and neither are corrupt roster loads. Those last two show only in
-the `relay.blobs` and `relay.roster` metrics, once they're exported (OBS-1, #569). So tell
-the causes apart from Storage's side, as below.
+timeouts aren't logged at all; they show only in the `relay.blobs` metric, once it is exported
+(OBS-1, #569). So tell the causes apart from Storage's side, as below.
+
+**`roster copy unreadable, replaced on next write: <Type>`** means a stored roster could not be
+parsed. The relay loaded that account as empty, and the next write replaces the copy. Do nothing.
+If the line repeats for the same account after a write, the writer is at fault: check what
+version of the relay wrote it. The line carries no account or device. The `relay.roster`
+`corrupt` counter still counts it.
 
 ## Mitigate
 

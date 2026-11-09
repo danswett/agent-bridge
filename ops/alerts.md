@@ -58,7 +58,7 @@ Signals:
 | A-STORM | 2 | LA `reconnect-storm` (then M) | Disconnects per minute > 5× the hour's median for 3 consecutive minutes, ≥ 20/min, and no deploy in the last 15 min | [reconnect-storm](runbooks/reconnect-storm.md) | #574 | Planned |
 | A-REFUSALS | 3 | M `relay.refusals` only: the relay logs no refusals, so this waits for OBS-1 | Refusals (4000 bad hello, 4001 token, 4003 proof, 4029 too many devices, 403 origin) > 10× the day's hourly median in an hour, ≥ 50 | [reconnect-storm](runbooks/reconnect-storm.md) | #574, after #569 | Planned |
 | A-RATELIMIT | 3 | LA `connections` (disconnect outcome `rate limited`), then M `relay.disconnects` | Admitted sockets closed with 4008 for exceeding the frame limit: ≥ 20 in an hour | [reconnect-storm](runbooks/reconnect-storm.md) | #574 | Planned |
-| A-ROSTER | 3 | LA `dependencies` | ≥ 5 roster failures in 15 min (Sev 2 at ≥ 50) | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
+| A-ROSTER | 3 | LA `dependencies` | ≥ 5 roster failures in 15 min (Sev 2 at ≥ 50); a corrupt stored copy ("roster copy unreadable") is counted by the same alert | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
 | A-BLOB | 3 | LA `dependencies` | ≥ 5 blob store failures in 15 min | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
 | A-PUSH | 3 | LA `dependencies` | Push failures (5xx or exceptions) > 20% of ≥ 10 pushes in 30 min | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
 | A-SIGNIN | 3 | M `relay.signins` | `refused` > 50% of ≥ 10 sign-ins in 30 min | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |

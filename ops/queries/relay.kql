@@ -69,14 +69,15 @@ ContainerAppConsoleLogs_CL
             Under10s = countif(todouble(j.State.Seconds) < 10) by End = tostring(j.State.End)
 
 // ==== dependencies: roster, blob store and push failures per 15 min (A-ROSTER, A-BLOB, A-PUSH)
-// The roster logs only failures, so its FailedPct is always 100; read its Failed count.
+// The roster logs only failures (a corrupt stored copy, "roster copy unreadable", included), so its
+// FailedPct is always 100; read its Failed count.
 ContainerAppConsoleLogs_CL
 | where TimeGenerated > ago(24h) and ContainerAppName_s == "agent-bridge-relay"
 | extend j = parse_json(Log_s)
 | extend Template = tostring(j.State["{OriginalFormat}"])
 | where Template startswith "roster " or Template startswith "blob " or Template startswith "push to "
 | extend Dependency = tostring(split(Template, " ")[0]),
-         Failed = Template has "failed" or (Template startswith "push to " and toint(j.State.Status) >= 500)
+         Failed = Template has "failed" or Template startswith "roster copy unreadable" or (Template startswith "push to " and toint(j.State.Status) >= 500)
 | summarize Total = count(), Failed = countif(Failed) by bin(TimeGenerated, 15m), Dependency
 | extend FailedPct = round(100.0 * Failed / Total, 1)
 | order by TimeGenerated desc
