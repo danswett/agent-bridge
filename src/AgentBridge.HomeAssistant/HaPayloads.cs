@@ -459,8 +459,10 @@ public static class HaPayloads
 
     // Publish-CopilotMqttGlobalStatus's attributes. discoveryHeld is what holds the host's
     // discovery, as Get-DaemonDiscoveryHoldSummary words it for the status line, or "".
-    public static JsonObject GlobalAttributes(IEnumerable<Descriptor> sessions, string machineName, string slug, JsonObject capabilities, DateTimeOffset now, string discoveryHeld = "") => new()
+    public static JsonObject GlobalAttributes(IEnumerable<Descriptor> sessions, string machineName, string slug, JsonObject     capabilities, DateTimeOffset now, string discoveryHeld = "", JsonObject? load = null)
     {
+            var attributes = new JsonObject
+            {
         ["sessions"] = new JsonArray([.. sessions.Select(d => (JsonNode)new JsonObject
         {
             ["name"] = d.Name,
@@ -474,7 +476,37 @@ public static class HaPayloads
         ["resumable"] = new JsonArray(),
         ["discovery_held"] = discoveryHeld,
         ["updated"] = Stamp(now),
-    };
+        };
+        if (load is not null) { attributes["load"] = load; }
+        return attributes;
+    }
+
+    // The sessions sensor's resource figures (#1150): counts, percentages and byte sizes only, keyed
+    // by the node ids the sensor already lists. Unknown figures are null, never zero. Held back from
+    // the sensor until Compliance clears it (HaConnectorOptions.PublishLoad).
+    public static JsonObject Load(AgentBridge.Host.Core.Load.ProcessLoadReport report, IReadOnlyDictionary<string, string> nodeBySession)
+    {
+        var sessions = new JsonObject();
+        foreach (var (id, s) in report.Sessions)
+        {
+            if (!nodeBySession.TryGetValue(id, out var node)) { continue; }
+            sessions[node] = new JsonObject
+            {
+                ["state"] = s.State.ToString().ToLowerInvariant(),
+                ["processes"] = s.Processes,
+                ["cpu_percent"] = s.CpuPercent,
+                ["working_set_bytes"] = s.WorkingSetBytes,
+            };
+        }
+        return new JsonObject
+        {
+            ["sampled_at"] = Stamp(report.SampledAt),
+            ["processors"] = report.Machine.Processors,
+            ["machine_cpu_percent"] = report.Machine.CpuPercent,
+            ["machine_available_memory_bytes"] = report.Machine.AvailableMemoryBytes,
+            ["sessions"] = sessions,
+        };
+    }
 
     // New-BridgeUsageRecord and Get-BridgeUsageWindow, from the host's reading. Percent is how
     // much is gone; the state is the window closest to running out, or "unknown" when there is

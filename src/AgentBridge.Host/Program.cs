@@ -394,6 +394,17 @@ async Task<int> ServeAsync(HostHandover handover)
     var attempts = new AttemptLedger(Path.Combine(identity.Folder, "answer-attempts.json"), log: Log);
     await using var source = new SessionSource(options, processes, drivers: drivers, answerAttempted: attempts.IsClaimed);
     attempts.Changed += source.AnswerAttemptsChanged;
+    // Per-session process CPU and working set, one shared snapshot every 5 s (#1150). Local only:
+    // host.log gets a line at most once a minute; nothing is sent anywhere.
+    await using var load = new AgentBridge.Host.Core.Load.ProcessLoadSampler(source, new AgentBridge.Host.Core.Load.SystemProcessTable());
+    var lastLoadLog = DateTimeOffset.MinValue;
+    load.Sampled += report =>
+    {
+        if (report.SampledAt - lastLoadLog < TimeSpan.FromSeconds(60)) { return; }
+        lastLoadLog = report.SampledAt;
+        Log(AgentBridge.Host.Core.Load.ProcessLoadSampler.Describe(report));
+    };
+    load.Start();
     // Writes to transcripts as the source's watcher hears them, so a delivery confirms as soon as
     // the agent records what it typed rather than at its next poll.
     var writes = new TranscriptWrites();
@@ -531,7 +542,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
     await using var homeAssistant = HaRunning.Start(settings, identity.Folder, source, usageMonitor, haActive, IsDevBuild(), HostVersion(), Log, answers,
-        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth);
+        HaReplies.For(replies, attachments), stops, launcher, hostUpdates, drivers, haAuth, () => load.Current);
     // What takes answering, replying, ending and launching away while it runs (design G5).
     // Asked afresh by what acts on it (updates, the readiness checks, the app's status).
     string? ServeReadOnly() => ReadOnlyReason() ?? g5.Active();
