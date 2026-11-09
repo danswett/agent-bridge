@@ -301,6 +301,12 @@ public sealed class SettingsTests : IAsyncLifetime
         return new SettingsResult(saved, false);
     });
 
+    // What a host reports once setup has registered the hooks, and no session has run them yet.
+    static AgentReadinessReport SetUp(AgentReadinessReport report) => report with
+    {
+        Agents = [.. report.Agents.Select(a => a with { Hooks = new(ReadinessState.Unknown, RecordIntakeOn), HookSetup = HookSetupState.Completed })],
+    };
+
     static AgentReadinessReport Readiness(string version) => new(Make.T0,
     [
         new("claude", "Claude", "fixture-home", "claude.exe", version,
@@ -670,7 +676,7 @@ public sealed class SettingsTests : IAsyncLifetime
         // last status event to arrive is this one, with 2.3.4 in it.
         host.On(HostOps.AgentsRefresh, _ =>
         {
-            host.Status = host.Status with { Agents = Readiness("2.3.4") };
+            host.Status = host.Status with { Agents = SetUp(Readiness("2.3.4")) };
             return new AgentBridge.Transport.ChannelReply(host.Status.Agents!, ch => host.SendAsync(HostOps.StatusEvent, host.Status));
         });
 
@@ -1592,6 +1598,8 @@ public sealed class SettingsTests : IAsyncLifetime
         host.OnAsync(HostOps.AgentsSetup, async _ =>
         {
             await release.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+            host.Status = host.Status with { Agents = host.Status.Agents! with { Agents = [.. host.Status.Agents.Agents.Select(a => a.Id == "claude"
+                ? a with { Hooks = new(ReadinessState.Unknown, RecordIntakeOn), HookSetup = HookSetupState.Completed } : a)] } };
             return new AgentSetupResult(true, "Registered. Start new agent sessions to verify hooks.", true);
         });
         host.On(HostOps.AgentsRefresh, _ => host.Status.Agents);
@@ -1716,6 +1724,47 @@ public sealed class SettingsTests : IAsyncLifetime
 
         Assert.Contains("fixture legacy host", settings.Error);
         Assert.Empty(host.Sent(HostOps.AgentsSetup));
+    }
+
+    [Fact]
+    public async Task A_press_the_app_refuses_ends_on_the_agents_own_row()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3"), ReadOnly = "fixture legacy host" });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1 && connection.Status?.ReadOnly is not null, "the read-only agent row");
+
+        await settings.SetUpAgentAsync("claude");
+
+        Assert.Equal("Setup failed · this bridge is read-only", settings.Agents.Single().Status);
+        Assert.Equal(Tone.Bad, settings.Agents.Single().StatusTone);
+        Assert.Contains("fixture legacy host", settings.Error);
+        Assert.Empty(host.Sent(HostOps.AgentsSetup));
+    }
+
+    [Fact]
+    public async Task A_press_the_host_calls_done_that_changes_nothing_says_so_on_the_row()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3") });
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        host.On(HostOps.AgentsSetup, _ => new AgentSetupResult(true, "Registered.", false));
+        host.On(HostOps.AgentsRefresh, _ => new AgentBridge.Transport.ChannelReply(host.Status.Agents!, ch => host.SendAsync(HostOps.StatusEvent, host.Status)));
+
+        await settings.SetUpAgentAsync("claude");
+
+        await Wait.UntilAsync(() => settings.Agents.SingleOrDefault()?.Status.StartsWith("Nothing changed", StringComparison.Ordinal) == true, "the nothing-changed note",
+            why: () => settings.Agents.SingleOrDefault()?.Status ?? "none");
+        Assert.Equal(Tone.Warn, settings.Agents.Single().StatusTone);
+    }
+
+    [Theory]
+    [InlineData(ReadinessState.Unknown, HookSetupState.NotSetUp, "Set up")]
+    [InlineData(ReadinessState.NeedsAction, HookSetupState.NotSetUp, "Set up")]
+    [InlineData(ReadinessState.Failed, HookSetupState.Incomplete, "Repair")]
+    [InlineData(ReadinessState.Working, HookSetupState.Completed, null)]
+    public void A_row_labels_its_button_for_what_the_host_reports(ReadinessState hooks, HookSetupState setup, string? verb)
+    {
+        var row = new AgentReadinessRow(Agent("claude", "Claude Code", hooks, setup: setup), canManage: true);
+
+        Assert.Equal(verb, row.SetUpVerb);
     }
 
     [Fact]
