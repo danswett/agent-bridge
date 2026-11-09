@@ -78,6 +78,25 @@ test.afterEach(() => {
   feedbackBuildConfigured = false;
 });
 
+// A machine's tab, or when it did not fit the bar (#1324), its place in the "N more" menu.
+async function machineListed(page, name) {
+  const tab = page.locator(`#machine-tabs [data-device-name="${name}"]`);
+  const more = page.locator('#machine-tabs .machine-more');
+  await expect(tab.or(more)).not.toHaveCount(0, { timeout: 30000 });
+  if (await tab.count()) { await expect(tab).toBeVisible(); return; }
+  await more.click();
+  await expect(page.locator('#machine-tabs .row-menu [role="menuitem"]').filter({ hasText: name })).toBeVisible({ timeout: 30000 });
+  await page.keyboard.press('Escape');
+}
+
+async function pickMachine(page, name) {
+  await machineListed(page, name);
+  const tab = page.locator(`#machine-tabs [data-device-name="${name}"]`);
+  if (await tab.count()) { await tab.click(); return; }
+  await page.locator('#machine-tabs .machine-more').click();
+  await page.locator('#machine-tabs .row-menu [role="menuitem"]').filter({ hasText: name }).click();
+}
+
 async function signIn(page) {
   await page.goto(appUrl);
   await page.click('#signin-button');
@@ -114,9 +133,9 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
 
   await signIn(page);
-  await expect(page.locator('#machine-tabs [data-device-name="fixture-host"]')).toBeVisible();
-  await expect(page.locator('#machine-tabs [data-device-name="demo-host"]')).toBeVisible();
-  await page.click('#machine-tabs [data-device-name="fixture-host"]');
+  await machineListed(page, 'fixture-host');
+  await machineListed(page, 'demo-host');
+  await pickMachine(page, 'fixture-host');
   await expect(page.locator('.session')).toHaveCount(fixture.sessions.length, { timeout: 30000 });
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on fixture-host');
   await expect(page.locator('[data-device-name="fixture-host"] button.machine-button')).toHaveAttribute('aria-current', 'true');
@@ -279,7 +298,7 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   const sockets = [];
   await context.routeWebSocket(/\/v1\/ws(\?|$)/, (ws) => { ws.connectToServer(); sockets.push(ws); });
   await signIn(page);
-  await page.click('#machine-tabs [data-device-name="demo-host"]');
+  await pickMachine(page, 'demo-host');
   await expect(page.locator('#return-slot')).toContainText(`${UNSUPPORTED_SESSIONS} yet`, { timeout: 30000 });
   await expect(page.locator('.session')).toHaveCount(0);
   await page.close();
@@ -304,7 +323,7 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   expect(new URL(opened.url()).hash).toBe('#/sessions');
   await opened.click('#signin-button');
   await expect(opened.locator('#conn')).toHaveText('Connected', { timeout: 30000 });
-  await expect(opened.locator('#machine-tabs [data-device-name="fixture-host"]')).toBeVisible();
+  await machineListed(opened, 'fixture-host');
   // The new sign-in starts where one with nothing remembered does, at every machine, not at
   // the machine the last one chose.
   await expect(opened.locator('[data-device-id="all"] button')).toHaveAttribute('aria-current', 'true');
@@ -338,7 +357,7 @@ test('a phone answers a question through the relay, and an answer in flight when
 
   await ask('ask-1', 'q1');
   await signIn(page);
-  await page.click('#machine-tabs [data-device-name="fixture-host"]');
+  await pickMachine(page, 'fixture-host');
   const q1 = card(page, 'ask-1').locator('.question:not(.resolved)');
   await expect(q1).toHaveAttribute('data-answerable', 'true', { timeout: 30000 });
   await open(page, 'ask-1');
@@ -385,7 +404,7 @@ test('a phone replies to a session through the relay, and a reply in flight when
   const typedFor = (id) => host.typedReplies.filter((r) => r.id === id);
 
   await signIn(page);
-  await page.click('#machine-tabs [data-device-name="fixture-host"]');
+  await pickMachine(page, 'fixture-host');
   await expect(page.locator('.session[data-id="reply-1"]')).toBeVisible({ timeout: 30000 });
   await open(page, 'reply-1');
   const reply = card(page, 'reply-1').locator('form.reply');
@@ -453,7 +472,7 @@ test.describe('notifications', () => {
     await fakePush(context);
     await signIn(page);
     test.skip(await page.evaluate(() => typeof PushManager === 'undefined'), `${browserName} here has no PushManager`);
-    await page.click('#machine-tabs [data-device-name="fixture-host"]');
+    await pickMachine(page, 'fixture-host');
     await expect(page.locator('.session').first()).toBeVisible({ timeout: 30000 });
     // Notifications are in Settings.
     await go(page, 'settings');
@@ -766,7 +785,7 @@ test('every machine shows its sessions and version, and its agents\' usage, merg
   await signIn(page);
   // One machine shown on its own (one that shows nothing), so a machine that comes online is
   // looked at in passing rather than shown.
-  await page.click('#machine-tabs [data-device-name="demo-host"]');
+  await pickMachine(page, 'demo-host');
   const usageHost = await startFixtureHost({
     base: relayUrl, name: 'usage-host', usage: copilot(40),
     sessions: [{ id: 'u-1', agent: 'copilot', title: 'One', status: 'idle', statusSince: t, updatedAt: t, activity: {} }, { id: 'u-2', agent: 'claude', title: 'Two', status: 'idle', statusSince: t, updatedAt: t, activity: {} }],
@@ -782,7 +801,7 @@ test('every machine shows its sessions and version, and its agents\' usage, merg
     expect(usageHost.log.filter((op) => op === 'usage.get').length).toBe(1);
 
     // Viewed: the usage comes on its own channel, as it changes.
-    await page.click('#machine-tabs [data-device-name="usage-host"]');
+    await pickMachine(page, 'usage-host');
     await expect(page.locator('.session')).toHaveCount(2, { timeout: 30000 });
     await expect.poll(() => usageHost.log.filter((op) => op === 'usage.subscribe').length, { timeout: 15000 }).toBe(1);
     await usageHost.setUsage(copilot(91));
