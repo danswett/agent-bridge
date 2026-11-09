@@ -63,6 +63,7 @@ public sealed partial class HaConnector
         // screen: typed before it could be seen, so never its answer (#76). WindowChecked is false
         // until the selector has been read waiting under this question.
         public string? WindowText;
+    public string? WindowSeal;
         public bool WindowChecked;
         // Home Assistant lost the card's controls or their values (stage 7): put on screen again,
         // with fresh baselines, keeping what this question has been through (settled, attempts,
@@ -408,6 +409,7 @@ public sealed partial class HaConnector
     async Task CheckWindowAsync(Armed armed, string node, bool onScreen, CancellationToken ct)
     {
         armed.WindowText = null;
+        armed.WindowSeal = null;
         armed.WindowChecked = onScreen;
         if (!onScreen) { return; }
         var box = await ObserveAsync(SessionEntities.Reply(node), ct);
@@ -940,9 +942,18 @@ public sealed partial class HaConnector
             // failed go again only on a press after the failure.
             if (card is { } c) { return c.Retry && !fresh ? null : Answer(sessionId, armed, null, c.Text, c.Text, c.Stamp, null, c.Driver); }
             var box = await ObserveAsync(SessionEntities.Reply(node), ct);
+            // An emptied box ends the refusal: the same words typed again are a new answer.
+            if (box.Present && string.IsNullOrWhiteSpace(box.Value)) { armed.WindowText = null; }
             if (armed.WindowText is not null && box.Present && box.Value == armed.WindowText && box.Value != armed.UsedPress)
             {
-                return WindowRead(box.Value, null);
+                // Refused once: a Send pressed after the notice sends the same words.
+                var send = await ObserveAsync(SessionEntities.Submit(node), ct);
+                if (armed.WindowSeal is not null && send.Present && send.Value != armed.WindowSeal) { armed.WindowText = null; }
+                else
+                {
+                    armed.WindowSeal ??= send.Value ?? "";
+                    return WindowRead(box.Value, null);
+                }
             }
             if (box.Present && !string.IsNullOrWhiteSpace(box.Value) && Changed(armed.ReplyBaseline, box) && box.Value != armed.UsedPress
                 && (box.Value != armed.FailedBox || fresh))
@@ -1078,14 +1089,17 @@ public sealed partial class HaConnector
             var typed = await ObserveAsync(SessionEntities.Reply(node), ct);
             if (typed.Present && !string.IsNullOrWhiteSpace(typed.Value) && Changed(armed.ReplyBaseline, typed))
             {
-                if (typed.Value == armed.WindowText) { return WindowRead(typed.Value, submit.Value); }
+                if (typed.Value == armed.WindowText) { armed.WindowText = null; return WindowRead(typed.Value, submit.Value); }
                 var typedAnswer = new Dictionary<string, JsonElement> { [fields[0].Source!.Name] = JsonSerializer.SerializeToElement(new { other = typed.Value }) };
                 return Answer(sessionId, armed, typedAnswer, null, typed.Value, null, submit.Value, DriverOf(submit.Snapshot?.UserId), PrincipalOf(submit.Snapshot?.UserId));
             }
         }
         if (pressed && windowText)
         {
-            return WindowRead(armed.WindowText!, submit.Value);
+            // Refused once: words still in the box on the next Send are the person's answer.
+            var refused = armed.WindowText!;
+            armed.WindowText = null;
+            return WindowRead(refused, submit.Value);
         }
         if (pressed && !complete)
         {

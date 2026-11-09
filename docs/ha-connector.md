@@ -446,7 +446,8 @@ does not answer it from the earlier refusal.
 and `Not sent - no Send button on this session` say what was wrong with the press itself; such
 a press is spent. `Not sent - type your answer again` says reply-box words were typed before the
 question was verifiably on screen; they are not sent, the question stays open, and words typed
-after are sent as usual. A re-arm or host restart takes a fresh window check. A question that ends is cleared (selector `Idle`, attributes `{}`, the slots
+after are sent as usual. Identical words are sent too once the person presses Send again after the
+notice (or empties the box and types them again). A re-arm or host restart takes a fresh window check. A question that ends is cleared (selector `Idle`, attributes `{}`, the slots
 it used reset); a question the card still shows when the connector takes over, but which the
 session no longer asks, is cleared too.
 
