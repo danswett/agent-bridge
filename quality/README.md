@@ -610,6 +610,32 @@ reads the mirror. Overriding only the package sources (`--source`) isn't enough:
 tries nuget.org from `nuget.config`, and its NU1900 warning is an error here. Unset, nothing
 changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
 
+### Independent review depth
+
+The [owner-approved #929 rule](https://github.com/danswett/agent-bridge/issues/929#issuecomment-6668478876)
+sets review depth by risk, effective 2026-11-05 12:27 PT:
+
+| What the PR touches | Required review |
+|---|---|
+| A `sensitive_paths` match in [`merge-rule.yml`](merge-rule.yml), a security title or label, or production auth, delivery or lifecycle code | **ENTIRE:** every resulting file, read to EOF after CI is green |
+| Other production code, at first review | **FULL:** the diff plus every changed file in full |
+| A re-push after a CLEAN review | **Delta:** the diff since the last CLEAN head, plus a whole read of only the files touched since |
+| A test-only or docs-only re-push | Delta only |
+
+A rebase may retain its independent review when `git range-diff` shows that the
+PR's own commits are unchanged; the receipt cites that range-diff. Otherwise,
+a carried delta needs a proved previously reviewed ancestor and an explicit
+review of the delta at the new head.
+
+Reduced read depth does not carry CI, Copilot's review or a commit status to a new
+head. The new head still needs fresh CI, a completed Copilot review at that head,
+all substantive findings disposed of, no unresolved threads and, where required,
+an independent-review receipt at that exact head. Retained review evidence belongs
+in that receipt; neither a rebase nor a delta clears a hold or admits the PR.
+Changes to `merge-rule.yml` are themselves ENTIRE-review changes. The existing
+merge rule and its other gates remain in force; this table does not change the
+App, ruleset or allowed receipt posters.
+
 ## 5. Coverage, timing, flakes and reports
 
 - **Coverage** (collected since #363, no gates yet): the `dotnet-coverage` tool (Cobertura,
