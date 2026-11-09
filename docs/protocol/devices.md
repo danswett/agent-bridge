@@ -6,16 +6,16 @@ design, its reasons and its proofs are in
 wire contract implementations share. It is not [roster.md](roster.md), the relay's list of
 machines seen online.
 
-**Status: R1a and R1b.** R1a is the encoding: framing, ids, entries, their strict parsing,
-presence assertions and the values enrollment computes. R1b is the acceptance rule and state in
-C# (design §3.3 to §3.5). The PWA's port of the rule, person commands, head attestations and
-vetoes come in R1c. It is a library only: nothing in the host, the relay or a client uses it yet
+**Status: R1a, R1b and R1c.** R1a is the encoding: framing, ids, entries, their strict parsing,
+presence assertions and the values enrollment computes. R1b is the acceptance rule and state in C#
+(design §3.3 to §3.5). R1c ports the rule to the PWA and adds vetoes, person commands and head
+attestations in both. R1d stores signing keys (TPM, DPAPI, WebCrypto). It is a library only: nothing in the host, the relay or a client uses it yet
 (slices R2 to R5).
 
 | Implementation | Where |
 |---|---|
 | C# (host, relay, app) | `src/AgentBridge.Roster`, tests in `tests/AgentBridge.Roster.Tests` |
-| JavaScript (PWA) | `pwa/js/roster`, replaying the vectors in `pwa/test/unit/roster-vectors.test.mjs` |
+| JavaScript (PWA) | `pwa/js/roster`, replaying the vectors in `pwa/test/unit/roster-vectors.test.mjs`, `roster-state.test.mjs` and `roster-commands.test.mjs` |
 | Swift (iOS) | Not yet: left to slice A1, which replays the same vectors |
 
 All three must accept and refuse the same inputs **with the same refusal code**, which is why the
@@ -34,14 +34,16 @@ bytes.
 |---|---|
 | `agent-bridge roster entry v1` | `sig`: `by`'s signature over `F(label, bodyBytes)` |
 | `agent-bridge roster cosign v1` | `cosig`: the cosigner's signature over `F(label, bodyBytes)` |
-| `agent-bridge presence v1` | A presence assertion's challenge: `SHA-256(F(label, role, bodyBytes))`, `role` being `by` or `cosigner` |
+| `agent-bridge presence v1` | A presence assertion's challenge: `SHA-256(F(label, role, bodyBytes))`, `role` being `by` or `cosigner` for an entry, `veto` for a veto and `command` for a person command |
 | `agent-bridge enroll commit v1` | `C = SHA-256(F(label, h, nN))` |
 | `agent-bridge enroll v1` | `T = SHA-256(F(label, account, h, nA, nN))` |
 | `agent-bridge enroll code1 v1`, `… code2 v1` | `codeN = U32(SHA-256(F(label, T))) mod 10⁶`, six digits, zero-padded |
 | `agent-bridge enroll key v1` | What a joining person's device signs with `sign`: `F(label, h)` |
 | `agent-bridge invite hint v1` | `hex(HMAC-SHA256(q, F(label))[0..7])` |
 | `agent-bridge enroll qr joiner v1`, `… qr approver v1` | `HMAC-SHA256(q, F(label, h))` |
-| `agent-bridge roster head v1`, `agent-bridge person command v1`, `agent-bridge reset veto v1` | Reserved for R1b and R1c |
+| `agent-bridge roster head v1` | A head attestation's MAC input (below) |
+| `agent-bridge person command v1` | What a person command's `by` signs: `F(label, bodyBytes)` |
+| `agent-bridge reset veto v1` | What a veto's `by` signs: `F(label, bodyBytes)` |
 
 ## Encodings
 
@@ -274,6 +276,66 @@ than the kept adds and what they need. When every such entry has some, it takes 
 names the grants it cannot void by position. When none is under every holder, it takes the one
 with the fewest ancestors outside what they all hold, and names the holders that lack it.
 
+## Vetoes, person commands and head attestations
+
+Design §5.6, §7.2 and §6.3. A veto and a person command travel as `{ "body", "sig", "uv"? }`,
+parsed strictly like an entry: no other wrapper member, `uv` holding only `by`'s assertion (an
+empty one is `value`), fixed content at most 8 KiB (`size`). Each check returns `null` or one code,
+in the order below; a parser refusal uses the entry codes above.
+
+**Veto** (`Veto.Parse`, `Veto.Check`; `parseVeto`, `checkVeto`). `body` is exactly `{ v: 1, op:
+"veto", account, generation, reset, by, at }`: `reset` 32 bytes, `at` as an entry's. `sig` is by
+`by`'s `sign` key over `F("agent-bridge reset veto v1", bodyBytes)`, and a `webauthn` device's
+assertion is over the challenge for role `veto`. Checked against the relay's copy of the current
+generation and the reset it holds: `account`, `generation`, `reset` (another reset), `signer` (not
+an active person's device there; probation does not matter), `signature`, `presence`.
+
+**Person command** (`PersonCommand.Parse`, `PersonCommand.Check`; `parsePersonCommand`,
+`checkPersonCommand`). `body` is `{ v: 1, action, request, by, target: { machine, … }, …,
+issuedAt, expiresAt, heads }`, with exactly the members its action has:
+
+| `action` | Body members besides the common ones | `target` members besides `machine` |
+|---|---|---|
+| `transfer` | `to` | `session` |
+| `folder-trust-answer` | `choice`, `nonce` | `question` |
+| `update` | `nonce` | none |
+| `forget` | none | none |
+| `attest` | `nonce` | none |
+
+`request` and `session` are lowercase UUIDs; `machine`, `by` and `to` device ids; `question` 1 to
+128 characters of `A–Z a–z 0–9 . _ : -`; `choice` 1 to 256 UTF-8 bytes with no control character;
+`nonce` 32 bytes; `issuedAt` and `expiresAt` RFC 3339 UTC as `at`; `heads` 1 to 4 hashes in head
+order. `sig` is over `F("agent-bridge person command v1", bodyBytes)`, the assertion for role
+`command`. The library checks, in order: `action` (not the op's), `machine` (not this host),
+`signer` (by is the machine or `to`, or is not an active person's device), `probation` (on
+probation, or held), `signature`, `presence`, `lifetime` (expiring at or before issue, or over 10
+minutes after), `future` (issued over 2 minutes after `now`), `expired` (expiring before `now`),
+`floor` (issued at or before the floor), `nonce` (an action with one, not this channel's), `heads`
+(a head the host does not hold: it syncs, then asks again), and for `attest` given the last
+attestation's heads, `regress` (one of those is neither named nor an ancestor of one named).
+Times compare exactly, to the nanosecond.
+
+The library holds no state, so these are **the host's obligations** (R6, and R2 for freshness),
+which no caller may skip:
+* the **durable replay record**: `request` never used before, written and flushed before the
+  action runs, kept until `expiresAt` plus 2 minutes has passed by the high-water mark;
+* the **wall-clock high-water mark**, persisted, passed as `now` when it is later than the clock,
+  with the **floor** a local clock reset sets, and the highest `issuedAt` accepted, persisted with
+  the record;
+* the **nonce** it gave the channel in `hello`, for an action that carries one;
+* **freshness** (§6.3) before any action but `attest` under `selfAttest`, and the heads of the
+  last attestation it took from another device, for `attest`.
+
+**Head attestation** (`HeadAttestation`; `attestationKey`, `attestationMessage`, `attestationMac`,
+`verifyAttestation`, `revokedAdds`). The key is a signed command's between the same two devices:
+`HKDF-SHA256(ikm: ECDH(attester, host), salt: "agent-bridge command v1", info: "<attester id>|<host
+id>")`. The MAC is `HMAC-SHA256(key, F("agent-bridge roster head v1", account, generation, heads,
+host id, nonce, revoked))`, where `heads` and `revoked` are each one part, their 32-byte hashes in
+head order joined, and `revoked` (the enrollment adds the host's applied state revokes, §6.3's
+acknowledgement) is always there, empty when there are none. A signed command's MAC is over the
+body's JSON bytes, and this input begins with its own label, so neither ever verifies as the
+other. The library takes the raw ECDH secret, which the caller's key store computes.
+
 ## Vectors
 
 [vectors/roster.json](vectors/roster.json) holds fixed test keys (`d`, `public`, `device`) and:
@@ -297,7 +359,16 @@ clock first (alone, they record who is `serving` then and the `names` shown), or
 what the verifier then applies: the active devices with the add, confirmation and name shown of each (and a `pending` rename),
 the conflicted ids, the heads, the quarantined entries, the evidence and who is served. A scenario with `limits` (`addCap`) runs a verifier with that
 cap shrunk so it can be reached. Every refusal `reason` the verifier can give has a scenario that shows it. The PWA's
-port replays the scenarios once R1c lands.
+port (`pwa/js/roster/verifier.js`) replays it in `pwa/test/unit/roster-state.test.mjs`, with the same
+verdicts, codes and state at every step (a scenario's `limits` shrink the port's cap the same way).
+
+[vectors/roster-commands.json](vectors/roster-commands.json) holds a roster (its `entries`, every one
+accepted at running time 0 and checked an hour later, so N is on probation), the `heldReset`,
+and `vetoes` and `commands`, each a `wrapper` with the parser's `refusal` or the check's `code`
+(`null`: taken), a command with the `context` it is checked in. Its `attestation` gives the two
+devices' keys, the derived `key`, the `message` and `mac`, and a signed command's `body` and `mac`
+under the same key, which must not verify the attestation. `RosterCommandTests.cs` writes it and
+`pwa/test/unit/roster-commands.test.mjs` replays it.
 
 ## Decided for the library
 
@@ -310,6 +381,10 @@ Decided by A, Trust lead, 2026-11-04, where the design left them open:
 | What "distinct heads" means for a merge's parents | No parent an ancestor of another |
 | §10's "partial cascade with a fabricated pair", whose bullet keeps E and E2 active | §3.5 governs, and the bullet is a design erratum (to be fixed after #391 lands): J's and K's removal also revokes D and E's add is not its ancestor, so E and E2 are void until enrolled again. A recovery of a device that approved others needs a cosigner, as the client asks |
 | §10's removal that revokes only a fabricated duplicate of a device's id, whose bullet keeps the device's own add active | §3.5 governs: the removal never takes that add, so the device wipes nothing, but it bars it when the removal's signer was active where it was made, and the device then shows "not active". The bullet describes only the case without the bar (erratum #811) |
+| What the library checks of a person command | Only what needs no state; the durable replay record, the high-water mark and floor, the nonce and freshness are the host's (R6, R2), named above |
+| A person command's field formats | As above; `issuedAt` and `expiresAt` RFC 3339 UTC, as entries' times |
+| The presence challenge roles for vetoes and person commands | `veto` and `command`, roles of their own, so an assertion made for one kind of signed object never stands for another |
+| The head attestation MAC | The signed command's HKDF key, over an input that begins with `agent-bridge roster head v1`, so neither MAC verifies as the other; `revoked` is one more part after the nonce, always present (erratum #811) |
 
 ## Open questions
 
@@ -326,5 +401,4 @@ check to change:
 | An empty `uv` object | Refused (`value`) |
 | An assertion carrying extension data | Refused: a presence proof asks for none |
 | The origin an assertion must name | Exactly `https://` + `rpId` |
-| The challenge role for person commands and vetoes | Decided in R1c |
 | How the QR identifies N's `sign` key when N shows it | Decided with R3 |

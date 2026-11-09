@@ -26,6 +26,10 @@ public static class Presence
 
     public const string RoleBy = "by";
     public const string RoleCosigner = "cosigner";
+    // A veto's and a person command's signer (decided by A, Trust lead, 2026-11-04): roles of their
+    // own, so an assertion made for one kind of signed object never stands for another.
+    public const string RoleVeto = "veto";
+    public const string RoleCommand = "command";
 
     // The challenge of a presence assertion for one signer's role (§3.2, `uv`):
     // SHA-256(F("agent-bridge presence v1", role, bodyBytes)).
@@ -135,18 +139,18 @@ public sealed record EntryBody(
     }
 
     // The relay's account id: 1 to 128 UTF-8 bytes with no control character.
-    static string ParseAccount(string account) =>
+    internal static string ParseAccount(string account) =>
         account.Length > 0 && StrictJson.Utf8Bytes(account) <= MaxAccountBytes && !StrictJson.HasControl(account)
             ? account : throw new RosterFormatException(Refusal.Account, "body.account");
 
-    static string DeviceId(JsonElement e, string what)
+    internal static string DeviceId(JsonElement e, string what)
     {
         var id = StrictJson.String(e, what);
         return Codec.IsId(id) ? id : throw new RosterFormatException(Refusal.Id, what);
     }
 
     // Entry hashes in head order, ascending by raw bytes and so distinct: prev and keep.
-    static IReadOnlyList<byte[]> Hashes(JsonElement e, string what, int min, int max)
+    internal static IReadOnlyList<byte[]> Hashes(JsonElement e, string what, int min, int max)
     {
         if (e.ValueKind != JsonValueKind.Array) { throw new RosterFormatException(Refusal.Type, what); }
         var count = e.GetArrayLength();

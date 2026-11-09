@@ -209,6 +209,23 @@ sender, which answers
 
 `request` is the sender's request id.
 
+### The MCP server (`mcp/`)
+
+An agent reaches this pipe through `mcp/src/server.mjs`, an MCP server it starts as a stdio child
+of its own session, so its ancestry includes the credential's root process. It keeps
+agent-ha-bridge's tool names (`list_agent_sessions`, `read_agent_session`,
+`reply_to_agent_session`, `launch_agent_session`, `read_launch_result`, `get_launch_options`) and
+maps them to `sessions.list`, `session.get`, `session.reply`, `session.launch` and
+`launch.options`. It finds the host from `AGENT_BRIDGE_PIPE` (a pipe name or path) or, on
+Windows, as above from the user's SID and the profile folder (`AGENT_BRIDGE_ROOT`, then
+`AGENT_BRIDGE_PROFILE`, default `default`). `AGENT_BRIDGE_TOKEN` is the credential, sent in
+`agent.hello`. It lists only the tools whose capability `hello` names, and none when no host
+answers, so an agent falls back to whatever else it has. A reply or launch the host refuses is
+returned as `outcome: "refused"` with the host's reason. Without an `agent.hello` principal (no
+token) it offers and dispatches the read tools only. Every request has a 15 s timeout; arguments
+are checked (types, 16 KiB text) before any pipe call. This machine only: `machine` arguments
+are ignored.
+
 
 Local only: a relay channel answers each of these with `unknown op`. All but `host.status`
 and `host.subscribe` are the app's alone ([above](#who-may-manage-the-host)).

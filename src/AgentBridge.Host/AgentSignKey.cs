@@ -47,31 +47,51 @@ public sealed class AgentSignKey : IDisposable
         if (!modeOn) { throw new InvalidOperationException("own-account messaging is off, so no agent signing key is made"); }
         if (Open(profileFolder) is { } existing) { return existing; }
         var folder = PrivateFolder.Ensure(Path.Combine(profileFolder, FolderName), "the agent signing key folder", "no agent signing key is made");
-        using var fresh = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        var point = Point(fresh);
-        var pkcs8 = fresh.ExportPkcs8PrivateKey();
         var final = Path.Combine(folder, FileName);
-        var temp = Path.Combine(folder, $"{FileName}.{Guid.NewGuid():N}.tmp");
-        byte[] content = [.. point, .. pkcs8];
-        try
+        // File.Move(overwrite: false) is not exclusive off Windows (it checks, then renames), so two
+        // first callers, in one process or two, could each move a different key in and the second
+        // would replace the first. An exclusive lock on a side file, held across the check and the
+        // move, lets one make the key and the others read it.
+        using (AcquireGate(Path.Combine(folder, FileName + ".lock")))
         {
-            // Written whole to a temp file and moved in without overwrite, so the final path never
-            // holds a partial key and a concurrent first caller loses cleanly to the winner.
-            using (var stream = PrivateFolder.CreateNew(temp))
+            if (!File.Exists(final))
             {
-                stream.Write(OperatingSystem.IsWindows() ? Protect(content) : content);
-                stream.Flush(true);
+                using var fresh = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+                var point = Point(fresh);
+                var pkcs8 = fresh.ExportPkcs8PrivateKey();
+                var temp = Path.Combine(folder, $"{FileName}.{Guid.NewGuid():N}.tmp");
+                byte[] content = [.. point, .. pkcs8];
+                try
+                {
+                    // Written whole to a temp file and moved in without overwrite, so the final path
+                    // never holds a partial key.
+                    using (var stream = PrivateFolder.CreateNew(temp))
+                    {
+                        stream.Write(OperatingSystem.IsWindows() ? Protect(content) : content);
+                        stream.Flush(true);
+                    }
+                    File.Move(temp, final, overwrite: false);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(content);
+                    CryptographicOperations.ZeroMemory(pkcs8);
+                    try { File.Delete(temp); } catch (IOException) { }
+                }
             }
-            try { File.Move(temp, final, overwrite: false); }
-            catch (IOException) when (File.Exists(final)) { }
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(content);
-            CryptographicOperations.ZeroMemory(pkcs8);
-            try { File.Delete(temp); } catch (IOException) { }
         }
         return Read(final);
+    }
+
+    // The OS drops the lock if its holder dies, so a crash never leaves it stuck.
+    static FileStream AcquireGate(string path)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (true)
+        {
+            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) when (DateTime.UtcNow < deadline) { Thread.Sleep(10); }
+        }
     }
 
     static AgentSignKey Read(string path)

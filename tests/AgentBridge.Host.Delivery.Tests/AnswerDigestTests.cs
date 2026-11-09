@@ -59,6 +59,8 @@ public sealed class AnswerDigestTests
         Assert.NotEqual(Digest(a), Digest(b));
 
     // The number is never expanded: a very long significand or exponent costs only its own length.
+    // It took 30.9 s on a loaded windows-11-arm runner (#1374), so the limit is a hang guard (an
+    // expanding or quadratic version takes many minutes), not a speed check.
     [Fact]
     public void An_absurdly_long_number_is_canonicalised_in_time_and_equal_spellings_still_match()
     {
@@ -71,7 +73,7 @@ public sealed class AnswerDigestTests
         Assert.Equal(Digest("1"), Digest($"0.{zeros}1e200001"));
         Assert.Equal(Digest($"1e{nines}"), Digest($"10e{minus}"));
         Assert.NotEqual(Digest($"1{zeros}1"), Digest($"1{zeros}2"));
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), $"took {clock.Elapsed}");
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(120), $"took {clock.Elapsed}");
     }
 
     // Text that is not a JSON number has no canonical form; the digest keeps it tagged, as written.
