@@ -397,8 +397,19 @@ public partial class App : Application
             if (d is not null) { await d.DisposeAsync(); }
         });
         if (options.SelfTest is not null) { AppLog.Write("self-test: closing the window and exiting"); }
-        window?.Close();
-        Exit();
+        if (window is null) { Exit(); return; }
+        // Window.Close disconnects UI Automation, and that cross-apartment call pumps messages: a
+        // window-position message still waiting is then handled by a window already half torn down,
+        // and WinUI faults in CWindowChrome::UpdateBridgeWindowSizePosition (0xC0000005, #1537, seen
+        // after a passing self-test). Hidden first and closed once the queue has run down, nothing is
+        // left waiting to be delivered mid-close.
+        var closing = window;
+        closing.AppWindow.Hide();
+        if (!closing.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { closing.Close(); Exit(); }))
+        {
+            closing.Close();
+            Exit();
+        }
     }
 }
 
