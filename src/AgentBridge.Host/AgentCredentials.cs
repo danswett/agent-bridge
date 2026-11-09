@@ -189,6 +189,9 @@ public sealed class AgentCredentials : AgentBridge.Host.Delivery.ILaunchCredenti
         return new AgentHelloResult(principal, credential.Scope);
     }
 
+    // The principal a credential's holder acts as (agent:<machine>/<session>).
+    public string PrincipalOf(AgentCredential credential) => AgentProtocol.Principal(machine, credential.Session);
+
     // The credential behind this channel's agent connection, or null when it has none or it has
     // been revoked or has expired since.
     public AgentCredential? Of(IProtocolChannel channel)

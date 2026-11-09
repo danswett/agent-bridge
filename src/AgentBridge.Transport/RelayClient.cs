@@ -85,6 +85,7 @@ public sealed class RelayClient : IAsyncDisposable
     long nextPush;
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> blobRequests = new();
     readonly ConcurrentDictionary<long, TaskCompletionSource<string?>> forgets = new();
+    readonly ConcurrentDictionary<long, (List<JsonElement> Machines, TaskCompletionSource<IReadOnlyList<JsonElement>> Done)> registries = new();
 
     // Frames held for a handler that is not attached yet.
     internal int QueuedFrames => inbound.Reader.Count;
@@ -165,6 +166,21 @@ public sealed class RelayClient : IAsyncDisposable
             return await tcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
         }
         finally { forgets.TryRemove(id, out _); }
+    }
+
+    // Asks the relay for the account's session registry (docs/protocol/roster.md): one frame per
+    // machine, as the relay sent it. Throws with the relay's reason when it refuses (slow-down).
+    public async Task<IReadOnlyList<JsonElement>> RegistryGetAsync(CancellationToken ct = default)
+    {
+        var id = Interlocked.Increment(ref nextPush);
+        var entry = (Machines: new List<JsonElement>(), Done: new TaskCompletionSource<IReadOnlyList<JsonElement>>(TaskCreationOptions.RunContinuationsAsynchronously));
+        registries[id] = entry;
+        try
+        {
+            await SendTextAsync(new { t = "registry-get", id }, ct);
+            return await entry.Done.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+        }
+        finally { registries.TryRemove(id, out _); }
     }
 
     // Ends, never faults, when the connection does; the caller then reconnects.
@@ -369,6 +385,15 @@ public sealed class RelayClient : IAsyncDisposable
                                 f.TrySetResult(j.TryGetProperty("error", out var why) && why.ValueKind == JsonValueKind.String ? why.GetString() : null);
                             }
                             break;
+                        case "registry":
+                            if (j.TryGetProperty("id", out var rid) && rid.TryGetInt64(out var rkey) && registries.TryGetValue(rkey, out var r))
+                            {
+                                if (j.TryGetProperty("error", out var rerr)) { r.Done.TrySetException(new InvalidOperationException(rerr.GetString() == "slow-down" ? "refused: the relay allows one registry read every 2 seconds; try again in a few seconds" : "refused: " + rerr.GetString())); }
+                                else if (j.TryGetProperty("known", out _)) { r.Done.TrySetResult(r.Machines); }
+                                else { r.Machines.Add(j.Clone()); }
+                            }
+                            else { Unhandled?.Invoke(j.Clone()); }
+                            break;
                         default: Unhandled?.Invoke(j.Clone()); break;
                     }
                 }
@@ -394,6 +419,7 @@ public sealed class RelayClient : IAsyncDisposable
         foreach (var p in pushes.Values) { p.TrySetException(new IOException("relay connection ended")); }
         foreach (var b in blobRequests.Values) { b.TrySetException(new IOException("relay connection ended")); }
         foreach (var f in forgets.Values) { f.TrySetException(new IOException("relay connection ended")); }
+        foreach (var r in registries.Values) { r.Done.TrySetException(new IOException("relay connection ended")); }
         if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
             try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, default); }
