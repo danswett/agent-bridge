@@ -187,6 +187,9 @@ public sealed record LaunchOptions
     public required LaunchDefaults Defaults { get; init; }
     // Set when a launch now would be busy, saying why.
     public string? Busy { get; init; }
+    // Set while the host's list of resumable sessions is still being read for the first time:
+    // the other choices are complete, and a client lists again for the sessions.
+    public bool? ResumablePending { get; init; }
     // Folder-trust questions launched agents are waiting on (launch.trust). Absent when none.
     public IReadOnlyList<TrustQuestion>? Trust { get; init; }
 }

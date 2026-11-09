@@ -259,19 +259,26 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // ---- launch.options ----
 
-    public async Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => (await ResolveAsync(cancellationToken)).Options;
+    public async Task<LaunchOptions> OptionsAsync(CancellationToken cancellationToken = default) => (await ResolveAsync(cancellationToken, cached: true)).Options;
 
     // The options, with what a launch needs that a client is not sent: each launcher's
     // executable and each resumable session's entry.
     sealed record Resolved(LaunchOptions Options, IReadOnlyDictionary<string, string> Executables, IReadOnlyList<ResumeEntry> Resumable);
 
-    async Task<Resolved> ResolveAsync(CancellationToken ct)
+    // cached: answer from the last sessions scan without waiting for one (launch.options); a launch
+    // waits for a scan, since it validates a resume against the list. Only launch.options is logged.
+    async Task<Resolved> ResolveAsync(CancellationToken ct, bool cached = false)
     {
+        var clock = TimeProvider.System;
+        var phase = clock.GetTimestamp();
+        long Lap() { var now = clock.GetTimestamp(); var ms = (long)clock.GetElapsedTime(phase, now).TotalMilliseconds; phase = now; return ms; }
+        long profilesMs = 0;
         var executables = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var l in Launchers.All)
         {
             if (locator.Find(l, Config.Agent(l.Id)) is { } exe) { executables[l.Id] = exe; }
         }
+        var lookupMs = Lap();
         var live = source.Snapshot();
         var agents = new List<LaunchAgent>();
         foreach (var l in Launchers.All.Where(l => executables.ContainsKey(l.Id)))
@@ -281,7 +288,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             string? profile = null;
             if (l.TakesProfile)
             {
+                Lap();
                 (profiles, profile) = await ProfilesAsync(executables[l.Id], ct);
+                profilesMs += Lap();
             }
             agents.Add(new LaunchAgent
             {
@@ -303,7 +312,9 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             .Select(w => new LaunchWorkspace { Label = w.Label, Path = w.Path, Isolate = w.Isolate ? true : null })
             .ToList();
 
-        var entries = await ResumableAsync(executables, live, ct);
+        Lap();
+        var (entries, pending) = await ResumableAsync(executables, live, cached, ct);
+        var resumableMs = Lap();
         var resumableList = entries.Select(e => new ResumableSession
         {
             Id = e.Entry.Id,
@@ -325,6 +336,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             Defaults = new LaunchDefaults { Agent = defaultAgent, Workspace = defaultWorkspace, Permissions = Config.Permissions },
             Busy = BusyReason(status: true),
             Trust = TrustQuestions() is { Count: > 0 } trust ? trust : null,
+            ResumablePending = pending ? true : null,
         };
         // Within its budget, losing the oldest resumable sessions first, then the longest lists.
         while (ProtocolJson.ByteCount(result) > LaunchProtocol.MaxOptionsBytes && result.Resumable.Count > 0)
@@ -334,6 +346,11 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         while (ProtocolJson.ByteCount(result) > LaunchProtocol.MaxOptionsBytes && result.Agents.Any(a => a.Models.Count > 8))
         {
             result = result with { Agents = [.. result.Agents.Select(a => a with { Models = [.. a.Models.Take(Math.Max(8, a.Models.Count - 8))] })] };
+        }
+        if (cached)
+        {
+            // Counts and milliseconds only, one line per call, so a slow phase can be told from a slow reply.
+            log($"launch.options: lookup {lookupMs} ms ({executables.Count} launchers), profiles {profilesMs} ms, resumable {resumableMs} ms ({result.Resumable.Count} sessions, {(pending ? "scan still running" : "from the last scan")})");
         }
         return new Resolved(result, executables, [.. entries.Select(e => e.Entry)]);
     }
@@ -405,10 +422,10 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     // when it has any, Copilot's own store otherwise), each once and under its own agent, with
     // the live ones left out (two CLIs on one transcript would corrupt it) and only those in
     // approved folders kept, before the list is cut to resumeCount. Newest first.
-    async Task<List<Offered>> ResumableAsync(IReadOnlyDictionary<string, string> executables, IReadOnlyList<Session> live, CancellationToken ct)
+    async Task<(List<Offered> Offered, bool Pending)> ResumableAsync(IReadOnlyDictionary<string, string> executables, IReadOnlyList<Session> live, bool cached, CancellationToken ct)
     {
-        if (Config.ResumeCount <= 0) { return []; }
-        var candidates = await CandidatesAsync(executables, ct);
+        if (Config.ResumeCount <= 0) { return ([], false); }
+        var (candidates, pending) = await CandidatesAsync(executables, cached, ct);
         var once = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Approval can ask git (a worktree's top and marker), so each folder is asked once per
         // pass, and newest first, so the older sessions past the limit are never asked about.
@@ -454,7 +471,35 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
             }
             if (!excluded.Contains(e.Id)) { offered.Add(new Offered(e, title, workspace!.Label)); }
         }
-        return offered;
+        return (offered, pending);
+    }
+
+    // The sessions scan runs on data events, not a clock: when the host starts and whenever a
+    // session registers or ends, the only times what can be resumed changes. Later calls do nothing.
+    public void StartScanning()
+    {
+        if (Interlocked.Exchange(ref scanStarted, 1) == 1) { return; }
+        lock (knownGate) { foreach (var s in source.Snapshot()) { known.Add(s.Id); } }
+        source.Changed += (_, c) =>
+        {
+            bool registeredOrEnded;
+            lock (knownGate) { registeredOrEnded = c.Kind == SessionChangeKind.Removed ? known.Remove(c.Id) : known.Add(c.Id); }
+            if (registeredOrEnded) { RefreshScan(); }
+        };
+        RefreshScan();
+    }
+
+    int scanStarted;
+    readonly object knownGate = new();
+    readonly HashSet<string> known = new(StringComparer.OrdinalIgnoreCase);
+
+    void RefreshScan()
+    {
+        try
+        {
+            if (Launchers.All.FirstOrDefault(l => l.Id == "agency") is { } launcher && locator.Find(launcher, Config.Agent(launcher.Id)) is { } exe) { agency.Refresh(exe); }
+        }
+        catch (Exception e) when (e is not OutOfMemoryException) { log($"launch.options: the sessions scan could not be started: {e.GetType().Name}"); }
     }
 
     // A label already offered, told apart by the start of its session's id.
@@ -462,12 +507,18 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
 
     // Every installed agent's stored sessions, each under the launcher that resumes it (Agency's own
     // list when it has one, Copilot's store otherwise), before any is checked or cut.
-    async Task<IEnumerable<ResumeEntry>> CandidatesAsync(IReadOnlyDictionary<string, string> executables, CancellationToken ct)
+    async Task<(IEnumerable<ResumeEntry> Entries, bool Pending)> CandidatesAsync(IReadOnlyDictionary<string, string> executables, bool cached, CancellationToken ct)
     {
         var kinds = new HashSet<string>(StringComparer.Ordinal);
         if (executables.ContainsKey("claude")) { kinds.Add("claude"); }
         if (executables.ContainsKey("codex")) { kinds.Add("codex"); }
-        IReadOnlyList<ResumeEntry> fromAgency = executables.TryGetValue("agency", out var a) ? await agency.SessionsAsync(a, ct) : [];
+        IReadOnlyList<ResumeEntry> fromAgency = [];
+        var pending = false;
+        if (executables.TryGetValue("agency", out var a))
+        {
+            if (cached) { var last = agency.CachedSessions(a); fromAgency = last.Entries; pending = !last.Ready; }
+            else { fromAgency = await agency.SessionsAsync(a, ct); }
+        }
         var copilotLauncher = executables.ContainsKey("copilot") ? "copilot" : executables.ContainsKey("agency") ? "agency" : null;
         if (fromAgency.Count == 0 && copilotLauncher is not null) { kinds.Add("copilot"); }
         var stored = await Task.Run(() => resumable.Read(kinds), ct);
@@ -478,7 +529,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
         // offering it would put two CLIs on one transcript; none of its sessions is offered
         // until a complete pass (§6.3 invariants 6 and 10).
         if (source.Held is { } held) { candidates = candidates.Where(e => !held.Agents.Contains(e.Agent)); }
-        return candidates;
+        return (candidates, pending);
     }
 
     // One stored session by its id for a restore: among the candidates, else read by its id alone,
@@ -487,7 +538,7 @@ public sealed partial class LaunchService : ISessionLauncher, ISessionResumer
     async Task<ResumeEntry?> FindAsync(IReadOnlyDictionary<string, string> executables, string id, CancellationToken ct)
     {
         bool Same(ResumeEntry e) => string.Equals(e.Id, id, StringComparison.OrdinalIgnoreCase);
-        if ((await CandidatesAsync(executables, ct)).FirstOrDefault(Same) is { } listed) { return listed; }
+        if ((await CandidatesAsync(executables, false, ct)).Entries.FirstOrDefault(Same) is { } listed) { return listed; }
         var kinds = new HashSet<string>(StringComparer.Ordinal);
         if (executables.ContainsKey("claude")) { kinds.Add("claude"); }
         if (executables.ContainsKey("codex")) { kinds.Add("codex"); }

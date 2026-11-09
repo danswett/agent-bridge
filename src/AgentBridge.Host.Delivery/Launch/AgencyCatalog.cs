@@ -8,10 +8,15 @@ namespace AgentBridge.Host.Delivery.Launch;
 // What Agency adds: its profiles, and the sessions it knows can be resumed. Both are asked of
 // Agency itself, as agent-ha-bridge asks (Get-BridgeAgencyProfileList,
 // Get-BridgeAgencySessionEntries), and kept for a while, since each is a process start.
-public sealed class AgencyCatalog(ICommandRunner runner, TimeProvider? time = null)
+public sealed class AgencyCatalog(ICommandRunner runner, TimeProvider? time = null, Action<string>? log = null)
 {
     readonly TimeProvider time = time ?? TimeProvider.System;
     readonly SemaphoreSlim gate = new(1, 1);
+    readonly Action<string> log = log ?? (_ => { });
+    // The last scan that worked, and whether a background scan is running or must run again.
+    readonly object scanLock = new();
+    (string Exe, IReadOnlyList<ResumeEntry> Entries)? scanned;
+    bool scanning, again;
     (string Exe, DateTimeOffset At, IReadOnlyList<string>? Names)? profiles;
     (string Exe, DateTimeOffset At, IReadOnlyList<ResumeEntry> Entries)? sessions;
 
@@ -43,12 +48,72 @@ public sealed class AgencyCatalog(ICommandRunner runner, TimeProvider? time = nu
         try
         {
             if (sessions is { } s && s.Exe == agency && time.GetUtcNow() - s.At < TimeSpan.FromMinutes(1)) { return s.Entries; }
-            var r = await runner.RunAsync(agency, ["hub", "list-local-sessions", "--json"], TimeSpan.FromSeconds(20), ct);
-            var entries = r.Ran && !r.TimedOut && r.ExitCode == 0 ? ParseSessions(r.Output) : [];
+            var found = await ScanAsync(agency, ct);
+            if (found is not null) { lock (scanLock) { scanned = (agency, found); } }
+            var entries = found ?? [];
             sessions = (agency, time.GetUtcNow(), entries);
             return entries;
         }
         finally { gate.Release(); }
+    }
+
+    // The last scan's sessions at once, never waiting on Agency: launch.options took 18.5 s here
+    // on a cold scan against its 20 s cap (#1527). Ready is false until a scan has worked, and
+    // that call starts one, so a host that has never scanned still answers with its other choices.
+    public (IReadOnlyList<ResumeEntry> Entries, bool Ready) CachedSessions(string agency)
+    {
+        lock (scanLock)
+        {
+            if (scanned is { } s && s.Exe == agency) { return (s.Entries, true); }
+            // A scan already running is the answer to this ask; queuing another would double the work.
+            if (scanning) { return ([], false); }
+        }
+        Refresh(agency);
+        return ([], false);
+    }
+
+    // Scans again in the background, for a data event (the host starting, a session ending or
+    // registering), not a clock. One scan at a time; an event during one asks for another after.
+    public void Refresh(string agency)
+    {
+        lock (scanLock)
+        {
+            if (scanning) { again = true; return; }
+            scanning = true;
+        }
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                try
+                {
+                    if (await ScanAsync(agency, CancellationToken.None) is { } found)
+                    {
+                        lock (scanLock) { scanned = (agency, found); }
+                    }
+                }
+                catch (Exception e) { log($"launch.options: sessions scan failed: {e.GetType().Name}"); }
+                lock (scanLock)
+                {
+                    if (again) { again = false; continue; }
+                    scanning = false;
+                    return;
+                }
+            }
+        });
+    }
+
+    // One `hub list-local-sessions` run, or null when it timed out or failed, so that a good list
+    // already held is kept. Counts and milliseconds only in the log.
+    async Task<IReadOnlyList<ResumeEntry>?> ScanAsync(string agency, CancellationToken ct)
+    {
+        var started = time.GetTimestamp();
+        var r = await runner.RunAsync(agency, ["hub", "list-local-sessions", "--json"], TimeSpan.FromSeconds(20), ct);
+        var ms = (long)time.GetElapsedTime(started).TotalMilliseconds;
+        var ok = r.Ran && !r.TimedOut && r.ExitCode == 0;
+        var entries = ok ? ParseSessions(r.Output) : null;
+        log($"launch.options: sessions scan {(ok ? $"found {entries!.Count}" : r.TimedOut ? "timed out" : "failed")} in {ms} ms (limit 20000 ms)");
+        return entries;
     }
 
     // A "Profiles:" heading, then one indented name a line; anything with a colon is not a name

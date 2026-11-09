@@ -8,6 +8,18 @@ launcher, as the peer `home-assistant` ([ha-connector.md](ha-connector.md#stage-
 they draw on are the profile's `config.json` ([host-config.md](host-config.md)). The code is
 `src/AgentBridge.Host.Delivery/Launch/`.
 
+## Answering `launch.options` without waiting for Agency (#1527)
+
+Agency's `hub list-local-sessions --json` took 18.5 s on a cold run against its 20 s cap, so
+`launch.options` no longer waits for it. It answers at once from the last good scan; a host that
+has not scanned yet answers with its other choices and `resumablePending: true`. The scan runs in
+the background when the host starts and when a session registers or ends (data events, never a
+timer, owner rule #1511), one at a time, and an event during a scan asks for one more after it.
+A scan that times out or fails keeps the last good list. `session.launch` and a restore still wait
+for a real scan, so the host validates every launch. Each call logs one line of phase times
+(launcher lookup, profiles, resumable) and each scan one line (count or timed out, milliseconds):
+counts and milliseconds only.
+
 ## What agent-ha-bridge does
 
 From `hooks/daemon-launch.ps1` (`Use-DaemonLaunchRequest`, `Resolve-DaemonRequestedLaunch`,
