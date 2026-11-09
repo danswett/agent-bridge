@@ -474,7 +474,9 @@ public sealed class LaunchTrustFlowTests : LaunchFlowFixture
     public async Task A_folder_trust_answer_whose_injector_did_not_start_says_the_machine_couldnt_deliver_it()
     {
         screens.Rows = CopilotAsks();
-        ServeTrust(Trusting(), trustConfirm: TimeSpan.FromMilliseconds(500));
+        // No budget is named: a refusal before any key goes never reaches the confirm loop, and
+        // naming one ran the launch on the real clock, where a loaded machine missed the question.
+        ServeTrust(Trusting());
         var ch = await OpenAsync();
         var id = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust").GetProperty("id").GetString()!;
 
