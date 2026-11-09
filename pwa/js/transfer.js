@@ -12,6 +12,7 @@ import { utf8 } from './bytes.js';
 import { toBase64url } from './blobs.js';
 import { deviceIdOf } from './identity.js';
 import { trustAction } from './launch.js';
+import { nowArgs } from './update.js';
 
 export const TRANSFER = Object.freeze({
   capability: 'sessions.transfer',
@@ -21,6 +22,9 @@ export const TRANSFER = Object.freeze({
 
 // How long a command may be carried out for: the host takes at most ten minutes.
 export const COMMAND_LIFETIME_S = 5 * 60;
+// A press that manages a machine lives at most two minutes from signing (ManageProtocol.MaxLifetime),
+// Update now's included (#1159): one older is refused expired.
+export const PRESS_LIFETIME_S = 2 * 60;
 
 const subtle = () => globalThis.crypto.subtle;
 
@@ -42,7 +46,8 @@ export async function macOf(keyBytes, bodyBytes) {
 // escaped approval's confirmation names the question and what was read (#803), in the order the
 // host's CommandTarget writes them, and nothing else does. args: a management command's arguments
 // (#801), signed after expiresAt as the host's CommandBody writes them; absent for everything else.
-export async function signCommand({ key, deviceId, machinePublic, action, session, to, question, shown, args, now = Date.now(), request = globalThis.crypto.randomUUID() }) {
+// lifetimeS: how long it may be carried out for, from now.
+export async function signCommand({ key, deviceId, machinePublic, action, session, to, question, shown, args, now = Date.now(), request = globalThis.crypto.randomUUID(), lifetimeS = COMMAND_LIFETIME_S }) {
   const machine = await deviceIdOf(machinePublic);
   const issuedAt = Math.floor(now / 1000);
   const target = { machine, session };
@@ -56,7 +61,7 @@ export async function signCommand({ key, deviceId, machinePublic, action, sessio
     target,
     to: to ?? machine,
     issuedAt,
-    expiresAt: issuedAt + COMMAND_LIFETIME_S,
+    expiresAt: issuedAt + lifetimeS,
   };
   if (args !== undefined) { fields.args = args; }
   const body = utf8.encode(JSON.stringify(fields));
@@ -81,6 +86,14 @@ export function signTrust({ question, choice, ...rest }) {
 export const ESCAPED_ACTION = 'session.approve:escaped';
 export function signEscapedApproval({ session, question, shown, request, ...rest }) {
   return signCommand({ ...rest, action: ESCAPED_ACTION, session, question, shown, request });
+}
+
+// An Update now press (#1159, docs/protocol/v1-update.md "The press"): for this machine alone, no
+// session, its request only inside, and args binding now, the release shown and what the
+// confirmation showed (accept, absent for one press on a quiet machine). Lives PRESS_LIFETIME_S.
+export const UPDATE_NOW_ACTION = 'update.install.now';
+export function signUpdateNow({ release, accept = null, request, ...rest }) {
+  return signCommand({ ...rest, action: UPDATE_NOW_ACTION, request, args: nowArgs({ release, accept }), lifetimeS: PRESS_LIFETIME_S });
 }
 
 // The sessions the account's other machines offer for a transfer to target, each with its

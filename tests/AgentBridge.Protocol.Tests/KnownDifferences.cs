@@ -63,10 +63,5 @@ public static class KnownDifferences
         .. Constraints.Select(v => new KnownDifference($"AnswerRequest/{v}", 766, "pwa", "check",
             "Answers.Check refuses it: outside the field's constraints",
             "checkAnswer takes it: it does not check constraints yet")),
-        // #1159: Update now's client slice (3) reads confirm; until then the PWA, which sends no
-        // Update now, reads it as any outcome it doesn't know.
-        new("UpdateCommandResult/confirm", 1159, "pwa", "read",
-            "reads confirm: more is busy than the person confirmed, and nothing was asked",
-            "reads it as refused, as any outcome it doesn't know"),
     ];
 }

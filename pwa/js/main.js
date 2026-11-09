@@ -34,7 +34,7 @@ import { ReturnGrace } from './return-grace.js';
 import { Reading } from './reading.js';
 import { HostClient } from './host-client.js';
 import { TRUST } from './launch.js';
-import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust } from './transfer.js';
+import { TRANSFER, collectRemote, collectingRemote, signEscapedApproval, signTransfer, signTrust, signUpdateNow } from './transfer.js';
 import { PushRegistrar, closeMachineNotices, closeNotices, closeReadNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
 import { offlineMachines } from './ui/views.js';
@@ -368,7 +368,7 @@ const demoStorage = {
 
 async function startDemo() {
   // Only the demo loads its pretend hosts: the live app never fetches or parses them (#609).
-  const { DemoBlobStore, DemoConnection, DemoHost, demoConfirm, demoDelegating, demoMachines, demoSignIn, demoTransfers, demoTrust, runScript } = await import('./demo.js');
+  const { DemoBlobStore, DemoConnection, DemoHost, demoConfirm, demoDelegating, demoMachines, demoSignIn, demoTransfers, demoTrust, demoUpdateNow, runScript } = await import('./demo.js');
   $('demo-banner').hidden = false;
   $('demo-settings').hidden = false;
   shell.setSignedIn(true);
@@ -405,6 +405,9 @@ async function startDemo() {
     // ?updates=1: a host whose app installs updates asked for from here (#51). Never a
     // read-only one, which offers none.
     updating: params.get('updates') === '1' && !ahb,
+    // ?updateNow=1 with it: Update now offered there too (#1159), with its sessions' busy as a
+    // host would count them.
+    updatingNow: params.get('updateNow') === '1',
     // ?signin=1: a host that runs an agent's own device-code sign-in when asked (#800), with four
     // sessions waiting on one, a quota error and a session not responding (demoSignIn).
     signingIn: params.get('signin') === '1',
@@ -467,7 +470,15 @@ async function startDemo() {
       save: (entries) => { try { demoStorage.setItem(USAGE_KEPT, JSON.stringify({ account: 'demo', entries })); } catch { /* a nicety */ } },
     });
   }
-  const demoUpdates = new UpdateControl({ fleet });
+  // Update now (#1159) signed by a key this page makes for itself, for each demo machine's.
+  const demoUpdates = new UpdateControl({
+    fleet,
+    sign: await demoUpdateNow(machines),
+    session: (hostId, sessionId) => hosts.sessions.get(hostId, sessionId),
+    nameOf: (id) => hosts.nameOf(id),
+    // ?restartMs=: how long a machine that left for an Update now reads "Restarting to update…".
+    ...(Number(params.get('restartMs')) ? { restartMs: Number(params.get('restartMs')) } : {}),
+  });
   // ?diagnose=1: each machine's Diagnose (#802), as a person's device has it.
   const demoDiagnose = params.get('diagnose') === '1' ? new DiagnoseControl({ fleet }) : null;
   const transfers = new Map();
@@ -786,8 +797,18 @@ function begin(account) {
   keepUsage(account);
   // Forgetting an offline machine (#50): what this app keeps about it goes with it. Its push
   // subscription is on that machine, which is gone; the notices it left here are closed.
-  // Each machine's updates (#51): Check and Install, from a person's device, which this is.
-  const updates = new UpdateControl({ fleet });
+  // Each machine's updates (#51): Check and Install, from a person's device, which this is; and
+  // Update now (#1159), signed by this device for the machine on the other end of the channel it
+  // goes on, whose key that channel's handshake proved.
+  const updates = new UpdateControl({
+    fleet,
+    sign: ({ machineKey, release, accept, request }) => {
+      if (!machineKey) { return Promise.reject(new Error('not connected to that machine')); }
+      return signUpdateNow({ key: identity.key, deviceId: identity.deviceId, machinePublic: machineKey, release, accept, request });
+    },
+    session: (hostId, sessionId) => hosts.sessions.get(hostId, sessionId),
+    nameOf: (id) => hosts.nameOf(id),
+  });
   // Each machine's Diagnose (#802): read here, copied only after review.
   const diagnose = new DiagnoseControl({ fleet });
   const dropMachine = (id) => {

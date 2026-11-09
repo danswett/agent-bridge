@@ -743,14 +743,6 @@
       "step": "read",
       "csharp": "reads it, the field its type's default",
       "pwa": "reads it, the field absent or filled in from another"
-    },
-    {
-      "vector": "UpdateCommandResult/confirm",
-      "issue": 1159,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "reads confirm: more is busy than the person confirmed, and nothing was asked",
-      "pwa": "reads it as refused, as any outcome it doesn't know"
     }
   ]
 }

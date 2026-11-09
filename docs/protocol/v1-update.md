@@ -70,8 +70,8 @@ read-only. The pipe never offers it.
 
 `request` is the device's UUID for one press; the same press sent again is the same ask.
 `update.check` and `update.install` without one fail with an error. `now` is **Update now**
-([below](#update-now-1159)): the host's half is built (slice 1), the app's, the PWA's and the
-Windows app's are not yet. Its press carries the
+([below](#update-now-1159)): the host's (slice 1), the app's (slice 2) and the PWA's (slice 3)
+halves are built; the Windows app's (slice 4) is not yet. Its press carries the
 request **only inside the signed command**, never beside it, so a host that doesn't know `now`
 finds no `request` and refuses the press with that error: it can never fall back to a plain
 Install (Connection, settled decision 6). A client never sends both: a host that knows `now`
@@ -153,8 +153,11 @@ the app's half, is built: `AutoUpdater` takes a `now` ask, says it carries one
 (`carriesUpdateNow`), reports `requestNow`, `waitingCode` and `last.code`, and leaves through
 `host.update.depart`, the app-only pipe op that calls the departure. That op is the step #870's
 lane owns: until #870 lands it, it is wired minimally here (`HostControl`, `UpdateService.DepartForAppAsync`)
-to the contract below (step 3), for SRE to review with #870 (settled decision 1). Not yet: the
-clients (slices 3 and 4). Everything below is the design all slices follow.
+to the contract below (step 3), for SRE to review with #870 (settled decision 1). Slice 3, the PWA's
+client, is built: Update now beside Install or the reason in its place, the confirmation, the signed
+press with `accept`, the confirm outcome, "Restarting to update…" for 90 s on the Machines page, and
+results worded from `code` (`pwa/js/update.js`, `pwa/js/ui/update-now-sheet.js`). Not yet: the Windows
+app's client (slice 4). Everything below is the design all slices follow.
 
 **The bound on the press's size.** A signed command's `body` is at most 2048 base64url
 characters for every action ([v1-transfer.md](v1-transfer.md#the-signed-command)) but

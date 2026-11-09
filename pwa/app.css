@@ -710,6 +710,23 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 @media (forced-colors: active) {
   .sign-in-sheet { border-color: CanvasText; }
 }
+/* Update now's confirmation (#1159, ui.md §6.6): modal, focus starts on Cancel, Update now last.
+   The dialog itself scrolls when a long list of busy sessions doesn't fit. */
+.update-now-sheet {
+  width: min(28rem, calc(100vw - 32px)); max-height: 90vh; overflow: auto; padding: 16px 20px;
+  border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); background: var(--ab-card); color: var(--ab-text);
+}
+.update-now-sheet::backdrop { background: var(--ab-shell); opacity: .85; }
+.update-now-title { margin: 0 0 8px; font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
+.update-now-body > p { margin: 0 0 8px; }
+.update-now-list { margin: 0 0 8px; padding: 0; list-style: none; display: grid; gap: 4px; }
+.update-now-session { overflow-wrap: anywhere; }
+.update-now-state, .update-now-more, .update-now-unknown { color: var(--ab-text2); }
+.update-now-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.update-now-actions .button { min-height: var(--tap); }
+@media (forced-colors: active) {
+  .update-now-sheet { border-color: CanvasText; }
+}
 @media (forced-colors: active) {
   .sign-in-banner { border-color: Highlight; }
   .sign-in-session { color: LinkText; }

@@ -17,7 +17,7 @@ import {
 import { checkAnswer } from '../../js/answers.js';
 import { checkReply } from '../../js/replies.js';
 import { checkLaunch, readLaunchOptions, readLaunchResult, readTrustQuestion, readTrustResult } from '../../js/launch.js';
-import { readUpdateCommandResult, readUpdateState } from '../../js/update.js';
+import { acceptOf, nowArgs, readBusy, readUpdateCommandResult, readUpdateState } from '../../js/update.js';
 import { readSignInDevices } from '../../js/signin-devices.js';
 import { readUsage } from '../../js/usage.js';
 import { readDiagnostics } from '../../js/diagnostics.js';
@@ -250,12 +250,12 @@ const READS = {
   TrustQuestion: { read: readTrustQuestion },
   TrustAnswerResult: { read: readTrustResult },
   // Update now's fields (#1159) are read from its client slice (3) on.
-  UpdateState: { read: readUpdateState, unread: ['canUpdateNow', 'updateNowWhy', 'updateNowAt', 'busy', 'requestNow', 'waitingCode', 'last.code'] },
-  UpdateResult: { read: (j) => readUpdateState({ last: j }).last, unread: ['code'] },
-  UpdateCommandResult: {
-    read: readUpdateCommandResult,
-    unread: ['code', 'state.canUpdateNow', 'state.updateNowWhy', 'state.updateNowAt', 'state.busy', 'state.requestNow', 'state.waitingCode', 'state.last.code'],
-  },
+  UpdateState: { read: readUpdateState },
+  UpdateResult: { read: (j) => readUpdateState({ last: j }).last },
+  UpdateCommandResult: { read: readUpdateCommandResult },
+  // What Update now would go over, and one session of it (#1159), as a confirmation shows them.
+  UpdateBusy: { read: readBusy },
+  UpdateBusySession: { read: (j) => readBusy({ working: 1, waiting: 0, sessions: [j] }).sessions[0] ?? null },
   SignInDevices: { read: readSignInDevices },
   SignInDevice: { read: (j) => readSignInDevices({ state: 'ready', devices: [j] })?.devices[0] ?? null },
   UsageReport: { read: readUsage },
@@ -413,6 +413,9 @@ const BUILDS = {
       return t.lastRequest('usage.get').data;
     },
   },
+  // An Update now press's args (#1159): the release shown, and accept exactly as the confirmation
+  // read what the machine said was busy.
+  UpdateNowArgs: { build: (j) => nowArgs({ release: j.release, accept: j.accept ? acceptOf(readBusy(j.accept)) : null }) },
 };
 
 // Records the PWA neither reads nor builds through a function these tests can call, and why.
@@ -437,10 +440,7 @@ const NOT_REPLAYED = {
   CommandTarget: 'replayed by signing signed-command.json\'s commands again',
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
-  UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it; Update now\'s is #1159\'s client slice (3)',
-  UpdateNowArgs: 'the PWA does not offer Update now yet (#1159 slice 3)',
-  UpdateBusy: 'the PWA does not offer Update now yet (#1159 slice 3)',
-  UpdateBusySession: 'the PWA does not offer Update now yet (#1159 slice 3)',
+  UpdateCommand: 'built inside UpdateControl from a fresh request, or an Update now\'s signed press (its args replayed as UpdateNowArgs, its signing in update.test.mjs)',
   // #801 slice A is the host's half; the PWA's controls wait for ui.md's spec.
   ManageCommand: 'the PWA does not manage machines yet (#801)',
   ManageRepairArgs: 'the PWA does not manage machines yet (#801)',
