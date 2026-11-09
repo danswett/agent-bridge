@@ -4,6 +4,9 @@ What the Windows app gathers for "Send feedback" (#738), before it is sealed ([f
 and uploaded. Code: `src/AgentBridge.App.Core/Feedback`. It has no UI; the review screen shows
 `FeedbackBundle.Text` and the sender seals `FeedbackBundle.CanonicalBytes`, which are the same bytes.
 
+The privacy design (consent, preview, retention, deletion, notice) is in
+[feedback-privacy.md](feedback-privacy.md), a draft under review (#732).
+
 ## Contents
 
 Schema `slipgates-feedback.v1`, the PWA's, with `platform: "Windows"`. In order:
