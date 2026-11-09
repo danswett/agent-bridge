@@ -79,7 +79,8 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         return new Echo(process.ProcessId, nint.Parse(parts[2], CultureInfo.InvariantCulture), log);
     }
 
-    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 15)
+    // 60 s, not 15: a loaded windows-11-arm runner took 11 s for a lone Escape key (#1379).
+    static T WaitFor<T>(string log, Func<string[], T?> found, int seconds = 60)
     {
         var deadline = Stopwatch.StartNew();
         while (true)
