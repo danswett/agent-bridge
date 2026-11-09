@@ -184,30 +184,18 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     wrap, and a character the console draws other than as written is drawn so in the bar
     too, and refused there. A bar too wide for the console shows only the labels around the
     field being answered, between arrows ("←" when labels are hidden before them, "→" when
-    after, `Da`'s `Hfn` window). Read as exactly such a window at that field, it is refused
-    with nothing typed and named (`bar-window`). Its reason says how wide the window must be
-    for the whole bar ("its titles need a window at least N columns wide"; N each title's
-    characters, two columns around each, one between and the four `$fn` leaves, a lower
-    bound as a wide character takes two), and to widen it or make its font smaller, or answer
-    at the machine. Where N is more than about 200, what a normal screen shows (1920 px),
-    widening may not be enough (a maximized window was still too narrow live, #1123): the
-    reason then leads with answering at the machine and says N and that a normal screen shows
-    about 200. Where N
-    is more than the 250 columns no window is taken to reach, widening is no advice at all:
-    "this question's titles are too long for Slipgates to check which field is
-    open; answer it at the machine, or ask with shorter titles". Reasons say "Slipgates",
-    never "phone": a browser or the Windows app answers the same way. A form
-    that differs from the question only in a hidden title reads the same, and each field's
-    own heading is read only once the keys reach it, after earlier fields are already filled
-    (#1137 review). A six-field form with long titles at 102 columns showed two labels and
-    "→", and was refused as no form at all, unnamed (#1123). Sessions the host launches open in a
-    normal window, so their width is the window's (host-launch.md, Width); the screen read takes
-    each row at the console buffer's full width, the width the CLI draws to. Copilot CLI 1.0.106's bar
-    (`_l`, window `kHi`) shows the most labels that fit around the field (any such run, each
-    read), and where not even one fits, the field's label alone, however long, wrapped over
-    as many rows as it takes with the arrows beside its first row: read across those rows
-    (words in order, a space or none at each break), it is the bar's window too, refused as
-    `bar-window`, never taken as the bar. Three titles of full sentences at 120 columns were
+    after, `Da`'s `Hfn` window). Read as exactly such a window at that field (#1554), it is accepted as the bar: the host
+    checks the labels it shows, the question's message, the field's heading and its hints, and
+    never refuses for width. A form that differs from the question only in a hidden title reads
+    the same at the first field; each later field's bar reaches that title, and the form is
+    refused there (#1137 review). Sessions the host launches open in a normal window, so their
+    width is the window's (host-launch.md, Width); the screen read takes each row at the
+    console buffer's full width. Copilot CLI 1.0.106's bar (`_l`, window `kHi`) shows the most
+    labels that fit around the field, and where not even one fits, the field's label alone,
+    wrapped over as many rows as it takes, with the arrows beside its first row: read across
+    those rows, it is the bar's window too, and accepted the same way. Before #1554 a 9-field
+    card with long titles was refused as `bar-window` with "titles are too long": the check
+    that found the open field was refusing every windowed bar. Three titles of full sentences at 120 columns were
     refused so live as the form gone (`bar@29`). A bar that reads as neither the whole bar
     nor a window at this field is refused (`bar`) as "this window is too narrow, or the
     question's titles too long, to check which field is open", not as the form gone: with
@@ -245,7 +233,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     the field itself (its options and pointer, or what is typed into it) drawn exactly as in
     the rows the write was held to: what changed was elsewhere on the screen, and the keys do
     the same there. A field drawn otherwise gets nothing more. Each refusal logs which check
-    failed (`heading`, `bottom-rule`, `under`, `message`, `bar`, `bar-window`, `field`,
+    failed (`heading`, `bottom-rule`, `under`, `message`, `bar`, `field`,
     `field-heading`, `hints`, `prompted` or `tall`, with the row) and the screen's outline (its row count, widest
     row, blank rows, where its rules and form headings are), never what any row says.
   * A form left part answered is not left so if the host can help it (#1123; design #1135,
@@ -358,7 +346,7 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     reported `typed`, not `delivered`; rows are compared whole, so an animated form would be
     refused rather than typed into; a form drawn taller than the console's window, its
     heading or hints scrolled out of sight, is stopped rather than typed into, and so is a
-    form whose tab bar is too wide to name every field (`bar-window`).
+    form whose tab bar is too wide to name every field (answered since #1554).
   * An optional text field left
     out is skipped with Enter; an option list cannot be left out, since Enter commits
     whatever its caret is on.
