@@ -95,7 +95,7 @@ public sealed class HostStartGateTests : IDisposable
             var gate = new HostStartGate(h, profile);
             Assert.True(gate.StartRestore(restore, resumer));
             gate.Serving();
-            for (var i = 0; i < 500 && resumer.Asked.IsEmpty; i++) { await Task.Delay(10); }
+            await HostWait.UntilAsync(() => !resumer.Asked.IsEmpty, "the restore to ask for the dead session");
             await restore.DisposeAsync();
         });
 
