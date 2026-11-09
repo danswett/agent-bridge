@@ -100,14 +100,14 @@ public sealed class SessionService
 
     // manage.*, through the relay only, from a person's device (ManageService, #801). Given one,
     // this binds its restart's eligibility to the #800 sign-in below: a restart would cancel a
-    // pending sign-in (Connection, Q-C8 on #886), so none commits while that entrypoint is on.
+    // sign-in flow (Connection, Q-C8 on #886), so none commits while one is running (#1454).
     public ManageService? Manage
     {
         get => manage;
         init
         {
             manage = value;
-            value?.Eligibility?.BindSignIn(() => SignIn is not null && SignInEntrypointApproved);
+            value?.Eligibility?.BindSignIn(() => SignIn is not null && SignInEntrypointApproved && SignIn.FlowRunning);
         }
     }
     readonly ManageService? manage;

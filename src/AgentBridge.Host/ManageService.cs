@@ -845,8 +845,8 @@ public sealed class NoRoster : IRosterGate
 
 // #800 (Connection's): a sign-in an agent is running for a person. Its flow lives in the host's
 // AgentSignInService and a restart cancels it (Connection's answer to Q-C8 on #886), so a remote
-// restart refuses while one could be pending: the default blocks whenever the sign-in entrypoint is
-// turned on. Narrowing that to "a flow is active" waits for Connection's read-only seam.
+// restart refuses while one is running (AgentSignInService.FlowRunning, #1454); the default here
+// blocks whenever the sign-in entrypoint is turned on.
 public interface IAgentSignInDeparture
 {
     bool BlocksDeparture { get; }
@@ -859,11 +859,11 @@ public sealed class RefuseWhileSignInEnabled(Func<bool> signInEnabled) : IAgentS
 
 // The host's own: SessionService binds it to its #800 sign-in entrypoint when given its
 // ManageService, so the check is wired where tests hold it (a mutant that left it unwired once
-// survived in Program). Until bound, nothing is pending.
+// survived in Program). Until bound, nothing is pending. Bound to "a flow is running now".
 sealed class BoundSignIn : IAgentSignInDeparture
 {
     Func<bool> on = () => false;
-    public void Bind(Func<bool> signInEnabled) => Volatile.Write(ref on, signInEnabled);
+    public void Bind(Func<bool> flowRunning) => Volatile.Write(ref on, flowRunning);
     public bool BlocksDeparture => Volatile.Read(ref on)();
 }
 
@@ -884,11 +884,11 @@ public sealed class RemoteRestartEligibility(Func<string?> readOnly, Func<bool> 
     public static RemoteRestartEligibility For(HostSettings settings, Func<string?> readOnly, TimeProvider? time = null) =>
         new(readOnly, () => settings.RemoteManage, new BoundSignIn(), time);
 
-    internal void BindSignIn(Func<bool> signInEnabled) => (signIns as BoundSignIn)?.Bind(signInEnabled);
+    internal void BindSignIn(Func<bool> flowRunning) => (signIns as BoundSignIn)?.Bind(flowRunning);
 
     public DepartureBlocker Kind => DepartureBlocker.Ineligible;
 
-    // #800's sign-in entrypoint, read now (canUpdateNow), not the snapshot the commit reads.
+    // #800's sign-in flow, read now (canUpdateNow), not the snapshot.
     public bool SignInPending
     {
         get
@@ -907,7 +907,14 @@ public sealed class RemoteRestartEligibility(Func<string?> readOnly, Func<bool> 
         Volatile.Write(ref last, new Snapshot(eligible, at));
     }
 
-    public bool IsBlocking() => Volatile.Read(ref last) is not { Eligible: true } s || time.GetElapsedTime(s.At) > MaxAge;
+    // The sign-in answer is read live as well, so a flow that starts after the snapshot still blocks the
+    // commit. It is one lock-guarded memory read, safe under the fence; unreadable blocks.
+    public bool IsBlocking()
+    {
+        if (Volatile.Read(ref last) is not { Eligible: true } s || time.GetElapsedTime(s.At) > MaxAge) { return true; }
+        try { return signIns.BlocksDeparture; }
+        catch { return true; }
+    }
 }
 
 // The Update purpose's other condition (#1159): no other profile's host runs from this installation.

@@ -85,7 +85,7 @@ authority to leave. Missing registration also fails closed with `ConditionFault`
 The real App, other-host, channel and transfer conditions belong to their owners
 and are **not implemented** here. `ServeAsync` registers two purposes at
 composition (`ManageComposition`): `RemoteRestartEligibility` for `RemoteRestart` (#801: not read-only,
-`permissions.remoteManage` on, no #800 sign-in entrypoint on), and for `Update` (#1159's Update
+`permissions.remoteManage` on, no #800 agent sign-in running now, read live at the commit as well, #1454), and for `Update` (#1159's Update
 now) that same eligibility with `OtherProfileHosts` (no other profile's host running from this
 installation, refreshed outside the fence just before the commit, as the eligibility is). Every other purpose has
 none, so its commit fails closed with `ConditionFault`. A purpose registers only once
