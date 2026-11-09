@@ -86,7 +86,7 @@ public sealed class LiteAgentSendTests : IDisposable
     [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":4}""")]
     [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"  \n "}""")]
     [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\u001b[31m"}""")]
-    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\rb"}""")]
+    [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\u0007b"}""")]
     [InlineData("""{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\u0000b"}""")]
     [InlineData("[1]")]
     public async Task A_bad_request_is_refused_before_the_sender_runs(string json)
@@ -96,9 +96,9 @@ public sealed class LiteAgentSendTests : IDisposable
     }
 
     [Fact]
-    public async Task Newlines_are_allowed_in_text()
+    public async Task Tab_CR_and_LF_are_allowed_in_text()
     {
-        await Send(hello, """{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\nb"}""");
+        await Send(hello, """{"machine":"m2","session":"agent_bridge_0123456789abcdef","text":"a\tb\r\nc"}""");
         Assert.Single(sender.Calls);
     }
 

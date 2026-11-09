@@ -192,7 +192,7 @@ code in the message:
 |---|---|---|
 | `machine` | 1 to 64 of letters, digits, `.`, `_`, `-` | `badMachine` |
 | `session` | the receiver's roster node id: `agent_bridge_` and exactly 16 lowercase hex digits | `badSession` |
-| `text` | not empty, not blank, no control characters except newline | `badText` |
+| `text` | not empty, not blank, no control characters except tab, CR and LF | `badText` |
 | `text` | at most 4096 characters (UTF-16 code units, not bytes) | `textTooLong` |
 
 A body that isn't an object is refused with `badRequest`. The host hands the request to the AP5-lite
@@ -202,10 +202,9 @@ sender, which answers
 | `outcome` | Meaning | Caller |
 |---|---|---|
 | `delivered` | the target host typed it into the session | done |
-| `refused` | the target refused; `code` is its reason (`notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, ...) | fall back to Home Assistant on `notReplyTarget` or `busy` |
+| `refused` | the target refused; `code` is its reason (`notReplyTarget`, `busy`, `composerNotEmpty`, `noSuchSession`, `rate`, ...). A rate refusal is outcome `refused` with code `rate`: it is final, with no Home Assistant fallback | fall back to Home Assistant on `notReplyTarget` or `busy` only |
 | `undeliverable` | no channel to the target; **the message was not queued anywhere** and is never retried | fall back to Home Assistant |
 | `unconfirmed` | sent, but no acknowledgement; it may or may not have arrived | fall back to Home Assistant |
-| `rate` | (reserved) the sender's rate cap was hit; this is final, with no Home Assistant fallback | do not fall back |
 | `off` | the mode is off, killed, or the peer isn't pinned; no channel was opened | fall back to Home Assistant |
 
 `request` is the sender's request id.

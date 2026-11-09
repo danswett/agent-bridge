@@ -33,9 +33,9 @@ public static partial class LiteAgentSend
         if (session is null || !SessionPattern().IsMatch(session)) { throw new ArgumentException("refused: badSession: session is agent_bridge_ and 16 lowercase hex digits"); }
         if (text is null || text.Length == 0) { throw new ArgumentException("refused: badText: text is required"); }
         if (text.Length > MaxText) { throw new ArgumentException($"refused: textTooLong: text is over {MaxText} characters"); }
-        if (string.IsNullOrWhiteSpace(text) || text.Any(c => char.IsControl(c) && c != '\n'))
+        if (string.IsNullOrWhiteSpace(text) || text.Any(c => char.IsControl(c) && c is not ('\n' or '\r' or '\t')))
         {
-            throw new ArgumentException("refused: badText: text must not be blank or hold control characters other than newline");
+            throw new ArgumentException("refused: badText: text must not be blank or hold control characters other than tab, CR and LF");
         }
         var outcome = await (sender ?? new LiteOffSender()).SendAsync(caller, new LiteSendInput(machine, session, text), ct);
         return new LiteSendReply(outcome.Kind.ToString().ToLowerInvariant(), outcome.Code, outcome.Request);
