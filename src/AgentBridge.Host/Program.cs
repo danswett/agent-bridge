@@ -525,7 +525,8 @@ async Task<int> ServeAsync(HostHandover handover)
         var deaf = new DeafSessionWatch(source, new WorkerInjector(log: Log), stops, launcher, log: Log);
         deafReplies.Measured = deaf.NoteReplyAsync;
         source.Changed += (_, change) => { if (change.Session is { } changed) { _ = deaf.NoteSessionAsync(changed); } };
-    }    // Folder-trust questions answered by a person from their devices, where config.json allows it.
+    }
+    // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
     // Approve on an approval with escaped characters, confirmed from a person's device approved here
     // (#803): permissions.escapedApprovalDevices, or while that is absent the folder-trust devices,

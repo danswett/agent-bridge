@@ -368,7 +368,7 @@ over 20 seconds to be typed; or the "stopped taking messages" attention the host
 It then ends the session through the normal stop path and resumes it through the normal resume path, but only when
 nothing would be lost: the session is idle, no tool is running, no background work or sub-agent is unfinished, no
 question is open, and the screen shows an empty input box. Otherwise it leaves the session alone and logs why.
-A session recovered once is not recovered again until it has taken a reply, with no timer involved. This restores a session that takes messages; it
+A session recovered once is not recovered again until it has taken a reply, with no timer involved. A stop that does not end the session is tried again on the next signal. The session is checked again after the screen is read, just before it is ended. The resumed session gets the machine's default launch settings and asks permission as usual: the old permission mode is not carried over, so it is never given wider rights than before. This restores a session that takes messages; it
 cannot bring back a result that was already lost. The cause is in the Copilot CLI (github/copilot-cli#5395).
 
 ## The log

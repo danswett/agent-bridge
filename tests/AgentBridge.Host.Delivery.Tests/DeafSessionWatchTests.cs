@@ -94,14 +94,42 @@ public sealed class DeafSessionWatchTests
         Assert.Equal(["stop"], rig.Calls);
     }
 
+    [Fact]
+    public async Task A_session_that_could_not_be_ended_is_tried_again_on_the_next_signal()
+    {
+        var rig = new Rig(Idle(), EmptyBox) { Stop = StopOutcome.Failed };
+
+        await rig.Watch.NoteAsync(Id, DeafSignal.HostError);
+        await rig.Watch.NoteAsync(Id, DeafSignal.HostError);
+
+        Assert.Equal(["stop", "stop"], rig.Calls);
+    }
+
+    [Fact]
+    public async Task A_tool_that_starts_while_the_screen_is_read_keeps_the_session_alone()
+    {
+        var rig = new Rig(Idle(), EmptyBox);
+        rig.OnRead = () => rig.Current = Idle() with { Activity = new Activity { CurrentTool = new ToolCall { Id = "t1", Name = "bash", Status = ToolStatus.Running, StartedAt = DateTimeOffset.UnixEpoch } } };
+
+        await rig.Watch.NoteAsync(Id, DeafSignal.HostError);
+
+        Assert.Empty(rig.Calls);
+    }
+
     sealed class Rig
     {
         public List<string> Calls { get; } = [];
         public StopOutcome Stop { get; set; } = StopOutcome.Ended;
         public DeafSessionWatch Watch { get; }
 
-        public Rig(Session session, string[] screen) =>
-            Watch = new DeafSessionWatch(new Source(session), new Screen(screen), new Stopper(this), new Resumer(this));
+        public Session Current { get; set; }
+            public Action? OnRead { get; set; }
+
+        public Rig(Session session, string[] screen)
+        {
+            Current = session;
+            Watch = new DeafSessionWatch(new Source(this), new Screen(this, screen), new Stopper(this), new Resumer(this));
+        }
 
         sealed class Stopper(Rig rig) : ISessionStopper
         {
@@ -122,19 +150,23 @@ public sealed class DeafSessionWatchTests
             }
         }
 
-        sealed class Screen(string[] rows) : IConsoleInjector
+        sealed class Screen(Rig rig, string[] rows) : IConsoleInjector
         {
             public Task<InjectionResult> InjectAsync(int processId, KeyPlan plan, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-            public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) => Task.FromResult(new ConsoleScreen(rows, null));
+            public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
+        {
+            rig.OnRead?.Invoke();
+            return Task.FromResult(new ConsoleScreen(rows, null));
+        }
         }
 
-        sealed class Source(Session session) : ISessionSource
+        sealed class Source(Rig rig) : ISessionSource
         {
             public long Revision => 0;
             public event EventHandler<SessionChange>? Changed { add { } remove { } }
-            public IReadOnlyList<Session> Snapshot() => [session];
-            public SessionList List(string? cursor = null) => new([session], 0);
-            public Session? Get(string id) => session;
+            public IReadOnlyList<Session> Snapshot() => [rig.Current];
+            public SessionList List(string? cursor = null) => new([rig.Current], 0);
+            public Session? Get(string id) => rig.Current;
             public SessionSubscription Subscribe() => throw new NotSupportedException();
             public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
             public Task StartAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

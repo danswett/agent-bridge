@@ -1,4 +1,5 @@
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Host.Core.Restore;
 using AgentBridge.Host.Delivery.Copilot;
 using AgentBridge.Protocol;
@@ -127,7 +128,12 @@ public sealed class DeafSessionWatch
     public Task NoteSessionAsync(Session s)
     {
         if (s.Agent != AgentKind.Copilot || s.Attention is not { Kind: AttentionKind.Error, Message: { } m } a
-            || !m.Contains("stopped taking messages", StringComparison.Ordinal)) { return Task.CompletedTask; }
+            || !string.Equals(m, AgentErrors.HostWedgeMessage, StringComparison.Ordinal))
+        {
+            // The error is gone: forget it so the table holds only sessions now showing one.
+            lock (gate) { errorsSeen.Remove(s.Id); }
+            return Task.CompletedTask;
+        }
         lock (gate)
         {
             if (errorsSeen.TryGetValue(s.Id, out var since) && since == a.Since) { return Task.CompletedTask; }
@@ -168,11 +174,17 @@ public sealed class DeafSessionWatch
             return;
         }
 
-        policy.Recovering(sessionId);
+        // The read took time: a tool, sub-agent or question may have started during it.
+        var after = source.Get(sessionId) is { } now ? DeafPolicy.Unsafe(now) : "it is gone";
+        if (after is not null) { log($"{Short(sessionId)} looks deaf ({signal}) but is left alone: {after}"); return; }
+
         log($"{Short(sessionId)} looks deaf ({signal}); ending it to resume it");
         var ended = await stopper.StopAsync(new StopRequest { Id = sessionId, Request = Guid.NewGuid().ToString("D") });
-        if (ended.Outcome != StopOutcome.Ended) { log($"{Short(sessionId)} was not ended ({ended.Outcome}); not resumed"); return; }
-        // Null launch: the machine's defaults, asking permission, as a session started by hand is.
+        if (ended.Outcome != StopOutcome.Ended) { log($"{Short(sessionId)} was not ended ({ended.Outcome}); not resumed, and it may be tried again"); return; }
+        // Only an ended session counts as recovered; one that could not be ended is tried again.
+        policy.Recovering(sessionId);
+        // Null launch: the machine's defaults. The host does not know the old permission mode, so
+        // it is not carried over, and a resumed session is never given wider rights than before.
         var resumed = await resumer.ResumeAsync(new ResumeAsk(sessionId, AgentKind.Copilot, null, "host-deaf-session"));
         log($"{Short(sessionId)} resumed after being deaf: {resumed.Outcome.ToString().ToLowerInvariant()}");
     }

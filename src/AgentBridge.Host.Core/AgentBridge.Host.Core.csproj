@@ -14,6 +14,8 @@
     <!-- Feed regressions enqueue exact session changes independently of transcript parsing. -->
     <InternalsVisibleTo Include="AgentBridge.Host.Tests" />
     <InternalsVisibleTo Include="AgentBridge.Host.Delivery.Tests" />
+    <!-- The deaf-session watch recognises the host-wedge notice by its shared message. -->
+    <InternalsVisibleTo Include="AgentBridge.Host.Delivery" />
     <!-- The HA connector's contract tests build questions the way the host parses them. -->
     <InternalsVisibleTo Include="AgentBridge.HomeAssistant.Tests" />
     <!-- The migration finds agent-ha-bridge's processes by command line, as the scanner does. -->
