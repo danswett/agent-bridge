@@ -453,8 +453,8 @@ empty history, a partial page with an unreadable and a truncated turn), each par
 attribution (and a `from` that refuses its turn), questions and approvals with each outcome,
 delegate events, and the `missing`, `stale` and `unavailable` results. `activity.turn` and `responseTurn` are in
 [vectors/sessions.json](vectors/sessions.json). C# replays them in `ProtocolVectorTests`, and the
-PWA in `pwa/test/unit/protocol-vectors.test.mjs` (until its history view lands, with each record
-marked not replayed yet).
+PWA in `pwa/test/unit/protocol-vectors.test.mjs` (the request is checked and built through
+`HostClient.history`, the page and its records read by `pwa/js/history.js`).
 
 ## Open questions
 

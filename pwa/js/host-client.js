@@ -13,6 +13,7 @@ import { LAUNCH, TRUST, readLaunchOptions, readLaunchResult, readTrustResult } f
 import { SIGN_IN } from './auth-state.js';
 import { Limits, hostJsonBytes } from './answers.js';
 import { checkReply } from './replies.js';
+import { checkHistoryRequest, readHistoryResult } from './history.js';
 
 export class HostError extends Error {
   // fromHost: the host answered with ok:false. Otherwise the request never got an answer
@@ -188,6 +189,21 @@ export class HostClient {
   async getSession(id) {
     const r = await this.request(Ops.sessionGet, { id });
     return r?.missing === true ? null : readSession(r);
+  }
+
+  // A page of a session's earlier turns (session.history, v1-history.md): the newest without
+  // `before`, otherwise the turns before the `before` of the page last received. Resolves to
+  // history.js's readHistoryResult (a page, or missing, stale or unavailable). Rejects when no
+  // result arrived, or the host sent one this app cannot read. It sends nothing a host would
+  // refuse, and does not look at capabilities: the caller asks only a host that offers
+  // sessions.history (history-store.js).
+  async history(id, { before, limit } = {}) {
+    const data = { id, ...(before === undefined || before === null ? {} : { before }), ...(limit === undefined || limit === null ? {} : { limit }) };
+    const refused = checkHistoryRequest(data);
+    if (refused) { throw new HostError(Ops.sessionHistory, refused); }
+    const result = readHistoryResult(await this.request(Ops.sessionHistory, data));
+    if (!result) { throw new HostError(Ops.sessionHistory, 'the machine sent a result this app cannot read'); }
+    return result;
   }
 
   // One sub-agent in full, with its own response, reasoning and history (session.get with
