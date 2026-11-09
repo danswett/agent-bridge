@@ -98,6 +98,20 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         }
     }
 
+    // The worker gives a screen read 10 s, and a loaded windows-11-arm runner took longer to start
+    // and attach it, so the read came back with a problem and no rows (#1379). A read types
+    // nothing, so it is safe to ask again until it answers.
+    static async Task<ConsoleScreen> ReadScreen(WorkerInjector injector, int pid)
+    {
+        var deadline = Stopwatch.StartNew();
+        while (true)
+        {
+            var screen = await injector.ReadScreenAsync(pid);
+            if (screen.Rows is not null || deadline.Elapsed > TimeSpan.FromSeconds(90)) { return screen; }
+            await Task.Delay(200);
+        }
+    }
+
     static List<string> Keys(string[] lines) => [.. lines.Where(l => l.StartsWith("key ", StringComparison.Ordinal))];
 
     static bool Exited(int pid)
@@ -195,7 +209,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         string[] draft = ["\u25CF Done.", "", "\u257B\u2584\u2584\u2584\u2584", $"\u2503 {space}", "\u2579\u2580\u2580\u2580\u2580", " Interactive \u00B7 @ files"];
         var echo = StartEcho(show: draft);
 
-        var screen = await new WorkerInjector(Worker).ReadScreenAsync(echo.Pid);
+        var screen = await ReadScreen(new WorkerInjector(Worker), echo.Pid);
 
         Assert.Null(screen.Problem);
         Assert.Equal(draft, screen.Rows!.Take(draft.Length));
@@ -220,7 +234,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         Assert.Equal(250, wide.Columns);
 
         Assert.Equal(250, (await injector.WidenAsync(echo.Pid, CreatedAt(echo.Pid), 120)).Columns);
-        var screen = await injector.ReadScreenAsync(echo.Pid);
+        var screen = await ReadScreen(injector, echo.Pid);
         Assert.Null(screen.Problem);
         Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
         Assert.Empty(Keys(WaitFor(echo.Log, lines => lines)));
@@ -256,7 +270,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
         var echo = StartEcho(show: PermissionPrompt);
         var injector = new WorkerInjector(Worker);
 
-        var screen = await injector.ReadScreenAsync(echo.Pid);
+        var screen = await ReadScreen(injector, echo.Pid);
         Assert.Null(screen.Problem);
         Assert.Equal(PermissionPrompt, screen.Rows!.Take(PermissionPrompt.Length));
         var (choice, problem) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate(screen.Rows!, approve: true, ["git push origin main --force-with-lease"]);
@@ -281,7 +295,9 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     {
         var echo = StartEcho(show: PermissionPrompt);
         var injector = new WorkerInjector(Worker);
-        var (choice, _) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate((await injector.ReadScreenAsync(echo.Pid)).Rows!, approve: false, ["git push origin main --force-with-lease"]);
+        var screen = await ReadScreen(injector, echo.Pid);
+        Assert.Null(screen.Problem);
+        var (choice, _) = AgentBridge.Host.Delivery.Copilot.CopilotPermissionScreen.Locate(screen.Rows!, approve: false, ["git push origin main --force-with-lease"]);
 
         var typed = await injector.InjectAsync(echo.Pid, new KeyPlan([new KeySend(choice!.Key, false, 0, 0, choice.Hold)]));
 
