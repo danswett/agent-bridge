@@ -1423,7 +1423,7 @@ public sealed class NotifyTests : IDisposable
     }
 
     [Fact]
-    public async Task A_session_that_gets_stuck_again_within_the_hour_is_not_told_again_and_that_is_logged_as_a_fault()
+    public async Task A_session_that_gets_stuck_again_after_a_recovery_is_told_for_the_second_episode_and_not_again_while_it_stays_stuck()
     {
         await using var c = Connector(Phones);
         Fail(HostWedge, status: SessionStatus.Idle);
@@ -1431,10 +1431,39 @@ public sealed class NotifyTests : IDisposable
         Assert.Single(StuckNotices());
         Ask(null);
         await Pass(c);
+        Assert.Equal(1, StuckClears());
         Fail(HostWedge, status: SessionStatus.Idle);
         await Pass(c);
+        Assert.Equal(2, StuckNotices().Count);
+        await Pass(c, 5 * 3600);
+        Assert.Equal(2, StuckNotices().Count);
+        Assert.DoesNotContain(log, m => m.Contains("FAULT", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_session_that_stays_stuck_across_many_polls_is_told_once()
+    {
+        await using var c = Connector(Phones);
+        Fail(HostWedge, status: SessionStatus.Idle);
+        for (var i = 0; i < 10; i++) { await Pass(c); }
         Assert.Single(StuckNotices());
-        Assert.Contains(log, m => m.Contains("FAULT", StringComparison.Ordinal) && m.Contains("flood guard", StringComparison.Ordinal));
+        Assert.Equal(0, StuckClears());
+    }
+
+    [Fact]
+    public async Task A_session_that_flaps_between_stuck_and_recovered_is_told_once_per_observed_recovery()
+    {
+        await using var c = Connector(Phones);
+        for (var episode = 1; episode <= 3; episode++)
+        {
+            Fail(HostWedge, status: SessionStatus.Idle);
+            await Pass(c);
+            await Pass(c);
+            Assert.Equal(episode, StuckNotices().Count);
+            Ask(null);
+            await Pass(c);
+            Assert.Equal(episode, StuckClears());
+        }
     }
 
     static readonly Attention HostWedge = new()
