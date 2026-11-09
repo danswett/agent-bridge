@@ -87,7 +87,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null)
+    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null, ILaunchCredentials? credentials = null, ILaunchAccount? account = null)
     {
         // A test that names a budget is about it running out.
         if (wait is not null || readyWait is not null || trustConfirm is not null || follow is not null) { clock.Run(); }
@@ -115,7 +115,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
             LocalNow = now ?? (() => DateTime.Now),
             Transfers = fetcher ?? transfers,
             TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
-        }, log: logged.Enqueue, attachments: attachments, credentials: credentials);
+        }, log: logged.Enqueue, attachments: attachments, credentials: credentials, account: account);
     }
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
@@ -221,6 +221,60 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         starter.Throws = null;
         await Launcher(Config()).LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
         Assert.Null(Assert.Single(starter.Specs).Environment![Launchers.TokenVariable]);
+    }
+
+    sealed class FakeAccount(LaunchAccount answer) : ILaunchAccount
+    {
+        public readonly List<string?> Asked = [];
+        public Task<LaunchAccount> CheckAsync(string? expectedLogin, CancellationToken cancellationToken) { Asked.Add(expectedLogin); return Task.FromResult(answer); }
+    }
+
+    [Fact]
+    public async Task A_Copilot_launch_hands_the_child_the_checked_token_and_leaves_GH_TOKEN_and_GITHUB_TOKEN_alone()
+    {
+        var account = new FakeAccount(LaunchAccount.Allowed("fake-pat-1518"));
+
+        await Launcher(Config(c => c with { CopilotAccount = "octo-pat" }), account: account).LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        var environment = Assert.Single(starter.Specs).Environment!;
+        Assert.Equal("fake-pat-1518", environment["COPILOT_GITHUB_TOKEN"]);
+        Assert.DoesNotContain("GH_TOKEN", environment.Keys);
+        Assert.DoesNotContain("GITHUB_TOKEN", environment.Keys);
+        Assert.Equal(["octo-pat"], account.Asked);
+    }
+
+    [Fact]
+    public async Task A_Copilot_launch_the_account_check_refuses_starts_nothing_and_says_why()
+    {
+        var result = await Launcher(Config(), account: new FakeAccount(LaunchAccount.Refuse("octo has no premium interactions left"))).LaunchAsync(
+            new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Contains("no premium interactions", result.Reason);
+        Assert.Empty(starter.Specs);
+    }
+
+    [Fact]
+    public async Task A_Copilot_launch_with_no_account_checker_wired_is_refused_rather_than_left_to_a_stored_login()
+    {
+        var launcher = new LaunchService(new DeliveryGate(), source, probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions { Time = clock, CopilotHome = f.CopilotHome, ClaudeHome = f.ClaudeHome, CodexHome = f.CodexHome, Config = Config(), PlatformSupported = true, IsSystemDirectory = _ => false });
+
+        var result = await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "copilot", Workspace = "App" }, "phone");
+
+        Assert.Equal(LaunchOutcome.Refused, result.Outcome);
+        Assert.Empty(starter.Specs);
+    }
+
+    [Fact]
+    public async Task A_Claude_launch_is_not_asked_about_a_Copilot_account()
+    {
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        var account = new FakeAccount(LaunchAccount.Refuse("never"));
+
+        await Launcher(Config(), account: account).LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "claude", Workspace = "App" }, "phone");
+
+        Assert.Empty(account.Asked);
+        Assert.DoesNotContain("COPILOT_GITHUB_TOKEN", Assert.Single(starter.Specs).Environment!.Keys);
     }
 
     [Fact]

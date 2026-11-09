@@ -38,6 +38,9 @@ public sealed record LaunchConfig
     public bool RemoteFolderTrust { get; init; }
     // The devices, by id, a person approved at the machine to answer from: none until they do.
     public IReadOnlyList<string> RemoteFolderTrustDevices { get; init; } = [];
+    // The GitHub login a Copilot launch must be made as (launch.copilotAccount). Unset asks only
+    // that COPILOT_GITHUB_TOKEN be valid and have quota (#1518).
+    public string? CopilotAccount { get; init; }
 
     public AgentConfig Agent(string id) => Agents.TryGetValue(id, out var a) ? a : AgentConfig.Default;
 
@@ -77,6 +80,7 @@ public sealed record LaunchConfig
             if (Get(l, "defaultProfile") is { } dp) { config = config with { DefaultProfile = Text(dp, "launch.defaultProfile") }; }
             if (Get(l, "resumeCount") is { } rc) { config = config with { ResumeCount = (int)Number(rc, "launch.resumeCount", 0, LaunchProtocol.MaxResumable, whole: true) }; }
             if (Get(l, "transfer") is { } tr) { config = config with { Transfer = ReadTransfer(tr) }; }
+            if (Get(l, "copilotAccount") is { } ca) { config = config with { CopilotAccount = Text(ca, "launch.copilotAccount") }; }
             if (Get(l, "remoteFolderTrust") is { } rft) { config = config with { RemoteFolderTrust = Bool(rft, "launch.remoteFolderTrust") }; }
             if (Get(l, "remoteFolderTrustDevices") is { } rfd)
             {
