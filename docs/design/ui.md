@@ -1,6 +1,6 @@
 # UI design: the session workbench
 
-The design for every Agent Bridge client: the Windows app, the PWA, and the later macOS,
+The design for every Slipgates client: the Windows app, the PWA, and the later macOS,
 iOS and Android apps.
 
 - What to build, in order: [ui-plan.md](ui-plan.md).
@@ -25,7 +25,7 @@ requirements they rest on, each with the check that enforces it, and the rules t
 approved for it on 2026-11-04 (#707). Delegate events in the conversation (§6.4, #661) and the
 history beside them (#292) were decided by the owner on 2026-11-04 and are proposed: not yet
 built (#661 and #292 build them).* The
-owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench", and
+owner's mock-ups live in a private design canvas, "Slipgates — Session Workbench", and
 proposals wait for the owner's sign-off in the private design studio
 ([design/README.md](../../design/README.md#owner-sign-off)).
 Every board is also rendered in [mockups/](mockups/README.md), and its source is in
@@ -1899,9 +1899,9 @@ collaborator item that is yours: a pending question on its target session, count
   session title quoted below, then its retained origins as the sender's report ("@*login* reports external content from
   @*other*", never stated as fact); *To* your session, its agent, machine and mode;
 - the **whole** message **exactly as the host will type it** (`agent-principals.md` §5.7): one
-  line, the host-built label first ("[Agent Bridge · from an agent on *link name* · not typed by
+  line, the host-built label first ("[Slipgates · from an agent on *link name* · not typed by
   your user · external: @*login*]", §6.4), then the words with the delivery escapes already
-  applied (a copied marker typed as "(Agent Bridge", a token-initial @ typed as ＠). The label
+  applied (a copied marker typed as "(Slipgates", a token-initial @ typed as ＠). The label
   holds only fields this host established: the name you gave the link and the verified login,
   never the sender's own machine name or an origin it merely reports. It is in the
   code face, escaped and never read as Markdown, exactly as an approval's (§6.4), in a scrolling
@@ -3065,7 +3065,7 @@ they are un-parked.
   Machines), 28 px rows, and a Bridge fill on the selected row. The toolbar's filter menu has
   the same toggle.
 - **Menu bar:** an extra whose label is N. Its menu names the waiting sessions (machine and
-  title, oldest first, at most 8) and Open Agent Bridge. An item opens its session at the
+  title, oldest first, at most 8) and Open Slipgates. An item opens its session at the
   question. The menu never shows a question's words or answers one.
 - **Dock:** the badge is N.
 - **Toolbar:** unified, with title and subtitle, search, and icon buttons.
