@@ -27,12 +27,30 @@ public sealed class AgentLimitsTests
     public void Twelve_messages_a_minute_to_one_target_from_different_origins_is_the_most_and_a_refusal_takes_no_slot()
     {
         var limits = Make();
-        for (var i = 0; i < 12; i++) { Assert.True(limits.CheckMessage($"o{i}", "t").Allowed); }
+        for (var i = 0; i < 7; i++) { Assert.True(limits.CheckMessage($"o{i}", "t").Allowed); }
+        now = now.AddSeconds(30);
+        for (var i = 0; i < 5; i++) { Assert.True(limits.CheckMessage("fresh", "t").Allowed); }
         Assert.False(limits.CheckMessage("fresh", "t").Allowed);
 
-        // The refused message above must not have used a slot in its own pair window.
+        // The seven early messages have left the target's window; the refused one would still sit
+        // in the pair's if it had been recorded, so the pair has exactly one slot left, not none.
+        now = now.AddSeconds(30);
+        Assert.True(limits.CheckMessage("fresh", "t").Allowed);
+        Assert.False(limits.CheckMessage("fresh", "t").Allowed);
+    }
+
+    [Fact]
+    public void A_clock_stepped_back_never_holds_a_window_for_longer_than_one_span()
+    {
+        var limits = Make();
+        for (var i = 0; i < 6; i++) { Assert.True(limits.CheckMessage("a", "b").Allowed); }
+        now = now.AddHours(-1);
+
+        var refused = limits.CheckMessage("a", "b");
+        Assert.False(refused.Allowed);
+        Assert.InRange(refused.RetryAfterSeconds, 1, 60);
         now = now.AddMinutes(1);
-        for (var i = 0; i < 6; i++) { Assert.True(limits.CheckMessage("fresh", "t").Allowed); }
+        Assert.True(limits.CheckMessage("a", "b").Allowed);
     }
 
     [Fact]
@@ -60,9 +78,14 @@ public sealed class AgentLimitsTests
 
         var refused = limits.CheckRead("one-too-many");
         Assert.False(refused.Allowed);
-        Assert.False(limits.CheckRead("busy").Allowed);
 
-        now = now.AddMinutes(1);
+        // A wiped "busy" would be refused as a new key with the full 60 s; the live window has 30 left.
+        now = now.AddSeconds(30);
+        var busy = limits.CheckRead("busy");
+        Assert.False(busy.Allowed);
+        Assert.Equal(30, busy.RetryAfterSeconds);
+
+        now = now.AddSeconds(30);
         Assert.True(limits.CheckRead("one-too-many").Allowed);
     }
 

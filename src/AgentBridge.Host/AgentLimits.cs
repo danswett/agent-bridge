@@ -115,6 +115,9 @@ public sealed class AgentLimits
         // Zero when another hit is admitted; otherwise the seconds until the oldest hit leaves.
         public int WaitFor(DateTimeOffset now, int limit)
         {
+            // A clock stepped back leaves hits in the future; count them as now, so the wait is
+            // never longer than one span.
+            if (hits.Any(h => h > now)) { var kept = hits.Select(h => h > now ? now : h).ToArray(); hits.Clear(); foreach (var h in kept) { hits.Enqueue(h); } }
             while (hits.Count > 0 && now - hits.Peek() >= span) { hits.Dequeue(); }
             if (hits.Count < limit) { return 0; }
             var seconds = (int)Math.Ceiling((hits.Peek() + span - now).TotalSeconds);

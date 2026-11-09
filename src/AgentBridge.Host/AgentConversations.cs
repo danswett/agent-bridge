@@ -32,7 +32,10 @@ public sealed class AgentConversations
     readonly object gate = new();
     // The conversation that drove each session's current turn; absent means a person drove it.
     readonly Dictionary<string, AgentConversation> driving = [];
-    readonly HashSet<string> launchedByAgent = [];
+    // Session -> when an agent launched it. Both maps are capped: see MakeRoom.
+    readonly Dictionary<string, DateTimeOffset> launchedByAgent = [];
+    const int MaxEntries = 1024;
+    static readonly TimeSpan LaunchMark = TimeSpan.FromHours(24);
 
     public AgentConversations(
         Func<DateTimeOffset>? clock = null,
@@ -46,6 +49,12 @@ public sealed class AgentConversations
         maxMessages = conversationMessages;
         maxAge = TimeSpan.FromMinutes(conversationMinutes);
         this.allowAgentLaunchedToLaunch = allowAgentLaunchedToLaunch;
+    }
+
+    // The host ends a session: forget everything held about it.
+    public void SessionEnded(string session)
+    {
+        lock (gate) { driving.Remove(session); launchedByAgent.Remove(session); }
     }
 
     // Person input to a session ends its part in any conversation; its next message is a fresh
@@ -67,7 +76,7 @@ public sealed class AgentConversations
         lock (gate)
         {
             var now = clock();
-            if (launch && !allowAgentLaunchedToLaunch && launchedByAgent.Contains(origin))
+            if (launch && !allowAgentLaunchedToLaunch && launchedByAgent.ContainsKey(origin))
             {
                 return AgentConversationVerdict.Refuse(AgentConversationVerdict.LaunchNotAllowed);
             }
@@ -86,10 +95,32 @@ public sealed class AgentConversations
             var depth = via.Contains(target) ? via.Count : via.Count + 1;
             if (depth > maxDepth) { return AgentConversationVerdict.Refuse(AgentConversationVerdict.ChainTooDeep); }
 
+            if (!MakeRoom(target, launch, now))
+            {
+                return AgentConversationVerdict.Refuse(launch ? AgentConversationVerdict.LaunchNotAllowed : AgentConversationVerdict.ConversationBudget);
+            }
             var next = new AgentConversation(current?.Root ?? Guid.NewGuid().ToString("N"), current?.RootAt ?? now, (current?.Messages ?? 0) + 1, via);
             driving[target] = next;
-            if (launch) { launchedByAgent.Add(target); }
+            if (launch) { launchedByAgent[target] = now; }
             return new AgentConversationVerdict(true, null, next);
         }
+    }
+
+    // A full table forgets only entries that can no longer limit anything: conversations past their
+    // age (their session then starts fresh, as after a restart) and launch marks over a day old.
+    // If none can go, the new entry is refused rather than another session's state wiped.
+    bool MakeRoom(string target, bool launch, DateTimeOffset now)
+    {
+        if (!driving.ContainsKey(target) && driving.Count >= MaxEntries)
+        {
+            foreach (var old in driving.Where(d => now - d.Value.RootAt > maxAge).Select(d => d.Key).ToList()) { driving.Remove(old); }
+            if (driving.Count >= MaxEntries) { return false; }
+        }
+        if (launch && !launchedByAgent.ContainsKey(target) && launchedByAgent.Count >= MaxEntries)
+        {
+            foreach (var old in launchedByAgent.Where(l => now - l.Value > LaunchMark).Select(l => l.Key).ToList()) { launchedByAgent.Remove(old); }
+            if (launchedByAgent.Count >= MaxEntries) { return false; }
+        }
+        return true;
     }
 }

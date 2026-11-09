@@ -91,4 +91,19 @@ public sealed class AgentConversationsTests
         open.TryLaunch("A", "L");
         Assert.True(open.TryLaunch("L", "M").Allowed);
     }
+
+    [Fact]
+    public void A_full_table_refuses_a_new_session_rather_than_forget_a_live_one_and_makes_room_by_age_or_when_a_session_ends()
+    {
+        var c = Make();
+        for (var i = 0; i < 1024; i++) { Assert.True(c.TrySend("A", $"t{i}").Allowed); }
+        Assert.Equal("conversation-budget", c.TrySend("A", "one-too-many").Reason);
+
+        c.SessionEnded("t0");
+        Assert.True(c.TrySend("B", "one-too-many").Allowed);
+        Assert.Equal("conversation-budget", c.TrySend("B", "another").Reason);
+
+        now = now.AddMinutes(61);
+        Assert.True(c.TrySend("B", "another").Allowed);
+    }
 }
