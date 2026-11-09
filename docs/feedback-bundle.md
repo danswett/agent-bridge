@@ -46,6 +46,10 @@ promise to catch every secret, which is why the person sees the exact bytes firs
 | Caller cancels | `Failed(Cancelled, Now)` |
 
 There is no offline queue and nothing is written to disk. The window keeps the note and the reviewed preview in memory for a manual Try again (the bundle is sealed again with a fresh key) and clears them on close. Failure results carry no report content.
+
+## Review step (Windows)
+`FeedbackReviewViewModel` drives the review before sending. It gathers through `IFeedbackBundleSource` and hands each bundle to `FeedbackSendViewModel.Ready`; `Rows` has one entry per bundle item (label, summary, optional), and `RowsExpanded` starts collapsed. Session turns are a separate option, off by default, named after the session. Changing the note, the screenshot or that option gathers again with a new `FeedbackRequest`, cancels the earlier gather, and drops any gather that finishes after a newer request or after Close. A refusal (`FeedbackRefusalReason`) or a failed gather shows through the send view model (`TooLarge` for `BundleTooLarge`, `Refused` for the rest, `Failed` for an error). Nothing is sent until `SendAsync` is called.
+
 ## Sources and availability (Windows)
 
 `AppFeedbackSources` reads what the bundle holds: the last 200 lines of `app.log` (with `app.log.1` before it), the last five records of `crash.log` (newest first, stack lines kept), the app's settings scalars, the host's agent report, and a session's `session.history`. Reads are read-only and share the files with the running app; a missing, locked or malformed file leaves that part empty. An unknown session reads as not found; a host that cannot answer reads as unavailable.

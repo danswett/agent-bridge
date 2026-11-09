@@ -108,6 +108,41 @@ public sealed class FeedbackSendViewModel : Observable
         Apply(FeedbackSendState.Ready, "", Tone.None, null, null, null, false);
     }
 
+    // Gathering ended without a bundle. Nothing can be sent until the report changes and gathers again.
+    public void GatherRefused(FeedbackRefusalReason reason)
+    {
+        if (!DropBundle()) { return; }
+        if (reason == FeedbackRefusalReason.BundleTooLarge)
+        {
+            Apply(FeedbackSendState.TooLarge, $"Not sent: the report is over the {Words.Size(FeedbackLimits.MaxBundleBytes)} limit. Turn off the screenshot or the session turns.", Tone.Bad, null, null, null, true);
+            return;
+        }
+        var text = reason switch
+        {
+            FeedbackRefusalReason.NoteTooLong => $"Your note is over {FeedbackLimits.MaxNoteChars} characters. Shorten it.",
+            FeedbackRefusalReason.ScreenshotTooLarge or FeedbackRefusalReason.ScreenshotNotPng => "The screenshot can't be attached. Remove it and try again.",
+            _ => "That session's turns couldn't be read. Turn them off and try again.",
+        };
+        Apply(FeedbackSendState.Refused, text, Tone.Bad, null, FeedbackFailureReason.BadRequest, null, true);
+    }
+
+    public void GatherFailed()
+    {
+        if (!DropBundle()) { return; }
+        Apply(FeedbackSendState.Failed, "Couldn't gather what's included. Change the report to try again.", Tone.Bad, FeedbackRetry.Never, FeedbackFailureReason.Unavailable, null, true);
+    }
+
+    bool DropBundle()
+    {
+        lock (gate)
+        {
+            if (closed || state is FeedbackSendState.Sending or FeedbackSendState.Sent) { return false; }
+            generation++;
+            bundle = null;
+            return true;
+        }
+    }
+
     public void Close()
     {
         CancellationTokenSource? cancel;
@@ -216,7 +251,8 @@ public sealed class FeedbackSendViewModel : Observable
         Raise(nameof(CanSend)); Raise(nameof(CanRetry)); Raise(nameof(RetryAt)); Raise(nameof(RetryHint));
         Raise(nameof(IsSending)); Raise(nameof(IsGathering)); Raise(nameof(IsClosed));
         Raise(nameof(Failed)); Raise(nameof(Speech)); Raise(nameof(FailureReason)); Raise(nameof(Attempts));
-        if (text.Length > 0 && !closed) { announce?.Invoke(text, urgent); }
+        // A listener may have moved the state on (a regather after a cancelled edit); don't announce a line that is gone.
+        if (text.Length > 0 && !closed && state == s) { announce?.Invoke(text, urgent); }
     }
 }
 
